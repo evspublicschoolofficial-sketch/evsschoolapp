@@ -1,0 +1,1799 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>E.V.S. Public School - Digital Web Portal (Standalone)</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            schoolNavy: '#0c2340',
+            schoolBlue: '#10316b',
+            schoolGold: '#d4af37',
+            schoolAmber: '#f59e0b',
+          }
+        }
+      }
+    }
+  </script>
+  <!-- FontAwesome 6 Free CDN -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+  <!-- Google Fonts: Plus Jakarta Sans -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- React 18 & ReactDOM CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Babel Standalone CDN -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    body {
+      font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-fadeIn {
+      animation: fadeIn 0.2s ease-out forwards;
+    }
+    @media print {
+      body * {
+        visibility: hidden;
+      }
+      #printable-area, #printable-area * {
+        visibility: visible;
+      }
+      #printable-area {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 antialiased selection:bg-amber-400 selection:text-slate-950 min-h-screen flex flex-col">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    const SPREADSHEET_ID = "1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU";
+    const API_URL = "https://script.google.com/macros/s/AKfycbzrASF0ip3AsJI-JwgPzXSgUcTphOp3GAMiPGH4sa3iN2pkqGvJaVEDq-uwkgX9xrUuCQ/exec";
+
+    // Standard class mapping dictionary
+    const DEFAULT_CLASS_MAP = {
+      'c1': '1st', 'c2': '2nd', 'c3': '3rd', 'c4': '4th', 'c5': '5th',
+      'c6': '6th', 'c7': '7th', 'c8': '8th', 'c9': '9th', 'c10': '10th',
+      'c11': '11th', 'c12': '12th', 'lkg': 'L.K.G', 'ukg': 'U.K.G',
+      'nursery': 'Nursery', 'pre-nursery': 'Pre-Nursery',
+    };
+
+    const getClassName = (code) => {
+      if (!code) return 'All';
+      const clean = String(code).trim().toLowerCase();
+      return DEFAULT_CLASS_MAP[clean] || code;
+    };
+
+    const formatDate = (dateStr) => {
+      if (!dateStr) return 'N/A';
+      try {
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return String(dateStr);
+        return d.toLocaleDateString('hi-IN', {
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric'
+        });
+      } catch {
+        return String(dateStr);
+      }
+    };
+
+    // Robust Google Sheets GViz Fetcher
+    async function fetchGVizSheet(sheetName) {
+      try {
+        const encoded = encodeURIComponent(sheetName);
+        const url = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}`;
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        const text = await res.text();
+        const start = text.indexOf('{');
+        const end = text.lastIndexOf('}');
+        if (start === -1 || end === -1) return null;
+        const parsed = JSON.parse(text.substring(start, end + 1));
+        const cols = parsed.table?.cols || [];
+        const rows = parsed.table?.rows || [];
+        
+        const colNames = cols.map((c, idx) => {
+          let label = (c?.label || '').trim();
+          if (!label) label = `col_${idx}`;
+          return label;
+        });
+
+        const items = [];
+        for (const row of rows) {
+          if (!row.c) continue;
+          const item = {};
+          let hasVal = false;
+          colNames.forEach((name, i) => {
+            const cell = row.c[i];
+            let val = cell ? (cell.f !== undefined && cell.f !== null ? cell.f : cell.v) : '';
+            if (val === null || val === undefined) val = '';
+            item[name] = val;
+            if (String(val).trim() !== '') hasVal = true;
+          });
+          if (hasVal) items.push(item);
+        }
+        return items;
+      } catch (err) {
+        console.warn('GViz fetch error for sheet:', sheetName, err);
+        return null;
+      }
+    }
+
+    // Extract photos and PDFs attached to Homework
+    function extractHomeworkMedia(hw) {
+      const items = [];
+      const processField = (val, title, labelHindi, defaultType) => {
+        if (!val) return;
+        const str = String(val).trim();
+        if (!str || str === 'undefined' || str === 'null' || str === '—') return;
+
+        const lower = str.toLowerCase();
+        const isPdf = lower.includes('.pdf');
+        const isImg = lower.includes('.jpg') || lower.includes('.jpeg') || lower.includes('.png') || lower.includes('.webp');
+        const type = isPdf && !isImg ? 'pdf' : defaultType;
+        const fileName = str.split('/').pop() || str;
+
+        // 1. Google Drive Link
+        const driveMatch = str.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || str.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+        if (driveMatch && driveMatch[1]) {
+          const fileId = driveMatch[1];
+          if (type === 'image') {
+            items.push({
+              id: `${hw.Homework_ID || Math.random()}-${title}`,
+              type: 'image',
+              title,
+              labelHindi,
+              fileName,
+              url: `https://drive.google.com/thumbnail?id=${fileId}&sz=w1200`,
+              fallbackUrl: `https://lh3.googleusercontent.com/d/${fileId}=w1200`,
+              openUrl: `https://drive.google.com/file/d/${fileId}/view?usp=sharing`,
+            });
+          } else {
+            items.push({
+              id: `${hw.Homework_ID || Math.random()}-${title}`,
+              type: 'pdf',
+              title,
+              labelHindi,
+              fileName,
+              url: `https://drive.google.com/file/d/${fileId}/preview`,
+              fallbackUrl: `https://docs.google.com/viewer?url=${encodeURIComponent(`https://drive.google.com/file/d/${fileId}/view`)}&embedded=true`,
+              openUrl: `https://drive.google.com/file/d/${fileId}/view?usp=sharing`,
+            });
+          }
+          return;
+        }
+
+        // 2. Direct Web URL
+        if (str.startsWith('http://') || str.startsWith('https://')) {
+          items.push({
+            id: `${hw.Homework_ID || Math.random()}-${title}`,
+            type,
+            title,
+            labelHindi,
+            fileName,
+            url: type === 'pdf' ? `https://docs.google.com/viewer?url=${encodeURIComponent(str)}&embedded=true` : str,
+            fallbackUrl: str,
+            openUrl: str,
+          });
+          return;
+        }
+
+        // 3. AppSheet Relative Path or filename
+        const driveSearchUrl = `https://drive.google.com/drive/search?q=${encodeURIComponent(fileName)}`;
+        const appSheetUrl = `https://www.appsheet.com/template/gettablefileurl?appName=SchoolApp&tableName=Homework&fileName=${encodeURIComponent(str)}`;
+        items.push({
+          id: `${hw.Homework_ID || Math.random()}-${title}`,
+          type,
+          title,
+          labelHindi,
+          fileName,
+          url: type === 'image' ? appSheetUrl : driveSearchUrl,
+          fallbackUrl: driveSearchUrl,
+          openUrl: driveSearchUrl,
+        });
+      };
+
+      const findVal = (keys) => {
+        for (const k of keys) {
+          if (hw[k] && String(hw[k]).trim() !== '') return String(hw[k]).trim();
+        }
+        for (const [k, v] of Object.entries(hw)) {
+          const cleanK = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+          for (const cand of keys) {
+            if (cleanK === cand.toLowerCase().replace(/[^a-z0-9]/g, '') && v && String(v).trim() !== '') {
+              return String(v).trim();
+            }
+          }
+        }
+        return null;
+      };
+
+      const p1 = findVal(['Homework_Photo', 'Homework Photo', 'Photo_1', 'Photo', 'Image_1', 'Image', 'Homework_Image', 'File_1', 'Attachment_1', 'Attachment']);
+      const p2 = findVal(['Homework_Photo_2', 'Homework Photo 2', 'Photo_2', 'Image_2', 'File_2', 'Attachment_2']);
+      const pdf = findVal(['Homework_PDF', 'Homework PDF', 'PDF', 'Document', 'Homework_Doc', 'File', 'Homework_File', 'Attachment_Doc']);
+
+      if (p1) processField(p1, 'Photo 1', 'फ़ोटो 1 (गृहकार्य पृष्ठ)', 'image');
+      if (p2) processField(p2, 'Photo 2', 'फ़ोटो 2 (अतिरिक्त कार्य)', 'image');
+      if (pdf) processField(pdf, 'Homework Document', 'गृहकार्य PDF दस्तावेज़', 'pdf');
+
+      return items;
+    }
+
+    // Interactive Media Attachment Component for Standalone Portal
+    function HomeworkMediaCard({ item, onOpen }) {
+      const [loadFailed, setLoadFailed] = useState(false);
+
+      if (item.type === 'pdf') {
+        return (
+          <div
+            onClick={onOpen}
+            className="group flex items-center justify-between p-2.5 rounded-xl border border-rose-200 bg-rose-50/70 hover:bg-rose-100/80 hover:border-rose-300 transition-all cursor-pointer shadow-2xs"
+          >
+            <div className="flex items-center gap-2.5 min-w-0 pr-2">
+              <div className="w-8 h-8 rounded-lg bg-rose-600 text-white flex items-center justify-center text-sm shadow-xs shrink-0 group-hover:scale-105 transition-transform">
+                <i className="fa-solid fa-file-pdf"></i>
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-rose-950 truncate">{item.labelHindi}</p>
+                <p className="text-[10px] text-rose-700 truncate">{item.fileName}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpen();
+                }}
+                className="px-2.5 py-1 rounded-lg bg-white text-rose-700 hover:bg-rose-600 hover:text-white border border-rose-300 text-[11px] font-bold transition-all flex items-center gap-1 shadow-2xs cursor-pointer"
+              >
+                <i className="fa-solid fa-eye text-[10px]"></i>
+                <span>PDF पढ़ें</span>
+              </button>
+              <a
+                href={item.openUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className="px-2 py-1 rounded-lg bg-rose-600 text-white hover:bg-rose-700 text-[11px] font-bold transition-all flex items-center gap-1 shadow-2xs cursor-pointer"
+                title="सीधे नए टैब / Google Drive में खोलें"
+              >
+                <i className="fa-solid fa-arrow-up-right-from-square text-[10px]"></i>
+                <span>खोलें</span>
+              </a>
+            </div>
+          </div>
+        );
+      }
+
+      // Image Attachment Card
+      return (
+        <div
+          onClick={onOpen}
+          className="group flex items-center justify-between p-2.5 rounded-xl border border-blue-200 bg-blue-50/70 hover:bg-blue-100/80 hover:border-blue-300 transition-all cursor-pointer shadow-2xs"
+        >
+          <div className="flex items-center gap-2.5 min-w-0 pr-2">
+            <div className="relative w-10 h-10 rounded-lg overflow-hidden border border-blue-300/80 bg-white shrink-0 flex items-center justify-center shadow-2xs">
+              {!loadFailed && item.url ? (
+                <img
+                  src={item.url}
+                  alt={item.title}
+                  className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-200"
+                  onError={() => setLoadFailed(true)}
+                  loading="lazy"
+                />
+              ) : (
+                <i className="fa-solid fa-image text-blue-900 text-lg"></i>
+              )}
+              <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                <i className="fa-solid fa-magnifying-glass-plus text-white text-xs"></i>
+              </div>
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-bold text-blue-950 truncate">{item.labelHindi}</p>
+              <p className="text-[10px] text-blue-700 truncate">{item.fileName}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpen();
+              }}
+              className="px-2.5 py-1 rounded-lg bg-white text-blue-900 hover:bg-blue-900 hover:text-white border border-blue-300 text-[11px] font-bold transition-all flex items-center gap-1 shadow-2xs cursor-pointer"
+            >
+              <i className="fa-solid fa-expand text-[10px]"></i>
+              <span>फ़ोटो देखें</span>
+            </button>
+            <a
+              href={item.openUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="px-2 py-1 rounded-lg bg-[#0c2340] text-amber-300 hover:bg-blue-950 text-[11px] font-bold transition-all flex items-center gap-1 shadow-2xs cursor-pointer"
+              title="सीधे नए टैब / Google Drive में खोलें"
+            >
+              <i className="fa-solid fa-arrow-up-right-from-square text-[10px]"></i>
+              <span>खोलें</span>
+            </a>
+          </div>
+        </div>
+      );
+    }
+
+    function App() {
+      const [activeTab, setActiveTab] = useState('parent'); // Default to parent portal
+      const [students, setStudents] = useState([]);
+      const [homeworkList, setHomeworkList] = useState([]);
+      const [trackerList, setTrackerList] = useState([]);
+      const [behaviorList, setBehaviorList] = useState([]);
+      const [feeList, setFeeList] = useState([]);
+      const [loadingData, setLoadingData] = useState(false);
+      const [apiError, setApiError] = useState(null);
+
+      // Parent Portal State
+      const [parentMobileInput, setParentMobileInput] = useState('');
+      const [selectedStudent, setSelectedStudent] = useState(null);
+      const [parentChildren, setParentChildren] = useState([]);
+      const [parentLoggedIn, setParentLoggedIn] = useState(false);
+      const [parentSearchAttempted, setParentSearchAttempted] = useState(false);
+      const [parentActiveSection, setParentActiveSection] = useState('overview'); // 'overview' | 'homework' | 'tracker' | 'fees' | 'behavior' | 'profile'
+      const [hwDaysFilter, setHwDaysFilter] = useState('3days');
+      const [qrModalStudent, setQrModalStudent] = useState(null);
+
+      // Lightbox Media Viewer State
+      const [activeMediaModal, setActiveMediaModal] = useState(null);
+      const [mediaZoom, setMediaZoom] = useState(1);
+      const [mediaRotation, setMediaRotation] = useState(0);
+
+      // Teacher State
+      const [hwDate, setHwDate] = useState(new Date().toISOString().split('T')[0]);
+      const [hwClass, setHwClass] = useState('C1');
+      const [hwSubject, setHwSubject] = useState('Hindi');
+      const [hwDetail, setHwDetail] = useState('');
+      const [hwSubmitting, setHwSubmitting] = useState(false);
+      const [hwSuccessMsg, setHwSuccessMsg] = useState(null);
+
+      // Manager State
+      const [managerSearch, setManagerSearch] = useState('');
+      const [managerClassFilter, setManagerClassFilter] = useState('all');
+
+      // Load all data from Google Sheets GViz and Apps Script
+      const loadAllData = async () => {
+        setLoadingData(true);
+        setApiError(null);
+        try {
+          // 1. Fetch Students
+          const gvizStudents = await fetchGVizSheet('Students');
+          if (gvizStudents && gvizStudents.length > 0) {
+            setStudents(gvizStudents);
+          } else {
+            const res = await fetch(`${API_URL}?action=getStudents`);
+            if (res.ok) {
+              const data = await res.json();
+              if (Array.isArray(data) && data.length > 1) {
+                const hdrs = data[0];
+                const list = data.slice(1).map(r => {
+                  const o = {};
+                  hdrs.forEach((h, i) => o[h] = r[i] || '');
+                  return o;
+                });
+                setStudents(list);
+              }
+            }
+          }
+
+          // 2. Fetch Homework
+          const gvizHw = await fetchGVizSheet('Homework');
+          if (gvizHw && gvizHw.length > 0) {
+            setHomeworkList(gvizHw);
+          } else {
+            const res = await fetch(`${API_URL}?action=getHomework`);
+            if (res.ok) {
+              const data = await res.json();
+              if (Array.isArray(data) && data.length > 1) {
+                const hdrs = data[0];
+                const list = data.slice(1).map(r => {
+                  const o = {};
+                  hdrs.forEach((h, i) => o[h] = r[i] || '');
+                  return o;
+                });
+                setHomeworkList(list);
+              }
+            }
+          }
+
+          // 3. Fetch Homework Tracker
+          const gvizTracker = await fetchGVizSheet('Homework_Tracker');
+          if (gvizTracker) setTrackerList(gvizTracker);
+
+          // 4. Fetch Student Behavior
+          const gvizBehavior = await fetchGVizSheet('Student_Behavior');
+          if (gvizBehavior) setBehaviorList(gvizBehavior);
+
+          // 5. Fetch Fee Collection
+          const gvizFees = await fetchGVizSheet('Fee_Collection');
+          if (gvizFees) setFeeList(gvizFees);
+
+        } catch (err) {
+          console.error('Data load error:', err);
+          setApiError('Google Sheets से डेटा लोड करने में त्रुटि। कृपया पुनः प्रयास करें।');
+        } finally {
+          setLoadingData(false);
+        }
+      };
+
+      useEffect(() => {
+        loadAllData();
+      }, []);
+
+      // Parent Login Handler
+      const handleParentLogin = (e) => {
+        if (e) e.preventDefault();
+        setParentSearchAttempted(true);
+        const clean = parentMobileInput.trim().replace(/\D/g, '');
+        if (!clean) return;
+
+        const matched = students.filter(s => {
+          const m = String(s.Parent_Mobile || '').replace(/\D/g, '');
+          return m === clean || (m.length >= 10 && m.endsWith(clean)) || (clean.length >= 10 && clean.endsWith(m));
+        });
+
+        if (matched.length > 0) {
+          setParentChildren(matched);
+          setSelectedStudent(matched[0]);
+          setParentLoggedIn(true);
+          setParentActiveSection('overview');
+        } else {
+          setParentChildren([]);
+          setSelectedStudent(null);
+          setParentLoggedIn(false);
+        }
+      };
+
+      // Filtered Homework for selected student
+      const parentHomework = useMemo(() => {
+        if (!selectedStudent) return [];
+        const studentId = String(selectedStudent.Student_ID || '').trim().toLowerCase();
+        const studentClass = String(selectedStudent.Class || '').trim().toLowerCase();
+
+        return homeworkList.filter(hw => {
+          const hwStudentId = String(hw.Student_ID || '').trim().toLowerCase();
+          const hwClass = String(hw.Class || '').trim().toLowerCase();
+          const isTargetStudent = hwStudentId && hwStudentId === studentId;
+          const isClassMatch = hwClass && (hwClass === studentClass || studentClass.includes(hwClass));
+          const isAll = !hwClass || hwClass === 'all' || (hw.Target_Type && hw.Target_Type.toLowerCase().includes('poori'));
+          return isTargetStudent || isClassMatch || isAll;
+        }).sort((a, b) => new Date(b.Date || 0) - new Date(a.Date || 0));
+      }, [selectedStudent, homeworkList]);
+
+      // Last 3 days filtered homework
+      const displayHomework = useMemo(() => {
+        if (hwDaysFilter === 'all') return parentHomework;
+        const now = new Date();
+        const cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 3).getTime();
+        return parentHomework.filter(hw => {
+          if (!hw.Date) return true;
+          return new Date(hw.Date).getTime() >= cutoff;
+        });
+      }, [parentHomework, hwDaysFilter]);
+
+      // Filtered Tracker for selected student
+      const studentTracker = useMemo(() => {
+        if (!selectedStudent) return [];
+        const sId = String(selectedStudent.Student_ID || '').trim().toLowerCase();
+        return trackerList.filter(t => String(t.Student_ID || '').trim().toLowerCase() === sId);
+      }, [selectedStudent, trackerList]);
+
+      const trackerStats = useMemo(() => {
+        const completed = studentTracker.filter(t => String(t.Status || '').toLowerCase().includes('complete') && !String(t.Status || '').toLowerCase().includes('in')).length;
+        const incompleted = studentTracker.filter(t => String(t.Status || '').toLowerCase().includes('incomplete') || String(t.Status || '').toLowerCase().includes('pending')).length;
+        return { completed, incompleted, total: studentTracker.length };
+      }, [studentTracker]);
+
+      // Filtered Behavior for selected student
+      const studentBehavior = useMemo(() => {
+        if (!selectedStudent) return [];
+        const sId = String(selectedStudent.Student_ID || '').trim().toLowerCase();
+        return behaviorList.filter(b => String(b.Student_ID || '').trim().toLowerCase() === sId)
+          .sort((a, b) => new Date(b.Date || 0) - new Date(a.Date || 0));
+      }, [selectedStudent, behaviorList]);
+
+      // Filtered Fees for selected student
+      const studentFees = useMemo(() => {
+        if (!selectedStudent) return { records: [], totalPaid: 0, balance: 0, hasDues: false };
+        const sId = String(selectedStudent.Student_ID || '').trim().toLowerCase();
+        const records = feeList.filter(f => String(f.Student_ID || '').trim().toLowerCase() === sId)
+          .sort((a, b) => new Date(b.Payment_Date || b.Date || 0) - new Date(a.Payment_Date || a.Date || 0));
+        
+        let totalPaid = 0;
+        let balance = 0;
+        records.forEach(r => {
+          totalPaid += parseFloat(r.Paid_Amount || r.Amount_Paid || 0) || 0;
+          const bal = parseFloat(r.Balance_Amount || r.Balance || 0);
+          if (!isNaN(bal) && bal > balance) balance = bal;
+        });
+
+        return {
+          records,
+          totalPaid,
+          balance,
+          hasDues: balance > 0
+        };
+      }, [selectedStudent, feeList]);
+
+      // Teacher Homework Submit
+      const handleTeacherSubmit = async (e) => {
+        e.preventDefault();
+        if (!hwDetail.trim()) return;
+        setHwSubmitting(true);
+        setHwSuccessMsg(null);
+        try {
+          const newHw = {
+            Homework_ID: 'HW-' + Date.now(),
+            Date: hwDate,
+            Class: hwClass,
+            Subject: hwSubject,
+            Homework_Detail: hwDetail.trim(),
+            Teacher: 'Faculty',
+            Target_Type: 'Whole Class',
+          };
+          setHomeworkList(prev => [newHw, ...prev]);
+          setHwSuccessMsg(`गृहकार्य (${hwSubject} - Class ${getClassName(hwClass)}) सफलतापूर्वक जोड़ दिया गया!`);
+          setHwDetail('');
+        } catch (err) {
+          console.error(err);
+        } finally {
+          setHwSubmitting(false);
+        }
+      };
+
+      return (
+        <div className="min-h-screen flex flex-col">
+          {/* Top Global Header */}
+          <header className="bg-[#0c2340] text-white shadow-md sticky top-0 z-40 border-b-2 border-amber-400">
+            <div className="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center text-lg font-black shadow-sm">
+                  <i className="fa-solid fa-graduation-cap"></i>
+                </div>
+                <div>
+                  <h1 className="text-base sm:text-lg font-black tracking-tight leading-tight flex items-center gap-2">
+                    <span>E.V.S. PUBLIC SCHOOL</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-md bg-amber-400/20 text-amber-300 font-bold border border-amber-400/30">
+                      वेब पोर्टल
+                    </span>
+                  </h1>
+                  <p className="text-[11px] text-slate-300">
+                    डिजिटल छात्र व अभिभावक सेवा पोर्टल • Google Sheets सिंक
+                  </p>
+                </div>
+              </div>
+
+              {/* Top Navigation Tabs */}
+              <nav className="flex items-center gap-1.5 bg-white/10 p-1 rounded-xl border border-white/15">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('parent')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    activeTab === 'parent' ? 'bg-amber-400 text-slate-950 shadow-sm' : 'text-slate-200 hover:text-white'
+                  }`}
+                >
+                  <i className="fa-solid fa-house-user"></i>
+                  <span>अभिभावक (Parent)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('teacher')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    activeTab === 'teacher' ? 'bg-amber-400 text-slate-950 shadow-sm' : 'text-slate-200 hover:text-white'
+                  }`}
+                >
+                  <i className="fa-solid fa-chalkboard-user"></i>
+                  <span>अध्यापक (Teacher)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('manager')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    activeTab === 'manager' ? 'bg-amber-400 text-slate-950 shadow-sm' : 'text-slate-200 hover:text-white'
+                  }`}
+                >
+                  <i className="fa-solid fa-gauge-high"></i>
+                  <span>प्रबंधन (Manager)</span>
+                </button>
+              </nav>
+            </div>
+          </header>
+
+          {/* Main Content Area */}
+          <main className="flex-1 max-w-6xl w-full mx-auto p-4 sm:p-6 space-y-6">
+            {/* PARENT PORTAL */}
+            {activeTab === 'parent' && (
+              <div className="space-y-6">
+                {/* Parent Login / Mobile Search Bar */}
+                {!parentLoggedIn ? (
+                  <div className="max-w-md mx-auto bg-white rounded-3xl p-6 sm:p-8 shadow-sm border border-slate-200 text-center space-y-4">
+                    <div className="w-16 h-16 rounded-2xl bg-amber-100 text-amber-900 flex items-center justify-center text-2xl mx-auto shadow-inner">
+                      <i className="fa-solid fa-mobile-screen-button"></i>
+                    </div>
+                    <div>
+                      <h2 className="text-lg sm:text-xl font-black text-[#0c2340]">अभिभावक लॉगिन</h2>
+                      <p className="text-xs text-slate-500 mt-1">
+                        स्कूल में पंजीकृत मोबाइल नंबर दर्ज करें और अपने बच्चे का गृहकार्य, फीस व आचरण देखें:
+                      </p>
+                    </div>
+
+                    <form onSubmit={handleParentLogin} className="space-y-3">
+                      <div className="relative">
+                        <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
+                          <i className="fa-solid fa-phone"></i>
+                        </span>
+                        <input
+                          type="tel"
+                          value={parentMobileInput}
+                          onChange={(e) => setParentMobileInput(e.target.value)}
+                          placeholder="10 अंकों का मोबाइल नंबर (उदा: 9876543210)"
+                          className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#0c2340]"
+                        />
+                      </div>
+                      <button
+                        type="submit"
+                        className="w-full py-2.5 bg-[#0c2340] hover:bg-blue-950 text-amber-300 font-black rounded-xl text-sm transition-all shadow-md active:scale-95 cursor-pointer flex items-center justify-center gap-2"
+                      >
+                        <i className="fa-solid fa-magnifying-glass"></i>
+                        <span>छात्र विवरण खोजें (Login)</span>
+                      </button>
+                    </form>
+
+                    {parentSearchAttempted && !selectedStudent && (
+                      <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800">
+                        <i className="fa-solid fa-circle-exclamation mr-1.5"></i>
+                        यह मोबाइल नंबर स्कूल रिकॉर्ड में नहीं मिला। कृपया स्कूल कार्यालय से संपर्क करें।
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  /* LOGGED-IN PARENT DASHBOARD */
+                  <div className="space-y-5">
+                    {/* Active Student Banner & Multi-Child Switcher */}
+                    <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-5 flex flex-wrap items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center text-xl font-black shadow-xs shrink-0">
+                          {selectedStudent?.Student_Name ? selectedStudent.Student_Name.charAt(0).toUpperCase() : 'S'}
+                        </div>
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="text-base sm:text-lg font-black text-[#0c2340]">
+                              {selectedStudent?.Student_Name}
+                            </h3>
+                            <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-900 border border-blue-200">
+                              कक्षा: {getClassName(selectedStudent?.Class)}
+                            </span>
+                            <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
+                              रोल नं: {selectedStudent?.Roll_Number || 'N/A'}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-500 mt-0.5 flex flex-wrap items-center gap-2">
+                            <span>पिता: <strong>{selectedStudent?.Father_Name || 'N/A'}</strong></span>
+                            <span>•</span>
+                            <span>प्रवेश सं: <strong>{selectedStudent?.Admission_Number || 'N/A'}</strong></span>
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        {/* Multi-child Sibling Switcher */}
+                        {parentChildren.length > 1 && (
+                          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs font-bold">
+                            <span className="text-slate-500 px-1 text-[11px]">बच्चा:</span>
+                            {parentChildren.map((c) => (
+                              <button
+                                key={c.Student_ID}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedStudent(c);
+                                  setParentActiveSection('overview');
+                                }}
+                                className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                                  selectedStudent?.Student_ID === c.Student_ID
+                                    ? 'bg-[#0c2340] text-amber-300 shadow-xs'
+                                    : 'text-slate-600 hover:text-slate-900'
+                                }`}
+                              >
+                                {c.Student_Name}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => setQrModalStudent(selectedStudent)}
+                          className="px-3 py-1.5 bg-blue-50 hover:bg-[#0c2340] hover:text-amber-300 text-blue-900 border border-blue-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                        >
+                          <i className="fa-solid fa-qrcode text-amber-500"></i>
+                          <span>क्यूआर पास</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setParentLoggedIn(false);
+                            setSelectedStudent(null);
+                            setParentActiveSection('overview');
+                          }}
+                          className="px-3 py-1.5 bg-slate-100 hover:bg-rose-50 hover:text-rose-700 text-slate-600 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                        >
+                          लॉगआउट
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* ========================================================================= */}
+                    {/* CRITICAL FEATURE: WHEN ON OVERVIEW, DISPLAY THE 4 INTERACTIVE VIEW CARDS */}
+                    {/* WHEN A CARD IS CLICKED, ONLY THAT CARD'S DETAIL OPENS!                    */}
+                    {/* ========================================================================= */}
+                    {parentActiveSection === 'overview' ? (
+                      <div className="space-y-4 animate-fadeIn">
+                        <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-950 flex flex-wrap items-center justify-between gap-2 shadow-2xs">
+                          <div className="flex items-center gap-2">
+                            <i className="fa-solid fa-hand-pointer text-amber-600 text-base animate-bounce"></i>
+                            <span className="font-black sm:text-sm">
+                              👉 पूरा विवरण देखने के लिए नीचे दिए गए किसी भी कार्ड पर टच करें — सिर्फ उसी की पूरी जानकारी खुलेगी:
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={loadAllData}
+                            disabled={loadingData}
+                            className="px-3 py-1 bg-white hover:bg-slate-50 text-slate-700 border border-amber-300 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                          >
+                            <i className={`fa-solid fa-arrows-rotate ${loadingData ? 'fa-spin' : ''}`}></i>
+                            <span>रिफ्रेश</span>
+                          </button>
+                        </div>
+
+                        {/* 4 INTERACTIVE VIEW CARDS */}
+                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+                          {/* CARD 1: HOMEWORK */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setParentActiveSection('homework');
+                              window.scrollTo({ top: 0, behavior: 'smooth' });
+                            }}
+                            className="p-4 rounded-2xl border text-left transition-all cursor-pointer relative overflow-hidden flex flex-col justify-between group bg-white hover:bg-slate-50 text-slate-800 border-slate-200 shadow-xs hover:border-slate-300 hover:shadow-md active:scale-[0.98]"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="w-11 h-11 rounded-xl flex items-center justify-center text-lg shrink-0 transition-transform group-hover:scale-105 bg-blue-100 text-blue-900">
+                                <i className="fa-solid fa-book-open"></i>
+                              </div>
+                              <span className="text-[10px] sm:text-xs font-black px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-900 border border-blue-200">
+                                {parentHomework.length} विषय
+                              </span>
+                            </div>
+                            <div className="mt-4">
+                              <div className="text-xs sm:text-sm font-black flex items-center justify-between">
+                                <span>1. आज का होमवर्क</span>
+                                <i className="fa-solid fa-chevron-right text-xs text-slate-300 group-hover:text-slate-600 transition-transform group-hover:translate-x-0.5"></i>
+                              </div>
+                              <div className="text-[11px] mt-0.5 text-slate-500">
+                                गृहकार्य, फ़ोटो व PDF
+                              </div>
+                            </div>
+                          </button>
+
+                          {/* CARD 2: TRACKER */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setParentActiveSection('tracker');
+                              window.scrollTo({ top: 0, behavior: 'smooth' });
+                            }}
+                            className="p-4 rounded-2xl border text-left transition-all cursor-pointer relative overflow-hidden flex flex-col justify-between group bg-white hover:bg-slate-50 text-slate-800 border-slate-200 shadow-xs hover:border-slate-300 hover:shadow-md active:scale-[0.98]"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="w-11 h-11 rounded-xl flex items-center justify-center text-lg shrink-0 transition-transform group-hover:scale-105 bg-emerald-100 text-emerald-900">
+                                <i className="fa-solid fa-list-check"></i>
+                              </div>
+                              <span className={`text-[10px] sm:text-xs font-black px-2.5 py-0.5 rounded-full ${
+                                trackerStats.incompleted > 0
+                                  ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                                  : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                              }`}>
+                                {trackerStats.incompleted > 0 ? `${trackerStats.incompleted} अधूरा` : 'सब पूरा ✓'}
+                              </span>
+                            </div>
+                            <div className="mt-4">
+                              <div className="text-xs sm:text-sm font-black flex items-center justify-between">
+                                <span>2. काम पूरा या अधूरा</span>
+                                <i className="fa-solid fa-chevron-right text-xs text-slate-300 group-hover:text-slate-600 transition-transform group-hover:translate-x-0.5"></i>
+                              </div>
+                              <div className="text-[11px] mt-0.5 text-slate-500">
+                                होमवर्क स्थिति जांचें
+                              </div>
+                            </div>
+                          </button>
+
+                          {/* CARD 3: FEES */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setParentActiveSection('fees');
+                              window.scrollTo({ top: 0, behavior: 'smooth' });
+                            }}
+                            className="p-4 rounded-2xl border text-left transition-all cursor-pointer relative overflow-hidden flex flex-col justify-between group bg-white hover:bg-slate-50 text-slate-800 border-slate-200 shadow-xs hover:border-slate-300 hover:shadow-md active:scale-[0.98]"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="w-11 h-11 rounded-xl flex items-center justify-center text-lg shrink-0 transition-transform group-hover:scale-105 bg-amber-100 text-amber-900">
+                                <i className="fa-solid fa-indian-rupee-sign"></i>
+                              </div>
+                              <span className={`text-[10px] sm:text-xs font-black px-2.5 py-0.5 rounded-full ${
+                                studentFees.hasDues
+                                  ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                                  : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                              }`}>
+                                {studentFees.hasDues ? `बकाया ₹${studentFees.balance}` : 'पूरी जमा ✓'}
+                              </span>
+                            </div>
+                            <div className="mt-4">
+                              <div className="text-xs sm:text-sm font-black flex items-center justify-between">
+                                <span>3. स्कूल फीस व रसीदें</span>
+                                <i className="fa-solid fa-chevron-right text-xs text-slate-300 group-hover:text-slate-600 transition-transform group-hover:translate-x-0.5"></i>
+                              </div>
+                              <div className="text-[11px] mt-0.5 text-slate-500">
+                                {studentFees.hasDues ? 'जमा विवरण व रसीदें' : 'सभी रसीदें सुरक्षित'}
+                              </div>
+                            </div>
+                          </button>
+
+                          {/* CARD 4: ATTENDANCE & BEHAVIOR */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setParentActiveSection('behavior');
+                              window.scrollTo({ top: 0, behavior: 'smooth' });
+                            }}
+                            className="p-4 rounded-2xl border text-left transition-all cursor-pointer relative overflow-hidden flex flex-col justify-between group bg-white hover:bg-slate-50 text-slate-800 border-slate-200 shadow-xs hover:border-slate-300 hover:shadow-md active:scale-[0.98]"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="w-11 h-11 rounded-xl flex items-center justify-center text-lg shrink-0 transition-transform group-hover:scale-105 bg-purple-100 text-purple-900">
+                                <i className="fa-solid fa-clipboard-check"></i>
+                              </div>
+                              <span className="text-[10px] sm:text-xs font-black px-2.5 py-0.5 rounded-full bg-purple-100 text-purple-900 border border-purple-200">
+                                {studentBehavior.length > 0 ? 'रिपोर्ट उपलब्ध' : 'हाजिरी रिपोर्ट'}
+                              </span>
+                            </div>
+                            <div className="mt-4">
+                              <div className="text-xs sm:text-sm font-black flex items-center justify-between">
+                                <span>4. हाजिरी व आचरण</span>
+                                <i className="fa-solid fa-chevron-right text-xs text-slate-300 group-hover:text-slate-600 transition-transform group-hover:translate-x-0.5"></i>
+                              </div>
+                              <div className="text-[11px] mt-0.5 text-slate-500">
+                                उपस्थिति, ड्रेस व स्वच्छता
+                              </div>
+                            </div>
+                          </button>
+                        </div>
+
+                        {/* Quick 5th Action: Full Profile */}
+                        <div className="p-3.5 bg-slate-100 border border-slate-200 rounded-2xl flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 text-xs text-slate-700">
+                            <i className="fa-solid fa-id-card text-blue-900 text-base"></i>
+                            <span>छात्र की पूरी प्रोफ़ाइल, पता, जन्मतिथि व माता-पिता का नाम:</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setParentActiveSection('profile');
+                              window.scrollTo({ top: 0, behavior: 'smooth' });
+                            }}
+                            className="px-4 py-2 bg-[#0c2340] hover:bg-blue-950 text-amber-300 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shadow-xs"
+                          >
+                            <i className="fa-solid fa-user"></i>
+                            <span>5. पूरी प्रोफ़ाइल देखें</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      /* WHEN IN A SPECIFIC SECTION: SHOW TOP HEADER WITH BACK BUTTON AND SWITCHER PILLS */
+                      <div className="space-y-5 animate-fadeIn">
+                        {/* SLEEK TOP NAVIGATION BAR */}
+                        <div className="bg-[#0c2340] text-white p-3.5 rounded-2xl shadow-md border border-slate-700 flex flex-wrap items-center justify-between gap-3">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setParentActiveSection('overview');
+                              window.scrollTo({ top: 0, behavior: 'smooth' });
+                            }}
+                            className="flex items-center gap-2 px-3.5 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black rounded-xl text-xs sm:text-sm transition-all cursor-pointer shadow-sm active:scale-95 shrink-0"
+                          >
+                            <i className="fa-solid fa-arrow-left"></i>
+                            <span>← वापस मुख्य 4 कार्ड्स (Back to Cards)</span>
+                          </button>
+
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <button
+                              onClick={() => setParentActiveSection('homework')}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                                parentActiveSection === 'homework' ? 'bg-amber-400 text-slate-950 shadow-xs' : 'bg-white/15 hover:bg-white/25 text-white'
+                              }`}
+                            >
+                              📚 1. गृहकार्य
+                            </button>
+                            <button
+                              onClick={() => setParentActiveSection('tracker')}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                                parentActiveSection === 'tracker' ? 'bg-emerald-400 text-slate-950 shadow-xs' : 'bg-white/15 hover:bg-white/25 text-white'
+                              }`}
+                            >
+                              📝 2. स्थिति
+                            </button>
+                            <button
+                              onClick={() => setParentActiveSection('fees')}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                                parentActiveSection === 'fees' ? 'bg-amber-300 text-slate-950 shadow-xs' : 'bg-white/15 hover:bg-white/25 text-white'
+                              }`}
+                            >
+                              💰 3. फीस
+                            </button>
+                            <button
+                              onClick={() => setParentActiveSection('behavior')}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                                parentActiveSection === 'behavior' ? 'bg-purple-300 text-slate-950 shadow-xs' : 'bg-white/15 hover:bg-white/25 text-white'
+                              }`}
+                            >
+                              🌟 4. आचरण
+                            </button>
+                            <button
+                              onClick={() => setParentActiveSection('profile')}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                                parentActiveSection === 'profile' ? 'bg-blue-300 text-slate-950 shadow-xs' : 'bg-white/15 hover:bg-white/25 text-white'
+                              }`}
+                            >
+                              🪪 5. प्रोफ़ाइल
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* 1. HOMEWORK DETAIL VIEW */}
+                        {parentActiveSection === 'homework' && (
+                          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 sm:p-6 space-y-4">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+                              <div>
+                                <h4 className="text-base sm:text-lg font-black text-[#0c2340] flex items-center gap-2">
+                                  <i className="fa-solid fa-book-open text-amber-500"></i>
+                                  <span>दैनिक गृहकार्य (Daily Homework Assignments)</span>
+                                </h4>
+                                <p className="text-xs text-slate-500 mt-1">
+                                  कक्षा {getClassName(selectedStudent?.Class)} का गृहकार्य, संलग्न फ़ोटो व PDF दस्तावेज़:
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl text-xs font-bold">
+                                <button
+                                  type="button"
+                                  onClick={() => setHwDaysFilter('3days')}
+                                  className={`px-3 py-1.5 rounded-lg transition-all ${
+                                    hwDaysFilter === '3days' ? 'bg-white text-blue-900 shadow-2xs' : 'text-slate-600'
+                                  }`}
+                                >
+                                  पिछले 3 दिन
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setHwDaysFilter('all')}
+                                  className={`px-3 py-1.5 rounded-lg transition-all ${
+                                    hwDaysFilter === 'all' ? 'bg-white text-blue-900 shadow-2xs' : 'text-slate-600'
+                                  }`}
+                                >
+                                  सभी रिकॉर्ड्स
+                                </button>
+                              </div>
+                            </div>
+
+                            {displayHomework.length === 0 ? (
+                              <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 text-slate-500 space-y-2">
+                                <i className="fa-solid fa-check-circle text-emerald-500 text-3xl"></i>
+                                <p className="font-bold text-sm">इस अवधि में कोई नया गृहकार्य नहीं मिला।</p>
+                              </div>
+                            ) : (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                {displayHomework.map((hw, idx) => {
+                                  const mediaList = extractHomeworkMedia(hw);
+                                  return (
+                                    <div key={idx} className="bg-slate-50 hover:bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 hover:border-slate-300 transition-all shadow-xs flex flex-col justify-between">
+                                      <div>
+                                        <div className="flex items-center justify-between gap-2 border-b border-slate-200/80 pb-2.5 mb-3">
+                                          <span className="px-2.5 py-1 bg-blue-100 text-blue-950 font-black text-xs rounded-lg">
+                                            {hw.Subject || 'General'}
+                                          </span>
+                                          <span className="text-xs font-bold text-slate-500 flex items-center gap-1">
+                                            <i className="fa-regular fa-calendar text-amber-600"></i>
+                                            {formatDate(hw.Date)}
+                                          </span>
+                                        </div>
+
+                                        <p className="text-sm font-semibold text-slate-800 leading-relaxed whitespace-pre-line mb-4">
+                                          {hw.Homework_Detail || hw.Detail || 'कोई विवरण नहीं।'}
+                                        </p>
+
+                                        {/* Media Attachments (Photos & PDF) */}
+                                        {mediaList.length > 0 && (
+                                          <div className="space-y-2 pt-2 border-t border-slate-200/60">
+                                            <p className="text-[11px] font-bold text-slate-500">
+                                              संलग्नक ({mediaList.length}):
+                                            </p>
+                                            <div className="space-y-2">
+                                              {mediaList.map((m) => (
+                                                <HomeworkMediaCard
+                                                  key={m.id}
+                                                  item={m}
+                                                  onOpen={() => {
+                                                    setActiveMediaModal(m);
+                                                    setMediaZoom(1);
+                                                    setMediaRotation(0);
+                                                  }}
+                                                />
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+
+                                      <div className="mt-4 pt-2.5 border-t border-slate-200/60 flex items-center justify-between text-[11px] text-slate-500">
+                                        <span>अध्यापक: <strong>{hw.Teacher || 'Faculty'}</strong></span>
+                                        <span>कक्षा: <strong>{getClassName(hw.Class)}</strong></span>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+
+                            {/* Back to All Cards button at bottom of section */}
+                            <div className="pt-4 border-t border-slate-100 flex justify-center">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setParentActiveSection('overview');
+                                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                                }}
+                                className="px-5 py-2.5 bg-[#0c2340] hover:bg-blue-950 text-amber-300 font-bold rounded-xl text-xs sm:text-sm flex items-center gap-2 shadow-sm cursor-pointer transition-all active:scale-95"
+                              >
+                                <i className="fa-solid fa-arrow-left"></i>
+                                <span>← वापस मुख्य 4 कार्ड्स पर जाएं (Back to Cards)</span>
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 2. TRACKER DETAIL VIEW */}
+                        {parentActiveSection === 'tracker' && (
+                          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 sm:p-6 space-y-4">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+                              <div>
+                                <h4 className="text-base sm:text-lg font-black text-[#0c2340] flex items-center gap-2">
+                                  <i className="fa-solid fa-list-check text-emerald-600"></i>
+                                  <span>गृहकार्य स्थिति ट्रैकर (Homework Completion Tracker)</span>
+                                </h4>
+                                <p className="text-xs text-slate-500 mt-1">
+                                  अध्यापकों द्वारा जांची गई विषयवार कार्य स्थिति:
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="px-3 py-1 bg-emerald-100 text-emerald-800 text-xs font-black rounded-lg border border-emerald-200">
+                                  {trackerStats.completed} पूरा
+                                </span>
+                                <span className="px-3 py-1 bg-rose-100 text-rose-800 text-xs font-black rounded-lg border border-rose-200">
+                                  {trackerStats.incompleted} अधूरा
+                                </span>
+                              </div>
+                            </div>
+
+                            {studentTracker.length === 0 ? (
+                              <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 text-slate-500">
+                                <i className="fa-solid fa-clipboard text-slate-400 text-3xl mb-2"></i>
+                                <p className="font-bold text-sm">इस छात्र का कोई ट्रैकर रिकॉर्ड अभी उपलब्ध नहीं है।</p>
+                              </div>
+                            ) : (
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-left text-xs">
+                                  <thead className="bg-[#0c2340] text-amber-300">
+                                    <tr>
+                                      <th className="p-3 rounded-l-xl">दिनांक (Date)</th>
+                                      <th className="p-3">विषय (Subject)</th>
+                                      <th className="p-3">स्थिति (Status)</th>
+                                      <th className="p-3 rounded-r-xl">टिप्पणी (Teacher Remarks)</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100">
+                                    {studentTracker.map((t, idx) => {
+                                      const st = String(t.Status || 'Complete');
+                                      const isDone = st.toLowerCase().includes('complete') && !st.toLowerCase().includes('in');
+                                      return (
+                                        <tr key={idx} className="hover:bg-slate-50">
+                                          <td className="p-3 font-semibold">{formatDate(t.Date)}</td>
+                                          <td className="p-3 font-bold text-slate-900">{t.Subject || '—'}</td>
+                                          <td className="p-3">
+                                            <span className={`px-2.5 py-1 rounded-full text-[11px] font-black ${
+                                              isDone ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-rose-100 text-rose-800 border border-rose-200'
+                                            }`}>
+                                              {isDone ? 'काम पूरा ✓' : 'काम अधूरा ❌'}
+                                            </span>
+                                          </td>
+                                          <td className="p-3 text-slate-600">{t.Remarks || t.Teacher_Remarks || '—'}</td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+
+                            <div className="pt-4 border-t border-slate-100 flex justify-center">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setParentActiveSection('overview');
+                                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                                }}
+                                className="px-5 py-2.5 bg-[#0c2340] hover:bg-blue-950 text-amber-300 font-bold rounded-xl text-xs sm:text-sm flex items-center gap-2 shadow-sm cursor-pointer transition-all active:scale-95"
+                              >
+                                <i className="fa-solid fa-arrow-left"></i>
+                                <span>← वापस मुख्य 4 कार्ड्स पर जाएं (Back to Cards)</span>
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 3. FEES DETAIL VIEW */}
+                        {parentActiveSection === 'fees' && (
+                          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 sm:p-6 space-y-4">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+                              <div>
+                                <h4 className="text-base sm:text-lg font-black text-[#0c2340] flex items-center gap-2">
+                                  <i className="fa-solid fa-indian-rupee-sign text-amber-500"></i>
+                                  <span>स्कूल फीस व रसीदें (Fee Receipts & Ledger)</span>
+                                </h4>
+                                <p className="text-xs text-slate-500 mt-1">
+                                  जमा की गई फीस, रसीद संख्या व शेष बकाया:
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-right">
+                                  <span className="text-[10px] text-slate-500 uppercase font-bold block">कुल जमा फीस</span>
+                                  <span className="text-sm font-black text-emerald-600">₹{studentFees.totalPaid.toLocaleString('en-IN')}</span>
+                                </div>
+                                <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-right">
+                                  <span className="text-[10px] text-slate-500 uppercase font-bold block">शेष बकाया</span>
+                                  <span className={`text-sm font-black ${studentFees.hasDues ? 'text-rose-600' : 'text-emerald-600'}`}>
+                                    {studentFees.hasDues ? `₹${studentFees.balance.toLocaleString('en-IN')}` : '₹0 (कोई बकाया नहीं)'}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {studentFees.records.length === 0 ? (
+                              <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 text-slate-500">
+                                <i className="fa-solid fa-receipt text-slate-400 text-3xl mb-2"></i>
+                                <p className="font-bold text-sm">इस छात्र का कोई फीस रिकॉर्ड अभी दर्ज नहीं है।</p>
+                              </div>
+                            ) : (
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-left text-xs">
+                                  <thead className="bg-[#0c2340] text-amber-300">
+                                    <tr>
+                                      <th className="p-3 rounded-l-xl">रसीद सं (Receipt No)</th>
+                                      <th className="p-3">दिनांक (Date)</th>
+                                      <th className="p-3">महीना / मद (Month)</th>
+                                      <th className="p-3">जमा राशि (Paid)</th>
+                                      <th className="p-3">भुगतान का तरीका (Mode)</th>
+                                      <th className="p-3 rounded-r-xl">शेष बकाया (Balance)</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100">
+                                    {studentFees.records.map((f, idx) => (
+                                      <tr key={idx} className="hover:bg-slate-50">
+                                        <td className="p-3 font-mono font-bold text-blue-900">{f.Receipt_No || `REC-${idx+1}`}</td>
+                                        <td className="p-3 font-semibold">{formatDate(f.Payment_Date || f.Date)}</td>
+                                        <td className="p-3 font-medium">{f.Month_For || f.Quarter || 'School Fee'}</td>
+                                        <td className="p-3 font-black text-emerald-700">₹{(parseFloat(f.Paid_Amount || f.Amount_Paid || 0) || 0).toLocaleString('en-IN')}</td>
+                                        <td className="p-3 text-slate-600">{f.Payment_Mode || 'Cash'}</td>
+                                        <td className="p-3 font-bold text-slate-700">
+                                          {parseFloat(f.Balance_Amount || 0) > 0 ? `₹${parseFloat(f.Balance_Amount).toLocaleString('en-IN')}` : '₹0 (Clear)'}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+
+                            <div className="pt-4 border-t border-slate-100 flex justify-center">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setParentActiveSection('overview');
+                                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                                }}
+                                className="px-5 py-2.5 bg-[#0c2340] hover:bg-blue-950 text-amber-300 font-bold rounded-xl text-xs sm:text-sm flex items-center gap-2 shadow-sm cursor-pointer transition-all active:scale-95"
+                              >
+                                <i className="fa-solid fa-arrow-left"></i>
+                                <span>← वापस मुख्य 4 कार्ड्स पर जाएं (Back to Cards)</span>
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 4. BEHAVIOR DETAIL VIEW */}
+                        {parentActiveSection === 'behavior' && (
+                          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 sm:p-6 space-y-4">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+                              <div>
+                                <h4 className="text-base sm:text-lg font-black text-[#0c2340] flex items-center gap-2">
+                                  <i className="fa-solid fa-clipboard-check text-purple-600"></i>
+                                  <span>हाजिरी व आचरण डायरी (Daily Attendance & Behavior)</span>
+                                </h4>
+                                <p className="text-xs text-slate-500 mt-1">
+                                  दैनिक उपस्थिति, स्कूल यूनिफॉर्म, अनुशासन व स्टार रेटिंग:
+                                </p>
+                              </div>
+                            </div>
+
+                            {studentBehavior.length === 0 ? (
+                              <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 text-slate-500">
+                                <i className="fa-solid fa-star text-slate-400 text-3xl mb-2"></i>
+                                <p className="font-bold text-sm">इस छात्र का कोई आचरण रिकॉर्ड अभी उपलब्ध नहीं है।</p>
+                              </div>
+                            ) : (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                {studentBehavior.map((b, idx) => (
+                                  <div key={idx} className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2.5 shadow-2xs">
+                                    <div className="flex items-center justify-between border-b border-slate-200/80 pb-2">
+                                      <span className="font-bold text-xs text-slate-800">{formatDate(b.Date)}</span>
+                                      <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                        उपस्थित ✓
+                                      </span>
+                                    </div>
+                                    <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                                      <div className="p-2 bg-white rounded-xl border border-slate-200">
+                                        <span className="text-[10px] text-slate-400 block font-semibold">ड्रेस / यूनिफॉर्म</span>
+                                        <span className="font-bold text-slate-800">{b.Uniform || 'Proper ✓'}</span>
+                                      </div>
+                                      <div className="p-2 bg-white rounded-xl border border-slate-200">
+                                        <span className="text-[10px] text-slate-400 block font-semibold">स्वच्छता</span>
+                                        <span className="font-bold text-slate-800">{b.Cleanliness || 'Good ✓'}</span>
+                                      </div>
+                                      <div className="p-2 bg-white rounded-xl border border-slate-200">
+                                        <span className="text-[10px] text-slate-400 block font-semibold">अनुशासन</span>
+                                        <span className="font-bold text-slate-800">{b.Discipline || 'Excellent'}</span>
+                                      </div>
+                                    </div>
+                                    {b.Teacher_Remarks && (
+                                      <p className="text-xs text-slate-600 bg-white p-2.5 rounded-xl border border-slate-200">
+                                        <strong>शिक्षक टिप्पणी:</strong> {b.Teacher_Remarks}
+                                      </p>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            <div className="pt-4 border-t border-slate-100 flex justify-center">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setParentActiveSection('overview');
+                                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                                }}
+                                className="px-5 py-2.5 bg-[#0c2340] hover:bg-blue-950 text-amber-300 font-bold rounded-xl text-xs sm:text-sm flex items-center gap-2 shadow-sm cursor-pointer transition-all active:scale-95"
+                              >
+                                <i className="fa-solid fa-arrow-left"></i>
+                                <span>← वापस मुख्य 4 कार्ड्स पर जाएं (Back to Cards)</span>
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 5. PROFILE DETAIL VIEW */}
+                        {parentActiveSection === 'profile' && selectedStudent && (
+                          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 sm:p-6 space-y-4">
+                            <div className="border-b border-slate-100 pb-3">
+                              <h4 className="text-base sm:text-lg font-black text-[#0c2340] flex items-center gap-2">
+                                <i className="fa-solid fa-id-card text-blue-900"></i>
+                                <span>छात्र की पूरी प्रोफ़ाइल (Complete Student Profile)</span>
+                              </h4>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
+                              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                                <span className="text-slate-400 block font-bold text-[10px] uppercase">छात्र का नाम</span>
+                                <span className="text-sm font-black text-slate-900">{selectedStudent.Student_Name}</span>
+                              </div>
+                              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                                <span className="text-slate-400 block font-bold text-[10px] uppercase">कक्षा (Class)</span>
+                                <span className="text-sm font-black text-slate-900">{getClassName(selectedStudent.Class)}</span>
+                              </div>
+                              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                                <span className="text-slate-400 block font-bold text-[10px] uppercase">प्रवेश संख्या (Admission No)</span>
+                                <span className="text-sm font-black text-slate-900">{selectedStudent.Admission_Number || 'N/A'}</span>
+                              </div>
+                              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                                <span className="text-slate-400 block font-bold text-[10px] uppercase">रोल नंबर (Roll No)</span>
+                                <span className="text-sm font-black text-slate-900">{selectedStudent.Roll_Number || 'N/A'}</span>
+                              </div>
+                              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                                <span className="text-slate-400 block font-bold text-[10px] uppercase">पिता का नाम (Father's Name)</span>
+                                <span className="text-sm font-black text-slate-900">{selectedStudent.Father_Name || 'N/A'}</span>
+                              </div>
+                              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                                <span className="text-slate-400 block font-bold text-[10px] uppercase">माता का नाम (Mother's Name)</span>
+                                <span className="text-sm font-black text-slate-900">{selectedStudent.Mother_Name || 'N/A'}</span>
+                              </div>
+                              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                                <span className="text-slate-400 block font-bold text-[10px] uppercase">पंजीकृत मोबाइल (Mobile)</span>
+                                <span className="text-sm font-black text-slate-900">{selectedStudent.Parent_Mobile || 'N/A'}</span>
+                              </div>
+                              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                                <span className="text-slate-400 block font-bold text-[10px] uppercase">जन्मतिथि (D.O.B)</span>
+                                <span className="text-sm font-black text-slate-900">{formatDate(selectedStudent.DOB) || 'N/A'}</span>
+                              </div>
+                              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                                <span className="text-slate-400 block font-bold text-[10px] uppercase">पता (Address)</span>
+                                <span className="text-sm font-black text-slate-900">{selectedStudent.Address || 'N/A'}</span>
+                              </div>
+                            </div>
+
+                            <div className="pt-4 border-t border-slate-100 flex justify-center">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setParentActiveSection('overview');
+                                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                                }}
+                                className="px-5 py-2.5 bg-[#0c2340] hover:bg-blue-950 text-amber-300 font-bold rounded-xl text-xs sm:text-sm flex items-center gap-2 shadow-sm cursor-pointer transition-all active:scale-95"
+                              >
+                                <i className="fa-solid fa-arrow-left"></i>
+                                <span>← वापस मुख्य 4 कार्ड्स पर जाएं (Back to Cards)</span>
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* TEACHER DASHBOARD */}
+            {activeTab === 'teacher' && (
+              <div className="max-w-3xl mx-auto bg-white rounded-3xl p-6 sm:p-8 shadow-sm border border-slate-200 space-y-6">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                  <div>
+                    <h2 className="text-lg sm:text-xl font-black text-[#0c2340] flex items-center gap-2">
+                      <i className="fa-solid fa-chalkboard-user text-amber-500"></i>
+                      <span>दैनिक गृहकार्य अपलोड (Teacher Homework Entry)</span>
+                    </h2>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      कक्षा चुनें, विषय दर्ज करें और तुरंत होमवर्क प्रकाशित करें:
+                    </p>
+                  </div>
+                  <span className="px-2.5 py-1 bg-amber-100 text-amber-900 rounded-lg text-xs font-bold">
+                    Faculty Portal
+                  </span>
+                </div>
+
+                {hwSuccessMsg && (
+                  <div className="p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-2xl text-xs font-bold flex items-center gap-2">
+                    <i className="fa-solid fa-circle-check text-emerald-600 text-base"></i>
+                    <span>{hwSuccessMsg}</span>
+                  </div>
+                )}
+
+                <form onSubmit={handleTeacherSubmit} className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">दिनांक (Date)</label>
+                      <input
+                        type="date"
+                        value={hwDate}
+                        onChange={(e) => setHwDate(e.target.value)}
+                        className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-[#0c2340]"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">कक्षा (Class)</label>
+                      <select
+                        value={hwClass}
+                        onChange={(e) => setHwClass(e.target.value)}
+                        className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-[#0c2340]"
+                      >
+                        {['Pre-Nursery', 'Nursery', 'LKG', 'UKG', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C10', 'C11', 'C12'].map((c) => (
+                          <option key={c} value={c}>Class {getClassName(c)}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">विषय (Subject)</label>
+                      <input
+                        type="text"
+                        value={hwSubject}
+                        onChange={(e) => setHwSubject(e.target.value)}
+                        placeholder="उदा: Hindi, Math, Science"
+                        className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-[#0c2340]"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  {/* Quick Subject Pills */}
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                    <span className="text-[11px] font-bold text-slate-400 mr-1">त्वरित विषय:</span>
+                    {['Hindi', 'English', 'Mathematics', 'Science', 'Social Studies', 'Sanskrit', 'EVS', 'Computer', 'Drawing'].map((sub) => (
+                      <button
+                        key={sub}
+                        type="button"
+                        onClick={() => setHwSubject(sub)}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+                          hwSubject === sub ? 'bg-[#0c2340] text-amber-300 border-[#0c2340]' : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        {sub}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">गृहकार्य विवरण (Homework Instructions)</label>
+                    <textarea
+                      rows="4"
+                      value={hwDetail}
+                      onChange={(e) => setHwDetail(e.target.value)}
+                      placeholder="आज का गृहकार्य विस्तार से यहाँ लिखें... (जैसे: पाठ 3 के प्रश्न 1 से 5 कॉपी में करें व याद करें)"
+                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-[#0c2340]"
+                      required
+                    ></textarea>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={hwSubmitting}
+                    className="w-full py-3 bg-[#0c2340] hover:bg-blue-950 text-amber-300 font-black rounded-xl text-sm transition-all shadow-md active:scale-95 cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    <i className="fa-solid fa-paper-plane"></i>
+                    <span>{hwSubmitting ? 'अपलोड हो रहा है...' : 'गृहकार्य प्रकाशित करें (Publish Homework)'}</span>
+                  </button>
+                </form>
+              </div>
+            )}
+
+            {/* MANAGER DASHBOARD */}
+            {activeTab === 'manager' && (
+              <div className="bg-white rounded-3xl p-6 sm:p-8 shadow-sm border border-slate-200 space-y-6">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+                  <div>
+                    <h2 className="text-lg sm:text-xl font-black text-[#0c2340] flex items-center gap-2">
+                      <i className="fa-solid fa-gauge-high text-amber-500"></i>
+                      <span>प्रबंधन नियंत्रण कक्ष (School Manager Overview)</span>
+                    </h2>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      कुल पंजीकृत छात्र: <strong>{students.length}</strong> | कुल गृहकार्य रिकॉर्ड्स: <strong>{homeworkList.length}</strong>
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={managerSearch}
+                      onChange={(e) => setManagerSearch(e.target.value)}
+                      placeholder="नाम या मोबाइल से खोजें..."
+                      className="p-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold focus:outline-none"
+                    />
+                    <select
+                      value={managerClassFilter}
+                      onChange={(e) => setManagerClassFilter(e.target.value)}
+                      className="p-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold"
+                    >
+                      <option value="all">सभी कक्षाएं</option>
+                      {['Pre-Nursery', 'Nursery', 'LKG', 'UKG', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C10', 'C11', 'C12'].map((c) => (
+                        <option key={c} value={c}>{getClassName(c)}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-[#0c2340] text-amber-300">
+                      <tr>
+                        <th className="p-3 rounded-l-xl">प्रवेश सं</th>
+                        <th className="p-3">छात्र का नाम</th>
+                        <th className="p-3">कक्षा</th>
+                        <th className="p-3">पिता का नाम</th>
+                        <th className="p-3">अभिभावक मोबाइल</th>
+                        <th className="p-3 rounded-r-xl">कार्य</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {students
+                        .filter(s => {
+                          const matchQuery = !managerSearch || 
+                            String(s.Student_Name || '').toLowerCase().includes(managerSearch.toLowerCase()) ||
+                            String(s.Parent_Mobile || '').includes(managerSearch);
+                          const matchClass = managerClassFilter === 'all' || String(s.Class || '').toLowerCase() === managerClassFilter.toLowerCase();
+                          return matchQuery && matchClass;
+                        })
+                        .slice(0, 50)
+                        .map((s, idx) => (
+                          <tr key={idx} className="hover:bg-slate-50">
+                            <td className="p-3 font-mono font-bold text-slate-700">{s.Admission_Number || s.Student_ID}</td>
+                            <td className="p-3 font-bold text-slate-900">{s.Student_Name}</td>
+                            <td className="p-3 font-bold text-blue-900">{getClassName(s.Class)}</td>
+                            <td className="p-3 text-slate-600">{s.Father_Name}</td>
+                            <td className="p-3 font-mono text-slate-700">{s.Parent_Mobile}</td>
+                            <td className="p-3">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedStudent(s);
+                                  setParentLoggedIn(true);
+                                  setActiveTab('parent');
+                                  setParentActiveSection('overview');
+                                }}
+                                className="px-2.5 py-1 bg-[#0c2340] text-amber-300 rounded-lg text-xs font-bold hover:bg-blue-950 cursor-pointer"
+                              >
+                                देखें →
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </main>
+
+          {/* LIGHTBOX MEDIA VIEWER MODAL (FOR PHOTOS AND PDF DOCUMENTS) */}
+          {activeMediaModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/85 backdrop-blur-sm animate-fadeIn">
+              <div className="bg-slate-900 text-white rounded-3xl w-full max-w-4xl max-h-[92vh] flex flex-col shadow-2xl border border-slate-700 overflow-hidden">
+                {/* Modal Header */}
+                <div className="p-3.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span className={`w-8 h-8 rounded-xl flex items-center justify-center text-sm shrink-0 ${
+                      activeMediaModal.type === 'pdf' ? 'bg-rose-600 text-white' : 'bg-blue-600 text-white'
+                    }`}>
+                      <i className={`fa-solid ${activeMediaModal.type === 'pdf' ? 'fa-file-pdf' : 'fa-image'}`}></i>
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-xs sm:text-sm font-black truncate">{activeMediaModal.labelHindi}</p>
+                      <p className="text-[10px] text-slate-400 truncate">{activeMediaModal.fileName}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {/* ZOOM CONTROLS FOR IMAGES */}
+                    {activeMediaModal.type === 'image' && (
+                      <div className="hidden sm:flex items-center gap-1 bg-white/10 p-1 rounded-xl">
+                        <button
+                          type="button"
+                          onClick={() => setMediaZoom(z => Math.max(0.5, z - 0.25))}
+                          className="w-7 h-7 rounded-lg hover:bg-white/20 text-xs flex items-center justify-center"
+                        >
+                          <i className="fa-solid fa-minus"></i>
+                        </button>
+                        <span className="text-[10px] font-mono w-10 text-center">{Math.round(mediaZoom * 100)}%</span>
+                        <button
+                          type="button"
+                          onClick={() => setMediaZoom(z => Math.min(3, z + 0.25))}
+                          className="w-7 h-7 rounded-lg hover:bg-white/20 text-xs flex items-center justify-center"
+                        >
+                          <i className="fa-solid fa-plus"></i>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setMediaRotation(r => (r + 90) % 360)}
+                          className="w-7 h-7 rounded-lg hover:bg-white/20 text-xs flex items-center justify-center"
+                        >
+                          <i className="fa-solid fa-rotate-right"></i>
+                        </button>
+                      </div>
+                    )}
+
+                    {/* DIRECT OPEN IN NEW TAB / GOOGLE DRIVE BUTTON */}
+                    <a
+                      href={activeMediaModal.openUrl || activeMediaModal.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black rounded-xl text-xs flex items-center gap-1.5 shadow-sm"
+                    >
+                      <i className="fa-solid fa-arrow-up-right-from-square text-xs"></i>
+                      <span>सीधे खोलें / डाउनलोड</span>
+                    </a>
+
+                    <button
+                      type="button"
+                      onClick={() => setActiveMediaModal(null)}
+                      className="w-8 h-8 rounded-xl bg-white/10 hover:bg-rose-600 text-white flex items-center justify-center text-sm font-black transition-colors ml-1 cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+
+                {/* Modal Body */}
+                <div className="flex-1 overflow-auto p-4 flex items-center justify-center bg-slate-950 min-h-[55vh] max-h-[75vh]">
+                  {activeMediaModal.type === 'image' ? (
+                    <div className="flex flex-col items-center justify-center w-full h-full">
+                      <img
+                        src={activeMediaModal.url}
+                        alt={activeMediaModal.title}
+                        style={{
+                          transform: `scale(${mediaZoom}) rotate(${mediaRotation}deg)`,
+                          transformOrigin: 'center center',
+                          transition: 'transform 0.15s ease-out',
+                        }}
+                        className="max-h-[60vh] max-w-full object-contain rounded-xl shadow-xl"
+                        onError={(e) => {
+                          const target = e.currentTarget;
+                          if (activeMediaModal.fallbackUrl && target.src !== activeMediaModal.fallbackUrl) {
+                            target.src = activeMediaModal.fallbackUrl;
+                          } else {
+                            target.style.display = 'none';
+                            const errBox = document.getElementById('standalone-media-err');
+                            if (errBox) errBox.style.display = 'block';
+                          }
+                        }}
+                      />
+                      <div id="standalone-media-err" style={{ display: 'none' }} className="p-6 bg-slate-900 border border-slate-700 rounded-2xl text-center max-w-md space-y-3">
+                        <i className="fa-solid fa-cloud text-amber-400 text-3xl"></i>
+                        <h5 className="font-bold text-sm text-white">Google Drive / AppSheet सुरक्षित फ़ोटो</h5>
+                        <p className="text-xs text-slate-300">
+                          इस फ़ोटो को देखने के लिए कृपया नीचे दिए गए बटन पर क्लिक करके सीधे Google Drive में खोलें:
+                        </p>
+                        <a
+                          href={activeMediaModal.openUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-2 px-4 py-2 bg-amber-400 text-slate-950 font-black rounded-xl text-xs shadow-md"
+                        >
+                          <i className="fa-solid fa-arrow-up-right-from-square"></i>
+                          <span>Google Drive में फ़ोटो खोलें</span>
+                        </a>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="w-full h-[65vh] flex flex-col gap-3">
+                      <div className="p-3 bg-slate-900 border border-slate-700 rounded-xl flex flex-wrap items-center justify-between gap-2 shrink-0">
+                        <div className="flex items-center gap-2">
+                          <i className="fa-solid fa-file-pdf text-rose-500 text-lg"></i>
+                          <span className="text-xs text-slate-200">
+                            यदि PDF यहाँ सीधे लोड नहीं हो रही है, तो तुरंत इस बटन को दबाएं:
+                          </span>
+                        </div>
+                        <a
+                          href={activeMediaModal.openUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-3.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black rounded-lg text-xs flex items-center gap-1.5 shadow-sm"
+                        >
+                          <i className="fa-solid fa-arrow-up-right-from-square"></i>
+                          <span>Google Drive में PDF खोलें</span>
+                        </a>
+                      </div>
+                      <iframe
+                        src={activeMediaModal.url}
+                        className="w-full flex-1 rounded-xl bg-white border border-slate-700"
+                        title={activeMediaModal.title}
+                      ></iframe>
+                    </div>
+                  )}
+                </div>
+
+                {/* Modal Footer */}
+                <div className="p-3 bg-slate-950 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
+                  <span>ई.वी.एस. पब्लिक स्कूल • गृहकार्य संलग्नक दर्शक</span>
+                  <button
+                    type="button"
+                    onClick={() => setActiveMediaModal(null)}
+                    className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-lg text-xs cursor-pointer"
+                  >
+                    बंद करें
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* QR PASS MODAL */}
+          {qrModalStudent && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-fadeIn">
+              <div className="bg-white rounded-3xl p-6 sm:p-8 max-w-sm w-full text-center space-y-4 shadow-2xl border border-slate-200">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <h4 className="text-base font-black text-[#0c2340]">छात्र डिजिटल क्यूआर पास</h4>
+                  <button
+                    type="button"
+                    onClick={() => setQrModalStudent(null)}
+                    className="w-7 h-7 rounded-lg bg-slate-100 text-slate-600 font-bold hover:bg-slate-200 flex items-center justify-center text-xs"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+                  <div className="w-16 h-16 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center text-2xl font-black mx-auto shadow-sm">
+                    {qrModalStudent.Student_Name ? qrModalStudent.Student_Name.charAt(0).toUpperCase() : 'S'}
+                  </div>
+                  <div>
+                    <h5 className="font-black text-base text-slate-900">{qrModalStudent.Student_Name}</h5>
+                    <p className="text-xs font-bold text-blue-900 mt-0.5">
+                      कक्षा {getClassName(qrModalStudent.Class)} | रोल नं: {qrModalStudent.Roll_Number || 'N/A'}
+                    </p>
+                    <p className="text-[11px] text-slate-500">प्रवेश सं: {qrModalStudent.Admission_Number}</p>
+                  </div>
+                  
+                  {/* Dynamic QR image from Google Charts API */}
+                  <div className="p-3 bg-white rounded-xl border border-slate-200 inline-block shadow-xs">
+                    <img
+                      src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(`EVS_STUDENT:${qrModalStudent.Admission_Number || qrModalStudent.Student_ID}:${qrModalStudent.Student_Name}`)}`}
+                      alt="Student QR Pass"
+                      className="w-36 h-36 mx-auto object-contain"
+                    />
+                  </div>
+                  <p className="text-[10px] text-slate-500">
+                    स्कूल गेट उपस्थिति व पुस्तकालय सत्यापन हेतु
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="w-full py-2.5 bg-[#0c2340] text-amber-300 font-bold rounded-xl text-xs flex items-center justify-center gap-2 shadow-sm"
+                >
+                  <i className="fa-solid fa-print"></i>
+                  <span>क्यूआर पास प्रिंट करें</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Global Sticky Footer */}
+          <footer className="bg-[#0c2340] text-slate-300 py-4 text-center text-xs border-t-2 border-amber-400 mt-auto">
+            <div className="max-w-6xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+              <span>ई.वी.एस. पब्लिक स्कूल • सर्वाधिकार सुरक्षित</span>
+              <span className="text-[11px] text-amber-400/90 font-semibold">
+                सिंगल फ़ाइल डिजिटल पोर्टल • ऑटोमैटिक Google Sheets बैकएंड
+              </span>
+            </div>
+          </footer>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
