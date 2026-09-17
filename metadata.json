@@ -1,6 +1,6 @@
 {
   "name": "E.V.S. Public School Portal",
-  "description": "Official Web Portal for E.V.S. Public School featuring Parent Portal, Teacher Dashboard, and Manager Dashboard with live homework and student records synchronization.",
-  "requestFramePermissions": ["camera"],
+  "description": "Official Web Portal for E.V.S. Public School featuring Parent Portal, Teacher Dashboard, Manager Dashboard, and Driver Portal with real-time GPS van tracking.",
+  "requestFramePermissions": ["camera", "geolocation"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -15,6 +15,9 @@ import { StudentQRScannerModal } from './components/StudentQRScannerModal';
 import { AddFeeModal } from './components/AddFeeModal';
 import { StudentHomeworkQRTrackerModal } from './components/StudentHomeworkQRTrackerModal';
 import { ManagerFeeDashboard } from './components/ManagerFeeDashboard';
+import { StudentBehaviorModal, StudentBehaviorInput } from './components/StudentBehaviorModal';
+import { DriverPortal } from './components/DriverPortal';
+import { ManagerVanTracker } from './components/ManagerVanTracker';
 import studentFarahPhoto from './assets/images/student_farah_1789483069291.jpg';
 import studentNamraPhoto from './assets/images/student_namra_1789483091505.jpg';
 
@@ -955,7 +958,7 @@ const HomeworkMediaCard: React.FC<HomeworkMediaCardProps> = ({ item, onOpen }) =
   );
 };
 
-type TabType = 'home' | 'parent' | 'teacher' | 'manager';
+type TabType = 'home' | 'parent' | 'teacher' | 'manager' | 'driver';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabType>('home');
@@ -1137,6 +1140,10 @@ export default function App() {
   const [hwTrackerModalOpen, setHwTrackerModalOpen] = useState<boolean>(false);
   const [selectedHwTrackerStudent, setSelectedHwTrackerStudent] = useState<Student | null>(null);
 
+  // Student Behavior & Conduct Modal State (उपस्थिति, आचरण, स्वच्छता व रिमार्क)
+  const [behaviorModalOpen, setBehaviorModalOpen] = useState<boolean>(false);
+  const [selectedBehaviorStudent, setSelectedBehaviorStudent] = useState<Student | null>(null);
+
   // Add Fee Modal State (Manager & Principal fee collection)
   const [addFeeModalOpen, setAddFeeModalOpen] = useState<boolean>(false);
   const [addFeeInitialStudentId, setAddFeeInitialStudentId] = useState<string | undefined>(undefined);
@@ -1146,7 +1153,7 @@ export default function App() {
   const [managerSelectedFeeStudent, setManagerSelectedFeeStudent] = useState<Student | null>(null);
 
   // Manager Dashboard State
-  const [managerTab, setManagerTab] = useState<'students' | 'homework' | 'behavior' | 'fees' | 'users'>('students');
+  const [managerTab, setManagerTab] = useState<'students' | 'homework' | 'behavior' | 'fees' | 'users' | 'vanTracking'>('students');
   const [studentSearchTerm, setStudentSearchTerm] = useState<string>('');
   const [studentClassFilter, setStudentClassFilter] = useState<string>('all');
   const [hwSearchTerm, setHwSearchTerm] = useState<string>('');
@@ -2745,6 +2752,58 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     }
   };
 
+  // Dedicated Handler for Saving Student Daily Behavior & Conduct Record (आचरण वगैरह)
+  const handleSaveStudentBehavior = (record: StudentBehaviorInput, sendWhatsApp: boolean) => {
+    const newRec: StudentBehaviorRecord = {
+      Behavior_ID: record.Behavior_ID || `BEH-${Date.now().toString().slice(-6)}`,
+      Student_ID: record.Student_ID,
+      Date: record.Date,
+      Class: record.Class || '',
+      Is_Bathed: record.Is_Bathed,
+      Nails_Clean: record.Nails_Clean,
+      Uniform_clean: record.Uniform_clean,
+      Good_Manners: record.Good_Manners,
+      Discipline: record.Discipline,
+      Is_Present: record.Is_Present,
+      Remark: record.Remark,
+      AI_Feedback: '',
+    };
+
+    setBehaviorList((prev) => [newRec, ...prev]);
+
+    // Save to localStorage for instant persistence
+    try {
+      const existing = localStorage.getItem('evs_custom_behavior_records');
+      const list: StudentBehaviorRecord[] = existing ? JSON.parse(existing) : [];
+      list.unshift(newRec);
+      localStorage.setItem('evs_custom_behavior_records', JSON.stringify(list));
+    } catch (e) {
+      console.warn('localStorage error for behavior:', e);
+    }
+
+    // Sync to Google Apps Script API in background
+    try {
+      fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'addBehavior',
+          behavior_id: newRec.Behavior_ID,
+          student_id: newRec.Student_ID,
+          date: newRec.Date,
+          class: newRec.Class,
+          is_bathed: newRec.Is_Bathed,
+          nails_clean: newRec.Nails_Clean,
+          uniform_clean: newRec.Uniform_clean,
+          good_manners: newRec.Good_Manners,
+          discipline: newRec.Discipline,
+          is_present: newRec.Is_Present,
+          remark: newRec.Remark,
+        }),
+      }).catch((err) => console.warn('Background sync behavior error:', err));
+    } catch {}
+  };
+
   // Dedicated Handler for Student Homework QR Tracker Modal (Complete/Incomplete)
   const handleUpdateHomeworkStatusModal = (
     recordId: string,
@@ -3147,6 +3206,20 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 )}
               </button>
 
+              <button
+                id="nav-tab-driver"
+                onClick={() => setActiveTab('driver')}
+                className={`px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all duration-150 flex items-center gap-2 cursor-pointer whitespace-nowrap ${
+                  activeTab === 'driver'
+                    ? 'bg-amber-400 text-slate-950 shadow-md font-bold'
+                    : 'text-slate-200 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                <i className="fa-solid fa-van-shuttle"></i>
+                <span>ड्राइवर (Driver)</span>
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              </button>
+
               {/* Quick Refresh Icon */}
               <button
                 onClick={() => {
@@ -3273,7 +3346,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 </h3>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                 {/* 1. Parent Portal */}
                 <div
                   onClick={() => setActiveTab('parent')}
@@ -3355,7 +3428,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       Manager Dashboard
                     </h4>
                     <p className="text-xs sm:text-sm text-slate-600 leading-relaxed mb-6">
-                      Comprehensive oversight of all student records, admission details, fee balances, and homework submissions history.
+                      Comprehensive oversight of all student records, fee collections, homework, and live van GPS tracking.
                     </p>
                   </div>
 
@@ -3366,6 +3439,39 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     </span>
                     <span className="text-[10px] bg-slate-200 text-slate-800 font-medium px-2 py-0.5 rounded">
                       Full Roster
+                    </span>
+                  </div>
+                </div>
+
+                {/* 4. Driver Portal */}
+                <div
+                  onClick={() => setActiveTab('driver')}
+                  className="group bg-white rounded-2xl p-6 sm:p-7 shadow-md hover:shadow-xl transition-all duration-200 border-2 border-slate-100 hover:border-emerald-500 flex flex-col justify-between cursor-pointer relative overflow-hidden"
+                >
+                  <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-50 rounded-bl-full transition-transform group-hover:scale-110 -z-0"></div>
+                  <div className="relative z-10">
+                    <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center text-2xl mb-5 group-hover:bg-emerald-600 group-hover:text-white transition-colors duration-200">
+                      <i className="fa-solid fa-van-shuttle"></i>
+                    </div>
+                    <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider">
+                      Transport & Safety
+                    </span>
+                    <h4 className="text-xl font-bold text-slate-900 mt-1 mb-2 group-hover:text-emerald-700 transition-colors">
+                      Driver Portal
+                    </h4>
+                    <p className="text-xs sm:text-sm text-slate-600 leading-relaxed mb-6">
+                      वैन ड्राइवर के लिए लाइव जीपीएस लोकेशन प्रसारण, रूट स्टॉप, ट्रिप स्थिति एवं प्रबंधक के साथ रीयल-टाइम संचार।
+                    </p>
+                  </div>
+
+                  <div className="relative z-10 pt-4 border-t border-slate-100 flex items-center justify-between">
+                    <span className="text-xs font-semibold text-emerald-700 group-hover:text-emerald-900 flex items-center gap-1">
+                      Start GPS Sharing
+                      <i className="fa-solid fa-arrow-right text-xs group-hover:translate-x-1 transition-transform"></i>
+                    </span>
+                    <span className="text-[10px] bg-emerald-100 text-emerald-800 font-medium px-2 py-0.5 rounded flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
+                      Live GPS
                     </span>
                   </div>
                 </div>
@@ -5838,6 +5944,21 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   {homeworkList.length}
                 </span>
               </button>
+
+              {/* Universal Student Finder & QR Scanner button */}
+              <button
+                type="button"
+                onClick={() => {
+                  setQrScannerTarget(null);
+                  setQrScannerSubtitle('शिक्षक: छात्र खोजें (QR स्कैन, नाम, ID या मोबाइल द्वारा)');
+                  setQrScannerOpen(true);
+                }}
+                className="px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 shadow-sm ml-auto"
+              >
+                <i className="fa-solid fa-magnifying-glass"></i>
+                <i className="fa-solid fa-qrcode"></i>
+                <span>छात्र खोजें / QR स्कैनर</span>
+              </button>
             </div>
 
             {/* TAB 1: UPLOAD HOMEWORK */}
@@ -6854,6 +6975,35 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 <i className="fa-solid fa-id-card-clip text-amber-600"></i>
                 <span>Staff & Users Sheet ({filteredUsers.length})</span>
               </button>
+
+              <button
+                id="manager-tab-van-tracking"
+                onClick={() => setManagerTab('vanTracking')}
+                className={`pb-3 px-3 text-xs sm:text-sm font-bold flex items-center gap-2 border-b-2 cursor-pointer transition-colors ${
+                  managerTab === 'vanTracking'
+                    ? 'border-blue-900 text-blue-900'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <i className="fa-solid fa-van-shuttle text-amber-500"></i>
+                <span>वैन लाइव ट्रैकिंग (Van Tracking)</span>
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              </button>
+
+              {/* Universal Student Finder & QR Scanner button */}
+              <button
+                type="button"
+                onClick={() => {
+                  setQrScannerTarget('managerStudents');
+                  setQrScannerSubtitle('प्रबंधक: छात्र खोजें (QR स्कैन, नाम, ID या मोबाइल द्वारा)');
+                  setQrScannerOpen(true);
+                }}
+                className="pb-2.5 px-3.5 text-xs sm:text-sm font-bold flex items-center gap-1.5 cursor-pointer bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 rounded-xl shadow-xs ml-auto transition-all"
+              >
+                <i className="fa-solid fa-magnifying-glass"></i>
+                <i className="fa-solid fa-qrcode"></i>
+                <span>छात्र खोजें / QR स्कैनर</span>
+              </button>
             </div>
 
             {/* VIEW 1: STUDENTS RECORDS */}
@@ -7278,6 +7428,20 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       ></i>
                       <span>Date ({managerBehaviorSortOrder.toUpperCase()})</span>
                     </button>
+
+                    {/* Record New Behavior Button */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setQrScannerTarget(null);
+                        setQrScannerSubtitle('आचरण व अनुशासन दर्ज करने हेतु छात्र खोजें या स्कैन करें');
+                        setQrScannerOpen(true);
+                      }}
+                      className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#0c2340] hover:bg-blue-950 text-amber-300 text-xs font-bold transition-all shadow-xs cursor-pointer"
+                    >
+                      <i className="fa-solid fa-plus-circle text-amber-400"></i>
+                      <span>नया आचरण दर्ज करें</span>
+                    </button>
                   </div>
                 </div>
 
@@ -7529,6 +7693,20 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                   <i className="fa-brands fa-whatsapp text-xs"></i>
                                   <span>Send</span>
                                 </button>
+                                {matchedStudent && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedBehaviorStudent(matchedStudent);
+                                      setBehaviorModalOpen(true);
+                                    }}
+                                    className="inline-flex items-center gap-1 px-2 py-1 rounded bg-[#0c2340] hover:bg-blue-950 text-amber-300 font-bold text-[11px] transition-colors shadow-xs cursor-pointer ml-1.5"
+                                    title="Update behavior or remarks"
+                                  >
+                                    <i className="fa-solid fa-pen-to-square text-xs"></i>
+                                    <span>Edit</span>
+                                  </button>
+                                )}
                               </td>
                             </tr>
                           );
@@ -7793,7 +7971,31 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 </div>
               </div>
             )}
+
+            {/* VIEW 6: VAN LIVE TRACKING */}
+            {managerTab === 'vanTracking' && (
+              <ManagerVanTracker
+                students={students}
+                users={usersList}
+                onOpenDriverPortal={() => setActiveTab('driver')}
+                getClassName={getClassName}
+              />
+            )}
           </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* 5. DRIVER PORTAL                                                          */}
+        {/* ========================================================================= */}
+        {activeTab === 'driver' && (
+          <DriverPortal
+            users={usersList}
+            onBackToHome={() => setActiveTab('home')}
+            onOpenManagerTracker={() => {
+              setActiveTab('manager');
+              setManagerTab('vanTracking');
+            }}
+          />
         )}
       </main>
 
@@ -8068,6 +8270,54 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
           </div>
         </div>
       )}
+
+      {/* ========================================================================= */}
+      {/* UNIVERSAL STUDENT FINDER & ACTION HUB (QR Code, Name, ID, Mobile Scanner) */}
+      {/* ========================================================================= */}
+      <StudentQRScannerModal
+        isOpen={qrScannerOpen}
+        onClose={() => setQrScannerOpen(false)}
+        onScan={handleQRScanned}
+        students={students}
+        title="छात्र खोजें एवं त्वरित कार्य (Find Student & Actions)"
+        subtitle={qrScannerSubtitle || 'QR स्कैन, नाम, स्टूडेंट ID, मोबाइल नंबर या रोल नंबर द्वारा खोजें'}
+        classMap={classMap}
+        getClassName={getClassName}
+        getStudentPhoto={getStudentPhoto}
+        onTrackHomework={(student) => {
+          setSelectedHwTrackerStudent(student as Student);
+          setHwTrackerModalOpen(true);
+        }}
+        onAssignHomework={(student) => {
+          if (student.Class) setHwClass(student.Class);
+          setActiveTab('teacher');
+          setTeacherPortalTab('upload');
+        }}
+        onAddFee={(student) => {
+          setAddFeeInitialStudentId(student.Student_ID);
+          setAddFeeModalOpen(true);
+        }}
+        onRecordBehavior={(student) => {
+          setSelectedBehaviorStudent(student as Student);
+          setBehaviorModalOpen(true);
+        }}
+      />
+
+      {/* ========================================================================= */}
+      {/* STUDENT BEHAVIOR & CONDUCT MODAL (आचरण व अनुशासन दर्ज करें)              */}
+      {/* ========================================================================= */}
+      <StudentBehaviorModal
+        isOpen={behaviorModalOpen}
+        onClose={() => {
+          setBehaviorModalOpen(false);
+          setSelectedBehaviorStudent(null);
+        }}
+        student={selectedBehaviorStudent}
+        onSaveBehavior={handleSaveStudentBehavior}
+        teacherName={teacherUser?.Name || managerUser?.Name || 'School Teacher'}
+        getClassName={getClassName}
+        getStudentPhoto={getStudentPhoto}
+      />
 
       {/* ========================================================================= */}
       {/* STUDENT HOMEWORK QR TRACKER MODAL (Complete / Incomplete Tracker)        */}
