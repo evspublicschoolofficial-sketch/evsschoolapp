@@ -104,6 +104,16 @@ export const StudentQRScannerModal: React.FC<StudentQRScannerModalProps> = ({
       if (found) return found;
     }
 
+    // 1b. Check if scanned text is a QR server URL containing data or chl parameter (e.g. api.qrserver.com/?data=57dd106d)
+    const urlDataMatch = text.match(/[?&](?:data|chl)=([^&]+)/i);
+    if (urlDataMatch && urlDataMatch[1]) {
+      const decodedParam = decodeURIComponent(urlDataMatch[1]).trim().toLowerCase();
+      const byParam = students.find(
+        (s) => String(s.Student_ID || '').trim().toLowerCase() === decodedParam
+      );
+      if (byParam) return byParam;
+    }
+
     // 2. Exact Student_ID match
     const byId = students.find(
       (s) => String(s.Student_ID || '').trim().toLowerCase() === clean

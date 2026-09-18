@@ -322,28 +322,47 @@ export const StudentQRCodeCard: React.FC<StudentQRCodeCardProps> = ({
     ''
   ).trim();
 
-  // Is rawQR an image URL (Google Drive or direct web image link)?
+  // Official Google Sheet Student QR code URL based on sheet formula:
+  // =IMAGE(CONCATENATE("https://api.qrserver.com/v1/create-qr-code/?data=", A2, "&size=250x250"))
+  const sheetQrUrl = useMemo(() => {
+    if (rawQR && (rawQR.startsWith('http://') || rawQR.startsWith('https://') || rawQR.startsWith('data:image/'))) {
+      return formatImageUrl(rawQR);
+    }
+    const studentId = String(student.Student_ID || '').trim();
+    if (studentId) {
+      return `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(studentId)}&size=250x250`;
+    }
+    return '';
+  }, [rawQR, student.Student_ID]);
+
+  // Is rawQR an image URL (Google Drive, qrserver or direct web image link)?
   const isImageUrl = useMemo(() => {
+    if (sheetQrUrl) return true;
     if (!rawQR) return false;
     if (rawQR.startsWith('data:image/')) return true;
-    if (rawQR.includes('drive.google.com') || rawQR.includes('googleusercontent.com')) return true;
+    if (rawQR.includes('drive.google.com') || rawQR.includes('googleusercontent.com') || rawQR.includes('qrserver.com')) return true;
     if (/^https?:\/\/.*\.(png|jpe?g|webp|gif|svg)(\?.*)?$/i.test(rawQR)) return true;
     return false;
-  }, [rawQR]);
+  }, [rawQR, sheetQrUrl]);
 
   const formattedQrImageUrl = useMemo(() => {
+    if (sheetQrUrl) return sheetQrUrl;
     if (isImageUrl) return formatImageUrl(rawQR);
     return '';
-  }, [isImageUrl, rawQR]);
+  }, [sheetQrUrl, isImageUrl, rawQR]);
 
-  // Generate dynamic QR code if rawQR is not an image or if image fails
+  // Generate dynamic QR code matching Google Sheet student QR code logic (encodes student.Student_ID)
   useEffect(() => {
     let isMounted = true;
     const generateQR = async () => {
       try {
+        const studentId = String(student.Student_ID || '').trim();
+        // The QR code generated in the Google Sheet encodes the student's unique ID
         const textToEncode = (rawQR && !isImageUrl)
           ? rawQR
-          : `EVS-STUDENT:${student.Student_ID} | Name: ${student.Student_Name} | Class: ${classNameTitle || student.Class} | Adm: ${student.Admission_Number}`;
+          : studentId;
+
+        if (!textToEncode) return;
 
         const url = await QRCode.toDataURL(textToEncode, {
           width: 320,
@@ -365,15 +384,17 @@ export const StudentQRCodeCard: React.FC<StudentQRCodeCardProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [student, rawQR, isImageUrl, classNameTitle]);
+  }, [student, rawQR, isImageUrl]);
 
-  const effectiveQrSrc = (isImageUrl && !imageError && formattedQrImageUrl) ? formattedQrImageUrl : qrDataUrl;
+  const effectiveQrSrc = (!imageError && formattedQrImageUrl) ? formattedQrImageUrl : qrDataUrl;
 
   const handleDownloadQR = (e?: React.MouseEvent) => {
     e?.stopPropagation();
-    if (!effectiveQrSrc) return;
+    // Prefer crisp data URL for direct download, fallback to effectiveQrSrc
+    const downloadSrc = qrDataUrl || effectiveQrSrc;
+    if (!downloadSrc) return;
     const a = document.createElement('a');
-    a.href = effectiveQrSrc;
+    a.href = downloadSrc;
     a.download = `${String(student.Student_Name || 'Student').replace(/[^a-zA-Z0-9_-]/g, '_')}_ID_${student.Student_ID}_QR.png`;
     document.body.appendChild(a);
     a.click();
@@ -392,6 +413,7 @@ export const StudentQRCodeCard: React.FC<StudentQRCodeCardProps> = ({
     const sName = student.Student_Name || 'Student';
     const cName = classNameTitle || student.Class;
     const effectivePhoto = photoUrl || (student.Student_Photo ? formatImageUrl(student.Student_Photo) : '');
+    const printQrSrc = qrDataUrl || effectiveQrSrc;
 
     const htmlContent = `
       <!DOCTYPE html>
@@ -534,7 +556,7 @@ export const StudentQRCodeCard: React.FC<StudentQRCodeCardProps> = ({
                 </div>
               ` : ''}
               <div class="qr-wrapper">
-                <img src="${effectiveQrSrc}" alt="QR" />
+                <img src="${printQrSrc}" alt="QR" />
               </div>
               <div class="student-name">${sName}</div>
               <div class="student-class">Class: ${cName} | Student ID: ${student.Student_ID}</div>
@@ -1280,9 +1302,21 @@ export default function App() {
 
       if (success && parsed.length > 0) {
         // Keep entries with at least a Student_Name or Student_ID
-        const valid = parsed.filter(
-          (s) => String(s.Student_Name || '').trim() !== '' || String(s.Student_ID || '').trim() !== ''
-        );
+        const valid = parsed
+          .filter(
+            (s) => String(s.Student_Name || '').trim() !== '' || String(s.Student_ID || '').trim() !== ''
+          )
+          .map((s) => {
+            // If QR code is not directly returned by GViz (due to =IMAGE(...) formula in sheet),
+            // construct the exact Google Sheet formula URL:
+            // =IMAGE(CONCATENATE("https://api.qrserver.com/v1/create-qr-code/?data=", A2, "&size=250x250"))
+            const existingQr = String(s['QR code'] || s['QR_code'] || s['QRCode'] || s.qr_code || '').trim();
+            const sId = String(s.Student_ID || '').trim();
+            if (!existingQr && sId) {
+              s['QR code'] = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(sId)}&size=250x250`;
+            }
+            return s;
+          });
         setStudents(valid);
         setApiError(null);
       } else {

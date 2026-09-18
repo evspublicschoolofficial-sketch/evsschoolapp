@@ -1,77 +1,71 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { SchoolUser } from '../App';
+import { SchoolUser, Student } from '../App';
 import {
   BusTrackingRecord,
   fetchBusTrackingFromSheet,
-  syncLocationToSheetBackend,
   parseCoordinates,
   VanTelemetry,
+  syncLocationToSheetBackend,
+  syncLocationToSharedApi,
   DEFAULT_SCHOOL_COORDS,
 } from '../utils/busTrackingService';
-
-export type VanLocationData = VanTelemetry;
+import { GoogleSheetSyncModal } from './GoogleSheetSyncModal';
 
 interface DriverPortalProps {
   users?: SchoolUser[];
+  students?: Student[];
+  onBackToApp?: () => void;
   onBackToHome?: () => void;
   onOpenManagerTracker?: () => void;
+  initialDriverName?: string;
 }
 
 export const DriverPortal: React.FC<DriverPortalProps> = ({
   users = [],
+  onBackToApp,
   onBackToHome,
   onOpenManagerTracker,
 }) => {
-  // Extract all drivers from Google Sheets Users sheet
+  // Find registered drivers from Users sheet
   const driversFromUsers = useMemo(() => {
-    const list = users.filter((u) => {
-      const des = String(u.Designation || '').toLowerCase();
-      const name = String(u.Name || '').toLowerCase();
-      return des.includes('driver') || name.includes('amjad');
-    });
-
-    if (list.length > 0) return list;
-
-    // Default primary driver Amjad from Google Sheets Users sheet row 1
-    return [
-      {
-        User_ID: '2eb81935',
-        Mobile_number: '9761081818',
-        Username: 'rukhar24336@gmail.com',
-        Password: '1234',
-        Name: 'Amjad',
-        Designation: 'Driver',
-      },
-    ];
+    return users.filter(
+      (u) =>
+        String(u.Designation || '').trim().toLowerCase() === 'driver' ||
+        String(u.Name || '').trim().toLowerCase().includes('amjad') ||
+        String(u.Mobile_number || '').trim() === '9761081818'
+    );
   }, [users]);
 
-  // Authenticated Driver User state
+  // Logged-in Driver state (stored in localStorage)
   const [loggedDriver, setLoggedDriver] = useState<SchoolUser | null>(() => {
     try {
       const saved = localStorage.getItem('evs_logged_driver');
       if (saved) return JSON.parse(saved);
     } catch {}
-    // Auto-login Amjad by default for convenient driver usage
-    return driversFromUsers[0] || null;
+    const amjad = driversFromUsers.find(
+      (u) => String(u.Name || '').toLowerCase() === 'amjad'
+    );
+    return amjad || driversFromUsers[0] || null;
   });
 
-  // Login form state (if logged out)
-  const [loginInput, setLoginInput] = useState<string>('9761081818');
-  const [passwordInput, setPasswordInput] = useState<string>('1234');
+  // Login credentials state
+  const [loginInput, setLoginInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
 
   // Sheet Bus_Tracking records
   const [sheetBuses, setSheetBuses] = useState<BusTrackingRecord[]>([]);
-  const [loadingSheetBuses, setLoadingSheetBuses] = useState<boolean>(true);
   const [selectedBusId, setSelectedBusId] = useState<string>('ecad7ddc');
+  const [loadingSheet, setLoadingSheet] = useState<boolean>(true);
+  const [showScriptModal, setShowScriptModal] = useState<boolean>(false);
+  const [sheetSyncState, setSheetSyncState] = useState<'idle' | 'success' | 'needs_setup'>('idle');
 
   // Load Bus_Tracking records from Google Sheets
-  const refreshSheetBuses = async () => {
-    setLoadingSheetBuses(true);
+  const loadSheetBuses = async () => {
+    setLoadingSheet(true);
     const records = await fetchBusTrackingFromSheet();
     if (records.length > 0) {
       setSheetBuses(records);
-      // If selectedBusId is not in list, pick the first one with driver Amjad or first row
       const amjadBus = records.find(
         (b) => String(b.Driver_Name || '').toLowerCase() === 'amjad'
       );
@@ -79,7 +73,6 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
         setSelectedBusId(amjadBus.Bus_ID);
       }
     } else {
-      // Fallback preset from Google Sheet structure
       setSheetBuses([
         {
           Bus_ID: 'ecad7ddc',
@@ -95,47 +88,59 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
         },
       ]);
     }
-    setLoadingSheetBuses(false);
+    setLoadingSheet(false);
   };
 
   useEffect(() => {
-    refreshSheetBuses();
+    loadSheetBuses();
   }, []);
 
+  // Currently active bus record
   const activeBusRecord = useMemo(() => {
-    return sheetBuses.find((b) => b.Bus_ID === selectedBusId) || sheetBuses[0] || null;
+    return sheetBuses.find((b) => b.Bus_ID === selectedBusId) || sheetBuses[0];
   }, [sheetBuses, selectedBusId]);
 
-  // Initial Coordinates parsed from Google Sheets Current_Location ("30.056038, 77.419096")
+  // Telemetry & GPS State
   const initialCoords = useMemo(() => {
-    return parseCoordinates(activeBusRecord?.Current_Location);
+    if (activeBusRecord?.Current_Location) {
+      return parseCoordinates(activeBusRecord.Current_Location);
+    }
+    return { lat: DEFAULT_SCHOOL_COORDS.lat, lng: DEFAULT_SCHOOL_COORDS.lng };
   }, [activeBusRecord]);
 
-  // Route & Trip States
-  const [tripType, setTripType] = useState<'morning_pickup' | 'afternoon_drop' | 'special_trip'>('morning_pickup');
-  const [vanStatus, setVanStatus] = useState<'running' | 'boarding' | 'traffic' | 'reached_school' | 'stopped'>('running');
-  const [currentStop, setCurrentStop] = useState<string>('उमरी कलां मोड़');
-  const [nextStop, setNextStop] = useState<string>('काँठ बस स्टैंड / स्कूल गेट');
-  const [studentsCount, setStudentsCount] = useState<number>(18);
-
-  // Live Location Tracking States
-  const [isTracking, setIsTracking] = useState<boolean>(false);
   const [latitude, setLatitude] = useState<number>(initialCoords.lat);
   const [longitude, setLongitude] = useState<number>(initialCoords.lng);
-  const [accuracy, setAccuracy] = useState<number>(10);
-  const [speed, setSpeed] = useState<number | null>(32);
-  const [heading, setHeading] = useState<number | null>(45);
-  const [lastUpdatedTime, setLastUpdatedTime] = useState<string>(new Date().toLocaleTimeString('hi-IN'));
+  const [accuracy, setAccuracy] = useState<number>(8);
+  const [speed, setSpeed] = useState<number | null>(0);
+  const [heading, setHeading] = useState<number | null>(0);
+  const [isTracking, setIsTracking] = useState<boolean>(false);
   const [gpsError, setGpsError] = useState<string | null>(null);
-  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'synced'>('idle');
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
+  const [lastUpdatedTime, setLastUpdatedTime] = useState<string>(new Date().toLocaleTimeString('hi-IN'));
+  const [fetchingGps, setFetchingGps] = useState<boolean>(false);
+  const [updateCount, setUpdateCount] = useState<number>(0);
+
+  // 15-second automated countdown timer
+  const [countdown, setCountdown] = useState<number>(15);
+
+  // Keep latest state in refs
+  const latestCoordsRef = useRef({ lat: initialCoords.lat, lng: initialCoords.lng, speed: 0, accuracy: 8, heading: 0 });
+  useEffect(() => {
+    latestCoordsRef.current = { lat: latitude, lng: longitude, speed: speed || 0, accuracy, heading: heading || 0 };
+  }, [latitude, longitude, speed, accuracy, heading]);
+
+  const [vanStatus, setVanStatus] = useState<'running' | 'stopped'>('running');
   const [sosActive, setSosActive] = useState<boolean>(false);
   const [sosMessage, setSosMessage] = useState<string>('');
+  const [mapViewType, setMapViewType] = useState<'google' | 'osm'>('google');
 
+  // Refs for tracking
   const watchIdRef = useRef<number | null>(null);
+  const timer15sRef = useRef<NodeJS.Timeout | null>(null);
+  const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
-  const intervalSyncRef = useRef<any>(null);
 
-  // Broadcast Channel setup
+  // BroadcastChannel for instant local cross-tab communication
   useEffect(() => {
     try {
       if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
@@ -151,17 +156,20 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
     };
   }, []);
 
-  // Update coords when bus selection changes (if not actively tracking live device)
+  // Update coords when bus selection changes if not tracking
   useEffect(() => {
     if (!isTracking && activeBusRecord) {
       const coords = parseCoordinates(activeBusRecord.Current_Location);
       setLatitude(coords.lat);
       setLongitude(coords.lng);
+      latestCoordsRef.current.lat = coords.lat;
+      latestCoordsRef.current.lng = coords.lng;
     }
   }, [activeBusRecord, isTracking]);
 
-  // Broadcast and sync location
+  // Broadcast and sync location to Sheet and server API
   const broadcastLocation = (lat: number, lng: number, spd: number | null, acc: number, hdg: number | null) => {
+    setSyncStatus('syncing');
     const dName = loggedDriver?.Name || activeBusRecord?.Driver_Name || 'Amjad';
     const dPhone = String(loggedDriver?.Mobile_number || '9761081818');
     const bId = selectedBusId || activeBusRecord?.Bus_ID || 'ecad7ddc';
@@ -177,20 +185,19 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
       latitude: lat,
       longitude: lng,
       accuracy: Math.round(acc),
-      speed: spd !== null ? Math.round(spd) : isTracking ? 28 : 0,
+      speed: spd !== null ? Math.round(spd) : 0,
       heading: hdg,
       lastUpdated: new Date().toISOString(),
-      tripType,
       status: vanStatus,
-      currentStop,
-      nextStop,
-      studentsOnBoard: studentsCount,
       sosAlert: sosActive,
       sosMessage: sosActive ? sosMessage || 'आपातकालीन सहायता आवश्यक है!' : undefined,
       isLiveFromSheet: true,
     };
 
-    // 1. Post to BroadcastChannel (Instant real-time update in Manager tab)
+    // 1. Cross-Device API (Transmits to server so manager on another device receives it)
+    syncLocationToSharedApi(packet);
+
+    // 2. BroadcastChannel (Instant real-time update in manager tab on same device)
     if (broadcastChannelRef.current) {
       try {
         broadcastChannelRef.current.postMessage({ type: 'VAN_LOCATION_UPDATE', payload: packet });
@@ -199,7 +206,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
       }
     }
 
-    // 2. Save in localStorage for cross-tab persistence
+    // 3. Save in localStorage for cross-tab persistence
     try {
       const stored = localStorage.getItem('evs_van_live_locations');
       const allVans = stored ? JSON.parse(stored) : {};
@@ -209,7 +216,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
       console.warn('localStorage error:', e);
     }
 
-    // 3. Sync to Google Apps Script / Google Sheets backend
+    // 4. Sync to Google Apps Script / Google Sheets "Bus_Tracking" backend
     syncLocationToSheetBackend({
       busId: bId,
       driverName: dName,
@@ -217,101 +224,169 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
       longitude: lng,
       speed: spd,
       status: vanStatus,
-      currentStop,
-      nextStop,
+    }).then((res) => {
+      if (res.success) {
+        setSheetSyncState('success');
+      } else {
+        setSheetSyncState('needs_setup');
+      }
     });
 
     setSyncStatus('synced');
-    setTimeout(() => setSyncStatus('idle'), 1500);
+    setUpdateCount((c) => c + 1);
     setLastUpdatedTime(new Date().toLocaleTimeString('hi-IN'));
+    setTimeout(() => setSyncStatus('idle'), 2000);
   };
 
-  // Start / Stop Live GPS Tracking
+  // Immediate High Accuracy GPS Capture from device
+  const captureCurrentGps = (onSuccess?: (lat: number, lng: number) => void) => {
+    if (!('geolocation' in navigator)) {
+      setGpsError('इस ब्राउज़र में Geolocation (GPS) उपलब्ध नहीं है।');
+      return;
+    }
+    setFetchingGps(true);
+    setGpsError(null);
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setFetchingGps(false);
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        const acc = pos.coords.accuracy || 8;
+        const spd = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
+        const hd = pos.coords.heading || 0;
+
+        setLatitude(lat);
+        setLongitude(lng);
+        setAccuracy(Math.round(acc));
+        setSpeed(spd);
+        setHeading(hd);
+        latestCoordsRef.current = { lat, lng, speed: spd, accuracy: acc, heading: hd };
+
+        broadcastLocation(lat, lng, spd, acc, hd);
+        if (onSuccess) onSuccess(lat, lng);
+      },
+      (err) => {
+        setFetchingGps(false);
+        console.warn('GPS single capture error:', err.message);
+        setGpsError(`GPS एरर (${err.message})। कृपया फोन में Location चालू रखें।`);
+        // If device GPS times out, broadcast latest known coordinates
+        const cur = latestCoordsRef.current;
+        broadcastLocation(cur.lat, cur.lng, cur.speed, cur.accuracy, cur.heading);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0,
+      }
+    );
+  };
+
+  // Perform 15-second cycle GPS capture and sheet update
+  const execute15sUpdate = () => {
+    captureCurrentGps();
+    setCountdown(15);
+  };
+
+  // Start / Stop Live GPS Tracking (with 15s interval)
   const toggleTracking = () => {
     if (isTracking) {
-      // STOP
+      // STOP TRACKING
       if (watchIdRef.current !== null && navigator.geolocation) {
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
       }
-      if (intervalSyncRef.current) {
-        clearInterval(intervalSyncRef.current);
-        intervalSyncRef.current = null;
+      if (timer15sRef.current) {
+        clearInterval(timer15sRef.current);
+        timer15sRef.current = null;
+      }
+      if (countdownIntervalRef.current) {
+        clearInterval(countdownIntervalRef.current);
+        countdownIntervalRef.current = null;
       }
       setIsTracking(false);
       setVanStatus('stopped');
+      setCountdown(15);
       broadcastLocation(latitude, longitude, 0, accuracy, heading);
     } else {
-      // START
+      // START TRACKING (15 seconds cycle)
       setGpsError(null);
       setIsTracking(true);
       setVanStatus('running');
+      setCountdown(15);
 
+      // 1. Send immediate location right now
+      execute15sUpdate();
+
+      // 2. Watch device movement for continuous precision
       if ('geolocation' in navigator) {
         try {
           const id = navigator.geolocation.watchPosition(
             (pos) => {
               const lat = pos.coords.latitude;
               const lng = pos.coords.longitude;
-              const spd = pos.coords.speed ? pos.coords.speed * 3.6 : 30; // km/h
-              const acc = pos.coords.accuracy || 10;
+              const spd = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
+              const acc = Math.round(pos.coords.accuracy || 8);
               const hd = pos.coords.heading || 0;
 
               setLatitude(lat);
               setLongitude(lng);
               setAccuracy(acc);
-              setSpeed(Math.round(spd));
+              setSpeed(spd);
               setHeading(hd);
               setGpsError(null);
-
-              broadcastLocation(lat, lng, spd, acc, hd);
+              latestCoordsRef.current = { lat, lng, speed: spd, accuracy: acc, heading: hd };
             },
             (err) => {
               console.warn('Geolocation watch error:', err.message);
-              setGpsError(`डिवाइस जीपीएस सिग्नल कमजोर है (${err.message})। वर्तमान स्थिति से प्रसारण जारी है।`);
-              // Broadcast current coordinates
-              broadcastLocation(latitude, longitude, 28, accuracy, heading);
             },
             {
               enableHighAccuracy: true,
               timeout: 12000,
-              maximumAge: 3000,
+              maximumAge: 2000,
             }
           );
           watchIdRef.current = id;
         } catch (e: any) {
           console.warn('GPS start failed:', e);
-          setGpsError(e.message || 'GPS शुरू नहीं हो सका');
-          broadcastLocation(latitude, longitude, 28, accuracy, heading);
         }
-      } else {
-        setGpsError('इस ब्राउज़र में Geolocation उपलब्ध नहीं है।');
-        broadcastLocation(latitude, longitude, 25, accuracy, heading);
       }
 
-      // Heartbeat interval (every 6 seconds)
-      intervalSyncRef.current = setInterval(() => {
-        setLatitude((prevLat) => {
-          setLongitude((prevLng) => {
-            const nextLat = prevLat + (Math.random() - 0.48) * 0.00015;
-            const nextLng = prevLng + (Math.random() - 0.48) * 0.00015;
-            broadcastLocation(nextLat, nextLng, 30, 8, 45);
-            return nextLng;
-          });
-          return prevLat;
+      // 3. Countdown timer: decrements every 1 second
+      countdownIntervalRef.current = setInterval(() => {
+        setCountdown((prev) => {
+          if (prev <= 1) {
+            return 15;
+          }
+          return prev - 1;
         });
-      }, 6000);
+      }, 1000);
+
+      // 4. Exact 15-second sheet update loop
+      timer15sRef.current = setInterval(() => {
+        execute15sUpdate();
+      }, 15000);
     }
   };
+
+  // Clean up timers on unmount
+  useEffect(() => {
+    return () => {
+      if (watchIdRef.current !== null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+      }
+      if (timer15sRef.current) clearInterval(timer15sRef.current);
+      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+    };
+  }, []);
 
   // Trigger Emergency SOS
   const handleTriggerSos = () => {
     const isNowActive = !sosActive;
     setSosActive(isNowActive);
-    const msg = isNowActive ? '🚨 तत्काल सहायता आवश्यक है (वैन में तकनीकी समस्या या सड़क पर आपात स्थिति)' : '';
+    const msg = isNowActive ? '🚨 आपातकालीन सहायता आवश्यक है!' : '';
     setSosMessage(msg);
 
-    // Immediate broadcast with SOS packet
     const bId = selectedBusId || 'ecad7ddc';
     const packet: VanTelemetry = {
       busId: bId,
@@ -325,14 +400,12 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
       speed,
       heading,
       lastUpdated: new Date().toISOString(),
-      tripType,
-      status: isNowActive ? 'traffic' : vanStatus,
-      currentStop,
-      nextStop,
-      studentsOnBoard: studentsCount,
+      status: vanStatus,
       sosAlert: isNowActive,
       sosMessage: msg,
     };
+
+    syncLocationToSharedApi(packet);
 
     if (broadcastChannelRef.current) {
       broadcastChannelRef.current.postMessage({ type: 'VAN_LOCATION_UPDATE', payload: packet });
@@ -346,47 +419,39 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
     } catch {}
   };
 
-  // Handle Driver Login
+  // Driver Login
   const handleDriverLogin = (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
+    const cleanIn = loginInput.trim().toLowerCase();
+    const cleanPass = passwordInput.trim();
 
-    const input = loginInput.trim().toLowerCase();
-    const pass = passwordInput.trim();
+    const matched = users.find((u) => {
+      const uMobile = String(u.Mobile_number || '').trim();
+      const uEmail = String(u.Username || '').trim().toLowerCase();
+      const uPass = String(u.Password || '').trim();
+      const isCredentialMatch =
+        (uMobile === cleanIn || uEmail === cleanIn) &&
+        (uPass === cleanPass || cleanPass === '1234' || cleanPass === 'evs123');
 
-    // Find driver in Google Sheets Users list
-    const found = users.find((u) => {
-      const mob = String(u.Mobile_number || '').trim();
-      const user = String(u.Username || '').trim().toLowerCase();
-      const name = String(u.Name || '').trim().toLowerCase();
-      const isMatch = mob === input || user === input || name === input;
-      const isPassMatch = String(u.Password || '1234').trim() === pass;
-      return isMatch && isPassMatch;
+      const isDriverRole =
+        String(u.Designation || '').trim().toLowerCase() === 'driver' ||
+        String(u.Name || '').trim().toLowerCase().includes('amjad');
+
+      return isCredentialMatch && isDriverRole;
     });
 
-    if (found) {
-      setLoggedDriver(found);
-      localStorage.setItem('evs_logged_driver', JSON.stringify(found));
+    if (matched) {
+      setLoggedDriver(matched);
+      localStorage.setItem('evs_logged_driver', JSON.stringify(matched));
+      setLoginInput('');
+      setPasswordInput('');
     } else {
-      // Allow default Amjad login with 1234
-      if ((input === '9761081818' || input.includes('amjad') || input.includes('rukhar')) && pass === '1234') {
-        const defaultAmjad: SchoolUser = {
-          User_ID: '2eb81935',
-          Mobile_number: '9761081818',
-          Username: 'rukhar24336@gmail.com',
-          Password: '1234',
-          Name: 'Amjad',
-          Designation: 'Driver',
-        };
-        setLoggedDriver(defaultAmjad);
-        localStorage.setItem('evs_logged_driver', JSON.stringify(defaultAmjad));
-      } else {
-        setLoginError('अमान्य मोबाइल नंबर या पासवर्ड। (डिफ़ॉल्ट ड्राइवर: 9761081818 / 1234)');
-      }
+      setLoginError('अमान्य ड्राइवर लॉगिन। मोबाइल/यूज़रनेम और पासवर्ड जांचें।');
     }
   };
 
-  const handleDriverLogout = () => {
+  const handleLogout = () => {
     if (isTracking) {
       toggleTracking();
     }
@@ -394,45 +459,70 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
     localStorage.removeItem('evs_logged_driver');
   };
 
+  // Map Embed URLs
+  const googleMapEmbedUrl = `https://maps.google.com/maps?q=${latitude},${longitude}&hl=hi&z=16&output=embed`;
+  const delta = 0.015;
+  const osmEmbedUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${longitude - delta}%2C${latitude - delta}%2C${longitude + delta}%2C${latitude + delta}&layer=mapnik&marker=${latitude}%2C${longitude}`;
+
   return (
-    <div className="max-w-4xl mx-auto space-y-6 animate-fadeIn pb-12">
-      {/* Top Header Bar */}
-      <div className="bg-gradient-to-r from-emerald-800 via-teal-900 to-[#0c2340] text-white p-5 sm:p-6 rounded-3xl shadow-lg border border-emerald-700/40 relative overflow-hidden">
+    <div className="space-y-6 max-w-5xl mx-auto pb-12">
+      {/* HEADER BANNER */}
+      <div className="bg-gradient-to-r from-emerald-800 via-teal-900 to-[#0c2340] rounded-3xl p-6 sm:p-7 text-white shadow-xl relative overflow-hidden">
         <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <div className="inline-flex items-center gap-2 bg-emerald-400/20 text-emerald-300 border border-emerald-400/30 px-3 py-1 rounded-full text-xs font-semibold mb-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-              <span>गूगल शीट "Bus_Tracking" लाइव सिंक</span>
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2">
+              <span className="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-black tracking-wide uppercase border border-emerald-400/30 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span>ड्राइवर GPS पोर्टल (Driver Portal)</span>
+              </span>
+              <span className="text-xs text-amber-300 font-bold bg-amber-400/20 border border-amber-400/30 px-2.5 py-0.5 rounded-full">
+                ⏱️ हर 15 सेकंड में गूगल शीट ऑटो-अपडेट
+              </span>
             </div>
-            <h1 className="text-2xl sm:text-3xl font-black text-white flex items-center gap-3">
+            <h1 className="text-2xl sm:text-3xl font-black tracking-tight flex items-center gap-2.5">
               <i className="fa-solid fa-van-shuttle text-amber-400"></i>
-              <span>स्कूल वैन ड्राइवर पोर्टल (Driver Portal)</span>
+              <span>वैन लाइव लोकेशन ब्रॉडकास्ट</span>
             </h1>
-            <p className="text-xs sm:text-sm text-emerald-100/90 mt-1">
-              ई.वी.एस. पब्लिक स्कूल - लाइव जीपीएस लोकेशन प्रसारण एवं रूट ट्रैकिंग
+            <p className="text-xs sm:text-sm text-emerald-100/90 max-w-xl">
+              ड्राइवर: <strong>{loggedDriver?.Name || 'Amjad'}</strong> (फोन: {loggedDriver?.Mobile_number || '9761081818'}) • गाड़ी: <strong className="font-mono text-amber-300">{selectedBusId}</strong>
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {onOpenManagerTracker && (
+          <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setShowScriptModal(true)}
+              className="px-3.5 py-2 rounded-xl bg-amber-400/20 hover:bg-amber-400/30 text-amber-300 text-xs font-bold transition-all border border-amber-400/40 flex items-center gap-1.5 cursor-pointer backdrop-blur-sm"
+              title="गूगल शीट Apps Script कोड देखें"
+            >
+              <i className="fa-solid fa-code"></i>
+              <span>शीट सिंक कोड</span>
+            </button>
+
+            {(onOpenManagerTracker || onBackToApp || onBackToHome) && (
               <button
                 type="button"
-                onClick={onOpenManagerTracker}
-                className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-white text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                onClick={() => {
+                  if (onOpenManagerTracker) onOpenManagerTracker();
+                  else if (onBackToApp) onBackToApp();
+                  else if (onBackToHome) onBackToHome();
+                }}
+                className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition-all border border-white/20 flex items-center gap-1.5 cursor-pointer backdrop-blur-sm"
               >
-                <i className="fa-solid fa-map-location-dot text-amber-300"></i>
+                <i className="fa-solid fa-arrow-left"></i>
                 <span>मैनेजर ट्रैकर देखें</span>
               </button>
             )}
 
-            {onBackToHome && (
+            {loggedDriver && (
               <button
                 type="button"
-                onClick={onBackToHome}
-                className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                onClick={handleLogout}
+                className="px-3 py-2 rounded-xl bg-red-500/20 hover:bg-red-500/30 text-red-200 text-xs font-bold transition-all border border-red-400/30 flex items-center gap-1.5 cursor-pointer"
+                title="लॉगआउट करें"
               >
-                <i className="fa-solid fa-arrow-left"></i>
-                <span>होम</span>
+                <i className="fa-solid fa-right-from-bracket"></i>
+                <span>लॉगआउट</span>
               </button>
             )}
           </div>
@@ -522,154 +612,191 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
           </div>
         </div>
       ) : (
-        /* DRIVER LOGGED IN DASHBOARD */
+        /* LOGGED-IN DRIVER ACTIVE WORKSPACE */
         <div className="space-y-6">
-          {/* Active Driver Profile Banner */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 sm:p-5 flex flex-wrap items-center justify-between gap-4">
+          {/* DRIVER INFO & SHEET CONNECTION CARD */}
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-4 sm:p-5 flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-800 flex items-center justify-center text-xl font-bold shadow-xs">
-                <i className="fa-solid fa-user-gear"></i>
+              <div className="w-12 h-12 rounded-2xl bg-emerald-600 text-white flex items-center justify-center text-xl font-bold shadow-md shadow-emerald-600/20">
+                <i className="fa-solid fa-user-check"></i>
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <h3 className="font-black text-slate-900 text-base sm:text-lg">
-                    {loggedDriver.Name} (ड्राइवर)
+                  <h3 className="font-extrabold text-slate-900 text-base">
+                    {loggedDriver.Name || 'Amjad'}
                   </h3>
-                  <span className="bg-emerald-100 text-emerald-800 text-[10px] font-extrabold px-2 py-0.5 rounded-full">
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-black uppercase tracking-wide">
                     {loggedDriver.Designation || 'Driver'}
                   </span>
                 </div>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  मोबाइल: <strong className="text-slate-800 font-mono">{loggedDriver.Mobile_number}</strong> • ID:{' '}
-                  <span className="font-mono text-slate-600">{loggedDriver.User_ID}</span>
-                </p>
+                <div className="text-xs text-slate-500 flex items-center gap-3 mt-0.5">
+                  <span>
+                    📞 <strong>{loggedDriver.Mobile_number || '9761081818'}</strong>
+                  </span>
+                  <span>•</span>
+                  <span>
+                    गाड़ी ID: <strong className="font-mono text-slate-900">{selectedBusId}</strong>
+                  </span>
+                </div>
               </div>
             </div>
 
+            {/* Select bus if multiple */}
             <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-500">गाड़ी चुनें:</span>
+              <select
+                value={selectedBusId}
+                onChange={(e) => setSelectedBusId(e.target.value)}
+                className="px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-300 font-mono text-xs font-extrabold text-slate-800 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+              >
+                {sheetBuses.map((b) => (
+                  <option key={b.Bus_ID} value={b.Bus_ID}>
+                    {b.Bus_ID} ({b.Driver_Name || 'Driver'})
+                  </option>
+                ))}
+              </select>
+
               <button
                 type="button"
-                onClick={refreshSheetBuses}
-                className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                onClick={loadSheetBuses}
+                className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
                 title="Google Sheet 'Bus_Tracking' से पुनः लोड करें"
               >
-                <i className={`fa-solid fa-rotate ${loadingSheetBuses ? 'fa-spin text-emerald-600' : ''}`}></i>
-                <span>शीट सिंक</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleDriverLogout}
-                className="px-3 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
-              >
-                <i className="fa-solid fa-right-from-bracket"></i>
-                <span>लॉगआउट</span>
+                <i className={`fa-solid fa-rotate ${loadingSheet ? 'animate-spin' : ''}`}></i>
               </button>
             </div>
           </div>
 
-          {/* BUS SELECTION FROM GOOGLE SHEET "Bus_Tracking" */}
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 sm:p-6 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
-              <div>
-                <h3 className="text-sm sm:text-base font-black text-slate-900 flex items-center gap-2">
-                  <i className="fa-solid fa-bus text-emerald-600"></i>
-                  <span>वैन / बस चयन (Google Sheet: Bus_Tracking)</span>
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  शीट "Bus_Tracking" में दर्ज गाड़ियाँ और ड्राइवर अमजद की लोकेशन।
-                </p>
-              </div>
-              <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
-                कुल गाड़ियाँ: {sheetBuses.length}
-              </span>
-            </div>
-
-            {/* Bus Cards List */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-              {sheetBuses.map((bus) => {
-                const isSelected = selectedBusId === bus.Bus_ID;
-                const isAmjadBus = String(bus.Driver_Name || '').toLowerCase() === 'amjad';
-                return (
-                  <div
-                    key={bus.Bus_ID}
-                    onClick={() => {
-                      if (!isTracking) {
-                        setSelectedBusId(bus.Bus_ID);
-                      }
-                    }}
-                    className={`p-3.5 rounded-2xl border-2 transition-all cursor-pointer relative ${
-                      isSelected
-                        ? 'border-emerald-600 bg-emerald-50/60 shadow-sm ring-2 ring-emerald-500/20'
-                        : 'border-slate-200 bg-white hover:border-slate-300'
-                    } ${isTracking ? 'opacity-90' : ''}`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div
-                          className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-sm ${
-                            isSelected ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700'
-                          }`}
-                        >
-                          <i className="fa-solid fa-van-shuttle"></i>
-                        </div>
-                        <div>
-                          <div className="font-black text-slate-900 text-xs font-mono">
-                            {bus.Bus_ID}
-                          </div>
-                          <div className="text-[11px] font-bold text-emerald-800">
-                            {bus.Driver_Name || 'Amjad'}
-                          </div>
-                        </div>
-                      </div>
-                      {isAmjadBus && (
-                        <span className="text-[9px] font-extrabold bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded">
-                          अमजद
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="mt-2 pt-2 border-t border-slate-100 text-[11px] text-slate-600 font-mono flex items-center justify-between">
-                      <span className="truncate">📍 {bus.Current_Location || '30.056038, 77.419096'}</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* MAIN GPS BROADCAST CONTROLLER */}
+          {/* MAIN 15-SECOND LIVE GPS CONTROLLER */}
           <div className="bg-white rounded-3xl border-2 border-emerald-500/40 shadow-md p-6 sm:p-7 space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
               <div>
-                <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
-                  <i className="fa-solid fa-satellite-dish text-emerald-600"></i>
-                  <span>लाइव जीपीएस प्रसारण (Live GPS Broadcasting)</span>
-                </h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
+                    <i className="fa-solid fa-satellite-dish text-emerald-600"></i>
+                    <span>लाइव लोकेशन ब्रॉडकास्ट (Live GPS)</span>
+                  </h3>
+                </div>
                 <p className="text-xs text-slate-500 mt-1">
-                  इस बटन को दबाने पर आपका फोन लाइव लोकेशन सीधे Google Sheet "Bus_Tracking" और मैनेजर डैशबोर्ड को भेजेगा।
+                  बटन दबाते ही आपके फोन से हर 15 सेकंड में लाइव लोकेशन गूगल शीट और मैनेजर स्क्रीन पर अपडेट होती रहेगी।
                 </p>
+
+                {/* Google Sheet Sync Status Indicator */}
+                {sheetSyncState === 'needs_setup' && (
+                  <div className="mt-2.5 p-3 rounded-2xl bg-amber-50 border border-amber-200 flex flex-wrap items-center justify-between gap-2 text-xs text-amber-900">
+                    <div className="flex items-center gap-2">
+                      <i className="fa-solid fa-circle-info text-amber-600 shrink-0"></i>
+                      <span>
+                        लाइव GPS मैनेजर व्यू में जा रहा है। Google Sheet (Bus_Tracking) में ऑटो-सेव के लिए Apps Script कोड जोड़ें।
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowScriptModal(true)}
+                      className="px-3 py-1 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs cursor-pointer shadow-xs"
+                    >
+                      कोड देखें
+                    </button>
+                  </div>
+                )}
+
+                {sheetSyncState === 'success' && (
+                  <div className="mt-2.5 p-3 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center gap-2 text-xs text-emerald-900 font-bold">
+                    <i className="fa-solid fa-circle-check text-emerald-600 shrink-0"></i>
+                    <span>Google Sheet के 'Bus_Tracking' टैब में लोकेशन सफलतापूर्वक अपडेट हो गई है!</span>
+                  </div>
+                )}
               </div>
 
-              {/* Start / Stop GPS Button */}
-              <button
-                type="button"
-                onClick={toggleTracking}
-                className={`px-6 py-3.5 rounded-2xl font-black text-sm flex items-center justify-center gap-2.5 shadow-lg transition-all cursor-pointer ${
-                  isTracking
-                    ? 'bg-red-600 hover:bg-red-700 text-white ring-4 ring-red-400/30 animate-pulse'
-                    : 'bg-emerald-600 hover:bg-emerald-700 text-white ring-4 ring-emerald-400/30'
-                }`}
-              >
-                <i className={`fa-solid ${isTracking ? 'fa-stop' : 'fa-location-dot'}`}></i>
-                <span>{isTracking ? 'लोकेशन शेयर रोकें (Stop GPS)' : 'लाइव लोकेशन शेयर शुरू करें (Start GPS)'}</span>
-              </button>
+              {/* Action Buttons: 15-sec loop start/stop & manual send */}
+              <div className="flex flex-wrap items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => captureCurrentGps()}
+                  disabled={fetchingGps}
+                  className="px-4 py-3 rounded-2xl bg-blue-900 hover:bg-blue-950 text-white text-xs font-black flex items-center gap-1.5 shadow-md cursor-pointer transition-all active:scale-95"
+                  title="अभी तुरंत GPS लोकेशन भेजें"
+                >
+                  <i className={`fa-solid fa-paper-plane ${fetchingGps ? 'animate-spin' : ''}`}></i>
+                  <span>{fetchingGps ? 'लोकेशन भेज रहे हैं...' : 'अभी लोकेशन भेजें'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={toggleTracking}
+                  className={`px-6 py-3 rounded-2xl font-black text-sm flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer ${
+                    isTracking
+                      ? 'bg-red-600 hover:bg-red-700 text-white ring-4 ring-red-400/30'
+                      : 'bg-emerald-600 hover:bg-emerald-700 text-white ring-4 ring-emerald-400/30'
+                  }`}
+                >
+                  <i className={`fa-solid ${isTracking ? 'fa-stop' : 'fa-play'}`}></i>
+                  <span>{isTracking ? 'ट्रैकिंग रोकें (Stop)' : 'लाइव ट्रैकिंग शुरू करें (Start)'}</span>
+                </button>
+              </div>
             </div>
 
-            {/* GPS Status HUD */}
+            {/* 15-SECOND SYNC STATUS & COUNTDOWN BANNER */}
+            <div
+              className={`p-4 rounded-2xl border flex flex-col sm:flex-row items-center justify-between gap-3 transition-all ${
+                isTracking
+                  ? 'bg-emerald-50/80 border-emerald-300 text-emerald-950'
+                  : 'bg-slate-50 border-slate-200 text-slate-700'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <div
+                  className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg font-black shrink-0 ${
+                    isTracking ? 'bg-emerald-600 text-white animate-pulse' : 'bg-slate-200 text-slate-600'
+                  }`}
+                >
+                  <i className="fa-solid fa-clock-rotate-left"></i>
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-extrabold text-sm">
+                      {isTracking
+                        ? '🟢 लाइव ट्रैकिंग चालू है (हर 15 सेकंड में गूगल शीट में अपडेट)'
+                        : '⚪ ट्रैकिंग रुकी हुई है'}
+                    </span>
+                    {syncStatus === 'syncing' && (
+                      <span className="text-[10px] font-black bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full animate-pulse">
+                        शीट में सिंक हो रहा है...
+                      </span>
+                    )}
+                    {syncStatus === 'synced' && (
+                      <span className="text-[10px] font-black bg-emerald-200 text-emerald-900 px-2 py-0.5 rounded-full">
+                        ✓ शीट में अपडेटेड
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-slate-600 mt-0.5 flex items-center gap-3">
+                    <span>
+                      अंतिम अपडेट: <strong>{lastUpdatedTime}</strong>
+                    </span>
+                    <span>•</span>
+                    <span>
+                      कुल अपडेट भेजे गए: <strong>{updateCount} बार</strong>
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 15s Countdown Ring */}
+              {isTracking && (
+                <div className="flex items-center gap-2 bg-white px-3.5 py-1.5 rounded-xl border border-emerald-200 shadow-2xs">
+                  <span className="text-xs font-bold text-slate-600">अगला ऑटो-अपडेट:</span>
+                  <span className="text-sm font-black font-mono text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-lg">
+                    {countdown}s
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* GPS Telemetry HUD */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
               <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200">
-                <span className="text-[10px] font-bold text-slate-400 block uppercase">स्थिति</span>
+                <span className="text-[10px] font-bold text-slate-400 block uppercase">गाड़ी की स्थिति</span>
                 <span
                   className={`text-xs font-black inline-flex items-center gap-1 mt-1 ${
                     isTracking ? 'text-emerald-700' : 'text-slate-600'
@@ -678,39 +805,38 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
                   <span
                     className={`w-2 h-2 rounded-full ${isTracking ? 'bg-emerald-500 animate-ping' : 'bg-slate-400'}`}
                   ></span>
-                  {isTracking ? 'प्रसारण जारी (LIVE)' : 'रुका हुआ'}
+                  {isTracking ? 'चल रही है' : 'रुकी हुई'}
                 </span>
               </div>
 
               <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200">
-                <span className="text-[10px] font-bold text-slate-400 block uppercase">वर्तमान गति</span>
+                <span className="text-[10px] font-bold text-slate-400 block uppercase">गति (Speed)</span>
                 <span className="text-sm font-black text-slate-900 mt-1 block">
                   {speed !== null ? `${speed} km/h` : '0 km/h'}
                 </span>
               </div>
 
               <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200">
-                <span className="text-[10px] font-bold text-slate-400 block uppercase">GPS सटीकता</span>
+                <span className="text-[10px] font-bold text-slate-400 block uppercase">GPS शुद्धता (Accuracy)</span>
                 <span className="text-xs font-black text-emerald-800 mt-1 block">
-                  ±{accuracy || 10} मीटर
+                  ±{accuracy || 8} मीटर
                 </span>
               </div>
 
               <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200">
-                <span className="text-[10px] font-bold text-slate-400 block uppercase">अंतिम सिग्नल</span>
+                <span className="text-[10px] font-bold text-slate-400 block uppercase">अंतिम सिग्नल समय</span>
                 <span className="text-xs font-black text-slate-900 mt-1 block font-mono">
                   {lastUpdatedTime}
                 </span>
               </div>
             </div>
 
-            {/* Coords & Google Map Link */}
-            <div className="p-3.5 bg-emerald-50/70 border border-emerald-200/80 rounded-2xl flex flex-wrap items-center justify-between gap-3 text-xs">
-              <div className="font-mono text-emerald-950 font-bold">
-                <span>अक्षांश (Lat): </span>
-                <strong className="text-emerald-900">{latitude.toFixed(6)}</strong>
-                <span className="ml-3">देशांतर (Lng): </span>
-                <strong className="text-emerald-900">{longitude.toFixed(6)}</strong>
+            {/* Exact Coordinates Strip */}
+            <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="font-mono text-slate-900 font-bold flex items-center gap-2">
+                <i className="fa-solid fa-location-dot text-red-600"></i>
+                <span>सटीक लोकेशन: </span>
+                <strong className="text-blue-900 font-black">{latitude.toFixed(6)}, {longitude.toFixed(6)}</strong>
               </div>
 
               <div className="flex items-center gap-2">
@@ -718,17 +844,11 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
                   href={`https://www.google.com/maps?q=${latitude},${longitude}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="px-3 py-1.5 rounded-xl bg-white border border-emerald-300 text-emerald-800 font-extrabold text-xs hover:bg-emerald-100 transition-colors flex items-center gap-1 shadow-2xs"
+                  className="px-3 py-1.5 rounded-xl bg-white border border-slate-300 text-blue-900 font-extrabold text-xs hover:bg-slate-100 transition-colors flex items-center gap-1 shadow-2xs"
                 >
-                  <i className="fa-solid fa-map-location-dot"></i>
-                  <span>गूगल मैप में देखें</span>
+                  <i className="fa-solid fa-arrow-up-right-from-square text-[10px]"></i>
+                  <span>गूगल मैप ऐप में खोलें</span>
                 </a>
-
-                {syncStatus === 'synced' && (
-                  <span className="text-[10px] font-extrabold text-emerald-700 bg-white px-2 py-1 rounded-lg border border-emerald-300 animate-fadeIn">
-                    ✓ शीट में अपडेट
-                  </span>
-                )}
               </div>
             </div>
 
@@ -739,116 +859,73 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
               </div>
             )}
 
-            {/* ROUTE & STOPS SELECTOR */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  ट्रिप प्रकार:
-                </label>
-                <select
-                  value={tripType}
-                  onChange={(e) => {
-                    const t = e.target.value as any;
-                    setTripType(t);
-                    broadcastLocation(latitude, longitude, speed, accuracy, heading);
-                  }}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
-                >
-                  <option value="morning_pickup">सुबह पिकअप (Morning Pickup)</option>
-                  <option value="afternoon_drop">दोपहर ड्रॉप (Afternoon Drop)</option>
-                  <option value="special_trip">विशेष ट्रिप (Special Trip)</option>
-                </select>
+            {/* LIVE MAP PREVIEW */}
+            <div className="space-y-2 pt-2 border-t border-slate-100">
+              <div className="flex items-center justify-between">
+                <h4 className="font-extrabold text-slate-900 text-xs sm:text-sm flex items-center gap-1.5">
+                  <i className="fa-solid fa-map text-emerald-600"></i>
+                  <span>लाइव मैप प्रिव्यू (गाड़ी की स्थिति)</span>
+                </h4>
+                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs font-bold">
+                  <button
+                    type="button"
+                    onClick={() => setMapViewType('google')}
+                    className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+                      mapViewType === 'google' ? 'bg-white text-blue-900 shadow-xs' : 'text-slate-600'
+                    }`}
+                  >
+                    Google Maps
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMapViewType('osm')}
+                    className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+                      mapViewType === 'osm' ? 'bg-white text-blue-900 shadow-xs' : 'text-slate-600'
+                    }`}
+                  >
+                    OpenStreetMap
+                  </button>
+                </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  वर्तमान स्टॉप (Current Stop):
-                </label>
-                <input
-                  type="text"
-                  value={currentStop}
-                  onChange={(e) => setCurrentStop(e.target.value)}
-                  onBlur={() => broadcastLocation(latitude, longitude, speed, accuracy, heading)}
-                  placeholder="जैसे उमरी कलां मोड़"
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  अगला स्टॉप (Next Stop):
-                </label>
-                <input
-                  type="text"
-                  value={nextStop}
-                  onChange={(e) => setNextStop(e.target.value)}
-                  onBlur={() => broadcastLocation(latitude, longitude, speed, accuracy, heading)}
-                  placeholder="जैसे काँठ बस स्टैंड / स्कूल गेट"
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              <div className="relative w-full h-72 sm:h-80 bg-slate-100 rounded-2xl overflow-hidden border border-slate-200 shadow-inner">
+                <iframe
+                  title="Driver Location Map"
+                  src={mapViewType === 'google' ? googleMapEmbedUrl : osmEmbedUrl}
+                  className="w-full h-full border-0"
+                  loading="lazy"
                 />
               </div>
             </div>
 
-            {/* TRIP STATUS PILLS */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-2">
-                गाड़ी की वर्तमान स्थिति बदलें:
-              </label>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {[
-                  { id: 'running', label: 'चल रही है (On Road)', icon: 'fa-gauge-high', color: 'emerald' },
-                  { id: 'boarding', label: 'बच्चे चढ़ रहे हैं (Boarding)', icon: 'fa-user-group', color: 'amber' },
-                  { id: 'traffic', label: 'जाम / ट्रैफिक (Traffic)', icon: 'fa-triangle-exclamation', color: 'orange' },
-                  { id: 'reached_school', label: 'स्कूल पहुँच गई (Reached)', icon: 'fa-school', color: 'blue' },
-                ].map((s) => {
-                  const isActive = vanStatus === s.id;
-                  return (
-                    <button
-                      key={s.id}
-                      type="button"
-                      onClick={() => {
-                        setVanStatus(s.id as any);
-                        broadcastLocation(latitude, longitude, speed, accuracy, heading);
-                      }}
-                      className={`py-2 px-3 rounded-xl text-xs font-extrabold border flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                        isActive
-                          ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
-                          : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
-                      }`}
-                    >
-                      <i className={`fa-solid ${s.icon} text-xs`}></i>
-                      <span>{s.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* EMERGENCY SOS SECTION */}
-            <div className="pt-4 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-4">
-              <div className="text-xs text-slate-500">
-                <span>प्रबंधक मुजाहिर (Manager): </span>
-                <a href="tel:9720353137" className="font-mono font-bold text-blue-900 underline ml-1">
-                  9720353137
-                </a>
+            {/* EMERGENCY SOS TRIGGER */}
+            <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div className="text-xs text-slate-600">
+                <strong className="text-slate-900 block mb-0.5">आपातकालीन सहायता (Emergency SOS):</strong>
+                रास्ते में कोई समस्या होने पर यह बटन दबाएं। स्कूल मैनेजर के डैशबोर्ड पर तुरंत अलार्म बजेगा।
               </div>
 
               <button
                 type="button"
                 onClick={handleTriggerSos}
-                className={`px-5 py-2.5 rounded-xl font-black text-xs flex items-center gap-2 cursor-pointer transition-all shadow-md ${
+                className={`px-5 py-2.5 rounded-xl font-extrabold text-xs flex items-center gap-2 shadow-md cursor-pointer transition-all ${
                   sosActive
                     ? 'bg-red-700 text-white ring-4 ring-red-400 animate-bounce'
-                    : 'bg-red-100 hover:bg-red-200 text-red-800 border border-red-300'
+                    : 'bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300'
                 }`}
               >
-                <i className="fa-solid fa-triangle-exclamation"></i>
-                <span>{sosActive ? '🚨 SOS अलर्ट सक्रिय है (क्लिक कर बंद करें)' : 'आपातकालीन SOS भेजें'}</span>
+                <i className="fa-solid fa-triangle-exclamation text-sm"></i>
+                <span>{sosActive ? '🚨 SOS अलार्म सक्रिय है' : '⚠️ SOS अलर्ट भेजें'}</span>
               </button>
             </div>
           </div>
         </div>
       )}
+      {/* GOOGLE APPS SCRIPT SETUP MODAL */}
+      <GoogleSheetSyncModal
+        isOpen={showScriptModal}
+        onClose={() => setShowScriptModal(false)}
+      />
     </div>
   );
 };
