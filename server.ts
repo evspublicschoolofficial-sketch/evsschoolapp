@@ -5,7 +5,20 @@ import { createServer as createViteServer } from 'vite';
 
 const PORT = 3000;
 const TELEMETRY_CACHE_FILE = '/tmp/evs_bus_telemetry.json';
-const GOOGLE_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzrASF0ip3AsJI-JwgPzXSgUcTphOp3GAMiPGH4sa3iN2pkqGvJaVEDq-uwkgX9xrUuCQ/exec';
+const URL_CONFIG_FILE = '/tmp/evs_apps_script_url.txt';
+const DEFAULT_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzrASF0ip3AsJI-JwgPzXSgUcTphOp3GAMiPGH4sa3iN2pkqGvJaVEDq-uwkgX9xrUuCQ/exec';
+
+let currentAppsScriptUrl = DEFAULT_APPS_SCRIPT_URL;
+try {
+  if (fs.existsSync(URL_CONFIG_FILE)) {
+    const savedUrl = fs.readFileSync(URL_CONFIG_FILE, 'utf-8').trim();
+    if (savedUrl.startsWith('https://script.google.com/macros/s/')) {
+      currentAppsScriptUrl = savedUrl;
+    }
+  }
+} catch (e) {
+  console.warn('Could not read URL config file:', e);
+}
 
 // Load cached telemetry if exists
 let liveTelemetryStore: Record<string, any> = {};
@@ -28,7 +41,7 @@ function saveTelemetryCache() {
 
 async function forwardToGoogleAppsScript(payload: any) {
   try {
-    const res = await fetch(GOOGLE_APPS_SCRIPT_URL, {
+    const res = await fetch(currentAppsScriptUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({
@@ -58,7 +71,32 @@ async function startServer() {
 
   // Health check
   app.get('/api/health', (_req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString(), buses: Object.keys(liveTelemetryStore) });
+    res.json({ status: 'ok', timestamp: new Date().toISOString(), buses: Object.keys(liveTelemetryStore), appsScriptUrl: currentAppsScriptUrl });
+  });
+
+  // Get current Google Apps Script URL
+  app.get('/api/apps-script-url', (_req, res) => {
+    res.json({ url: currentAppsScriptUrl, isDefault: currentAppsScriptUrl === DEFAULT_APPS_SCRIPT_URL });
+  });
+
+  // Update Google Apps Script URL
+  app.post('/api/apps-script-url', (req, res) => {
+    try {
+      const newUrl = String(req.body?.url || '').trim();
+      if (!newUrl || newUrl === DEFAULT_APPS_SCRIPT_URL) {
+        currentAppsScriptUrl = DEFAULT_APPS_SCRIPT_URL;
+        if (fs.existsSync(URL_CONFIG_FILE)) fs.unlinkSync(URL_CONFIG_FILE);
+        return res.json({ success: true, url: DEFAULT_APPS_SCRIPT_URL, message: 'Reset to default Apps Script URL' });
+      }
+      if (newUrl.startsWith('https://script.google.com/macros/s/')) {
+        currentAppsScriptUrl = newUrl;
+        fs.writeFileSync(URL_CONFIG_FILE, newUrl, 'utf-8');
+        return res.json({ success: true, url: newUrl, message: 'Apps Script URL updated successfully' });
+      }
+      return res.status(400).json({ error: 'Invalid Google Apps Script Web App URL format' });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // GET live bus telemetry (all buses)

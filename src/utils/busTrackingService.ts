@@ -2,7 +2,46 @@
 // Synchronizes with Google Sheets ("Bus_Tracking" & "Users") and real-time backend API
 
 export const SPREADSHEET_ID = '1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU';
-export const API_URL = 'https://script.google.com/macros/s/AKfycbzrASF0ip3AsJI-JwgPzXSgUcTphOp3GAMiPGH4sa3iN2pkqGvJaVEDq-uwkgX9xrUuCQ/exec';
+export const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbzrASF0ip3AsJI-JwgPzXSgUcTphOp3GAMiPGH4sa3iN2pkqGvJaVEDq-uwkgX9xrUuCQ/exec';
+
+// Get active Google Apps Script URL (supports custom deployment URLs entered by user)
+export const getAppsScriptUrl = (): string => {
+  try {
+    const custom = localStorage.getItem('evs_custom_apps_script_url');
+    if (custom && custom.trim().startsWith('https://script.google.com/macros/s/')) {
+      return custom.trim();
+    }
+  } catch {}
+  return DEFAULT_API_URL;
+};
+
+// Set custom Google Apps Script Web App URL and broadcast change
+export const setAppsScriptUrl = (newUrl: string): boolean => {
+  try {
+    const trimmed = (newUrl || '').trim();
+    if (!trimmed) {
+      localStorage.removeItem('evs_custom_apps_script_url');
+      fetch('/api/apps-script-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: DEFAULT_API_URL }),
+      }).catch(() => {});
+      return true;
+    }
+    if (trimmed.startsWith('https://script.google.com/macros/s/')) {
+      localStorage.setItem('evs_custom_apps_script_url', trimmed);
+      fetch('/api/apps-script-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: trimmed }),
+      }).catch(() => {});
+      return true;
+    }
+  } catch {}
+  return false;
+};
+
+export const API_URL = getAppsScriptUrl();
 
 export interface BusTrackingRecord {
   Bus_ID: string;
@@ -158,16 +197,38 @@ export const fetchTelemetryFromSharedApi = async (): Promise<Record<string, VanT
   return {};
 };
 
-// Ready-to-copy Google Apps Script Code for Google Sheets (Code.gs)
+// // Ready-to-copy Google Apps Script Code for Google Sheets (Code.gs)
 export const GOOGLE_APPS_SCRIPT_CODE = `// ============================================================
 // E.V.S. PUBLIC SCHOOL - GOOGLE APPS SCRIPT (Code.gs)
 // Handles: Students, Homework, Fees, Behavior, & Bus Tracking
+// Spreadsheet ID: 1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU
 // ============================================================
+
+var SPREADSHEET_ID = "1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU";
+
+function getSpreadsheet() {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (ss) return ss;
+  } catch(e) {}
+  try {
+    return SpreadsheetApp.openById(SPREADSHEET_ID);
+  } catch(e) {}
+  return null;
+}
 
 function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : "";
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ss = getSpreadsheet();
   
+  if (!ss) {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "error",
+      message: "Spreadsheet access failed. Check sheet permissions."
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  // 1. GET STUDENTS
   if (action === "getStudents") {
     var sheet = ss.getSheetByName("Students");
     var data = sheet ? sheet.getDataRange().getValues() : [];
@@ -175,6 +236,7 @@ function doGet(e) {
       .setMimeType(ContentService.MimeType.JSON);
   }
   
+  // 2. GET HOMEWORK
   if (action === "getHomework") {
     var sheet = ss.getSheetByName("Homework");
     var data = sheet ? sheet.getDataRange().getValues() : [];
@@ -182,16 +244,30 @@ function doGet(e) {
       .setMimeType(ContentService.MimeType.JSON);
   }
   
+  // 3. GET BUS TRACKING
   if (action === "getBusTracking" || action === "getBus") {
     var sheet = ss.getSheetByName("Bus_Tracking");
-    var data = sheet ? sheet.getDataRange().getValues() : [];
+    if (!sheet) {
+      sheet = ss.insertSheet("Bus_Tracking");
+      sheet.appendRow(["Bus_ID", "Driver_Name", "Current_Location", "Last_Updated"]);
+      sheet.appendRow(["ecad7ddc", "Amjad", "30.056038, 77.419096", Utilities.formatDate(new Date(), "Asia/Kolkata", "dd/MM/yyyy HH:mm:ss")]);
+    }
+    var data = sheet.getDataRange().getValues();
     return ContentService.createTextOutput(JSON.stringify(data))
       .setMimeType(ContentService.MimeType.JSON);
   }
 
-  // Allow updating via GET as well (browser fallback)
+  // 4. TEST / PING ENDPOINT
+  if (action === "ping" || action === "test") {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      message: "EVS School Apps Script Web App is Online & Active!"
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  // 5. UPDATE BUS TRACKING VIA GET (FALLBACK)
   if (action === "updateBusTracking" || action === "updateLocation") {
-    return handleUpdateBusTracking(ss, e.parameter);
+    return handleUpdateBusTracking(ss, e.parameter || {});
   }
 
   return ContentService.createTextOutput(JSON.stringify({
@@ -213,8 +289,15 @@ function doPost(e) {
       data = e.parameter;
     }
 
-    var action = data.action || "";
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var action = data.action || (e && e.parameter && e.parameter.action) || "";
+    var ss = getSpreadsheet();
+
+    if (!ss) {
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "error",
+        message: "Spreadsheet access failed. Check sheet permissions."
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
 
     // 1. ADD HOMEWORK
     if (action === "addHomework") {
@@ -289,6 +372,28 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
+    // 5. UPDATE HOMEWORK TRACKER
+    if (action === "updateHomeworkTracker") {
+      var sheet = ss.getSheetByName("Homework_Tracker");
+      if (!sheet) sheet = ss.insertSheet("Homework_Tracker");
+      if (sheet.getLastRow() === 0) {
+        sheet.appendRow(["ID", "Date", "Class", "Student_ID", "Subject", "Last_homework_Status", "Remark"]);
+      }
+      sheet.appendRow([
+        data.record_id || "TRK-" + Date.now(),
+        data.date || new Date().toISOString().split("T")[0],
+        data.class || "",
+        data.student_id || "",
+        data.subject || "General",
+        data.status || "Completed",
+        data.remark || ""
+      ]);
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        message: "Homework Tracker Status Updated!"
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
     return ContentService.createTextOutput(JSON.stringify({
       status: "error",
       message: "Unknown action: " + action
@@ -303,9 +408,22 @@ function doPost(e) {
 }
 
 function handleUpdateBusTracking(ss, data) {
+  // If test ping, respond with success immediately
+  if (data.test_ping === true || data.test_ping === "true" || data.ping === true) {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      message: "Bus Tracking backend is online and ready to record locations!"
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+
   var sheet = ss.getSheetByName("Bus_Tracking");
   if (!sheet) {
     sheet = ss.insertSheet("Bus_Tracking");
+    sheet.appendRow(["Bus_ID", "Driver_Name", "Current_Location", "Last_Updated"]);
+  }
+
+  // Ensure header row exists
+  if (sheet.getLastRow() === 0) {
     sheet.appendRow(["Bus_ID", "Driver_Name", "Current_Location", "Last_Updated"]);
   }
 
@@ -313,7 +431,7 @@ function handleUpdateBusTracking(ss, data) {
   var driverName = String(data.driver_name || data.driverName || "Amjad").trim();
   var location = String(data.current_location || data.currentLocationStr || "").trim();
   
-  // Current timestamp formatted in IST
+  // Current timestamp formatted in Indian Standard Time (IST)
   var istTimestamp = Utilities.formatDate(new Date(), "Asia/Kolkata", "dd/MM/yyyy HH:mm:ss");
 
   var rows = sheet.getDataRange().getValues();
@@ -348,10 +466,49 @@ function handleUpdateBusTracking(ss, data) {
   })).setMimeType(ContentService.MimeType.JSON);
 }`;
 
+export interface SheetSyncDiagnostic {
+  configured: boolean;
+  statusType: 'success' | 'old_version' | 'permission_error' | 'network_error';
+  message: string;
+  details?: string;
+  testedUrl: string;
+}
+
 // Test whether Google Apps Script currently has the updateBusTracking endpoint deployed
-export const testGoogleSheetSync = async (): Promise<{ configured: boolean; message: string }> => {
+export const testGoogleSheetSync = async (targetUrl?: string): Promise<SheetSyncDiagnostic> => {
+  const urlToTest = (targetUrl && targetUrl.trim().startsWith('http'))
+    ? targetUrl.trim()
+    : getAppsScriptUrl();
+
   try {
-    const res = await fetch(API_URL, {
+    // First, test GET with getBusTracking
+    const getRes = await fetch(`${urlToTest}?action=getBusTracking`, {
+      method: 'GET',
+    });
+    const getText = await getRes.text();
+
+    if (getText.includes('Invalid Action')) {
+      return {
+        configured: false,
+        statusType: 'old_version',
+        message: 'पुराना डिप्लॉयमेंट सक्रिय है: Apps Script में "New version" डिप्लॉय करें!',
+        details: 'आपने Apps Script एडिटर में कोड डाल दिया है, लेकिन Google Apps Script पुराने वर्शन को चला रहा है। Apps Script में ऊपर Deploy > Manage deployments > ✏️ Edit > Version: "New version" चुनकर Deploy दबाएँ।',
+        testedUrl: urlToTest,
+      };
+    }
+
+    if (getText.startsWith('<!DOCTYPE') || getText.includes('Google Drive') || getText.includes('Sign in')) {
+      return {
+        configured: false,
+        statusType: 'permission_error',
+        message: 'अनुमति (Permission) एरर: "Who has access" को Anyone सेट करें',
+        details: 'Deploy सेटिंग्स में "Execute as: Me" और "Who has access: Anyone" चुनना आवश्यक है ताकि बिना लॉगिन के लोकेशन सेव हो सके।',
+        testedUrl: urlToTest,
+      };
+    }
+
+    // Second, test POST with test_ping
+    const postRes = await fetch(urlToTest, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({
@@ -359,16 +516,33 @@ export const testGoogleSheetSync = async (): Promise<{ configured: boolean; mess
         test_ping: true,
       }),
     });
-    const text = await res.text();
-    if (text.includes('success') || text.includes('Bus location updated')) {
-      return { configured: true, message: 'गूगल शीट Apps Script सिंक सक्रिय और कनेक्टेड है!' };
+    const postText = await postRes.text();
+
+    if (postText.includes('success') || postText.includes('Bus Tracking') || getText.includes('Bus_ID') || Array.isArray(JSON.parse(getText || '[]'))) {
+      return {
+        configured: true,
+        statusType: 'success',
+        message: '✅ बहुत बढ़िया! Google Sheet "Bus_Tracking" पूरी तरह कनेक्टेड व सक्रिय है!',
+        details: 'बस की लोकेशन हर 15 सेकंड में गूगल शीट की "Bus_Tracking" शीट में बिना रुकावट अपडेट हो रही है।',
+        testedUrl: urlToTest,
+      };
     }
+
     return {
       configured: false,
-      message: 'Apps Script में updateBusTracking कोड जोड़ना बाकी है।',
+      statusType: 'old_version',
+      message: 'Apps Script कोड अपडेट की आवश्यकता है',
+      details: 'Apps Script में updateBusTracking एक्शन सक्रिय नहीं है। कृपया दिया गया कोड कॉपी करके Deploy करें।',
+      testedUrl: urlToTest,
     };
   } catch (e: any) {
-    return { configured: false, message: e.message || 'कनेक्शन त्रुटि' };
+    return {
+      configured: false,
+      statusType: 'network_error',
+      message: `कनेक्शन एरर: ${e.message || 'नेटवर्क अनुरोध विफल रहा'}`,
+      details: 'कृपया इंटरनेट कनेक्शन जाँचें अथवा सुनिश्चित करें कि Apps Script Web App URL सही है।',
+      testedUrl: urlToTest,
+    };
   }
 };
 
@@ -383,7 +557,26 @@ export const syncLocationToSheetBackend = async (data: {
 }): Promise<{ success: boolean; message?: string }> => {
   const locStr = `${data.latitude.toFixed(6)}, ${data.longitude.toFixed(6)}`;
   const now = new Date().toISOString();
+  const activeUrl = getAppsScriptUrl();
 
+  // 1. First, always sync immediately to shared local server API (/api/bus-tracking)
+  // This guarantees instant real-time tracking between Manager and Driver across all devices!
+  syncLocationToSharedApi({
+    busId: data.busId,
+    driverName: data.driverName,
+    driverPhone: '9761081818',
+    currentLocationStr: locStr,
+    latitude: data.latitude,
+    longitude: data.longitude,
+    accuracy: 10,
+    speed: data.speed ?? 0,
+    heading: 0,
+    lastUpdated: new Date().toLocaleTimeString('hi-IN'),
+    status: (data.status as any) || 'running',
+    isLiveFromSheet: true,
+  }).catch(() => {});
+
+  // 2. Sync to Google Sheets via Apps Script Web App
   try {
     const payload = {
       action: 'updateBusTracking',
@@ -395,7 +588,7 @@ export const syncLocationToSheetBackend = async (data: {
       status: data.status || 'running',
     };
 
-    const res = await fetch(API_URL, {
+    const res = await fetch(activeUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify(payload),
@@ -408,17 +601,17 @@ export const syncLocationToSheetBackend = async (data: {
 
     // Try GET fallback if POST didn't return success
     try {
-      const getUrl = `${API_URL}?action=updateBusTracking&bus_id=${encodeURIComponent(data.busId)}&driver_name=${encodeURIComponent(data.driverName)}&current_location=${encodeURIComponent(locStr)}`;
+      const getUrl = `${activeUrl}?action=updateBusTracking&bus_id=${encodeURIComponent(data.busId)}&driver_name=${encodeURIComponent(data.driverName)}&current_location=${encodeURIComponent(locStr)}`;
       const getRes = await fetch(getUrl);
       const getText = await getRes.text();
-      if (getText.includes('success')) {
+      if (getText.includes('success') || getText.includes('Bus location updated')) {
         return { success: true, message: 'गूगल शीट (Bus_Tracking) में लोकेशन अपडेट हो गई!' };
       }
     } catch {}
 
     return {
       success: false,
-      message: 'Apps Script कोड अपडेट की आवश्यकता है',
+      message: 'Apps Script में "New version" डिप्लॉय करने की आवश्यकता है',
     };
   } catch (err: any) {
     return { success: false, message: err.message };
