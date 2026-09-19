@@ -481,7 +481,16 @@ export const testGoogleSheetSync = async (targetUrl?: string): Promise<SheetSync
     : getAppsScriptUrl();
 
   try {
-    // First, test GET with getBusTracking
+    // 1. Test GET with ping or getBusTracking
+    let isWorking = false;
+    try {
+      const pingRes = await fetch(`${urlToTest}?action=ping`);
+      const pingText = await pingRes.text();
+      if (pingText.includes('Online & Active') || pingText.includes('success')) {
+        isWorking = true;
+      }
+    } catch {}
+
     const getRes = await fetch(`${urlToTest}?action=getBusTracking`, {
       method: 'GET',
     });
@@ -497,7 +506,7 @@ export const testGoogleSheetSync = async (targetUrl?: string): Promise<SheetSync
       };
     }
 
-    if (getText.startsWith('<!DOCTYPE') || getText.includes('Google Drive') || getText.includes('Sign in')) {
+    if (getText.startsWith('<!DOCTYPE') && (getText.includes('Google Drive') || getText.includes('Sign in'))) {
       return {
         configured: false,
         statusType: 'permission_error',
@@ -507,18 +516,7 @@ export const testGoogleSheetSync = async (targetUrl?: string): Promise<SheetSync
       };
     }
 
-    // Second, test POST with test_ping
-    const postRes = await fetch(urlToTest, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({
-        action: 'updateBusTracking',
-        test_ping: true,
-      }),
-    });
-    const postText = await postRes.text();
-
-    if (postText.includes('success') || postText.includes('Bus Tracking') || getText.includes('Bus_ID') || Array.isArray(JSON.parse(getText || '[]'))) {
+    if (isWorking || getText.includes('Bus_ID') || Array.isArray(JSON.parse(getText || '[]'))) {
       return {
         configured: true,
         statusType: 'success',
@@ -588,6 +586,17 @@ export const syncLocationToSheetBackend = async (data: {
       status: data.status || 'running',
     };
 
+    // Try GET request first (most reliable with Google Apps Script without CORS redirect blocks)
+    try {
+      const getUrl = `${activeUrl}?action=updateBusTracking&bus_id=${encodeURIComponent(data.busId)}&driver_name=${encodeURIComponent(data.driverName)}&current_location=${encodeURIComponent(locStr)}`;
+      const getRes = await fetch(getUrl);
+      const getText = await getRes.text();
+      if (getText.includes('success') || getText.includes('Bus location updated')) {
+        return { success: true, message: 'गूगल शीट (Bus_Tracking) में लोकेशन अपडेट हो गई!' };
+      }
+    } catch {}
+
+    // POST fallback
     const res = await fetch(activeUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -598,16 +607,6 @@ export const syncLocationToSheetBackend = async (data: {
     if (text.includes('success') || text.includes('Bus location updated')) {
       return { success: true, message: 'गूगल शीट (Bus_Tracking) में लोकेशन अपडेट हो गई!' };
     }
-
-    // Try GET fallback if POST didn't return success
-    try {
-      const getUrl = `${activeUrl}?action=updateBusTracking&bus_id=${encodeURIComponent(data.busId)}&driver_name=${encodeURIComponent(data.driverName)}&current_location=${encodeURIComponent(locStr)}`;
-      const getRes = await fetch(getUrl);
-      const getText = await getRes.text();
-      if (getText.includes('success') || getText.includes('Bus location updated')) {
-        return { success: true, message: 'गूगल शीट (Bus_Tracking) में लोकेशन अपडेट हो गई!' };
-      }
-    } catch {}
 
     return {
       success: false,
