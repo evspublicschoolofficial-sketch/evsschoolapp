@@ -2,7 +2,7 @@
 // Synchronizes with Google Sheets ("Bus_Tracking" & "Users") and real-time backend API
 
 export const SPREADSHEET_ID = '1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU';
-export const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbzrASF0ip3AsJI-JwgPzXSgUcTphOp3GAMiPGH4sa3iN2pkqGvJaVEDq-uwkgX9xrUuCQ/exec';
+export const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbwVy51K14qu6IXipAZXP4NspFcAUHpLcYv8-zjhkYnBlUI17TzGi_KaJU9TRmNT8D5vvQ/exec';
 
 // Get active Google Apps Script URL (supports custom deployment URLs entered by user)
 export const getAppsScriptUrl = (): string => {

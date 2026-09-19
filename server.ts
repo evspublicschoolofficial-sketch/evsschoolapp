@@ -6,7 +6,7 @@ import { createServer as createViteServer } from 'vite';
 const PORT = 3000;
 const TELEMETRY_CACHE_FILE = '/tmp/evs_bus_telemetry.json';
 const URL_CONFIG_FILE = '/tmp/evs_apps_script_url.txt';
-const DEFAULT_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzrASF0ip3AsJI-JwgPzXSgUcTphOp3GAMiPGH4sa3iN2pkqGvJaVEDq-uwkgX9xrUuCQ/exec';
+const DEFAULT_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwVy51K14qu6IXipAZXP4NspFcAUHpLcYv8-zjhkYnBlUI17TzGi_KaJU9TRmNT8D5vvQ/exec';
 
 let currentAppsScriptUrl = DEFAULT_APPS_SCRIPT_URL;
 try {
