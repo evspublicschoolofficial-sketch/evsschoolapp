@@ -113,7 +113,13 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
   const [accuracy, setAccuracy] = useState<number>(8);
   const [speed, setSpeed] = useState<number | null>(0);
   const [heading, setHeading] = useState<number | null>(0);
-  const [isTracking, setIsTracking] = useState<boolean>(false);
+  const [isTracking, setIsTracking] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('evs_driver_is_tracking') === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [gpsError, setGpsError] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
   const [lastUpdatedTime, setLastUpdatedTime] = useState<string>(new Date().toLocaleTimeString('hi-IN'));
@@ -129,10 +135,23 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
     latestCoordsRef.current = { lat: latitude, lng: longitude, speed: speed || 0, accuracy, heading: heading || 0 };
   }, [latitude, longitude, speed, accuracy, heading]);
 
-  const [vanStatus, setVanStatus] = useState<'running' | 'stopped'>('running');
+  const [vanStatus, setVanStatus] = useState<'running' | 'stopped'>(() => {
+    try {
+      return localStorage.getItem('evs_driver_is_tracking') === 'true' ? 'running' : 'stopped';
+    } catch {
+      return 'stopped';
+    }
+  });
   const [sosActive, setSosActive] = useState<boolean>(false);
   const [sosMessage, setSosMessage] = useState<string>('');
   const [mapViewType, setMapViewType] = useState<'google' | 'osm'>('google');
+
+  // Sync isTracking to localStorage whenever it changes
+  useEffect(() => {
+    try {
+      localStorage.setItem('evs_driver_is_tracking', isTracking ? 'true' : 'false');
+    } catch {}
+  }, [isTracking]);
 
   // Refs for tracking
   const watchIdRef = useRef<number | null>(null);
@@ -235,7 +254,20 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
   }, [activeBusRecord, isTracking]);
 
   // Broadcast and sync location to Sheet and server API
-  const broadcastLocation = (lat: number, lng: number, spd: number | null, acc: number, hdg: number | null) => {
+  const broadcastLocation = (
+    lat: number,
+    lng: number,
+    spd: number | null,
+    acc: number,
+    hdg: number | null,
+    options?: { force?: boolean; customStatus?: 'running' | 'stopped' }
+  ) => {
+    // Guard clause: If tracking is off and not explicitly forced, do not send telemetry
+    if (!isTracking && !options?.force) {
+      return;
+    }
+
+    const currentStatus = options?.customStatus || (isTracking ? 'running' : 'stopped');
     setSyncStatus('syncing');
     const dName = loggedDriver?.Name || activeBusRecord?.Driver_Name || 'Amjad';
     const dPhone = String(loggedDriver?.Mobile_number || '9761081818');
@@ -255,7 +287,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
       speed: spd !== null ? Math.round(spd) : 0,
       heading: hdg,
       lastUpdated: new Date().toISOString(),
-      status: vanStatus,
+      status: currentStatus,
       sosAlert: sosActive,
       sosMessage: sosActive ? sosMessage || 'आपातकालीन सहायता आवश्यक है!' : undefined,
       isLiveFromSheet: true,
@@ -290,7 +322,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
       latitude: lat,
       longitude: lng,
       speed: spd,
-      status: vanStatus,
+      status: currentStatus,
     }).then((res) => {
       if (res.success) {
         setSheetSyncState('success');
@@ -306,7 +338,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
   };
 
   // Immediate High Accuracy GPS Capture from device
-  const captureCurrentGps = (onSuccess?: (lat: number, lng: number) => void) => {
+  const captureCurrentGps = (onSuccess?: (lat: number, lng: number) => void, forceSend = false) => {
     if (!('geolocation' in navigator)) {
       setGpsError('इस ब्राउज़र में Geolocation (GPS) उपलब्ध नहीं है।');
       return;
@@ -330,7 +362,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
         setHeading(hd);
         latestCoordsRef.current = { lat, lng, speed: spd, accuracy: acc, heading: hd };
 
-        broadcastLocation(lat, lng, spd, acc, hd);
+        broadcastLocation(lat, lng, spd, acc, hd, { force: forceSend });
         if (onSuccess) onSuccess(lat, lng);
       },
       (err) => {
@@ -339,7 +371,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
         setGpsError(`GPS एरर (${err.message})। कृपया फोन में Location चालू रखें।`);
         // If device GPS times out, broadcast latest known coordinates
         const cur = latestCoordsRef.current;
-        broadcastLocation(cur.lat, cur.lng, cur.speed, cur.accuracy, cur.heading);
+        broadcastLocation(cur.lat, cur.lng, cur.speed, cur.accuracy, cur.heading, { force: forceSend });
       },
       {
         enableHighAccuracy: true,
@@ -355,90 +387,112 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
     setCountdown(15);
   };
 
+  // Stop active hardware watching and intervals
+  const stopTrackingServices = () => {
+    if (watchIdRef.current !== null && navigator.geolocation) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+    if (timer15sRef.current) {
+      clearInterval(timer15sRef.current);
+      timer15sRef.current = null;
+    }
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
+    }
+    releaseWakeLock();
+    stopKeepAliveAudio();
+  };
+
+  // Start continuous GPS tracking, wake lock, keep-alive audio and intervals
+  const startTrackingServices = () => {
+    // Keep screen on & prevent background freeze
+    requestWakeLock();
+    startKeepAliveAudio();
+
+    // 1. Send immediate location right now
+    execute15sUpdate();
+
+    // 2. Watch device movement for continuous precision
+    if ('geolocation' in navigator) {
+      try {
+        const id = navigator.geolocation.watchPosition(
+          (pos) => {
+            const lat = pos.coords.latitude;
+            const lng = pos.coords.longitude;
+            const spd = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
+            const acc = Math.round(pos.coords.accuracy || 8);
+            const hd = pos.coords.heading || 0;
+
+            setLatitude(lat);
+            setLongitude(lng);
+            setAccuracy(acc);
+            setSpeed(spd);
+            setHeading(hd);
+            setGpsError(null);
+            latestCoordsRef.current = { lat, lng, speed: spd, accuracy: acc, heading: hd };
+          },
+          (err) => {
+            console.warn('Geolocation watch error:', err.message);
+          },
+          {
+            enableHighAccuracy: true,
+            timeout: 12000,
+            maximumAge: 2000,
+          }
+        );
+        watchIdRef.current = id;
+      } catch (e: any) {
+        console.warn('GPS start failed:', e);
+      }
+    }
+
+    // 3. Countdown timer: decrements every 1 second
+    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+    countdownIntervalRef.current = setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 1) {
+          return 15;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    // 4. Exact 15-second sheet update loop
+    if (timer15sRef.current) clearInterval(timer15sRef.current);
+    timer15sRef.current = setInterval(() => {
+      execute15sUpdate();
+    }, 15000);
+  };
+
+  // Auto-resume tracking on initial mount / reload if it was previously started
+  useEffect(() => {
+    if (isTracking && loggedDriver) {
+      startTrackingServices();
+    }
+    return () => {
+      stopTrackingServices();
+    };
+  }, []);
+
   // Start / Stop Live GPS Tracking (with 15s interval)
   const toggleTracking = () => {
     if (isTracking) {
       // STOP TRACKING
-      if (watchIdRef.current !== null && navigator.geolocation) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
-        watchIdRef.current = null;
-      }
-      if (timer15sRef.current) {
-        clearInterval(timer15sRef.current);
-        timer15sRef.current = null;
-      }
-      if (countdownIntervalRef.current) {
-        clearInterval(countdownIntervalRef.current);
-        countdownIntervalRef.current = null;
-      }
-      releaseWakeLock();
-      stopKeepAliveAudio();
+      stopTrackingServices();
       setIsTracking(false);
       setVanStatus('stopped');
       setCountdown(15);
-      broadcastLocation(latitude, longitude, 0, accuracy, heading);
+      // Inform backend and manager view that tracking has explicitly stopped
+      broadcastLocation(latitude, longitude, 0, accuracy, heading, { force: true, customStatus: 'stopped' });
     } else {
       // START TRACKING (15 seconds cycle)
       setGpsError(null);
       setIsTracking(true);
       setVanStatus('running');
       setCountdown(15);
-
-      // Keep screen on & prevent background freeze
-      requestWakeLock();
-      startKeepAliveAudio();
-
-      // 1. Send immediate location right now
-      execute15sUpdate();
-
-      // 2. Watch device movement for continuous precision
-      if ('geolocation' in navigator) {
-        try {
-          const id = navigator.geolocation.watchPosition(
-            (pos) => {
-              const lat = pos.coords.latitude;
-              const lng = pos.coords.longitude;
-              const spd = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
-              const acc = Math.round(pos.coords.accuracy || 8);
-              const hd = pos.coords.heading || 0;
-
-              setLatitude(lat);
-              setLongitude(lng);
-              setAccuracy(acc);
-              setSpeed(spd);
-              setHeading(hd);
-              setGpsError(null);
-              latestCoordsRef.current = { lat, lng, speed: spd, accuracy: acc, heading: hd };
-            },
-            (err) => {
-              console.warn('Geolocation watch error:', err.message);
-            },
-            {
-              enableHighAccuracy: true,
-              timeout: 12000,
-              maximumAge: 2000,
-            }
-          );
-          watchIdRef.current = id;
-        } catch (e: any) {
-          console.warn('GPS start failed:', e);
-        }
-      }
-
-      // 3. Countdown timer: decrements every 1 second
-      countdownIntervalRef.current = setInterval(() => {
-        setCountdown((prev) => {
-          if (prev <= 1) {
-            return 15;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-
-      // 4. Exact 15-second sheet update loop
-      timer15sRef.current = setInterval(() => {
-        execute15sUpdate();
-      }, 15000);
+      startTrackingServices();
     }
   };
 
@@ -802,7 +856,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
               <div className="flex flex-wrap items-center gap-2.5">
                 <button
                   type="button"
-                  onClick={() => captureCurrentGps()}
+                  onClick={() => captureCurrentGps(undefined, true)}
                   disabled={fetchingGps}
                   className="px-4 py-3 rounded-2xl bg-blue-900 hover:bg-blue-950 text-white text-xs font-black flex items-center gap-1.5 shadow-md cursor-pointer transition-all active:scale-95"
                   title="अभी तुरंत GPS लोकेशन भेजें"
