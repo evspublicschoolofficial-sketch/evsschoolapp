@@ -8,6 +8,7 @@ import {
   DEFAULT_SCHOOL_COORDS,
   calculateDistanceKm,
   fetchTelemetryFromSharedApi,
+  subscribeToBusUpdates,
 } from '../utils/busTrackingService';
 import { GoogleSheetSyncModal } from './GoogleSheetSyncModal';
 
@@ -82,6 +83,23 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
   useEffect(() => {
     fetchSheetData();
 
+    // Real-time WebSocket subscription for instant location updates
+    const unsubscribeWs = subscribeToBusUpdates((msg) => {
+      if (msg.type === 'BUS_UPDATE' && msg.telemetry) {
+        const loc: VanTelemetry = msg.telemetry;
+        setLiveTelemetry((prev) => ({
+          ...prev,
+          [loc.busId]: loc,
+        }));
+        setLastSyncTime(new Date().toLocaleTimeString('hi-IN'));
+      } else if (msg.type === 'SNAPSHOT' && msg.data) {
+        setLiveTelemetry((prev) => ({
+          ...prev,
+          ...msg.data,
+        }));
+      }
+    });
+
     try {
       if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
         const bc = new BroadcastChannel('evs_school_van_tracking');
@@ -113,6 +131,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
     window.addEventListener('storage', handleStorageChange);
 
     return () => {
+      unsubscribeWs();
       if (broadcastChannelRef.current) {
         broadcastChannelRef.current.close();
       }

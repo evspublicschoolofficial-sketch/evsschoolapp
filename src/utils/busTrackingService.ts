@@ -200,18 +200,96 @@ export const fetchBusTrackingFromSheet = async (): Promise<BusTrackingRecord[]> 
   }
 };
 
-// Send live location update to cross-device shared server API
+// Persistent WebSocket connection for real-time background location updates
+let persistentWs: WebSocket | null = null;
+let wsReconnectTimer: any = null;
+const wsListeners = new Set<(msg: any) => void>();
+
+export const getPersistentWebSocket = (): WebSocket | null => {
+  if (typeof window === 'undefined') return null;
+  if (persistentWs && (persistentWs.readyState === WebSocket.OPEN || persistentWs.readyState === WebSocket.CONNECTING)) {
+    return persistentWs;
+  }
+
+  try {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws/location`;
+    persistentWs = new WebSocket(wsUrl);
+
+    persistentWs.onopen = () => {
+      console.log('[WebSocket] Connected to /ws/location');
+      if (wsReconnectTimer) {
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = null;
+      }
+    };
+
+    persistentWs.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        for (const listener of wsListeners) {
+          listener(data);
+        }
+      } catch {}
+    };
+
+    persistentWs.onerror = (err) => {
+      console.warn('[WebSocket] Error:', err);
+    };
+
+    persistentWs.onclose = () => {
+      persistentWs = null;
+      // Auto-reconnect after 3 seconds if disconnected
+      if (!wsReconnectTimer) {
+        wsReconnectTimer = setTimeout(() => {
+          wsReconnectTimer = null;
+          getPersistentWebSocket();
+        }, 3000);
+      }
+    };
+  } catch (err) {
+    console.warn('[WebSocket] Init failed:', err);
+  }
+
+  return persistentWs;
+};
+
+export const subscribeToBusUpdates = (listener: (msg: any) => void) => {
+  wsListeners.add(listener);
+  getPersistentWebSocket();
+  return () => {
+    wsListeners.delete(listener);
+  };
+};
+
+export const sendLocationViaWebSocket = (telemetry: VanTelemetry): boolean => {
+  try {
+    const ws = getPersistentWebSocket();
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'LOCATION_UPDATE', payload: telemetry }));
+      return true;
+    }
+  } catch (err) {
+    console.warn('[WebSocket] send failed:', err);
+  }
+  return false;
+};
+
+// Send live location update to cross-device shared server API (WebSocket primary + HTTP fallback)
 export const syncLocationToSharedApi = async (telemetry: VanTelemetry) => {
+  // 1. Try pushing via persistent WebSocket first
+  const wsSent = sendLocationViaWebSocket(telemetry);
+
+  // 2. Also ensure HTTP POST reaches server for fallback & Google Sheet sync
   try {
     const res = await fetch('/api/bus-tracking', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(telemetry),
     });
-    return res.ok;
+    return res.ok || wsSent;
   } catch (e) {
-    // Non-blocking in case server endpoint is unavailable
-    return false;
+    return wsSent;
   }
 };
 
@@ -511,31 +589,24 @@ export const testGoogleSheetSync = async (targetUrl?: string): Promise<SheetSync
     : getAppsScriptUrl();
 
   try {
-    // 1. Test GET with ping or getBusTracking
-    let isWorking = false;
+    // 1. First test ping endpoint
+    let pingWorking = false;
     try {
       const pingRes = await fetch(`${urlToTest}?action=ping`);
       const pingText = await pingRes.text();
       if (pingText.includes('Online & Active') || pingText.includes('success')) {
-        isWorking = true;
+        pingWorking = true;
       }
     } catch {}
 
-    const getRes = await fetch(`${urlToTest}?action=getBusTracking`, {
-      method: 'GET',
-    });
-    const getText = await getRes.text();
+    // 2. Test getBusTracking
+    let getText = '';
+    try {
+      const getRes = await fetch(`${urlToTest}?action=getBusTracking`);
+      getText = await getRes.text();
+    } catch {}
 
-    if (getText.includes('Invalid Action')) {
-      return {
-        configured: false,
-        statusType: 'old_version',
-        message: 'पुराना डिप्लॉयमेंट सक्रिय है: Apps Script में "New version" डिप्लॉय करें!',
-        details: 'आपने Apps Script एडिटर में कोड डाल दिया है, लेकिन Google Apps Script पुराने वर्शन को चला रहा है। Apps Script में ऊपर Deploy > Manage deployments > ✏️ Edit > Version: "New version" चुनकर Deploy दबाएँ।',
-        testedUrl: urlToTest,
-      };
-    }
-
+    // Check for permissions errors
     if (getText.startsWith('<!DOCTYPE') && (getText.includes('Google Drive') || getText.includes('Sign in'))) {
       return {
         configured: false,
@@ -546,12 +617,31 @@ export const testGoogleSheetSync = async (targetUrl?: string): Promise<SheetSync
       };
     }
 
-    if (isWorking || getText.includes('Bus_ID') || Array.isArray(JSON.parse(getText || '[]'))) {
+    // If ping succeeded or getBusTracking returns valid table/JSON or bus data
+    let hasBusData = false;
+    try {
+      const parsed = JSON.parse(getText);
+      if (Array.isArray(parsed)) {
+        hasBusData = true;
+      }
+    } catch {}
+
+    if (pingWorking || hasBusData || getText.includes('Bus_ID') || getText.includes('success')) {
       return {
         configured: true,
         statusType: 'success',
         message: '✅ बहुत बढ़िया! Google Sheet "Bus_Tracking" पूरी तरह कनेक्टेड व सक्रिय है!',
-        details: 'बस की लोकेशन हर 15 सेकंड में गूगल शीट की "Bus_Tracking" शीट में बिना रुकावट अपडेट हो रही है।',
+        details: 'नया वर्शन सफलतापूर्वक कनेक्ट हो चुका है। अब बस की लोकेशन हर 15 सेकंड में गूगल शीट में ऑटो-अपडेट हो रही है।',
+        testedUrl: urlToTest,
+      };
+    }
+
+    if (getText.includes('Invalid Action')) {
+      return {
+        configured: false,
+        statusType: 'old_version',
+        message: 'पुराना डिप्लॉयमेंट सक्रिय है: Apps Script में "New version" डिप्लॉय करें!',
+        details: 'आपने Apps Script एडिटर में कोड डाल दिया है, लेकिन Google Apps Script पुराने वर्शन को चला रहा है। Apps Script में ऊपर Deploy > Manage deployments > ✏️ Edit > Version: "New version" चुनकर Deploy दबाएँ।',
         testedUrl: urlToTest,
       };
     }

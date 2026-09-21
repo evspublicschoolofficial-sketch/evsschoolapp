@@ -1,6 +1,8 @@
 import express from 'express';
+import http from 'http';
 import path from 'path';
 import fs from 'fs';
+import { WebSocketServer, WebSocket } from 'ws';
 import { createServer as createViteServer } from 'vite';
 
 const PORT = 3000;
@@ -61,8 +63,123 @@ async function forwardToGoogleAppsScript(payload: any) {
   }
 }
 
+function processTelemetryPayload(data: any) {
+  const busId = String(data.busId || data.bus_id || 'ecad7ddc').trim();
+  const driverName = String(data.driverName || data.driver_name || 'Amjad').trim();
+  const lat = typeof data.latitude === 'number' ? data.latitude : parseFloat(data.latitude);
+  const lng = typeof data.longitude === 'number' ? data.longitude : parseFloat(data.longitude);
+
+  if (isNaN(lat) || isNaN(lng)) {
+    return null;
+  }
+
+  const locStr = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+  const now = new Date().toISOString();
+
+  const telemetry = {
+    busId,
+    driverName,
+    driverPhone: data.driverPhone || '9761081818',
+    currentLocationStr: locStr,
+    latitude: lat,
+    longitude: lng,
+    accuracy: data.accuracy || 10,
+    speed: data.speed !== undefined ? data.speed : null,
+    heading: data.heading !== undefined ? data.heading : null,
+    lastUpdated: data.lastUpdated || now,
+    status: data.status || 'running',
+    isLiveFromSheet: false,
+    lastServerSync: now,
+  };
+
+  liveTelemetryStore[busId] = telemetry;
+  saveTelemetryCache();
+
+  // Forward asynchronously to Google Sheets
+  forwardToGoogleAppsScript(telemetry).then((result) => {
+    if (result.ok && !result.response?.includes('error')) {
+      console.log(`[GoogleSheetSync] Updated bus ${busId} in Google Sheets`);
+    }
+  });
+
+  return telemetry;
+}
+
 async function startServer() {
   const app = express();
+  const server = http.createServer(app);
+
+  // Setup WebSocket Server on /ws/location
+  const wss = new WebSocketServer({ noServer: true });
+
+  const clients = new Set<WebSocket>();
+
+  wss.on('connection', (ws: WebSocket) => {
+    clients.add(ws);
+    // Send immediate snapshot of current buses
+    ws.send(JSON.stringify({ type: 'SNAPSHOT', data: liveTelemetryStore }));
+
+    ws.on('message', (message: string | Buffer) => {
+      try {
+        const raw = message.toString();
+        const parsed = JSON.parse(raw);
+
+        if (parsed.type === 'PING') {
+          ws.send(JSON.stringify({ type: 'PONG', timestamp: Date.now() }));
+          return;
+        }
+
+        if (parsed.type === 'LOCATION_UPDATE' && parsed.payload) {
+          const telemetry = processTelemetryPayload(parsed.payload);
+          if (telemetry) {
+            // Acknowledge to sender
+            ws.send(JSON.stringify({ type: 'ACK', busId: telemetry.busId, timestamp: telemetry.lastUpdated }));
+
+            // Broadcast update to all connected clients (monitors, parents, dashboard)
+            const broadcastMsg = JSON.stringify({ type: 'BUS_UPDATE', telemetry });
+            for (const client of clients) {
+              if (client !== ws && client.readyState === WebSocket.OPEN) {
+                client.send(broadcastMsg);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('WebSocket message error:', err);
+      }
+    });
+
+    ws.on('close', () => {
+      clients.delete(ws);
+    });
+
+    ws.on('error', () => {
+      clients.delete(ws);
+    });
+  });
+
+  // Handle WebSocket upgrade
+  server.on('upgrade', (request, socket, head) => {
+    const pathname = new URL(request.url || '', `http://${request.headers.host}`).pathname;
+    if (pathname === '/ws/location') {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit('connection', ws, request);
+      });
+    } else {
+      // Allow other upgrades (e.g. Vite HMR if any) to pass through
+    }
+  });
+
+  // Keep WebSocket connections alive with heartbeat
+  setInterval(() => {
+    for (const ws of clients) {
+      if (ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.ping();
+        } catch {}
+      }
+    }
+  }, 20000);
 
   // Parsing middlewares
   app.use(express.json({ limit: '10mb' }));
@@ -71,7 +188,13 @@ async function startServer() {
 
   // Health check
   app.get('/api/health', (_req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString(), buses: Object.keys(liveTelemetryStore), appsScriptUrl: currentAppsScriptUrl });
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      buses: Object.keys(liveTelemetryStore),
+      appsScriptUrl: currentAppsScriptUrl,
+      wsClients: clients.size,
+    });
   });
 
   // Get current Google Apps Script URL
@@ -120,44 +243,18 @@ async function startServer() {
         } catch {}
       }
 
-      const busId = String(data.busId || data.bus_id || 'ecad7ddc').trim();
-      const driverName = String(data.driverName || data.driver_name || 'Amjad').trim();
-      const lat = typeof data.latitude === 'number' ? data.latitude : parseFloat(data.latitude);
-      const lng = typeof data.longitude === 'number' ? data.longitude : parseFloat(data.longitude);
-
-      if (isNaN(lat) || isNaN(lng)) {
+      const telemetry = processTelemetryPayload(data);
+      if (!telemetry) {
         return res.status(400).json({ error: 'Valid latitude and longitude required' });
       }
 
-      const locStr = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
-      const now = new Date().toISOString();
-
-      const telemetry = {
-        busId,
-        driverName,
-        driverPhone: data.driverPhone || '9761081818',
-        currentLocationStr: locStr,
-        latitude: lat,
-        longitude: lng,
-        accuracy: data.accuracy || 10,
-        speed: data.speed !== undefined ? data.speed : null,
-        heading: data.heading !== undefined ? data.heading : null,
-        lastUpdated: data.lastUpdated || now,
-        status: data.status || 'running',
-        isLiveFromSheet: false,
-        lastServerSync: now,
-      };
-
-      // Store in memory & cache
-      liveTelemetryStore[busId] = telemetry;
-      saveTelemetryCache();
-
-      // Forward to Google Apps Script in background
-      forwardToGoogleAppsScript(telemetry).then((result) => {
-        if (result.ok && !result.response?.includes('error')) {
-          console.log(`[GoogleSheetSync] Updated bus ${busId} in Google Sheets successfully`);
+      // Broadcast to any connected WebSocket clients
+      const broadcastMsg = JSON.stringify({ type: 'BUS_UPDATE', telemetry });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(broadcastMsg);
         }
-      });
+      }
 
       res.json({
         success: true,
@@ -185,8 +282,8 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on http://0.0.0.0:${PORT} with WebSocket /ws/location`);
   });
 }
 

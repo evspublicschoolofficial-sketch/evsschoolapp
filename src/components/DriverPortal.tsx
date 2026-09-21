@@ -7,6 +7,7 @@ import {
   VanTelemetry,
   syncLocationToSheetBackend,
   syncLocationToSharedApi,
+  testGoogleSheetSync,
   DEFAULT_SCHOOL_COORDS,
 } from '../utils/busTrackingService';
 import { GoogleSheetSyncModal } from './GoogleSheetSyncModal';
@@ -69,8 +70,10 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
       const amjadBus = records.find(
         (b) => String(b.Driver_Name || '').toLowerCase() === 'amjad'
       );
-      if (amjadBus && !selectedBusId) {
+      if (amjadBus && (!selectedBusId || !records.some(r => r.Bus_ID === selectedBusId))) {
         setSelectedBusId(amjadBus.Bus_ID);
+      } else if (!records.some(r => r.Bus_ID === selectedBusId) && records[0]) {
+        setSelectedBusId(records[0].Bus_ID);
       }
     } else {
       setSheetBuses([
@@ -93,6 +96,13 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
 
   useEffect(() => {
     loadSheetBuses();
+    testGoogleSheetSync().then((diag) => {
+      if (diag.configured) {
+        setSheetSyncState('success');
+      } else if (diag.statusType === 'old_version' || diag.statusType === 'permission_error') {
+        setSheetSyncState('needs_setup');
+      }
+    });
   }, []);
 
   // Currently active bus record
@@ -161,6 +171,8 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
   const wakeLockRef = useRef<any>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioOscillatorRef = useRef<OscillatorNode | null>(null);
+  const trackingWorkerRef = useRef<Worker | null>(null);
+  const audioKeepAliveIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Acquire Screen Wake Lock so screen doesn't automatically sleep while tracking is active
   const requestWakeLock = async () => {
@@ -185,31 +197,39 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
     }
   };
 
-  // Silent audio keep-alive: mobile browsers (especially Chrome/Android and Safari/iOS)
-  // throttle JS timers to 1 minute or kill geolocation when the screen turns off.
-  // Playing an inaudible audio stream keeps the browser's background audio session awake,
-  // allowing continuous geolocation tracking and timer executions even with the screen locked!
+  // WhatsApp-style Background Keep-Alive Audio:
+  // Mobile browsers (Android Chrome, iOS Safari) suspend JavaScript execution and GPS
+  // when the screen is turned off or phone is locked unless an audio session is active.
+  // We keep an inaudible audio stream looping continuously so the browser does NOT suspend tracking!
   const startKeepAliveAudio = () => {
     try {
-      if (!audioContextRef.current) {
-        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-        if (AudioCtx) {
-          audioContextRef.current = new AudioCtx();
-        }
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!audioContextRef.current && AudioCtx) {
+        audioContextRef.current = new AudioCtx();
       }
       if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
         audioContextRef.current.resume();
       }
+
       if (audioContextRef.current && !audioOscillatorRef.current) {
         const osc = audioContextRef.current.createOscillator();
         const gain = audioContextRef.current.createGain();
-        // Inaudible frequency & near-zero volume
-        osc.frequency.setValueAtTime(30, audioContextRef.current.currentTime);
-        gain.gain.setValueAtTime(0.0001, audioContextRef.current.currentTime);
+        // 25Hz inaudible frequency & ultra-low gain
+        osc.frequency.setValueAtTime(25, audioContextRef.current.currentTime);
+        gain.gain.setValueAtTime(0.00005, audioContextRef.current.currentTime);
         osc.connect(gain);
         gain.connect(audioContextRef.current.destination);
         osc.start();
         audioOscillatorRef.current = osc;
+      }
+
+      // Interval watchdog: Ensure audio context stays active even if OS tries to suspend it
+      if (!audioKeepAliveIntervalRef.current) {
+        audioKeepAliveIntervalRef.current = setInterval(() => {
+          if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+            audioContextRef.current.resume().catch(() => {});
+          }
+        }, 5000);
       }
     } catch (e) {
       console.warn('Keep-alive audio could not start:', e);
@@ -218,10 +238,18 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
 
   const stopKeepAliveAudio = () => {
     try {
+      if (audioKeepAliveIntervalRef.current) {
+        clearInterval(audioKeepAliveIntervalRef.current);
+        audioKeepAliveIntervalRef.current = null;
+      }
       if (audioOscillatorRef.current) {
         audioOscillatorRef.current.stop();
         audioOscillatorRef.current.disconnect();
         audioOscillatorRef.current = null;
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close().catch(() => {});
+        audioContextRef.current = null;
       }
     } catch {}
   };
@@ -293,10 +321,20 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
       isLiveFromSheet: true,
     };
 
-    // 1. Cross-Device API (Transmits to server so manager on another device receives it)
+    // 1. Cross-Device API & Persistent WebSocket (Transmits to server so manager & parents receive it instantly)
     syncLocationToSharedApi(packet);
 
-    // 2. BroadcastChannel (Instant real-time update in manager tab on same device)
+    // 2. Service Worker sync: Store last location in SW for background sync
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator && navigator.serviceWorker.controller) {
+      try {
+        navigator.serviceWorker.controller.postMessage({
+          type: 'STORE_LAST_LOCATION',
+          payload: packet,
+        });
+      } catch {}
+    }
+
+    // 3. BroadcastChannel (Instant real-time update in manager tab on same device)
     if (broadcastChannelRef.current) {
       try {
         broadcastChannelRef.current.postMessage({ type: 'VAN_LOCATION_UPDATE', payload: packet });
@@ -305,7 +343,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
       }
     }
 
-    // 3. Save in localStorage for cross-tab persistence
+    // 4. Save in localStorage for cross-tab persistence
     try {
       const stored = localStorage.getItem('evs_van_live_locations');
       const allVans = stored ? JSON.parse(stored) : {};
@@ -387,7 +425,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
     setCountdown(15);
   };
 
-  // Stop active hardware watching and intervals
+  // Stop active hardware watching, background worker and intervals
   const stopTrackingServices = () => {
     if (watchIdRef.current !== null && navigator.geolocation) {
       navigator.geolocation.clearWatch(watchIdRef.current);
@@ -401,13 +439,20 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
       clearInterval(countdownIntervalRef.current);
       countdownIntervalRef.current = null;
     }
+    if (trackingWorkerRef.current) {
+      try {
+        trackingWorkerRef.current.postMessage({ action: 'STOP_TRACKING' });
+        trackingWorkerRef.current.terminate();
+      } catch {}
+      trackingWorkerRef.current = null;
+    }
     releaseWakeLock();
     stopKeepAliveAudio();
   };
 
-  // Start continuous GPS tracking, wake lock, keep-alive audio and intervals
+  // Start continuous GPS tracking, Web Worker heartbeat, wake lock, keep-alive audio and intervals
   const startTrackingServices = () => {
-    // Keep screen on & prevent background freeze
+    // Keep screen on & keep audio session alive so OS does not sleep JS/GPS
     requestWakeLock();
     startKeepAliveAudio();
 
@@ -438,8 +483,8 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
           },
           {
             enableHighAccuracy: true,
-            timeout: 12000,
-            maximumAge: 2000,
+            timeout: 15000,
+            maximumAge: 1000,
           }
         );
         watchIdRef.current = id;
@@ -448,7 +493,30 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
       }
     }
 
-    // 3. Countdown timer: decrements every 1 second
+    // 3. Web Worker heartbeat (Runs uninterrupted in background thread even when screen is locked)
+    try {
+      if (typeof window !== 'undefined' && 'Worker' in window) {
+        if (trackingWorkerRef.current) {
+          trackingWorkerRef.current.terminate();
+        }
+        const worker = new Worker('/trackingWorker.js');
+        worker.onmessage = (e) => {
+          const msg = e.data;
+          if (msg.type === 'TICK') {
+            setCountdown(msg.countdown);
+          } else if (msg.type === 'TRIGGER_UPDATE') {
+            setCountdown(15);
+            execute15sUpdate();
+          }
+        };
+        worker.postMessage({ action: 'START_TRACKING' });
+        trackingWorkerRef.current = worker;
+      }
+    } catch (e) {
+      console.warn('Web worker initialization failed, relying on interval:', e);
+    }
+
+    // 4. Foreground fallback countdown timer (in case Web Worker is blocked)
     if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
     countdownIntervalRef.current = setInterval(() => {
       setCountdown((prev) => {
@@ -459,7 +527,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
       });
     }, 1000);
 
-    // 4. Exact 15-second sheet update loop
+    // 5. Foreground fallback 15-second timer
     if (timer15sRef.current) clearInterval(timer15sRef.current);
     timer15sRef.current = setInterval(() => {
       execute15sUpdate();
@@ -939,14 +1007,19 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
 
             {/* SCREEN-OFF & BACKGROUND KEEP-ALIVE TIP */}
             {isTracking && (
-              <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-2xl flex items-start gap-2.5 text-xs text-blue-900">
-                <i className="fa-solid fa-mobile-screen-button text-blue-600 text-sm mt-0.5 shrink-0"></i>
+              <div className="p-4 bg-emerald-50/90 border-2 border-emerald-300 rounded-2xl flex items-start gap-3 text-xs text-emerald-950 shadow-xs">
+                <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center text-sm shrink-0 shadow-xs">
+                  <i className="fa-solid fa-satellite-dish animate-pulse"></i>
+                </div>
                 <div className="space-y-1">
-                  <span className="font-extrabold block text-blue-950">
-                    💡 स्क्रीन एवं बैकग्राउंड ट्रैकिंग सहायता (Screen & Background Tip):
+                  <span className="font-extrabold block text-emerald-950 text-sm">
+                    ⚡ WhatsApp जैसी बैकग्राउंड लाइव ट्रैकिंग सक्रिय है (Service Worker + WebSocket):
                   </span>
-                  <p className="text-blue-800 leading-relaxed text-[11px]">
-                    ऐप्लिकेशन में <strong>स्क्रीन वेक-लॉक (Screen Wake Lock)</strong> और <strong>बैकग्राउंड कीप-अलाइव</strong> सक्रिय है ताकि स्क्रीन लॉक होने पर भी सिग्नल बना रहे। फिर भी बेहतर ट्रैकिंग के लिए वाहन चलाते समय फोन को डैशबोर्ड स्टैंड पर रखें या स्क्रीन को ऑन रखें। यदि स्क्रीन बंद हो जाए, तो ऐप खोलते ही तुरंत नवीनतम लोकेशन सिंक हो जाएगी।
+                  <p className="text-emerald-900 leading-relaxed text-xs">
+                    अब फोन की <strong>स्क्रीन लॉक या बंद (Screen Off)</strong> होने पर भी ट्रैकिंग बंद नहीं होगी! ऐप में <strong>Service Worker</strong>, <strong>पर्सिस्टेंट WebSocket कनेक्शन</strong>, <strong>Web Worker बैकग्राउंड थ्रेड</strong> और <strong>कीप-अलाइव ऑडियो</strong> चालू हैं, जो स्क्रीन बंद रहने पर भी रियल-टाइम में सर्वर और Google Sheet पर लोकेशन भेजते रहेंगे।
+                  </p>
+                  <p className="text-[11px] text-emerald-800 font-semibold mt-1">
+                    📱 <em>नोट: फोन को लॉक करने से पहले बस "लाइव ट्रैकिंग शुरू करें" बटन ऑन रहना चाहिए। ऐप को फोन के रीसेंट ऐप्स (Recent Apps) से स्वाइप/बंद न करें।</em>
                   </p>
                 </div>
               </div>
