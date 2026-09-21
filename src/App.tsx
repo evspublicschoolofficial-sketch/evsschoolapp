@@ -983,7 +983,23 @@ const HomeworkMediaCard: React.FC<HomeworkMediaCardProps> = ({ item, onOpen }) =
 type TabType = 'home' | 'parent' | 'teacher' | 'manager' | 'driver';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<TabType>('home');
+  const [activeTab, setActiveTab] = useState<TabType>(() => {
+    try {
+      const saved = localStorage.getItem('evs_active_tab');
+      if (saved && ['home', 'parent', 'teacher', 'manager', 'driver'].includes(saved)) {
+        return saved as TabType;
+      }
+    } catch {}
+    return 'home';
+  });
+
+  // Persist activeTab so when user re-opens the app or browser, it opens exactly where they were
+  useEffect(() => {
+    try {
+      localStorage.setItem('evs_active_tab', activeTab);
+    } catch {}
+  }, [activeTab]);
+
   const [students, setStudents] = useState<Student[]>([]);
   const [homeworkList, setHomeworkList] = useState<Homework[]>([]);
   const [loadingStudents, setLoadingStudents] = useState<boolean>(false);
@@ -997,11 +1013,61 @@ export default function App() {
   const [feeRecords, setFeeRecords] = useState<FeeCollectionRecord[]>([]);
   const [loadingFees, setLoadingFees] = useState<boolean>(false);
 
-  // Parent Portal State
-  const [parentMobileInput, setParentMobileInput] = useState<string>('');
-  const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
-  const [parentChildren, setParentChildren] = useState<Student[]>([]);
-  const [parentLoggedIn, setParentLoggedIn] = useState<boolean>(false);
+  // Parent Portal State (persisted so parents stay on their child's portal on refresh)
+  const [parentMobileInput, setParentMobileInput] = useState<string>(() => {
+    try {
+      return localStorage.getItem('evs_parent_mobile_input') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [selectedStudent, setSelectedStudent] = useState<Student | null>(() => {
+    try {
+      const saved = localStorage.getItem('evs_parent_selected_student');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [parentChildren, setParentChildren] = useState<Student[]>(() => {
+    try {
+      const saved = localStorage.getItem('evs_parent_children');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [parentLoggedIn, setParentLoggedIn] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('evs_parent_logged_in') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  // Sync parent login session to localStorage
+  useEffect(() => {
+    try {
+      if (parentLoggedIn) {
+        localStorage.setItem('evs_parent_logged_in', 'true');
+        if (selectedStudent) {
+          localStorage.setItem('evs_parent_selected_student', JSON.stringify(selectedStudent));
+        }
+        if (parentChildren.length > 0) {
+          localStorage.setItem('evs_parent_children', JSON.stringify(parentChildren));
+        }
+        if (parentMobileInput) {
+          localStorage.setItem('evs_parent_mobile_input', parentMobileInput);
+        }
+      } else {
+        localStorage.removeItem('evs_parent_logged_in');
+        localStorage.removeItem('evs_parent_selected_student');
+        localStorage.removeItem('evs_parent_children');
+        localStorage.removeItem('evs_parent_mobile_input');
+      }
+    } catch {}
+  }, [parentLoggedIn, selectedStudent, parentChildren, parentMobileInput]);
+
   const [parentSearchAttempted, setParentSearchAttempted] = useState<boolean>(false);
   const [manualLinkOpen, setManualLinkOpen] = useState<boolean>(false);
   const [manualLinkInput, setManualLinkInput] = useState<string>('');
@@ -1146,7 +1212,21 @@ export default function App() {
   const [teacherLoginError, setTeacherLoginError] = useState<string | null>(null);
   const [teacherLoginSubmitting, setTeacherLoginSubmitting] = useState<boolean>(false);
   const [showTeacherPassword, setShowTeacherPassword] = useState<boolean>(false);
-  const [teacherPortalTab, setTeacherPortalTab] = useState<'upload' | 'tracker' | 'submissions'>('upload');
+  const [teacherPortalTab, setTeacherPortalTab] = useState<'upload' | 'tracker' | 'submissions'>(() => {
+    try {
+      const saved = localStorage.getItem('evs_teacher_portal_tab');
+      if (saved && ['upload', 'tracker', 'submissions'].includes(saved)) {
+        return saved as 'upload' | 'tracker' | 'submissions';
+      }
+    } catch {}
+    return 'upload';
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('evs_teacher_portal_tab', teacherPortalTab);
+    } catch {}
+  }, [teacherPortalTab]);
   const [teacherTrackerSearch, setTeacherTrackerSearch] = useState<string>('');
   const [teacherTrackerClassFilter, setTeacherTrackerClassFilter] = useState<string>('all');
   const [teacherTrackerStatusFilter, setTeacherTrackerStatusFilter] = useState<'all' | 'Completed' | 'Incompleted'>('all');
@@ -1175,7 +1255,21 @@ export default function App() {
   const [managerSelectedFeeStudent, setManagerSelectedFeeStudent] = useState<Student | null>(null);
 
   // Manager Dashboard State
-  const [managerTab, setManagerTab] = useState<'students' | 'homework' | 'behavior' | 'fees' | 'users' | 'vanTracking'>('students');
+  const [managerTab, setManagerTab] = useState<'students' | 'homework' | 'behavior' | 'fees' | 'users' | 'vanTracking'>(() => {
+    try {
+      const saved = localStorage.getItem('evs_manager_tab');
+      if (saved && ['students', 'homework', 'behavior', 'fees', 'users', 'vanTracking'].includes(saved)) {
+        return saved as any;
+      }
+    } catch {}
+    return 'students';
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('evs_manager_tab', managerTab);
+    } catch {}
+  }, [managerTab]);
   const [studentSearchTerm, setStudentSearchTerm] = useState<string>('');
   const [studentClassFilter, setStudentClassFilter] = useState<string>('all');
   const [hwSearchTerm, setHwSearchTerm] = useState<string>('');
@@ -1319,6 +1413,22 @@ export default function App() {
           });
         setStudents(valid);
         setApiError(null);
+
+        // If parent is already logged in, update their selected student and children from freshly fetched sheet
+        try {
+          const savedLoggedIn = localStorage.getItem('evs_parent_logged_in') === 'true';
+          const savedStudentStr = localStorage.getItem('evs_parent_selected_student');
+          if (savedLoggedIn && savedStudentStr) {
+            const parsedStudent = JSON.parse(savedStudentStr);
+            const sid = String(parsedStudent.Student_ID || '').trim().toLowerCase();
+            const freshMatch = valid.find(
+              (s) => String(s.Student_ID || '').trim().toLowerCase() === sid
+            );
+            if (freshMatch) {
+              setSelectedStudent(freshMatch);
+            }
+          }
+        } catch {}
       } else {
         setStudents((prev) => {
           if (prev.length === 0) {

@@ -63,11 +63,27 @@ export const StudentQRScannerModal: React.FC<StudentQRScannerModalProps> = ({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const animationFrameId = useRef<number | null>(null);
+  const barcodeDetectorRef = useRef<any>(null);
 
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [isScanning, setIsScanning] = useState<boolean>(false);
   const [scanSuccessMessage, setScanSuccessMessage] = useState<string | null>(null);
+  const [torchSupported, setTorchSupported] = useState<boolean>(false);
+  const [torchOn, setTorchOn] = useState<boolean>(false);
+
+  // Initialize native BarcodeDetector if supported by modern browser/Android Chrome
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
+      try {
+        barcodeDetectorRef.current = new (window as any).BarcodeDetector({
+          formats: ['qr_code', 'code_128', 'code_39', 'ean_13'],
+        });
+      } catch (e) {
+        barcodeDetectorRef.current = null;
+      }
+    }
+  }, []);
 
   // Play audio/vibrate feedback on successful scan
   const playBeep = () => {
@@ -233,10 +249,27 @@ export const StudentQRScannerModal: React.FC<StudentQRScannerModalProps> = ({
       videoRef.current.srcObject = null;
     }
     setIsScanning(false);
+    setTorchOn(false);
   };
 
-  // Scan frame from video element using jsQR
-  const scanFrame = () => {
+  // Toggle Camera Flash/Torch (helps dramatically in dark classrooms or evening vans)
+  const toggleTorch = async () => {
+    if (!streamRef.current) return;
+    const track = streamRef.current.getVideoTracks()[0];
+    if (!track) return;
+    try {
+      const nextTorch = !torchOn;
+      await (track as any).applyConstraints({
+        advanced: [{ torch: nextTorch }],
+      });
+      setTorchOn(nextTorch);
+    } catch (e) {
+      console.warn('Torch toggle failed', e);
+    }
+  };
+
+  // Fast & accurate scan frame using native BarcodeDetector or enhanced jsQR
+  const scanFrame = async () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas || video.readyState !== video.HAVE_ENOUGH_DATA) {
@@ -251,6 +284,20 @@ export const StudentQRScannerModal: React.FC<StudentQRScannerModalProps> = ({
       return;
     }
 
+    // Method 1: Hardware-accelerated native BarcodeDetector (instant and ultra-accurate)
+    if (barcodeDetectorRef.current) {
+      try {
+        const barcodes = await barcodeDetectorRef.current.detect(video);
+        if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
+          handleDecodedCode(barcodes[0].rawValue);
+          return;
+        }
+      } catch (e) {
+        // Fallback to canvas jsQR below
+      }
+    }
+
+    // Method 2: High-accuracy canvas jsQR with inversion attempts and center crop prioritization
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -260,11 +307,24 @@ export const StudentQRScannerModal: React.FC<StudentQRScannerModalProps> = ({
     }
 
     ctx.drawImage(video, 0, 0, width, height);
-    const imageData = ctx.getImageData(0, 0, width, height);
 
-    const code = jsQR(imageData.data, imageData.width, imageData.height, {
-      inversionAttempts: 'dontInvert',
+    // Try center-cropped region first (where user aims camera, much faster & higher accuracy)
+    const cropSize = Math.min(width, height) * 0.75;
+    const cropX = (width - cropSize) / 2;
+    const cropY = (height - cropSize) / 2;
+    const cropData = ctx.getImageData(cropX, cropY, cropSize, cropSize);
+
+    let code = jsQR(cropData.data, cropData.width, cropData.height, {
+      inversionAttempts: 'attemptBoth',
     });
+
+    // If not found in center crop, scan the entire frame
+    if (!code || !code.data) {
+      const fullData = ctx.getImageData(0, 0, width, height);
+      code = jsQR(fullData.data, fullData.width, fullData.height, {
+        inversionAttempts: 'attemptBoth',
+      });
+    }
 
     if (code && code.data) {
       handleDecodedCode(code.data);
@@ -274,7 +334,7 @@ export const StudentQRScannerModal: React.FC<StudentQRScannerModalProps> = ({
     animationFrameId.current = requestAnimationFrame(scanFrame);
   };
 
-  // Start camera stream
+  // Start camera stream with autofocus and torch detection
   const startCamera = async () => {
     setCameraError(null);
     stopCamera();
@@ -287,7 +347,7 @@ export const StudentQRScannerModal: React.FC<StudentQRScannerModalProps> = ({
 
       const constraints: MediaStreamConstraints = {
         video: {
-          facingMode: facingMode,
+          facingMode: { ideal: facingMode },
           width: { ideal: 1280 },
           height: { ideal: 720 },
         },
@@ -296,6 +356,21 @@ export const StudentQRScannerModal: React.FC<StudentQRScannerModalProps> = ({
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
+
+      // Check if torch/flashlight is supported
+      const track = stream.getVideoTracks()[0];
+      if (track) {
+        try {
+          const capabilities: any = track.getCapabilities ? track.getCapabilities() : {};
+          if (capabilities.torch) {
+            setTorchSupported(true);
+          } else {
+            setTorchSupported(false);
+          }
+        } catch {
+          setTorchSupported(false);
+        }
+      }
 
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -319,7 +394,7 @@ export const StudentQRScannerModal: React.FC<StudentQRScannerModalProps> = ({
   };
 
   // Handle uploaded image file
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -327,7 +402,18 @@ export const StudentQRScannerModal: React.FC<StudentQRScannerModalProps> = ({
     const reader = new FileReader();
 
     reader.onload = (event) => {
-      img.onload = () => {
+      img.onload = async () => {
+        // Try native BarcodeDetector first on image element
+        if (barcodeDetectorRef.current) {
+          try {
+            const barcodes = await barcodeDetectorRef.current.detect(img);
+            if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
+              handleDecodedCode(barcodes[0].rawValue);
+              return;
+            }
+          } catch {}
+        }
+
         const canvas = canvasRef.current || document.createElement('canvas');
         canvas.width = img.width;
         canvas.height = img.height;
@@ -335,7 +421,9 @@ export const StudentQRScannerModal: React.FC<StudentQRScannerModalProps> = ({
         if (ctx) {
           ctx.drawImage(img, 0, 0);
           const imageData = ctx.getImageData(0, 0, img.width, img.height);
-          const code = jsQR(imageData.data, imageData.width, imageData.height);
+          const code = jsQR(imageData.data, imageData.width, imageData.height, {
+            inversionAttempts: 'attemptBoth',
+          });
           if (code && code.data) {
             handleDecodedCode(code.data);
           } else {
@@ -835,8 +923,23 @@ export const StudentQRScannerModal: React.FC<StudentQRScannerModalProps> = ({
                     </div>
                   </div>
 
-                  {/* Camera Switch Button */}
+                  {/* Camera Controls Overlay (Switch Cam & Torch) */}
                   <div className="absolute top-3 right-3 flex items-center gap-2">
+                    {torchSupported && (
+                      <button
+                        type="button"
+                        onClick={toggleTorch}
+                        className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border flex items-center gap-1.5 backdrop-blur-xs cursor-pointer shadow-xs transition-colors ${
+                          torchOn
+                            ? 'bg-amber-400 text-slate-950 border-amber-300'
+                            : 'bg-black/60 hover:bg-black/80 text-white border-white/20'
+                        }`}
+                        title={torchOn ? 'टॉर्च बंद करें' : 'टॉर्च चालू करें (कम रोशनी में)'}
+                      >
+                        <i className={`fa-solid ${torchOn ? 'fa-lightbulb' : 'fa-bolt'}`}></i>
+                        <span>{torchOn ? 'Torch On' : 'Torch'}</span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => setFacingMode((prev) => (prev === 'environment' ? 'user' : 'environment'))}

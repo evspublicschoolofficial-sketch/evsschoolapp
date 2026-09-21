@@ -139,6 +139,73 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
   const timer15sRef = useRef<NodeJS.Timeout | null>(null);
   const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
+  const wakeLockRef = useRef<any>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioOscillatorRef = useRef<OscillatorNode | null>(null);
+
+  // Acquire Screen Wake Lock so screen doesn't automatically sleep while tracking is active
+  const requestWakeLock = async () => {
+    if (typeof navigator !== 'undefined' && 'wakeLock' in navigator) {
+      try {
+        wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
+        wakeLockRef.current.addEventListener('release', () => {
+          wakeLockRef.current = null;
+        });
+      } catch (e) {
+        console.warn('Wake Lock request failed:', e);
+      }
+    }
+  };
+
+  const releaseWakeLock = () => {
+    if (wakeLockRef.current) {
+      try {
+        wakeLockRef.current.release();
+      } catch {}
+      wakeLockRef.current = null;
+    }
+  };
+
+  // Silent audio keep-alive: mobile browsers (especially Chrome/Android and Safari/iOS)
+  // throttle JS timers to 1 minute or kill geolocation when the screen turns off.
+  // Playing an inaudible audio stream keeps the browser's background audio session awake,
+  // allowing continuous geolocation tracking and timer executions even with the screen locked!
+  const startKeepAliveAudio = () => {
+    try {
+      if (!audioContextRef.current) {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioCtx) {
+          audioContextRef.current = new AudioCtx();
+        }
+      }
+      if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+        audioContextRef.current.resume();
+      }
+      if (audioContextRef.current && !audioOscillatorRef.current) {
+        const osc = audioContextRef.current.createOscillator();
+        const gain = audioContextRef.current.createGain();
+        // Inaudible frequency & near-zero volume
+        osc.frequency.setValueAtTime(30, audioContextRef.current.currentTime);
+        gain.gain.setValueAtTime(0.0001, audioContextRef.current.currentTime);
+        osc.connect(gain);
+        gain.connect(audioContextRef.current.destination);
+        osc.start();
+        audioOscillatorRef.current = osc;
+      }
+    } catch (e) {
+      console.warn('Keep-alive audio could not start:', e);
+    }
+  };
+
+  const stopKeepAliveAudio = () => {
+    try {
+      if (audioOscillatorRef.current) {
+        audioOscillatorRef.current.stop();
+        audioOscillatorRef.current.disconnect();
+        audioOscillatorRef.current = null;
+      }
+    } catch {}
+  };
 
   // BroadcastChannel for instant local cross-tab communication
   useEffect(() => {
@@ -304,6 +371,8 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
         clearInterval(countdownIntervalRef.current);
         countdownIntervalRef.current = null;
       }
+      releaseWakeLock();
+      stopKeepAliveAudio();
       setIsTracking(false);
       setVanStatus('stopped');
       setCountdown(15);
@@ -314,6 +383,10 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
       setIsTracking(true);
       setVanStatus('running');
       setCountdown(15);
+
+      // Keep screen on & prevent background freeze
+      requestWakeLock();
+      startKeepAliveAudio();
 
       // 1. Send immediate location right now
       execute15sUpdate();
@@ -369,9 +442,26 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
     }
   };
 
+  // Re-acquire WakeLock and trigger instant refresh if app comes back to view
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && isTracking) {
+        requestWakeLock();
+        startKeepAliveAudio();
+        execute15sUpdate();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [isTracking]);
+
   // Clean up timers on unmount
   useEffect(() => {
     return () => {
+      releaseWakeLock();
+      stopKeepAliveAudio();
       if (watchIdRef.current !== null && navigator.geolocation) {
         navigator.geolocation.clearWatch(watchIdRef.current);
       }
@@ -792,6 +882,21 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
                 </div>
               )}
             </div>
+
+            {/* SCREEN-OFF & BACKGROUND KEEP-ALIVE TIP */}
+            {isTracking && (
+              <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-2xl flex items-start gap-2.5 text-xs text-blue-900">
+                <i className="fa-solid fa-mobile-screen-button text-blue-600 text-sm mt-0.5 shrink-0"></i>
+                <div className="space-y-1">
+                  <span className="font-extrabold block text-blue-950">
+                    💡 स्क्रीन एवं बैकग्राउंड ट्रैकिंग सहायता (Screen & Background Tip):
+                  </span>
+                  <p className="text-blue-800 leading-relaxed text-[11px]">
+                    ऐप्लिकेशन में <strong>स्क्रीन वेक-लॉक (Screen Wake Lock)</strong> और <strong>बैकग्राउंड कीप-अलाइव</strong> सक्रिय है ताकि स्क्रीन लॉक होने पर भी सिग्नल बना रहे। फिर भी बेहतर ट्रैकिंग के लिए वाहन चलाते समय फोन को डैशबोर्ड स्टैंड पर रखें या स्क्रीन को ऑन रखें। यदि स्क्रीन बंद हो जाए, तो ऐप खोलते ही तुरंत नवीनतम लोकेशन सिंक हो जाएगी।
+                  </p>
+                </div>
+              </div>
+            )}
 
             {/* GPS Telemetry HUD */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">

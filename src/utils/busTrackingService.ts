@@ -115,8 +115,38 @@ export const calculateDistanceKm = (
   return parseFloat((R * c).toFixed(2));
 };
 
-// Fetch real rows from Google Sheets "Bus_Tracking"
+// Fetch real rows from Google Sheets "Bus_Tracking" (via Apps Script or GViz)
 export const fetchBusTrackingFromSheet = async (): Promise<BusTrackingRecord[]> => {
+  const activeUrl = getAppsScriptUrl();
+
+  // 1. Try Apps Script API first (fast and accurately formatted)
+  try {
+    const res = await fetch(`${activeUrl}?action=getBusTracking`);
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 1) {
+        const records: BusTrackingRecord[] = [];
+        for (let i = 1; i < data.length; i++) {
+          const row = data[i];
+          if (Array.isArray(row) && (row[0] || row[1])) {
+            records.push({
+              Bus_ID: String(row[0] ?? '').trim(),
+              Driver_Name: String(row[1] ?? '').trim(),
+              Current_Location: String(row[2] ?? '').trim() || '30.056038, 77.419096',
+              Last_Updated: String(row[3] ?? '').trim() || new Date().toLocaleString('hi-IN'),
+            });
+          }
+        }
+        if (records.length > 0) {
+          return records;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Apps Script getBusTracking fetch error, trying GViz fallback:', err);
+  }
+
+  // 2. Fallback to Google Sheets GViz endpoint
   try {
     const encoded = encodeURIComponent('Bus_Tracking');
     const res = await fetch(
