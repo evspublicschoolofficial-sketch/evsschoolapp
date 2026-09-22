@@ -502,6 +502,40 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
+    // 6. ADD NEW STUDENT (Students sheet)
+    if (action === "addStudent") {
+      var sheet = ss.getSheetByName("Students");
+      if (!sheet) sheet = ss.insertSheet("Students");
+      if (sheet.getLastRow() === 0) {
+        sheet.appendRow([
+          "Student_ID", "Admission_Number", "Roll_Number", "Student_Name", "Class",
+          "Father_Name", "Mother_Name", "Parent_Mobile", "Village/rRoute", "Balance_Amount",
+          "Student_Photo", "QR code"
+        ]);
+      }
+      var studentId = data.student_id || ("S-" + Date.now());
+      var qrFormula = '=IMAGE(CONCATENATE("https://api.qrserver.com/v1/create-qr-code/?data=", "' + studentId + '", "&size=250x250"))';
+      sheet.appendRow([
+        studentId,
+        data.admission_number || "",
+        data.roll_number || "",
+        data.student_name || "",
+        data.class || "",
+        data.father_name || "",
+        data.mother_name || "",
+        data.parent_mobile || "",
+        data.village_route || data.village || "",
+        data.balance_amount !== undefined ? Number(data.balance_amount) : 0,
+        data.student_photo || "",
+        qrFormula
+      ]);
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        message: "Student added successfully to Students sheet!",
+        student_id: studentId
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
     return ContentService.createTextOutput(JSON.stringify({
       status: "error",
       message: "Unknown action: " + action

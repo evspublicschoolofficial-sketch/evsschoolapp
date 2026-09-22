@@ -13,6 +13,7 @@ import {
 } from 'recharts';
 import { StudentQRScannerModal } from './components/StudentQRScannerModal';
 import { AddFeeModal } from './components/AddFeeModal';
+import { AddStudentModal } from './components/AddStudentModal';
 import { StudentHomeworkQRTrackerModal } from './components/StudentHomeworkQRTrackerModal';
 import { ManagerFeeDashboard } from './components/ManagerFeeDashboard';
 import { StudentBehaviorModal, StudentBehaviorInput } from './components/StudentBehaviorModal';
@@ -127,6 +128,29 @@ const DEFAULT_CLASS_MAP: Record<string, string> = {
   C11: '7th',
   C12: '8th',
 };
+
+// LocalStorage Cache Keys & Constants for 0.1s Instant Load (Stale-While-Revalidate)
+export const CACHE_KEY_STUDENTS = 'evs_cache_students';
+export const CACHE_KEY_HOMEWORK = 'evs_cache_homework';
+export const CACHE_KEY_CLASSES = 'evs_cache_classes';
+export const CACHE_KEY_FEES_RECORDS = 'evs_cache_fees_records';
+export const CACHE_KEY_FEES_BALANCES = 'evs_cache_fees_balances';
+export const CACHE_KEY_HW_TRACKER = 'evs_cache_hw_tracker';
+export const CACHE_KEY_BEHAVIOR = 'evs_cache_behavior';
+export const CACHE_KEY_USERS = 'evs_cache_users';
+export const CACHE_KEY_TIMESTAMP = 'evs_cache_timestamp';
+export const CACHE_TTL_MS = 60 * 60 * 1000; // 1 Hour Cache Expiration
+
+export function getCachedData<T>(key: string, fallback: T): T {
+  try {
+    const item = localStorage.getItem(key);
+    if (!item) return fallback;
+    const parsed = JSON.parse(item);
+    return parsed !== null && parsed !== undefined ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 // Convert Google Drive link or standard URL to an image link
 export const formatImageUrl = (url: string | null | undefined): string => {
@@ -1000,18 +1024,45 @@ export default function App() {
     } catch {}
   }, [activeTab]);
 
-  const [students, setStudents] = useState<Student[]>([]);
-  const [homeworkList, setHomeworkList] = useState<Homework[]>([]);
-  const [loadingStudents, setLoadingStudents] = useState<boolean>(false);
-  const [loadingHomework, setLoadingHomework] = useState<boolean>(false);
+  // LocalStorage cached initial states (0.1s instant render)
+  const [students, setStudents] = useState<Student[]>(() => getCachedData<Student[]>(CACHE_KEY_STUDENTS, []));
+  const [homeworkList, setHomeworkList] = useState<Homework[]>(() => getCachedData<Homework[]>(CACHE_KEY_HOMEWORK, []));
+  const [loadingStudents, setLoadingStudents] = useState<boolean>(() => {
+    try {
+      const cached = localStorage.getItem(CACHE_KEY_STUDENTS);
+      return !cached;
+    } catch {
+      return false;
+    }
+  });
+  const [loadingHomework, setLoadingHomework] = useState<boolean>(() => {
+    try {
+      const cached = localStorage.getItem(CACHE_KEY_HOMEWORK);
+      return !cached;
+    } catch {
+      return false;
+    }
+  });
   const [apiError, setApiError] = useState<string | null>(null);
 
   // Dynamic Class mapping state
-  const [classMap, setClassMap] = useState<Record<string, string>>(DEFAULT_CLASS_MAP);
+  const [classMap, setClassMap] = useState<Record<string, string>>(() => getCachedData<Record<string, string>>(CACHE_KEY_CLASSES, DEFAULT_CLASS_MAP));
   // Fee Collection balance amounts by Student ID (lowercase)
-  const [feeBalances, setFeeBalances] = useState<Record<string, number>>({});
-  const [feeRecords, setFeeRecords] = useState<FeeCollectionRecord[]>([]);
+  const [feeBalances, setFeeBalances] = useState<Record<string, number>>(() => getCachedData<Record<string, number>>(CACHE_KEY_FEES_BALANCES, {}));
+  const [feeRecords, setFeeRecords] = useState<FeeCollectionRecord[]>(() => getCachedData<FeeCollectionRecord[]>(CACHE_KEY_FEES_RECORDS, []));
   const [loadingFees, setLoadingFees] = useState<boolean>(false);
+
+  // Background Sync & Caching States
+  const [isBackgroundSyncing, setIsBackgroundSyncing] = useState<boolean>(false);
+  const [lastSyncTimestamp, setLastSyncTimestamp] = useState<number>(() => {
+    try {
+      const val = localStorage.getItem(CACHE_KEY_TIMESTAMP);
+      return val ? parseInt(val, 10) || 0 : 0;
+    } catch {
+      return 0;
+    }
+  });
+  const [syncToastMessage, setSyncToastMessage] = useState<string | null>(null);
 
   // Parent Portal State (persisted so parents stay on their child's portal on refresh)
   const [parentMobileInput, setParentMobileInput] = useState<string>(() => {
@@ -1155,11 +1206,11 @@ export default function App() {
   const [mediaRotation, setMediaRotation] = useState<number>(0);
 
   // Homework Tracker State (from Google Sheet: Homework_Tracker)
-  const [hwTrackerList, setHwTrackerList] = useState<HomeworkTrackerRecord[]>([]);
+  const [hwTrackerList, setHwTrackerList] = useState<HomeworkTrackerRecord[]>(() => getCachedData<HomeworkTrackerRecord[]>(CACHE_KEY_HW_TRACKER, []));
   const [loadingHwTracker, setLoadingHwTracker] = useState<boolean>(false);
 
   // Student Behavior State (from Google Sheet: Student_Behavior)
-  const [behaviorList, setBehaviorList] = useState<StudentBehaviorRecord[]>([]);
+  const [behaviorList, setBehaviorList] = useState<StudentBehaviorRecord[]>(() => getCachedData<StudentBehaviorRecord[]>(CACHE_KEY_BEHAVIOR, []));
   const [loadingBehavior, setLoadingBehavior] = useState<boolean>(false);
   const [behaviorFilterDate, setBehaviorFilterDate] = useState<string>('all');
   const [copiedBehaviorReport, setCopiedBehaviorReport] = useState<string | null>(null);
@@ -1176,7 +1227,7 @@ export default function App() {
   const [hwErrorMessage, setHwErrorMessage] = useState<string | null>(null);
 
   // Users Sheet & Manager Authentication State
-  const [usersList, setUsersList] = useState<SchoolUser[]>([]);
+  const [usersList, setUsersList] = useState<SchoolUser[]>(() => getCachedData<SchoolUser[]>(CACHE_KEY_USERS, []));
   const [loadingUsers, setLoadingUsers] = useState<boolean>(false);
   const [managerUser, setManagerUser] = useState<SchoolUser | null>(() => {
     try {
@@ -1250,6 +1301,10 @@ export default function App() {
   const [addFeeModalOpen, setAddFeeModalOpen] = useState<boolean>(false);
   const [addFeeInitialStudentId, setAddFeeInitialStudentId] = useState<string | undefined>(undefined);
   const [feeNotificationSuccess, setFeeNotificationSuccess] = useState<string | null>(null);
+
+  // Add Student Modal State (Manager Portal: नया छात्र जोड़ें)
+  const [addStudentModalOpen, setAddStudentModalOpen] = useState<boolean>(false);
+  const [studentNotificationSuccess, setStudentNotificationSuccess] = useState<string | null>(null);
 
   // Selected Student for Manager Fee Explorer (Manager Portal)
   const [managerSelectedFeeStudent, setManagerSelectedFeeStudent] = useState<Student | null>(null);
@@ -1354,9 +1409,11 @@ export default function App() {
     }
   };
 
-  // Fetch Students with automatic fallback
-  const fetchStudents = async () => {
-    setLoadingStudents(true);
+  // Fetch Students with automatic fallback and LocalStorage caching
+  const fetchStudents = async (silent = false) => {
+    if (!silent && students.length === 0) {
+      setLoadingStudents(true);
+    }
     try {
       let parsed: Student[] = [];
       let success = false;
@@ -1412,6 +1469,11 @@ export default function App() {
             return s;
           });
         setStudents(valid);
+        try {
+          localStorage.setItem(CACHE_KEY_STUDENTS, JSON.stringify(valid));
+        } catch (e) {
+          console.warn('Could not cache students in localStorage:', e);
+        }
         setApiError(null);
 
         // If parent is already logged in, update their selected student and children from freshly fetched sheet
@@ -1450,9 +1512,11 @@ export default function App() {
     }
   };
 
-  // Fetch Homework with automatic fallback
-  const fetchHomework = async () => {
-    setLoadingHomework(true);
+  // Fetch Homework with automatic fallback and LocalStorage caching
+  const fetchHomework = async (silent = false) => {
+    if (!silent && homeworkList.length === 0) {
+      setLoadingHomework(true);
+    }
     try {
       let parsed: Homework[] = [];
       let success = false;
@@ -1504,6 +1568,11 @@ export default function App() {
           return dateB - dateA;
         });
         setHomeworkList(valid);
+        try {
+          localStorage.setItem(CACHE_KEY_HOMEWORK, JSON.stringify(valid));
+        } catch (e) {
+          console.warn('Could not cache homework in localStorage:', e);
+        }
         setApiError(null);
       } else {
         setHomeworkList((prev) => {
@@ -1548,6 +1617,9 @@ export default function App() {
         }
       }
       setClassMap(newMap);
+      try {
+        localStorage.setItem(CACHE_KEY_CLASSES, JSON.stringify(newMap));
+      } catch {}
     } catch (err) {
       console.warn('Could not fetch classes sheet, using default class map:', err);
     }
@@ -1555,7 +1627,9 @@ export default function App() {
 
   // Fetch Fee Collection records and balance amounts by Student ID
   const fetchFeeCollection = async () => {
-    setLoadingFees(true);
+    if (feeRecords.length === 0) {
+      setLoadingFees(true);
+    }
     try {
       const encoded = encodeURIComponent('Fee_Collection');
       const res = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}`);
@@ -1626,6 +1700,10 @@ export default function App() {
 
       setFeeBalances(balances);
       setFeeRecords(records);
+      try {
+        localStorage.setItem(CACHE_KEY_FEES_BALANCES, JSON.stringify(balances));
+        localStorage.setItem(CACHE_KEY_FEES_RECORDS, JSON.stringify(records));
+      } catch {}
     } catch (err) {
       console.warn('Could not fetch fee collection sheet:', err);
     } finally {
@@ -1635,7 +1713,9 @@ export default function App() {
 
   // Fetch Homework Tracker records from Google Sheets (Homework_Tracker sheet)
   const fetchHomeworkTracker = async () => {
-    setLoadingHwTracker(true);
+    if (hwTrackerList.length === 0) {
+      setLoadingHwTracker(true);
+    }
     try {
       const encoded = encodeURIComponent('Homework_Tracker');
       const res = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}`);
@@ -1722,6 +1802,9 @@ export default function App() {
       }
 
       setHwTrackerList(records);
+      try {
+        localStorage.setItem(CACHE_KEY_HW_TRACKER, JSON.stringify(records));
+      } catch {}
     } catch (err) {
       console.warn('Could not fetch Homework_Tracker sheet:', err);
     } finally {
@@ -1731,7 +1814,9 @@ export default function App() {
 
   // Fetch Student Behavior records from Google Sheets (Student_Behavior sheet)
   const fetchStudentBehavior = async () => {
-    setLoadingBehavior(true);
+    if (behaviorList.length === 0) {
+      setLoadingBehavior(true);
+    }
     try {
       const encoded = encodeURIComponent('Student_Behavior');
       const res = await fetch(
@@ -1803,6 +1888,9 @@ export default function App() {
         }
       }
       setBehaviorList(records);
+      try {
+        localStorage.setItem(CACHE_KEY_BEHAVIOR, JSON.stringify(records));
+      } catch {}
     } catch (err) {
       console.warn('Could not fetch Student_Behavior sheet:', err);
     } finally {
@@ -1812,7 +1900,9 @@ export default function App() {
 
   // Fetch Users records from Google Sheets (Users sheet)
   const fetchUsers = async (): Promise<SchoolUser[]> => {
-    setLoadingUsers(true);
+    if (usersList.length === 0) {
+      setLoadingUsers(true);
+    }
     try {
       const encoded = encodeURIComponent('Users');
       const res = await fetch(
@@ -1854,6 +1944,9 @@ export default function App() {
         }
       }
       setUsersList(userRecords);
+      try {
+        localStorage.setItem(CACHE_KEY_USERS, JSON.stringify(userRecords));
+      } catch {}
       return userRecords;
     } catch (err) {
       console.warn('Could not fetch Users sheet:', err);
@@ -1898,15 +1991,119 @@ export default function App() {
     return 0;
   };
 
-  // Initial load
+  // Background Synchronization with LocalStorage persistence & Stale-While-Revalidate
+  const syncAllData = async (manual = false) => {
+    setIsBackgroundSyncing(true);
+    if (manual) {
+      setSyncToastMessage('डेटा सिंक किया जा रहा है... (Syncing fresh records)');
+    }
+    try {
+      await Promise.allSettled([
+        fetchStudents(true),
+        fetchHomework(true),
+        fetchClasses(),
+        fetchFeeCollection(),
+        fetchHomeworkTracker(),
+        fetchStudentBehavior(),
+        fetchUsers(),
+      ]);
+      const now = Date.now();
+      setLastSyncTimestamp(now);
+      try {
+        localStorage.setItem(CACHE_KEY_TIMESTAMP, String(now));
+      } catch {}
+
+      if (manual) {
+        setSyncToastMessage('ताज़ा डेटा सफलतापूर्वक अपडेट हो गया! (Data synced)');
+        setTimeout(() => setSyncToastMessage(null), 3000);
+      }
+    } catch (err) {
+      console.warn('Sync failed:', err);
+      if (manual) {
+        setSyncToastMessage('सिंक में त्रुटि हुई, स्थानीय डेटा सुरक्षित है।');
+        setTimeout(() => setSyncToastMessage(null), 3500);
+      }
+    } finally {
+      setIsBackgroundSyncing(false);
+    }
+  };
+
+  // Formatted label for last sync time
+  const getSyncTimeLabel = (): string => {
+    if (!lastSyncTimestamp) return 'सिंक नहीं हुआ';
+    const elapsedMinutes = Math.floor((Date.now() - lastSyncTimestamp) / 60000);
+    if (elapsedMinutes < 1) return 'अभी-अभी';
+    if (elapsedMinutes < 60) return `${elapsedMinutes}m पहले`;
+    const elapsedHours = Math.floor(elapsedMinutes / 60);
+    return `${elapsedHours}h पहले`;
+  };
+
+  // Manager: Handle Add Student with optimistic UI and local persistence
+  const handleStudentAdded = async (newStudent: Student, sendWhatsApp = false) => {
+    // 1. Optimistically add to state and localStorage cache
+    setStudents((prev) => {
+      const updated = [newStudent, ...prev];
+      try {
+        localStorage.setItem(CACHE_KEY_STUDENTS, JSON.stringify(updated));
+      } catch (e) {
+        console.warn('Error saving added student to cache:', e);
+      }
+      return updated;
+    });
+
+    setStudentNotificationSuccess(`छात्र ${newStudent.Student_Name} (${newStudent.Admission_Number || newStudent.Student_ID}) सफलतापूर्वक दर्ज कर लिया गया है!`);
+    setTimeout(() => setStudentNotificationSuccess(null), 4000);
+
+    // 2. Background sync to Google Apps Script
+    try {
+      fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'addStudent',
+          student_id: newStudent.Student_ID,
+          admission_number: newStudent.Admission_Number,
+          roll_number: newStudent.Roll_Number,
+          student_name: newStudent.Student_Name,
+          class: newStudent.Class,
+          father_name: newStudent.Father_Name,
+          mother_name: newStudent.Mother_Name,
+          parent_mobile: newStudent.Parent_Mobile,
+          village: newStudent['Village/rRoute'] || newStudent.Village,
+          student_photo: newStudent.Student_Photo,
+          balance_amount: newStudent.Balance_Amount || 0,
+        }),
+      }).catch((e) => console.warn('Background addStudent sync warning:', e));
+    } catch {}
+
+    // 3. Optional WhatsApp notification to parent
+    if (sendWhatsApp && newStudent.Parent_Mobile) {
+      const cleanMobile = String(newStudent.Parent_Mobile).replace(/\D/g, '');
+      const studentClass = getClassName(newStudent.Class);
+      const msg = `🏫 *E.V.S. Public School - छात्र प्रवेश एवं विवरण*\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `प्रिय अभिभावक, आपके बच्चे का स्कूल में पंजीकरण सफलतापूर्वक हो गया है:\n\n` +
+        `👤 *छात्र का नाम:* ${newStudent.Student_Name}\n` +
+        `🆔 *Student ID:* ${newStudent.Student_ID}\n` +
+        `📝 *प्रवेश संख्या (Admission No):* ${newStudent.Admission_Number || 'N/A'}\n` +
+        `🔢 *रोल नंबर:* ${newStudent.Roll_Number || 'N/A'}\n` +
+        `📚 *कक्षा (Class):* ${studentClass}\n` +
+        `👨‍👩‍👦 *पिता/माता का नाम:* ${newStudent.Father_Name || newStudent.Mother_Name || 'N/A'}\n` +
+        `📱 *मोबाइल:* ${newStudent.Parent_Mobile}\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `_ई.वी.एस. पब्लिक स्कूल पोर्टल पर अपने पंजीकृत मोबाइल नंबर से लॉगिन करके अपने बच्चे की दैनिक उपस्थिति, गृहकार्य व शुल्क की स्थिति देख सकते हैं।_`;
+      const encoded = encodeURIComponent(msg);
+      const waUrl = cleanMobile.length >= 10
+        ? `https://wa.me/91${cleanMobile.slice(-10)}?text=${encoded}`
+        : `https://wa.me/?text=${encoded}`;
+      window.open(waUrl, '_blank');
+    }
+  };
+
+  // Initial load - Stale While Revalidate background sync
   useEffect(() => {
-    fetchStudents();
-    fetchHomework();
-    fetchClasses();
-    fetchFeeCollection();
-    fetchHomeworkTracker();
-    fetchStudentBehavior();
-    fetchUsers();
+    // Instantly renders cached state, and executes background sync
+    syncAllData(false);
   }, []);
 
   // Parse Date string into comparable timestamp at midnight (00:00:00)
@@ -3364,26 +3561,64 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
               </button>
 
-              {/* Quick Refresh Icon */}
-              <button
-                onClick={() => {
-                  fetchStudents();
-                  fetchHomework();
-                }}
-                disabled={loadingStudents || loadingHomework}
-                className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-amber-300 hover:text-amber-200 transition-colors ml-1 cursor-pointer disabled:opacity-50"
-                title="Refresh latest data from Google Sheets"
-              >
-                <i
-                  className={`fa-solid fa-arrows-rotate ${
-                    loadingStudents || loadingHomework ? 'fa-spin' : ''
-                  }`}
-                ></i>
-              </button>
+              {/* Background Sync Indicator & Manual Sync / Refresh Button */}
+              <div className="flex items-center gap-1.5 ml-1">
+                {isBackgroundSyncing ? (
+                  <div
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-400/20 border border-amber-400/40 text-amber-200 text-xs font-semibold animate-pulse shrink-0"
+                    title="डेटा बैकग्राउंड में सिंक हो रहा है... (Syncing fresh records in background)"
+                  >
+                    <i className="fa-solid fa-arrows-rotate fa-spin text-[10px] text-amber-300"></i>
+                    <span className="hidden sm:inline text-xs">सिंक हो रहा है...</span>
+                  </div>
+                ) : (
+                  <button
+                    id="manual-sync-btn"
+                    onClick={() => syncAllData(true)}
+                    disabled={isBackgroundSyncing}
+                    className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-amber-300 hover:text-amber-200 transition-colors text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0 shadow-sm"
+                    title={`अंतिम सिंक: ${getSyncTimeLabel()} (क्लिक करके ताज़ा डेटा लोड करें)`}
+                  >
+                    <i className="fa-solid fa-rotate text-xs"></i>
+                    <span className="hidden md:inline">डेटा सिंक (Sync)</span>
+                    <span className="text-[10px] opacity-75 hidden xl:inline">({getSyncTimeLabel()})</span>
+                  </button>
+                )}
+              </div>
             </nav>
           </div>
         </div>
       </header>
+
+      {/* Subtle Background Sync Bar at Top */}
+      {isBackgroundSyncing && (
+        <div className="w-full bg-gradient-to-r from-amber-500 via-amber-300 to-amber-500 h-0.5 animate-pulse"></div>
+      )}
+
+      {/* Sync Status Toast Banner */}
+      {syncToastMessage && (
+        <div className="fixed top-16 right-4 z-50 bg-slate-900/95 text-white px-4 py-2.5 rounded-xl shadow-2xl border border-amber-400/40 text-xs font-bold flex items-center gap-2 backdrop-blur-xs animate-bounce">
+          <i className="fa-solid fa-circle-check text-emerald-400 text-sm"></i>
+          <span>{syncToastMessage}</span>
+          <button
+            onClick={() => setSyncToastMessage(null)}
+            className="ml-2 text-white/70 hover:text-white text-xs cursor-pointer"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Global Success Notification for Added Student */}
+      {studentNotificationSuccess && (
+        <div className="bg-emerald-600 text-white px-4 py-2 text-xs font-semibold flex items-center justify-between shadow-sm">
+          <div className="flex items-center gap-2">
+            <i className="fa-solid fa-circle-check"></i>
+            <span>{studentNotificationSuccess}</span>
+          </div>
+          <button onClick={() => setStudentNotificationSuccess(null)} className="text-white/80 hover:text-white text-xs">✕</button>
+        </div>
+      )}
 
       {/* Global Alert if API Error */}
       {apiError && (
@@ -7197,6 +7432,18 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         </option>
                       ))}
                     </select>
+
+                    {/* Add Student Button for Manager */}
+                    <button
+                      id="btn-add-student-manager"
+                      type="button"
+                      onClick={() => setAddStudentModalOpen(true)}
+                      className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs flex items-center gap-1.5 shadow-sm cursor-pointer shrink-0 transition-colors"
+                      title="नया छात्र जोड़ें (Add New Student)"
+                    >
+                      <i className="fa-solid fa-user-plus"></i>
+                      <span>नया छात्र जोड़ें</span>
+                    </button>
                   </div>
                 </div>
 
@@ -8414,6 +8661,41 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
           </div>
         </div>
       )}
+
+      {/* ========================================================================= */}
+      {/* ADD STUDENT MODAL (प्रबंधक: नया छात्र जोड़ें)                                */}
+      {/* ========================================================================= */}
+      <AddStudentModal
+        isOpen={addStudentModalOpen}
+        onClose={() => setAddStudentModalOpen(false)}
+        onStudentAdded={handleStudentAdded}
+        existingStudents={students}
+        classMap={classMap}
+        getClassName={getClassName}
+      />
+
+      {/* ========================================================================= */}
+      {/* ADD FEE COLLECTION MODAL (फ़ीस रसीद काटें व जमा करें)                         */}
+      {/* ========================================================================= */}
+      <AddFeeModal
+        isOpen={addFeeModalOpen}
+        onClose={() => {
+          setAddFeeModalOpen(false);
+          setAddFeeInitialStudentId(undefined);
+        }}
+        onFeeAdded={handleFeeAdded}
+        students={students}
+        managerName={managerUser?.Name || 'Manager'}
+        classMap={classMap}
+        getClassName={getClassName}
+        feeBalances={feeBalances}
+        initialSelectedStudentId={addFeeInitialStudentId}
+        onTriggerQRScan={() => {
+          setQrScannerTarget('managerStudents');
+          setQrScannerSubtitle('फ़ीस जमा करने हेतु छात्र का QR कोड स्कैन करें');
+          setQrScannerOpen(true);
+        }}
+      />
 
       {/* ========================================================================= */}
       {/* UNIVERSAL STUDENT FINDER & ACTION HUB (QR Code, Name, ID, Mobile Scanner) */}
