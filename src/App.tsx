@@ -19,6 +19,8 @@ import { ManagerFeeDashboard } from './components/ManagerFeeDashboard';
 import { StudentBehaviorModal, StudentBehaviorInput } from './components/StudentBehaviorModal';
 import { DriverPortal } from './components/DriverPortal';
 import { ManagerVanTracker } from './components/ManagerVanTracker';
+import { StudentAvatar } from './components/StudentAvatar';
+import { ManagerOverviewModals } from './components/ManagerOverviewModals';
 import studentFarahPhoto from './assets/images/student_farah_1789483069291.jpg';
 import studentNamraPhoto from './assets/images/student_namra_1789483091505.jpg';
 
@@ -158,10 +160,13 @@ export const formatImageUrl = (url: string | null | undefined): string => {
   const str = String(url).trim();
   if (!str) return '';
   // Check if Drive file URL
-  const driveMatch = str.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || str.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  const driveMatch =
+    str.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) ||
+    str.match(/[?&]id=([a-zA-Z0-9_-]+)/) ||
+    str.match(/\/d\/([a-zA-Z0-9_-]+)/);
   if (driveMatch && driveMatch[1]) {
-    // lh3.googleusercontent.com works directly in img tags without cookies
-    return `https://drive.google.com/thumbnail?id=${driveMatch[1]}&sz=w800`;
+    // Automatically convert Google Drive URLs to direct viewable links: https://lh3.googleusercontent.com/d/FILE_ID
+    return `https://lh3.googleusercontent.com/d/${driveMatch[1]}`;
   }
   return str;
 };
@@ -1186,18 +1191,24 @@ export default function App() {
     if (sId && customPhotos[sId]) {
       return customPhotos[sId];
     }
-    // 2. Photo from Google Sheets record
-    if (student.Student_Photo && String(student.Student_Photo).trim()) {
-      return formatImageUrl(student.Student_Photo);
+    // 2. Photo from Google Sheets record ("Photo" column or "Student_Photo" column)
+    const sheetPhoto =
+      (student as any).Photo ||
+      student.Student_Photo ||
+      (student as any).photo ||
+      (student as any).student_photo ||
+      (student as any).Photo_URL;
+    if (sheetPhoto && String(sheetPhoto).trim()) {
+      return formatImageUrl(sheetPhoto);
     }
-    // 3. Realistic school portraits
+    // 3. Realistic school portraits fallback
     if (sId === '57dd106d' || sName.includes('farah')) {
       return studentFarahPhoto;
     }
     if (sId === 'dfe3be96' || sName.includes('namra')) {
       return studentNamraPhoto;
     }
-    return 'https://images.unsplash.com/photo-1544717305-2782549b5136?w=400&auto=format&fit=crop&q=80';
+    return '';
   };
 
   // Media Viewer Lightbox State (for Photos and PDFs)
@@ -3898,13 +3909,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 <div className="flex items-center gap-2 self-start sm:self-auto">
                   {selectedStudent && (
                     <div className="hidden sm:flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200 text-xs">
-                      <img
-                        src={getStudentPhoto(selectedStudent)}
-                        alt={selectedStudent.Student_Name}
-                        className="w-5 h-5 rounded-full object-cover border border-slate-300"
-                        onError={(e) => {
-                          (e.target as HTMLElement).style.display = 'none';
-                        }}
+                      <StudentAvatar
+                        student={selectedStudent}
+                        photoUrl={getStudentPhoto(selectedStudent)}
+                        size="xs"
                       />
                       <span className="font-extrabold text-slate-900">{selectedStudent.Student_Name}</span>
                       <span className="text-[10px] bg-blue-100 text-blue-900 px-1.5 py-0.2 rounded font-semibold">
@@ -4074,14 +4082,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                   : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100 hover:border-slate-300'
                               }`}
                             >
-                              <img
-                                src={childPhoto}
-                                alt={child.Student_Name}
-                                className="w-6 h-6 rounded-full object-cover border border-white/50 shrink-0"
-                                onError={(e) => {
-                                  (e.target as HTMLElement).style.display = 'none';
-                                }}
-                              />
+                              <StudentAvatar student={child} photoUrl={childPhoto} size="xs" />
                               <span className="font-extrabold">{child.Student_Name}</span>
                               <span
                                 className={`text-[10px] px-1.5 py-0.2 rounded font-semibold ${
@@ -4175,26 +4176,13 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div className="flex items-center gap-3.5">
                         {/* Student Photo Avatar with Change/Upload Trigger */}
-                        <div className="relative group shrink-0">
-                          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#0c2340] to-[#10316b] text-amber-400 flex items-center justify-center text-xl font-black shadow-md border-2 border-amber-300 overflow-hidden">
-                            <img
-                              src={getStudentPhoto(selectedStudent)}
-                              alt={selectedStudent.Student_Name}
-                              className="w-full h-full object-cover"
-                              onError={(e) => {
-                                (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1544717305-2782549b5136?w=400&auto=format&fit=crop&q=80';
-                              }}
-                            />
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => handleTriggerPhotoUpload(selectedStudent.Student_ID)}
-                            className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-[#0c2340] text-amber-300 border-2 border-white flex items-center justify-center text-[10px] shadow-sm hover:scale-110 transition-transform cursor-pointer"
-                            title="फ़ोटो बदलें या अपलोड करें (Change or Upload Photo)"
-                          >
-                            <i className="fa-solid fa-camera"></i>
-                          </button>
-                        </div>
+                        <StudentAvatar
+                          student={selectedStudent}
+                          photoUrl={getStudentPhoto(selectedStudent)}
+                          size="lg"
+                          showUploadBtn={true}
+                          onUpload={() => handleTriggerPhotoUpload(selectedStudent.Student_ID)}
+                        />
 
                         <div>
                           <div className="flex flex-wrap items-center gap-2">
@@ -6855,20 +6843,11 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             <tr key={rec.ID || idx} className="hover:bg-slate-50 transition-colors">
                               <td className="px-3 py-3">
                                 <div className="flex items-center gap-2.5">
-                                  {matchedStudent?.Student_Photo ? (
-                                    <img
-                                      src={matchedStudent.Student_Photo}
-                                      alt=""
-                                      className="w-8 h-8 rounded-full object-cover border border-slate-200"
-                                      onError={(e) => {
-                                        (e.target as HTMLElement).style.display = 'none';
-                                      }}
-                                    />
-                                  ) : (
-                                    <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-900 font-bold flex items-center justify-center text-xs">
-                                      {matchedStudent?.Student_Name ? matchedStudent.Student_Name.charAt(0) : 'S'}
-                                    </div>
-                                  )}
+                                  <StudentAvatar
+                                    student={matchedStudent}
+                                    photoUrl={matchedStudent ? getStudentPhoto(matchedStudent) : ''}
+                                    size="sm"
+                                  />
                                   <div>
                                     <div className="font-bold text-slate-900">
                                       {matchedStudent?.Student_Name || rec.Student_ID || 'Student'}
@@ -7241,56 +7220,20 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               </div>
             </div>
 
-            {/* Quick Metrics Bar */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-blue-100 text-blue-800 flex items-center justify-center text-lg shrink-0">
-                  <i className="fa-solid fa-user-graduate"></i>
-                </div>
-                <div>
-                  <div className="text-[11px] text-slate-500 font-medium">Total Students</div>
-                  <div className="text-lg sm:text-xl font-extrabold text-slate-900">
-                    {loadingStudents ? '...' : students.length}
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center text-lg shrink-0">
-                  <i className="fa-solid fa-book"></i>
-                </div>
-                <div>
-                  <div className="text-[11px] text-slate-500 font-medium">Homework Entries</div>
-                  <div className="text-lg sm:text-xl font-extrabold text-slate-900">
-                    {loadingHomework ? '...' : homeworkList.length}
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center text-lg shrink-0">
-                  <i className="fa-solid fa-id-card-clip"></i>
-                </div>
-                <div>
-                  <div className="text-[11px] text-slate-500 font-medium">Total Staff (Users)</div>
-                  <div className="text-lg sm:text-xl font-extrabold text-slate-900">
-                    {loadingUsers ? '...' : usersList.length}
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-purple-100 text-purple-800 flex items-center justify-center text-lg shrink-0">
-                  <i className="fa-solid fa-school"></i>
-                </div>
-                <div>
-                  <div className="text-[11px] text-slate-500 font-medium">Classes Active</div>
-                  <div className="text-lg sm:text-xl font-extrabold text-slate-900">
-                    {classOptions.length}
-                  </div>
-                </div>
-              </div>
-            </div>
+            {/* 4 Dynamic Summary Cards & Interactive Modals (Manager Dashboard Header Overview) */}
+            <ManagerOverviewModals
+              students={students}
+              feeRecords={feeRecords}
+              feeBalances={feeBalances}
+              behaviorList={behaviorList}
+              classMap={classMap}
+              getClassName={getClassName}
+              getStudentPhoto={getStudentPhoto}
+              loadingStudents={loadingStudents}
+              loadingFees={loadingFees}
+              loadingBehavior={loadingBehavior}
+              onSelectStudent={(st) => setSelectedStudentDetail(st)}
+            />
 
             {/* Manager Switcher Tabs (5 Tabs) */}
             <div className="flex flex-wrap border-b border-slate-200 gap-x-2 gap-y-2">
@@ -8404,20 +8347,11 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
             </button>
 
             <div className="flex items-center gap-3.5 mb-5 pb-4 border-b border-slate-100">
-              <div className="w-14 h-14 rounded-2xl bg-[#0c2340] text-amber-400 flex items-center justify-center text-xl font-bold border-2 border-amber-300 shadow overflow-hidden shrink-0">
-                {selectedStudentDetail.Student_Photo ? (
-                  <img
-                    src={formatImageUrl(selectedStudentDetail.Student_Photo)}
-                    alt={selectedStudentDetail.Student_Name}
-                    className="w-full h-full object-cover"
-                    onError={(e) => {
-                      (e.target as HTMLElement).style.display = 'none';
-                    }}
-                  />
-                ) : (
-                  selectedStudentDetail.Student_Name?.charAt(0) || 'S'
-                )}
-              </div>
+              <StudentAvatar
+                student={selectedStudentDetail}
+                photoUrl={getStudentPhoto(selectedStudentDetail)}
+                size="lg"
+              />
               <div>
                 <h3 className="text-lg font-bold text-slate-900">
                   {selectedStudentDetail.Student_Name}

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import jsQR from 'jsqr';
+import { StudentAvatar } from './StudentAvatar';
 
 export interface StudentRecordForScan {
   Student_ID?: string;
@@ -557,17 +558,11 @@ export const StudentQRScannerModal: React.FC<StudentQRScannerModalProps> = ({
           <div className="bg-gradient-to-r from-amber-50/90 via-blue-50/80 to-amber-50/90 border-b-2 border-amber-300 p-3.5 shrink-0 animate-fadeIn">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-3">
-                {getStudentPhoto(selectedStudent) ? (
-                  <img
-                    src={getStudentPhoto(selectedStudent)}
-                    alt={selectedStudent.Student_Name}
-                    className="w-12 h-12 rounded-xl object-cover border-2 border-amber-400 shadow-xs shrink-0"
-                  />
-                ) : (
-                  <div className="w-12 h-12 rounded-xl bg-[#0c2340] text-amber-300 flex items-center justify-center font-bold text-base border-2 border-amber-400 shadow-xs shrink-0">
-                    {(selectedStudent.Student_Name || 'S').slice(0, 1)}
-                  </div>
-                )}
+                <StudentAvatar
+                  student={selectedStudent as any}
+                  photoUrl={getStudentPhoto(selectedStudent)}
+                  size="md"
+                />
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <h4 className="text-sm font-bold text-slate-900">
@@ -807,17 +802,11 @@ export const StudentQRScannerModal: React.FC<StudentQRScannerModalProps> = ({
                       }`}
                     >
                       <div className="flex items-center gap-3 min-w-0">
-                        {getStudentPhoto(st) ? (
-                          <img
-                            src={getStudentPhoto(st)}
-                            alt={st.Student_Name}
-                            className="w-10 h-10 rounded-full object-cover border border-slate-200 shrink-0"
-                          />
-                        ) : (
-                          <div className="w-10 h-10 rounded-full bg-slate-100 text-[#0c2340] flex items-center justify-center font-bold text-xs shrink-0 border border-slate-200">
-                            {(st.Student_Name || 'S').slice(0, 1)}
-                          </div>
-                        )}
+                        <StudentAvatar
+                          student={st as any}
+                          photoUrl={getStudentPhoto(st)}
+                          size="md"
+                        />
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
                             <span className="font-bold text-xs text-slate-900 truncate">
