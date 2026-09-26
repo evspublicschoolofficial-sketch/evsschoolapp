@@ -181,6 +181,17 @@ async function startServer() {
     }
   }, 20000);
 
+  // CORS Middleware for seamless local & preview cross-origin requests
+  app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, x-apps-script-url');
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(200);
+    }
+    next();
+  });
+
   // Parsing middlewares
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
@@ -232,7 +243,12 @@ async function startServer() {
         } catch {}
       }
 
-      const targetUrl = currentAppsScriptUrl;
+      // Check if client provided a specific custom URL in payload or headers
+      const clientUrl = payload?.appsScriptUrl || req.headers['x-apps-script-url'];
+      const targetUrl = (typeof clientUrl === 'string' && clientUrl.trim().startsWith('https://script.google.com/macros/s/'))
+        ? clientUrl.trim()
+        : currentAppsScriptUrl;
+
       console.log(`[AppsScriptForwarder] Action: ${payload?.action}, Target: ${targetUrl}`);
 
       const response = await fetch(targetUrl, {
@@ -244,11 +260,12 @@ async function startServer() {
       const responseText = await response.text();
 
       // Check for Google Apps Script 404 / access error
-      if (responseText.includes('Page not found') || responseText.includes('unable to open the file')) {
+      if (responseText.includes('Page not found') || responseText.includes('unable to open the file') || responseText.includes('Service invoked too many times')) {
         return res.status(502).json({
           success: false,
-          error: 'Google Apps Script Web App unshared or not found. Please deploy as Web App with "Anyone" access.',
+          error: 'Google Apps Script Web App unshared or access denied. Please verify Web App deployment with "Who has access: Anyone".',
           needsDeployment: true,
+          raw: responseText,
         });
       }
 
@@ -278,9 +295,14 @@ async function startServer() {
   });
 
   // Ping/Test current Google Apps Script connection
-  app.get('/api/test-apps-script', async (_req, res) => {
+  app.get('/api/test-apps-script', async (req, res) => {
     try {
-      const response = await fetch(`${currentAppsScriptUrl}?action=ping`, { method: 'GET' });
+      const queryUrl = req.query?.url;
+      const targetUrl = (typeof queryUrl === 'string' && queryUrl.trim().startsWith('https://script.google.com/macros/s/'))
+        ? queryUrl.trim()
+        : currentAppsScriptUrl;
+
+      const response = await fetch(`${targetUrl}?action=ping`, { method: 'GET' });
       const text = await response.text();
       if (text.includes('Page not found') || text.includes('unable to open the file')) {
         return res.json({
@@ -337,6 +359,100 @@ async function startServer() {
     } catch (err: any) {
       console.error('Error saving bus telemetry:', err);
       res.status(500).json({ error: err.message || 'Internal error' });
+    }
+  });
+
+  // In-memory cache for student daily AI greetings to avoid duplicate Gemini API calls & rate limits
+  const greetingCache = new Map<string, { text: string; timestamp: number }>();
+
+  // AI Daily Greeting & Activity Summary via Gemini API (@google/genai)
+  app.post('/api/ai-student-greeting', async (req, res) => {
+    try {
+      const {
+        studentName = 'छात्र',
+        attendanceStatus = 'उपस्थित',
+        isAbsent = false,
+        homeworkSummary = '',
+        behaviorSummary = '',
+        teacherRemark = '',
+        date = '',
+      } = req.body || {};
+
+      const fallbackGreeting = (() => {
+        if (isAbsent) {
+          return `नमस्ते! आज ${studentName} विद्यालय में अनुपस्थित रहे। हम आशा करते हैं कि वे सकुशल हैं। कृपया छूटे हुए अध्ययन और गृहकार्य का विवरण नीचे देख लें और स्वास्थ्य में सुधार होते ही नियमित उपस्थिति सुनिश्चित करें।`;
+        }
+        let msg = `नमस्ते! आज ${studentName} विद्यालय में उपस्थित रहे और कक्षा की गतिविधियों में सक्रिय रूप से भाग लिया।`;
+        if (teacherRemark && !teacherRemark.toLowerCase().includes('fault')) {
+          msg += ` शिक्षक की टिप्पणी: "${teacherRemark}"।`;
+        } else if (behaviorSummary) {
+          msg += ` आज उनका आचरण व अनुशासन सराहनीय रहा।`;
+        }
+        if (homeworkSummary) {
+          msg += ` आज ${homeworkSummary} दिया गया है, कृपया शाम को समय पर पूरा करवाएं।`;
+        } else {
+          msg += ` आज का दैनिक विवरण और गृहकार्य नीचे उपलब्ध है।`;
+        }
+        return msg;
+      })();
+
+      const cacheKey = `${studentName}_${date}_${isAbsent}_${attendanceStatus}_${homeworkSummary}_${teacherRemark}`;
+      const now = Date.now();
+      const cached = greetingCache.get(cacheKey);
+      if (cached && now - cached.timestamp < 30 * 60 * 1000) {
+        return res.json({ success: true, greeting: cached.text, cached: true });
+      }
+
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        greetingCache.set(cacheKey, { text: fallbackGreeting, timestamp: now });
+        return res.json({ success: true, greeting: fallbackGreeting, fallback: true });
+      }
+
+      try {
+        const { GoogleGenAI } = await import('@google/genai');
+        const ai = new GoogleGenAI({ apiKey });
+
+        const prompt = `तुम E.V.S. Public School (ई.वी.एस. पब्लिक स्कूल) के आत्मीय, सम्मानजनक व उत्साहवर्धक AI शिक्षा सहायक हो।
+निम्नलिखित छात्र की आज (${date || 'आज'}) की विद्यालय गतिविधियों का विवरण दिया गया है:
+- छात्र का नाम: ${studentName}
+- उपस्थिति स्थिति: ${isAbsent ? 'अनुपस्थित (Absent)' : attendanceStatus}
+- आज का गृहकार्य (Homework): ${homeworkSummary || 'कोई नया गृहकार्य दर्ज नहीं है'}
+- आचरण व स्वच्छता (Behavior/Conduct): ${behaviorSummary || 'सामान्य'}
+- शिक्षक की टिप्पणी (Teacher Remark): ${teacherRemark || 'कोई विशेष टिप्पणी नहीं'}
+
+निर्देश:
+1. अभिभावक को संबोधित करते हुए शुद्ध, सरल, आत्मीय व सम्मानजनक हिंदी में 2 से 3 वाक्यों का संक्षिप्त अभिवादन और आज की मुख्य गतिविधि का सार लिखो।
+2. यदि छात्र अनुपस्थित है, तो स्वास्थ्य का हाल पूछें और छूटी पढ़ाई/गृहकार्य की तरफ ध्यान दिलाएं।
+3. यदि छात्र उपस्थित था और आचरण/गृहकार्य अच्छा है, तो प्रशंसा करें और गृहकार्य समय पर कराने के लिए प्रेरित करें।
+4. कोई शीर्षक, बुलेट पॉइंट या अंग्रेजी शब्द न लिखें। केवल शुद्ध, मधुर व पठनीय हिंदी पैराग्राफ में संदेश दें।`;
+
+        const response = await ai.models.generateContent({
+          model: 'gemini-3.1-flash-lite',
+          contents: prompt,
+        });
+
+        const greetingText = response.text?.trim() || fallbackGreeting;
+        greetingCache.set(cacheKey, { text: greetingText, timestamp: now });
+        return res.json({
+          success: true,
+          greeting: greetingText,
+        });
+      } catch {
+        // Gracefully handle rate limit (429), quota exhaustion or API error with fallback greeting
+        greetingCache.set(cacheKey, { text: fallbackGreeting, timestamp: now });
+        return res.json({
+          success: true,
+          greeting: fallbackGreeting,
+          fallback: true,
+        });
+      }
+    } catch {
+      return res.json({
+        success: true,
+        greeting: 'नमस्ते! छात्र की दैनिक विद्यालय गतिविधियां व विवरण नीचे काम की चीजों में प्रस्तुत हैं।',
+        fallback: true,
+      });
     }
   });
 

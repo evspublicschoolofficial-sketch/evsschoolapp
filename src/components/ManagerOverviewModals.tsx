@@ -15,6 +15,10 @@ interface ManagerOverviewModalsProps {
   loadingBehavior?: boolean;
   onSelectStudent?: (student: Student) => void;
   onOpenAddStudent?: () => void;
+  onSyncStudent?: (student: Student) => Promise<{ success: boolean; error?: string }>;
+  onSyncAllPending?: () => Promise<void>;
+  onOpenSyncSettings?: () => void;
+  onDeleteStudent?: (studentId: string, studentName: string) => Promise<boolean>;
 }
 
 export type ManagerModalType = 'totalStudents' | 'feesOverview' | 'absentToday' | 'faultyBehavior' | null;
@@ -49,12 +53,19 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
   loadingBehavior = false,
   onSelectStudent,
   onOpenAddStudent,
+  onSyncStudent,
+  onSyncAllPending,
+  onOpenSyncSettings,
+  onDeleteStudent,
 }) => {
   const [activeModal, setActiveModal] = useState<ManagerModalType>(null);
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [classFilter, setClassFilter] = useState<string>('all');
   const [feeTab, setFeeTab] = useState<'collected' | 'pending'>('collected');
   const [attendanceDateTab, setAttendanceDateTab] = useState<'today' | 'recent'>('today');
+  const [syncingStudentId, setSyncingStudentId] = useState<string | null>(null);
+  const [syncingAll, setSyncingAll] = useState<boolean>(false);
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
 
   // Reset search and filters whenever modal opens/changes
   useEffect(() => {
@@ -692,6 +703,87 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
               {/* ================================================================= */}
               {activeModal === 'totalStudents' && (
                 <>
+                  {/* Google Sheet Sync Notice and Direct Access Banner */}
+                  <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-emerald-50 border border-blue-200 p-3.5 rounded-2xl text-xs space-y-2.5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 text-blue-950 font-bold">
+                        <i className="fa-solid fa-file-excel text-emerald-600 text-sm"></i>
+                        <span>Google Sheet ('Students' टैब) लाइव स्टेटस</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <a
+                          href="https://docs.google.com/spreadsheets/d/1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU/edit"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-2.5 py-1 bg-white hover:bg-slate-100 text-blue-900 border border-blue-300 rounded-lg font-bold text-[11px] shadow-2xs flex items-center gap-1 cursor-pointer transition-colors"
+                        >
+                          <i className="fa-solid fa-arrow-up-right-from-square text-[10px]"></i>
+                          <span>Google Sheet खोलें</span>
+                        </a>
+                        {onOpenSyncSettings && (
+                          <button
+                            type="button"
+                            onClick={onOpenSyncSettings}
+                            className="px-2.5 py-1 bg-blue-900 hover:bg-blue-800 text-white rounded-lg font-bold text-[11px] shadow-2xs flex items-center gap-1 cursor-pointer transition-colors"
+                          >
+                            <i className="fa-solid fa-gear text-[10px]"></i>
+                            <span>सिंक सेटिंग्स</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="text-[11px] text-slate-700 bg-white/70 p-2.5 rounded-xl border border-blue-100 leading-relaxed space-y-1">
+                      <div>💡 <strong>ध्यान दें:</strong> स्कूल के सभी छात्र गूगल शीट में नीचे दिए गए <strong>'Students'</strong> टैब में दर्ज होते हैं। (पहला <em>'Student'</em> टैब स्टाफ लॉगिन का है)।</div>
+                      <div className="text-slate-600 text-[10px]">
+                        📌 गूगल शीट में ऊपर 4 पुराने छात्र (Row 2-5) हैं, और नये छात्र खाली फॉर्मूला पंक्तियों के कारण नीचे (Row 995+) आ गए थे। आप यहाँ किसी भी अनावश्यक टेस्ट छात्र को 🗑️ (हटाएं) बटन से सीधे हटा सकते हैं।
+                      </div>
+                    </div>
+
+                    {/* Unsynced Students Warning & Bulk Sync */}
+                    {students.some((s: any) => s._isCustom && !s._sheetSynced) && (
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 bg-amber-100/80 border border-amber-300 rounded-xl text-amber-950 font-medium">
+                        <div className="flex items-center gap-2">
+                          <i className="fa-solid fa-triangle-exclamation text-amber-600"></i>
+                          <span>
+                            {students.filter((s: any) => s._isCustom && !s._sheetSynced).length} छात्र अभी Google Sheet में सिंक होना बाकी हैं।
+                          </span>
+                        </div>
+                        {onSyncAllPending && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              setSyncingAll(true);
+                              setSyncNotice(null);
+                              try {
+                                await onSyncAllPending();
+                                setSyncNotice('✅ सिंक प्रक्रिया पूर्ण हुई!');
+                              } catch (e: any) {
+                                setSyncNotice(`⚠️ एरर: ${e.message}`);
+                              } finally {
+                                setSyncingAll(false);
+                                setTimeout(() => setSyncNotice(null), 5000);
+                              }
+                            }}
+                            disabled={syncingAll}
+                            className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold shadow-xs cursor-pointer transition-colors disabled:opacity-50 flex items-center gap-1.5 self-start sm:self-auto shrink-0"
+                          >
+                            <i className={`fa-solid fa-arrows-rotate ${syncingAll ? 'fa-spin' : ''}`}></i>
+                            <span>{syncingAll ? 'सिंक हो रहा...' : 'सभी को Sheet में सिंक करें'}</span>
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Temporary Notification Alert */}
+                    {syncNotice && (
+                      <div className="p-2 bg-emerald-100 border border-emerald-300 text-emerald-900 rounded-xl text-xs font-bold flex items-center gap-2">
+                        <i className="fa-solid fa-circle-check text-emerald-600"></i>
+                        <span>{syncNotice}</span>
+                      </div>
+                    )}
+                  </div>
+
                   {filteredAllStudents.length === 0 ? (
                     <div className="text-center py-12 text-slate-400">
                       <i className="fa-solid fa-user-slash text-4xl mb-3"></i>
@@ -703,6 +795,9 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                       {filteredAllStudents.map((st) => {
                         const phone = getStudentPhone(st);
                         const bal = feeBalances[String(st.Student_ID || '').toLowerCase()] ?? Number(st.Balance_Amount || 0);
+                        const isCustom = Boolean((st as any)._isCustom);
+                        const isSheetSynced = Boolean((st as any)._sheetSynced);
+                        const isSyncingThis = syncingStudentId === st.Student_ID;
 
                         return (
                           <div
@@ -732,6 +827,53 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                                 {bal > 0 && (
                                   <div className="text-[10px] text-rose-600 font-semibold mt-0.5">
                                     बकाया: ₹{formatIndianCurrency(bal)}
+                                  </div>
+                                )}
+
+                                {/* Google Sheet Sync Badges for Custom Added Students */}
+                                {isCustom && (
+                                  <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                                    {isSheetSynced ? (
+                                      <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                                        <i className="fa-solid fa-cloud-arrow-up text-emerald-600 text-[9px]"></i>
+                                        <span>Sheet Synced ✓</span>
+                                      </span>
+                                    ) : (
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="text-[10px] font-semibold text-amber-800 bg-amber-50 border border-amber-300 px-2 py-0.5 rounded-full flex items-center gap-1">
+                                          <i className="fa-solid fa-clock text-[9px]"></i>
+                                          <span>Sheet सिंक लंबित</span>
+                                        </span>
+                                        {onSyncStudent && (
+                                          <button
+                                            type="button"
+                                            onClick={async () => {
+                                              setSyncingStudentId(st.Student_ID);
+                                              setSyncNotice(null);
+                                              try {
+                                                const res = await onSyncStudent(st);
+                                                if (res.success) {
+                                                  setSyncNotice(`✅ ${st.Student_Name} Google Sheet ('Students' टैब) में सुरक्षित हो गया!`);
+                                                } else {
+                                                  setSyncNotice(`⚠️ सिंक नहीं हो सका: ${res.error || 'Apps Script URL जाँचें'}`);
+                                                }
+                                              } catch (e: any) {
+                                                setSyncNotice(`⚠️ एरर: ${e.message}`);
+                                              } finally {
+                                                setSyncingStudentId(null);
+                                                setTimeout(() => setSyncNotice(null), 5000);
+                                              }
+                                            }}
+                                            disabled={isSyncingThis}
+                                            className="text-[10px] font-bold text-blue-900 hover:text-white bg-blue-100 hover:bg-blue-700 border border-blue-300 px-2.5 py-0.5 rounded-full transition-colors cursor-pointer disabled:opacity-50 flex items-center gap-1"
+                                            title="Google Sheet में अभी जोड़ें"
+                                          >
+                                            <i className={`fa-solid fa-arrows-rotate text-[9px] ${isSyncingThis ? 'fa-spin' : ''}`}></i>
+                                            <span>{isSyncingThis ? 'सिंक...' : 'Sheet में जोड़ें'}</span>
+                                          </button>
+                                        )}
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                               </div>
@@ -765,6 +907,32 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                                   title="प्रोफ़ाइल देखें (View Profile)"
                                 >
                                   <i className="fa-solid fa-eye"></i>
+                                </button>
+                              )}
+
+                              {onDeleteStudent && (
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    const confirmDelete = window.confirm(
+                                      `क्या आप वाकई छात्र "${st.Student_Name || 'Unknown'}" (ID: ${st.Student_ID}) को पोर्टल व Sheet से हटाना चाहते हैं?`
+                                    );
+                                    if (confirmDelete) {
+                                      setSyncNotice(`छात्र ${st.Student_Name} को हटाया जा रहा है...`);
+                                      try {
+                                        await onDeleteStudent(st.Student_ID, st.Student_Name || '');
+                                        setSyncNotice(`✅ छात्र "${st.Student_Name}" को सफलतापूर्वक हटा दिया गया!`);
+                                      } catch (e: any) {
+                                        setSyncNotice(`⚠️ एरर: ${e.message}`);
+                                      } finally {
+                                        setTimeout(() => setSyncNotice(null), 4000);
+                                      }
+                                    }
+                                  }}
+                                  className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-600 hover:text-white text-rose-600 border border-rose-200 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                                  title="छात्र हटाएं (Delete Student)"
+                                >
+                                  <i className="fa-solid fa-trash-can"></i>
                                 </button>
                               )}
                             </div>

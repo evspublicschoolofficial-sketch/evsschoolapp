@@ -37,6 +37,14 @@ const QUICK_REMARKS = [
   'यूनिफॉर्म व स्वच्छता पर विशेष ध्यान दें।',
 ];
 
+const ABSENCE_QUICK_REMARKS = [
+  'आज छात्र विद्यालय में अनुपस्थित रहा।',
+  'बीमारी / अस्वस्थ होने के कारण अनुपस्थित।',
+  'पारिवारिक कार्य हेतु अवकाश पर है।',
+  'बिना पूर्व सूचना के अनुपस्थित रहा।',
+  'अभिभावक द्वारा अवकाश आवेदन प्राप्त।',
+];
+
 export const StudentBehaviorModal: React.FC<StudentBehaviorModalProps> = ({
   isOpen,
   onClose,
@@ -62,6 +70,27 @@ export const StudentBehaviorModal: React.FC<StudentBehaviorModalProps> = ({
 
   if (!isOpen || !student) return null;
 
+  const handleAttendanceChange = (present: boolean) => {
+    setIsPresent(present);
+    if (!present) {
+      // If switching to Absent: clear conduct praise and set absent remark
+      if (
+        remark === 'कक्षा में बहुत अच्छा आचरण व अनुशासन रहा।' ||
+        QUICK_REMARKS.includes(remark)
+      ) {
+        setRemark('आज छात्र विद्यालय में अनुपस्थित रहा।');
+      }
+    } else {
+      // If switching back to Present: set back default conduct remark
+      if (
+        remark === 'आज छात्र विद्यालय में अनुपस्थित रहा।' ||
+        ABSENCE_QUICK_REMARKS.includes(remark)
+      ) {
+        setRemark('कक्षा में बहुत अच्छा आचरण व अनुशासन रहा।');
+      }
+    }
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setIsSaving(true);
@@ -73,12 +102,13 @@ export const StudentBehaviorModal: React.FC<StudentBehaviorModalProps> = ({
       Date: date,
       Class: student.Class,
       Is_Present: isPresent,
-      Is_Bathed: isBathed,
-      Nails_Clean: nailsClean,
-      Uniform_clean: uniformClean,
-      Good_Manners: goodManners,
-      Discipline: discipline,
-      Remark: remark.trim(),
+      // If student is absent, NO conduct is filled/saved
+      Is_Bathed: isPresent ? isBathed : false,
+      Nails_Clean: isPresent ? nailsClean : false,
+      Uniform_clean: isPresent ? uniformClean : false,
+      Good_Manners: isPresent ? goodManners : 'लागू नहीं (अनुपस्थित)',
+      Discipline: isPresent ? discipline : false,
+      Remark: remark.trim() || (isPresent ? 'सामान्य' : 'आज छात्र विद्यालय में अनुपस्थित रहा।'),
       Teacher_Name: teacherName,
     };
 
@@ -89,21 +119,36 @@ export const StudentBehaviorModal: React.FC<StudentBehaviorModalProps> = ({
       const cleanPhone = String(student.Parent_Mobile).replace(/[^0-9]/g, '');
       const phoneToUse = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
 
-      const attendanceText = isPresent ? 'उपस्थित (Present) ✅' : 'अनुपस्थित (Absent) ❌';
-      const mannersText = goodManners;
-      const hygieneText = `${isBathed ? 'स्नान: हाँ ✅' : 'स्नान: नहीं ❌'} | ${uniformClean ? 'ड्रेस: साफ़ ✅' : 'ड्रेस: गंदी ❌'} | ${nailsClean ? 'नाखून: कटे ✅' : 'नाखून: बड़े ❌'}`;
+      let msg = '';
+      if (!isPresent) {
+        // WhatsApp message for Absent Student (No conduct details)
+        msg = `🏫 *ई.वी.एस. पब्लिक स्कूल (E.V.S. Public School)*\n` +
+          `📢 *दैनिक छात्र अनुपस्थिति सूचना (Daily Attendance Alert)*\n\n` +
+          `👤 *छात्र:* ${student.Student_Name} (ID: ${student.Student_ID || '—'})\n` +
+          `🎓 *कक्षा:* ${getClassName(student.Class)} | *तारीख:* ${date}\n\n` +
+          `• *हाजिरी स्थिति:* ❌ अनुपस्थित (Absent)\n` +
+          `• *विवरण:* छात्र आज विद्यालय में उपस्थित नहीं हुआ है। अतः विद्यालय आचरण व स्वच्छता मूल्यांकन लागू नहीं है।\n` +
+          (remark.trim() ? `• *टिप्पणी/कारण:* ${remark.trim()}\n\n` : '\n') +
+          `👨‍🏫 *दर्जकर्ता:* ${teacherName}\n` +
+          `_ई.वी.एस. पब्लिक स्कूल_`;
+      } else {
+        // WhatsApp message for Present Student with Conduct Breakdown
+        const attendanceText = 'उपस्थित (Present) ✅';
+        const mannersText = goodManners;
+        const hygieneText = `${isBathed ? 'स्नान: हाँ ✅' : 'स्नान: नहीं ❌'} | ${uniformClean ? 'ड्रेस: साफ़ ✅' : 'ड्रेस: गंदी ❌'} | ${nailsClean ? 'नाखून: कटे ✅' : 'नाखून: बड़े ❌'}`;
 
-      const msg = `🏫 *ई.वी.एस. पब्लिक स्कूल (E.V.S. Public School)*\n` +
-        `📋 *दैनिक छात्र आचरण व अनुशासन रिपोर्ट (Daily Conduct Report)*\n\n` +
-        `👤 *छात्र:* ${student.Student_Name} (ID: ${student.Student_ID || '—'})\n` +
-        `🎓 *कक्षा:* ${getClassName(student.Class)} | *तारीख:* ${date}\n\n` +
-        `• *हाजिरी:* ${attendanceText}\n` +
-        `• *आचरण व शिष्टाचार:* ${mannersText}\n` +
-        `• *अनुशासन:* ${discipline ? 'संतोषजनक व उत्तम (Good) 👍' : 'सुधार अपेक्षित (Needs Attention) ⚠️'}\n` +
-        `• *दैनिक स्वच्छता:* ${hygieneText}\n` +
-        (remark ? `• *शिक्षक टिप्पणी:* ${remark}\n\n` : '\n') +
-        `👨‍🏫 *शिक्षक:* ${teacherName}\n` +
-        `धन्यवाद!`;
+        msg = `🏫 *ई.वी.एस. पब्लिक स्कूल (E.V.S. Public School)*\n` +
+          `📋 *दैनिक छात्र आचरण व अनुशासन रिपोर्ट (Daily Conduct Report)*\n\n` +
+          `👤 *छात्र:* ${student.Student_Name} (ID: ${student.Student_ID || '—'})\n` +
+          `🎓 *कक्षा:* ${getClassName(student.Class)} | *तारीख:* ${date}\n\n` +
+          `• *हाजिरी:* ${attendanceText}\n` +
+          `• *आचरण व शिष्टाचार:* ${mannersText}\n` +
+          `• *अनुशासन:* ${discipline ? 'संतोषजनक व उत्तम (Good) 👍' : 'सुधार अपेक्षित (Needs Attention) ⚠️'}\n` +
+          `• *दैनिक स्वच्छता:* ${hygieneText}\n` +
+          (remark ? `• *शिक्षक टिप्पणी:* ${remark}\n\n` : '\n') +
+          `👨‍🏫 *शिक्षक:* ${teacherName}\n` +
+          `धन्यवाद!`;
+      }
 
       const encoded = encodeURIComponent(msg);
       window.open(`https://wa.me/${phoneToUse}?text=${encoded}`, '_blank');
@@ -195,7 +240,7 @@ export const StudentBehaviorModal: React.FC<StudentBehaviorModalProps> = ({
               <div className="flex rounded-lg overflow-hidden border border-slate-300">
                 <button
                   type="button"
-                  onClick={() => setIsPresent(true)}
+                  onClick={() => handleAttendanceChange(true)}
                   className={`flex-1 py-1.5 font-bold text-center cursor-pointer transition-colors ${
                     isPresent ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
@@ -204,7 +249,7 @@ export const StudentBehaviorModal: React.FC<StudentBehaviorModalProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setIsPresent(false)}
+                  onClick={() => handleAttendanceChange(false)}
                   className={`flex-1 py-1.5 font-bold text-center cursor-pointer transition-colors ${
                     !isPresent ? 'bg-rose-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
@@ -215,131 +260,184 @@ export const StudentBehaviorModal: React.FC<StudentBehaviorModalProps> = ({
             </div>
           </div>
 
-          {/* Daily Hygiene Checkmarks */}
-          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2">
-            <h5 className="font-bold text-slate-800 text-[11px] uppercase tracking-wider flex items-center gap-1.5">
-              <i className="fa-solid fa-sparkles text-amber-500"></i>
-              दैनिक स्वच्छता एवं वेशभूषा (Hygiene & Uniform)
-            </h5>
-            <div className="grid grid-cols-3 gap-2">
-              {/* Bathed */}
-              <button
-                type="button"
-                onClick={() => setIsBathed(!isBathed)}
-                className={`p-2 rounded-lg border text-center transition-all cursor-pointer ${
-                  isBathed ? 'bg-blue-50 border-blue-400 text-blue-900 font-bold' : 'bg-white border-slate-300 text-slate-500'
-                }`}
-              >
-                <i className={`fa-solid ${isBathed ? 'fa-circle-check text-blue-600' : 'fa-circle-xmark text-slate-400'} block text-base mb-1`}></i>
-                <span>स्नान (Bathed)</span>
-              </button>
+          {/* IF ABSENT: NO conduct fields should be shown or filled */}
+          {!isPresent ? (
+            <div className="space-y-3.5 animate-fadeIn">
+              <div className="bg-rose-50 border-2 border-rose-200 rounded-xl p-4 text-center space-y-2">
+                <div className="w-12 h-12 mx-auto rounded-full bg-rose-100 text-rose-600 flex items-center justify-center text-xl shadow-xs">
+                  <i className="fa-solid fa-user-xmark"></i>
+                </div>
+                <div>
+                  <h4 className="font-bold text-rose-950 text-sm">
+                    छात्र आज अनुपस्थित (Absent) है
+                  </h4>
+                  <p className="text-xs text-rose-700 max-w-sm mx-auto mt-1 leading-relaxed">
+                    छात्र अनुपस्थित होने के कारण विद्यालय आचरण, दैनिक स्वच्छता, ड्रेस, नाखून व अनुशासन का कोई भी विवरण नहीं भरा जाएगा। केवल अनुपस्थिति दर्ज की जाएगी।
+                  </p>
+                </div>
+              </div>
 
-              {/* Uniform */}
-              <button
-                type="button"
-                onClick={() => setUniformClean(!uniformClean)}
-                className={`p-2 rounded-lg border text-center transition-all cursor-pointer ${
-                  uniformClean ? 'bg-emerald-50 border-emerald-400 text-emerald-900 font-bold' : 'bg-white border-slate-300 text-slate-500'
-                }`}
-              >
-                <i className={`fa-solid ${uniformClean ? 'fa-shirt text-emerald-600' : 'fa-circle-xmark text-slate-400'} block text-base mb-1`}></i>
-                <span>साफ़ ड्रेस (Uniform)</span>
-              </button>
-
-              {/* Nails */}
-              <button
-                type="button"
-                onClick={() => setNailsClean(!nailsClean)}
-                className={`p-2 rounded-lg border text-center transition-all cursor-pointer ${
-                  nailsClean ? 'bg-indigo-50 border-indigo-400 text-indigo-900 font-bold' : 'bg-white border-slate-300 text-slate-500'
-                }`}
-              >
-                <i className={`fa-solid ${nailsClean ? 'fa-hand text-indigo-600' : 'fa-circle-xmark text-slate-400'} block text-base mb-1`}></i>
-                <span>साफ़ नाखून (Nails)</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Conduct & Discipline */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">शिष्टाचार (Good Manners):</label>
-              <select
-                value={goodManners}
-                onChange={(e) => setGoodManners(e.target.value)}
-                className="w-full px-3 py-1.5 rounded-lg border border-slate-300 text-xs focus:ring-1 focus:ring-blue-800 bg-white"
-              >
-                <option value="उत्कृष्ट (Excellent)">उत्कृष्ट (Excellent) ⭐⭐⭐</option>
-                <option value="अच्छा (Good)">अच्छा (Good) ⭐⭐</option>
-                <option value="संतोषजनक (Satisfactory)">संतोषजनक (Satisfactory)</option>
-                <option value="सुधार अपेक्षित (Needs Improvement)">सुधार अपेक्षित (Needs Improvement) ⚠️</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">अनुशासन (Discipline):</label>
-              <div className="flex rounded-lg overflow-hidden border border-slate-300">
-                <button
-                  type="button"
-                  onClick={() => setDiscipline(true)}
-                  className={`flex-1 py-1.5 font-bold text-center cursor-pointer transition-colors ${
-                    discipline ? 'bg-blue-800 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
-                >
-                  ✓ अनुशासित (Good)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDiscipline(false)}
-                  className={`flex-1 py-1.5 font-bold text-center cursor-pointer transition-colors ${
-                    !discipline ? 'bg-amber-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
-                >
-                  ✕ अनियंत्रित (Fault)
-                </button>
+              {/* Absence Reason / Remark (Optional) */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-semibold text-slate-700">
+                    अनुपस्थिति की टिप्पणी / कारण (Reason / Remark - Optional):
+                  </label>
+                  <span className="text-[10px] text-slate-400">क्लिक करके सीधे जोड़ें</span>
+                </div>
+                <input
+                  type="text"
+                  value={remark}
+                  onChange={(e) => setRemark(e.target.value)}
+                  placeholder="उदा. बुखार / बीमारी, पारिवारिक कार्य, बिना पूर्व सूचना अनुपस्थित..."
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs focus:ring-1 focus:ring-rose-800 bg-white outline-none"
+                />
+                <div className="flex flex-wrap gap-1 mt-1.5">
+                  {ABSENCE_QUICK_REMARKS.map((qr, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => setRemark(qr)}
+                      className="text-[10px] bg-rose-50 hover:bg-rose-100 text-rose-800 px-2 py-0.5 rounded-full border border-rose-200 transition-colors cursor-pointer text-left"
+                    >
+                      + {qr}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
-          </div>
+          ) : (
+            /* IF PRESENT: Only then conduct, hygiene, uniform, manners and discipline are filled */
+            <div className="space-y-4 animate-fadeIn">
+              {/* Daily Hygiene Checkmarks */}
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2">
+                <h5 className="font-bold text-slate-800 text-[11px] uppercase tracking-wider flex items-center gap-1.5">
+                  <i className="fa-solid fa-sparkles text-amber-500"></i>
+                  दैनिक स्वच्छता एवं वेशभूषा (Hygiene & Uniform)
+                </h5>
+                <div className="grid grid-cols-3 gap-2">
+                  {/* Bathed */}
+                  <button
+                    type="button"
+                    onClick={() => setIsBathed(!isBathed)}
+                    className={`p-2 rounded-lg border text-center transition-all cursor-pointer ${
+                      isBathed ? 'bg-blue-50 border-blue-400 text-blue-900 font-bold' : 'bg-white border-slate-300 text-slate-500'
+                    }`}
+                  >
+                    <i className={`fa-solid ${isBathed ? 'fa-circle-check text-blue-600' : 'fa-circle-xmark text-slate-400'} block text-base mb-1`}></i>
+                    <span>स्नान (Bathed)</span>
+                  </button>
 
-          {/* Remark & Quick Chips */}
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="font-semibold text-slate-700">शिक्षक टिप्पणी / रिमार्क (Teacher Remark):</label>
-              <span className="text-[10px] text-slate-400">क्लिक करके सीधे जोड़ें</span>
+                  {/* Uniform */}
+                  <button
+                    type="button"
+                    onClick={() => setUniformClean(!uniformClean)}
+                    className={`p-2 rounded-lg border text-center transition-all cursor-pointer ${
+                      uniformClean ? 'bg-emerald-50 border-emerald-400 text-emerald-900 font-bold' : 'bg-white border-slate-300 text-slate-500'
+                    }`}
+                  >
+                    <i className={`fa-solid ${uniformClean ? 'fa-shirt text-emerald-600' : 'fa-circle-xmark text-slate-400'} block text-base mb-1`}></i>
+                    <span>साफ़ ड्रेस (Uniform)</span>
+                  </button>
+
+                  {/* Nails */}
+                  <button
+                    type="button"
+                    onClick={() => setNailsClean(!nailsClean)}
+                    className={`p-2 rounded-lg border text-center transition-all cursor-pointer ${
+                      nailsClean ? 'bg-indigo-50 border-indigo-400 text-indigo-900 font-bold' : 'bg-white border-slate-300 text-slate-500'
+                    }`}
+                  >
+                    <i className={`fa-solid ${nailsClean ? 'fa-hand text-indigo-600' : 'fa-circle-xmark text-slate-400'} block text-base mb-1`}></i>
+                    <span>साफ़ नाखून (Nails)</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Conduct & Discipline */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">शिष्टाचार (Good Manners):</label>
+                  <select
+                    value={goodManners}
+                    onChange={(e) => setGoodManners(e.target.value)}
+                    className="w-full px-3 py-1.5 rounded-lg border border-slate-300 text-xs focus:ring-1 focus:ring-blue-800 bg-white"
+                  >
+                    <option value="उत्कृष्ट (Excellent)">उत्कृष्ट (Excellent) ⭐⭐⭐</option>
+                    <option value="अच्छा (Good)">अच्छा (Good) ⭐⭐</option>
+                    <option value="संतोषजनक (Satisfactory)">संतोषजनक (Satisfactory)</option>
+                    <option value="सुधार अपेक्षित (Needs Improvement)">सुधार अपेक्षित (Needs Improvement) ⚠️</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">अनुशासन (Discipline):</label>
+                  <div className="flex rounded-lg overflow-hidden border border-slate-300">
+                    <button
+                      type="button"
+                      onClick={() => setDiscipline(true)}
+                      className={`flex-1 py-1.5 font-bold text-center cursor-pointer transition-colors ${
+                        discipline ? 'bg-blue-800 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      ✓ अनुशासित (Good)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDiscipline(false)}
+                      className={`flex-1 py-1.5 font-bold text-center cursor-pointer transition-colors ${
+                        !discipline ? 'bg-amber-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      ✕ अनियंत्रित (Fault)
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Remark & Quick Chips */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-semibold text-slate-700">शिक्षक टिप्पणी / रिमार्क (Teacher Remark):</label>
+                  <span className="text-[10px] text-slate-400">क्लिक करके सीधे जोड़ें</span>
+                </div>
+                <textarea
+                  rows={2}
+                  value={remark}
+                  onChange={(e) => setRemark(e.target.value)}
+                  placeholder="छात्र के आचरण, पढ़ाई या अनुशासन पर अपनी टिप्पणी दर्ज करें..."
+                  className="w-full p-2 rounded-lg border border-slate-300 text-xs focus:ring-1 focus:ring-blue-800 bg-white outline-none"
+                />
+                {/* Quick remark chips */}
+                <div className="flex flex-wrap gap-1 mt-1.5">
+                  {QUICK_REMARKS.map((qr, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => setRemark(qr)}
+                      className="text-[10px] bg-slate-100 hover:bg-amber-100 text-slate-700 hover:text-slate-900 px-2 py-0.5 rounded-full border border-slate-200 transition-colors cursor-pointer text-left"
+                    >
+                      + {qr}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
-            <textarea
-              rows={2}
-              value={remark}
-              onChange={(e) => setRemark(e.target.value)}
-              placeholder="छात्र के आचरण, पढ़ाई या अनुशासन पर अपनी टिप्पणी दर्ज करें..."
-              className="w-full p-2 rounded-lg border border-slate-300 text-xs focus:ring-1 focus:ring-blue-800 bg-white outline-none"
-            />
-            {/* Quick remark chips */}
-            <div className="flex flex-wrap gap-1 mt-1.5">
-              {QUICK_REMARKS.map((qr, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => setRemark(qr)}
-                  className="text-[10px] bg-slate-100 hover:bg-amber-100 text-slate-700 hover:text-slate-900 px-2 py-0.5 rounded-full border border-slate-200 transition-colors cursor-pointer text-left"
-                >
-                  + {qr}
-                </button>
-              ))}
-            </div>
-          </div>
+          )}
 
           {/* WhatsApp Toggle */}
           {student.Parent_Mobile && (
-            <div className="bg-emerald-50 border border-emerald-200 p-2.5 rounded-xl flex items-center justify-between">
+            <div className={`p-2.5 rounded-xl flex items-center justify-between border ${
+              !isPresent ? 'bg-rose-50 border-rose-200' : 'bg-emerald-50 border-emerald-200'
+            }`}>
               <div className="flex items-center gap-2">
-                <i className="fa-brands fa-whatsapp text-emerald-600 text-base"></i>
+                <i className={`fa-brands fa-whatsapp text-base ${!isPresent ? 'text-rose-600' : 'text-emerald-600'}`}></i>
                 <div>
-                  <span className="font-bold text-emerald-950 text-[11px] block">
-                    अभिभावक को WhatsApp पर सूचना भेजें
+                  <span className={`font-bold text-[11px] block ${!isPresent ? 'text-rose-950' : 'text-emerald-950'}`}>
+                    {!isPresent ? 'अभिभावक को WhatsApp पर अनुपस्थिति की सूचना भेजें' : 'अभिभावक को WhatsApp पर आचरण रिपोर्ट भेजें'}
                   </span>
-                  <span className="text-[10px] text-emerald-800">
-                    मोबाइल: {student.Parent_Mobile} पर रिपोर्ट ऑटोमैटिक तैयार होगी
+                  <span className={`text-[10px] ${!isPresent ? 'text-rose-800' : 'text-emerald-800'}`}>
+                    मोबाइल: {student.Parent_Mobile} पर संदेश भेजा जाएगा
                   </span>
                 </div>
               </div>
@@ -347,7 +445,7 @@ export const StudentBehaviorModal: React.FC<StudentBehaviorModalProps> = ({
                 type="checkbox"
                 checked={sendWhatsApp}
                 onChange={(e) => setSendWhatsApp(e.target.checked)}
-                className="w-4 h-4 text-emerald-600 rounded cursor-pointer"
+                className={`w-4 h-4 rounded cursor-pointer ${!isPresent ? 'accent-rose-600' : 'text-emerald-600'}`}
               />
             </div>
           )}
@@ -364,17 +462,26 @@ export const StudentBehaviorModal: React.FC<StudentBehaviorModalProps> = ({
             <button
               type="submit"
               disabled={isSaving}
-              className="px-5 py-2 rounded-lg bg-[#0c2340] text-amber-300 hover:bg-blue-950 font-bold shadow-md transition-all cursor-pointer flex items-center gap-2 disabled:opacity-50"
+              className={`px-5 py-2 rounded-lg font-bold shadow-md transition-all cursor-pointer flex items-center gap-2 disabled:opacity-50 ${
+                !isPresent
+                  ? 'bg-rose-700 text-white hover:bg-rose-800'
+                  : 'bg-[#0c2340] text-amber-300 hover:bg-blue-950'
+              }`}
             >
               {saveSuccess ? (
                 <>
-                  <i className="fa-solid fa-circle-check text-emerald-400"></i>
+                  <i className="fa-solid fa-circle-check text-emerald-300"></i>
                   <span>सफलतापूर्वक दर्ज हुआ!</span>
                 </>
               ) : isSaving ? (
                 <>
                   <i className="fa-solid fa-spinner fa-spin"></i>
                   <span>सहेज रहे हैं...</span>
+                </>
+              ) : !isPresent ? (
+                <>
+                  <i className="fa-solid fa-user-xmark"></i>
+                  <span>अनुपस्थिति दर्ज करें</span>
                 </>
               ) : (
                 <>

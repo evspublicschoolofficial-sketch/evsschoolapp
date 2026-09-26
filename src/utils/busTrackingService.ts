@@ -552,10 +552,56 @@ function doPost(e) {
           row.push("");
         }
       }
-      sheet.appendRow(row);
+      // Find the first empty row based on Student_ID (column 1)
+      // to avoid jumping past empty rows with residual formatting or dragged formulas
+      var targetRow = -1;
+      var currentLastRow = sheet.getLastRow();
+      if (currentLastRow > 1) {
+        var idValues = sheet.getRange(1, 1, currentLastRow, 1).getValues();
+        for (var r = 1; r < idValues.length; r++) { // skip header at index 0
+          var idVal = String(idValues[r][0] || "").trim();
+          if (!idVal) {
+            targetRow = r + 1; // 1-based index
+            break;
+          }
+        }
+      }
+      if (targetRow === -1) {
+        targetRow = currentLastRow === 0 ? 2 : currentLastRow + 1;
+      }
+      sheet.getRange(targetRow, 1, 1, row.length).setValues([row]);
       return ContentService.createTextOutput(JSON.stringify({
         status: "success",
         message: "Student added successfully to Students sheet!",
+        student_id: studentId,
+        row_number: targetRow
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 7. DELETE STUDENT
+    if (action === "deleteStudent") {
+      var sheet = ss.getSheetByName("Students");
+      if (!sheet) {
+        return ContentService.createTextOutput(JSON.stringify({
+          status: "error",
+          message: "Students sheet not found"
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
+      var studentId = String(data.student_id || data.studentId || "").trim();
+      var deleted = false;
+      var curRows = sheet.getLastRow();
+      if (studentId && curRows > 1) {
+        var idCol = sheet.getRange(1, 1, curRows, 1).getValues();
+        for (var i = curRows - 1; i >= 1; i--) {
+          if (String(idCol[i][0] || "").trim().toLowerCase() === studentId.toLowerCase()) {
+            sheet.deleteRow(i + 1);
+            deleted = true;
+          }
+        }
+      }
+      return ContentService.createTextOutput(JSON.stringify({
+        status: deleted ? "success" : "not_found",
+        message: deleted ? "Student deleted from sheet" : "Student not found in sheet",
         student_id: studentId
       })).setMimeType(ContentService.MimeType.JSON);
     }

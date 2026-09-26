@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import QRCode from 'qrcode';
 import {
   ResponsiveContainer,
@@ -1025,15 +1025,7 @@ const HomeworkMediaCard: React.FC<HomeworkMediaCardProps> = ({ item, onOpen }) =
 type TabType = 'home' | 'parent' | 'teacher' | 'manager' | 'driver';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<TabType>(() => {
-    try {
-      const saved = localStorage.getItem('evs_active_tab');
-      if (saved && ['home', 'parent', 'teacher', 'manager', 'driver'].includes(saved)) {
-        return saved as TabType;
-      }
-    } catch {}
-    return 'home';
-  });
+  const [activeTab, setActiveTab] = useState<TabType>('home');
 
   // Persist activeTab so when user re-opens the app or browser, it opens exactly where they were
   useEffect(() => {
@@ -1138,6 +1130,7 @@ export default function App() {
   }, [parentLoggedIn, selectedStudent, parentChildren, parentMobileInput]);
 
   const [parentSearchAttempted, setParentSearchAttempted] = useState<boolean>(false);
+  const [parentLoginSubmitting, setParentLoginSubmitting] = useState<boolean>(false);
   const [manualLinkOpen, setManualLinkOpen] = useState<boolean>(false);
   const [manualLinkInput, setManualLinkInput] = useState<string>('');
   const [manualLinkError, setManualLinkError] = useState<string | null>(null);
@@ -1146,6 +1139,12 @@ export default function App() {
   const [hwDaysFilter, setHwDaysFilter] = useState<'latest' | 'all'>('latest');
   const [parentActiveSection, setParentActiveSection] = useState<'overview' | 'homework' | 'tracker' | 'behavior' | 'fees' | 'profile'>('overview');
   const [trackerStatusFilter, setTrackerStatusFilter] = useState<'all' | 'completed' | 'incompleted'>('all');
+
+  // AI Daily Greeting & Activity Summary for Parent Portal
+  const [aiGreeting, setAiGreeting] = useState<string>('');
+  const [aiGreetingLoading, setAiGreetingLoading] = useState<boolean>(false);
+  const [isAiGenerated, setIsAiGenerated] = useState<boolean>(false);
+  const greetingCacheRef = useRef<Record<string, string>>({});
 
   // Custom student photos persisted in localStorage
   const [customPhotos, setCustomPhotos] = useState<Record<string, string>>(() => {
@@ -1282,6 +1281,19 @@ export default function App() {
       return null;
     }
   });
+
+  // Strict role isolation: only the authenticated user can access their role's section
+  useEffect(() => {
+    if (parentLoggedIn && selectedStudent) {
+      if (activeTab !== 'parent') {
+        setActiveTab('parent');
+      }
+    } else if (teacherUser && !managerUser) {
+      if (activeTab !== 'teacher') {
+        setActiveTab('teacher');
+      }
+    }
+  }, [parentLoggedIn, selectedStudent, teacherUser, managerUser, activeTab]);
   const [teacherLoginInput, setTeacherLoginInput] = useState<string>('');
   const [teacherPasswordInput, setTeacherPasswordInput] = useState<string>('');
   const [teacherLoginError, setTeacherLoginError] = useState<string | null>(null);
@@ -2083,68 +2095,29 @@ export default function App() {
     return `${elapsedHours}h पहले`;
   };
 
-  // Manager: Handle Add Student with optimistic UI, local persistence and dual-channel Google Sheet sync
-  const handleStudentAdded = async (newStudent: Student, sendWhatsApp = false) => {
-    // 1. Tag student as custom and locally stored
-    const customStudent: Student = {
-      ...newStudent,
-      _isCustom: true,
-      _createdAt: new Date().toISOString(),
-      _sheetSynced: false,
-    } as any;
-
-    // 2. Persist in evs_custom_students so it is NEVER lost on page reload or GViz background fetch
-    try {
-      const saved = localStorage.getItem('evs_custom_students');
-      const list: Student[] = saved ? JSON.parse(saved) : [];
-      const updatedList = [
-        customStudent,
-        ...list.filter(
-          (s) => String(s.Student_ID).toLowerCase().trim() !== String(newStudent.Student_ID).toLowerCase().trim()
-        ),
-      ];
-      localStorage.setItem('evs_custom_students', JSON.stringify(updatedList));
-    } catch (e) {
-      console.warn('Error saving custom students list:', e);
-    }
-
-    // 3. Optimistically update local students state and CACHE_KEY_STUDENTS
-    setStudents((prev) => {
-      const filtered = prev.filter(
-        (s) => String(s.Student_ID).toLowerCase().trim() !== String(newStudent.Student_ID).toLowerCase().trim()
-      );
-      const updated = [customStudent, ...filtered];
-      try {
-        localStorage.setItem(CACHE_KEY_STUDENTS, JSON.stringify(updated));
-      } catch (e) {
-        console.warn('Error saving added student to cache:', e);
-      }
-      return updated;
-    });
-
-    setStudentNotificationSuccess(`छात्र ${newStudent.Student_Name} (${newStudent.Admission_Number || newStudent.Student_ID}) पोर्टल में सुरक्षित हो गया है! Google Sheet में सिंक किया जा रहा है...`);
-
-    // 4. Dual-channel sync to Google Sheet: Primary via /api/forward-apps-script (avoids CORS) and secondary direct Apps Script fetch
+  // Sync a single student to Google Sheet
+  const syncStudentToSheet = async (studentToSync: Student): Promise<{ success: boolean; error?: string }> => {
     const payload = {
+      appsScriptUrl: getEffectiveApiUrl(),
       action: 'addStudent',
-      student_id: newStudent.Student_ID,
-      admission_number: newStudent.Admission_Number,
-      roll_number: newStudent.Roll_Number,
-      student_name: newStudent.Student_Name,
-      class: newStudent.Class,
-      father_name: newStudent.Father_Name,
-      mother_name: newStudent.Mother_Name,
-      parent_mobile: newStudent.Parent_Mobile,
-      village: newStudent['Village/rRoute'] || newStudent.Village || '',
-      village_route: newStudent['Village/rRoute'] || newStudent.Village || '',
-      student_photo: newStudent.Student_Photo || '',
-      balance_amount: newStudent.Balance_Amount || 0,
+      student_id: studentToSync.Student_ID,
+      admission_number: studentToSync.Admission_Number,
+      roll_number: studentToSync.Roll_Number,
+      student_name: studentToSync.Student_Name,
+      class: studentToSync.Class,
+      father_name: studentToSync.Father_Name,
+      mother_name: studentToSync.Mother_Name,
+      parent_mobile: studentToSync.Parent_Mobile,
+      village: studentToSync['Village/rRoute'] || studentToSync.Village || '',
+      village_route: studentToSync['Village/rRoute'] || studentToSync.Village || '',
+      student_photo: studentToSync.Student_Photo || '',
+      balance_amount: studentToSync.Balance_Amount || 0,
     };
 
     let syncSuccess = false;
     let syncErrorDetail = '';
 
-    // Step A: Try server proxy endpoint
+    // Step A: Primary via server proxy (avoids CORS restrictions)
     try {
       const proxyRes = await fetch('/api/forward-apps-script', {
         method: 'POST',
@@ -2187,21 +2160,97 @@ export default function App() {
     }
 
     if (syncSuccess) {
-      // Mark as sheet synced in evs_custom_students
+      // Mark as sheet synced in state and storage
+      setStudents((prev) =>
+        prev.map((st) =>
+          String(st.Student_ID).toLowerCase().trim() === String(studentToSync.Student_ID).toLowerCase().trim()
+            ? { ...st, _sheetSynced: true }
+            : st
+        )
+      );
       try {
         const saved = localStorage.getItem('evs_custom_students');
         if (saved) {
           const list: any[] = JSON.parse(saved);
           const updated = list.map((st) =>
-            String(st.Student_ID).toLowerCase().trim() === String(newStudent.Student_ID).toLowerCase().trim()
+            String(st.Student_ID).toLowerCase().trim() === String(studentToSync.Student_ID).toLowerCase().trim()
               ? { ...st, _sheetSynced: true }
               : st
           );
           localStorage.setItem('evs_custom_students', JSON.stringify(updated));
         }
       } catch {}
+      // Refresh students silently in background to pull the latest sheet data
+      setTimeout(() => fetchStudents(true), 1500);
+    }
 
-      setStudentNotificationSuccess(`✅ छात्र ${newStudent.Student_Name} (${newStudent.Admission_Number || newStudent.Student_ID}) Google Sheet व पोर्टल में सफलतापूर्वक जुड़ गया है!`);
+    return { success: syncSuccess, error: syncErrorDetail };
+  };
+
+  // Sync all pending unsynced custom students
+  const syncAllPendingStudentsToSheet = async () => {
+    const pending = students.filter((s) => (s as any)._isCustom && !(s as any)._sheetSynced);
+    if (pending.length === 0) {
+      setStudentNotificationSuccess('सभी छात्र पहले से ही Google Sheet से सिंक हैं!');
+      setTimeout(() => setStudentNotificationSuccess(null), 3500);
+      return;
+    }
+    setStudentNotificationSuccess(`${pending.length} लंबित छात्रों को Google Sheet में सिंक किया जा रहा है...`);
+    let successCount = 0;
+    for (const st of pending) {
+      const res = await syncStudentToSheet(st);
+      if (res.success) successCount++;
+    }
+    setStudentNotificationSuccess(`✅ ${successCount}/${pending.length} छात्र Google Sheet ('Students' टैब) में सिंक हो गए!`);
+    setTimeout(() => setStudentNotificationSuccess(null), 5000);
+  };
+
+  // Manager: Handle Add Student with optimistic UI, local persistence and dual-channel Google Sheet sync
+  const handleStudentAdded = async (newStudent: Student, sendWhatsApp = false): Promise<{ success: boolean; error?: string }> => {
+    // 1. Tag student as custom and locally stored
+    const customStudent: Student = {
+      ...newStudent,
+      _isCustom: true,
+      _createdAt: new Date().toISOString(),
+      _sheetSynced: false,
+    } as any;
+
+    // 2. Persist in evs_custom_students so it is NEVER lost on page reload or GViz background fetch
+    try {
+      const saved = localStorage.getItem('evs_custom_students');
+      const list: Student[] = saved ? JSON.parse(saved) : [];
+      const updatedList = [
+        customStudent,
+        ...list.filter(
+          (s) => String(s.Student_ID).toLowerCase().trim() !== String(newStudent.Student_ID).toLowerCase().trim()
+        ),
+      ];
+      localStorage.setItem('evs_custom_students', JSON.stringify(updatedList));
+    } catch (e) {
+      console.warn('Error saving custom students list:', e);
+    }
+
+    // 3. Optimistically update local students state and CACHE_KEY_STUDENTS
+    setStudents((prev) => {
+      const filtered = prev.filter(
+        (s) => String(s.Student_ID).toLowerCase().trim() !== String(newStudent.Student_ID).toLowerCase().trim()
+      );
+      const updated = [customStudent, ...filtered];
+      try {
+        localStorage.setItem(CACHE_KEY_STUDENTS, JSON.stringify(updated));
+      } catch (e) {
+        console.warn('Error saving added student to cache:', e);
+      }
+      return updated;
+    });
+
+    setStudentNotificationSuccess(`छात्र ${newStudent.Student_Name} (${newStudent.Admission_Number || newStudent.Student_ID}) पोर्टल में सुरक्षित हो गया है! Google Sheet में सिंक किया जा रहा है...`);
+
+    // 4. Sync to Google Sheet via syncStudentToSheet
+    const syncResult = await syncStudentToSheet(customStudent);
+
+    if (syncResult.success) {
+      setStudentNotificationSuccess(`✅ छात्र ${newStudent.Student_Name} (${newStudent.Admission_Number || newStudent.Student_ID}) Google Sheet ('Students' टैब) व पोर्टल में सफलतापूर्वक जुड़ गया है!`);
       setTimeout(() => setStudentNotificationSuccess(null), 5000);
     } else {
       setStudentNotificationSuccess(
@@ -2232,6 +2281,60 @@ export default function App() {
         : `https://wa.me/?text=${encoded}`;
       window.open(waUrl, '_blank');
     }
+
+    return syncResult;
+  };
+
+  // Manager: Delete student from portal and Google Sheet
+  const handleDeleteStudent = async (studentId: string, studentName: string): Promise<boolean> => {
+    const sId = String(studentId || '').trim();
+    if (!sId) return false;
+
+    // 1. Remove from local students state
+    setStudents((prev) => {
+      const updated = prev.filter((s) => String(s.Student_ID || '').trim().toLowerCase() !== sId.toLowerCase());
+      try {
+        localStorage.setItem(CACHE_KEY_STUDENTS, JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
+    // 2. Remove from evs_custom_students in localStorage
+    try {
+      const saved = localStorage.getItem('evs_custom_students');
+      if (saved) {
+        const list: any[] = JSON.parse(saved);
+        const filtered = list.filter((s) => String(s.Student_ID || '').trim().toLowerCase() !== sId.toLowerCase());
+        localStorage.setItem('evs_custom_students', JSON.stringify(filtered));
+      }
+    } catch {}
+
+    // 3. Clear selected student modal if open
+    setSelectedStudentDetail((prev) => {
+      if (prev && String(prev.Student_ID || '').trim().toLowerCase() === sId.toLowerCase()) {
+        return null;
+      }
+      return prev;
+    });
+
+    // 4. Forward delete request to Google Apps Script
+    try {
+      await fetch('/api/forward-apps-script', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'deleteStudent',
+          student_id: sId,
+          appsScriptUrl: getEffectiveApiUrl(),
+        }),
+      });
+    } catch (err) {
+      console.warn('Could not forward delete request to Google Apps Script:', err);
+    }
+
+    setStudentNotificationSuccess(`छात्र "${studentName || sId}" को पोर्टल से हटा दिया गया!`);
+    setTimeout(() => setStudentNotificationSuccess(null), 4000);
+    return true;
   };
 
   // Initial load - Stale While Revalidate background sync
@@ -2273,23 +2376,39 @@ export default function App() {
   };
 
   // Parent Portal: Handle Mobile / Student Lookup (Supports Multiple Children)
-  const handleParentLogin = (e?: React.FormEvent, customQuery?: string) => {
+  const handleParentLogin = async (e?: React.FormEvent, customQuery?: string) => {
     if (e) e.preventDefault();
     setParentSearchAttempted(true);
+    setParentLoginSubmitting(true);
 
     const query = (customQuery !== undefined ? customQuery : parentMobileInput).trim();
     const cleanDigits = query.replace(/\D/g, '');
     const cleanLower = query.toLowerCase();
 
     if (!cleanDigits && !cleanLower) {
+      setParentLoginSubmitting(false);
       return;
     }
+
+    if (!students || students.length === 0) {
+      setLoadingStudents(true);
+      try {
+        await fetchStudents();
+      } catch (err) {
+        console.error('Error fetching students:', err);
+      } finally {
+        setLoadingStudents(false);
+      }
+    }
+
+    const currentCached = getCachedData<Student[]>(CACHE_KEY_STUDENTS, students);
+    const studentData = currentCached && currentCached.length > 0 ? currentCached : students;
 
     // 1. Search by registered Parent_Mobile (finds all siblings enrolled under this mobile)
     let matched: Student[] = [];
     if (cleanDigits.length >= 4) {
-      matched = students.filter((s) => {
-        const rawMobile = String(s.Parent_Mobile || '').replace(/\D/g, '');
+      matched = studentData.filter((s) => {
+        const rawMobile = String(s.Parent_Mobile || s.Mobile || '').replace(/\D/g, '');
         return (
           rawMobile === cleanDigits ||
           (rawMobile.length >= 10 && rawMobile.endsWith(cleanDigits)) ||
@@ -2300,7 +2419,7 @@ export default function App() {
 
     // 2. If no mobile match, check if input matches Student_ID or Admission_Number
     if (matched.length === 0) {
-      const byIdOrAdm = students.filter((s) => {
+      const byIdOrAdm = studentData.filter((s) => {
         const sId = String(s.Student_ID || '').trim().toLowerCase();
         const adm = String(s.Admission_Number || '').trim().toLowerCase();
         return sId === cleanLower || adm === cleanLower;
@@ -2310,7 +2429,7 @@ export default function App() {
         // If matched by Student ID/Admission number, also lookup siblings sharing the same Parent_Mobile
         const primaryMobile = String(byIdOrAdm[0].Parent_Mobile || '').replace(/\D/g, '');
         if (primaryMobile && primaryMobile.length >= 10) {
-          const siblings = students.filter((s) => {
+          const siblings = studentData.filter((s) => {
             const rawMobile = String(s.Parent_Mobile || '').replace(/\D/g, '');
             return (
               rawMobile === primaryMobile ||
@@ -2325,11 +2444,17 @@ export default function App() {
       }
     }
 
+    setParentLoginSubmitting(false);
+
     if (matched.length > 0) {
       setParentChildren(matched);
       setSelectedStudent(matched[0]);
       setParentLoggedIn(true);
       setParentSearchAttempted(false);
+      try {
+        localStorage.setItem('evs_parent_logged_in', 'true');
+        localStorage.setItem('evs_parent_mobile', query);
+      } catch {}
     } else {
       setParentChildren([]);
       setSelectedStudent(null);
@@ -2389,6 +2514,11 @@ export default function App() {
     setManualLinkOpen(false);
     setManualLinkError(null);
     setManualLinkSuccess(null);
+    try {
+      localStorage.removeItem('evs_parent_logged_in');
+      localStorage.removeItem('evs_parent_mobile');
+    } catch {}
+    setActiveTab('home');
   };
 
   // Parent Portal: Strict Class Homework filtered for the Last 3 Days
@@ -2596,6 +2726,78 @@ export default function App() {
     return studentBehaviorRecords.length > 0 ? studentBehaviorRecords[0] : null;
   }, [studentBehaviorRecords]);
 
+  // AI Daily Greeting & Activity Summary for Parent Portal
+  useEffect(() => {
+    if (!parentLoggedIn || !selectedStudent) return;
+
+    const sName = selectedStudent.Student_Name || 'छात्र';
+    const sId = selectedStudent.Student_ID || sName;
+    const isAbsent = Boolean(latestBehaviorRecord && !latestBehaviorRecord.Is_Present);
+    const hwCount = parentHomework.length;
+    const hwSubjects = Array.from(new Set(parentHomework.map((h) => h.Subject).filter(Boolean))).join(', ');
+    const recordDate = latestBehaviorRecord?.Date || new Date().toISOString().split('T')[0];
+    const remark = latestBehaviorRecord?.Remark || '';
+    const cacheKey = `${sId}_${recordDate}_${isAbsent}_${hwCount}_${remark}`;
+
+    // If already generated/cached, use immediately and don't re-fetch
+    if (greetingCacheRef.current[cacheKey]) {
+      setAiGreeting(greetingCacheRef.current[cacheKey]);
+      setIsAiGenerated(true);
+      setAiGreetingLoading(false);
+      return;
+    }
+
+    // Instant smart rule-based greeting in pure Hindi
+    let localGreeting = '';
+    if (isAbsent) {
+      localGreeting = `नमस्ते! आज ${sName} विद्यालय में उपस्थित नहीं था। आशा है सब सकुशल है। छूटी हुई पढ़ाई व गृहकार्य का विवरण नीचे गृहकार्य अनुभाग में देखें।`;
+    } else if (latestBehaviorRecord) {
+      localGreeting = `नमस्ते! आज ${sName} विद्यालय में उपस्थित रहा और कक्षा में अनुशासित आचरण प्रदर्शित किया। ${
+        remark && !remark.toLowerCase().includes('fault') ? `शिक्षक टिप्पणी: "${remark}"। ` : ''
+      }${hwCount > 0 ? `आज ${hwSubjects || `${hwCount} विषयों`} का गृहकार्य दिया गया है, कृपया शाम को समय पर पूरा करवाएं।` : 'दैनिक गृहकार्य व उपस्थिति नीचे उपलब्ध है।'}`;
+    } else {
+      localGreeting = `नमस्ते! ${sName} की आज की दैनिक विद्यालय गतिविधियां नीचे प्रस्तुत हैं। दैनिक उपस्थिति, गृहकार्य व शिक्षक की टिप्पणी नीचे काम की चीजों में देख सकते हैं।`;
+    }
+
+    setAiGreeting(localGreeting);
+    setIsAiGenerated(false);
+
+    // Call server Gemini API with fallback for personalized daily AI briefing
+    const controller = new AbortController();
+    setAiGreetingLoading(true);
+
+    fetch('/api/ai-student-greeting', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        studentName: sName,
+        attendanceStatus: latestBehaviorRecord?.Is_Present ? 'उपस्थित (Present)' : 'उपस्थित',
+        isAbsent,
+        homeworkSummary: hwCount > 0 ? `${hwCount} विषयों (${hwSubjects}) का कार्य` : '',
+        behaviorSummary: latestBehaviorRecord?.Good_Manners || (latestBehaviorRecord?.Discipline ? 'उत्कृष्ट' : ''),
+        teacherRemark: remark,
+        date: recordDate,
+      }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.greeting) {
+          greetingCacheRef.current[cacheKey] = data.greeting;
+          setAiGreeting(data.greeting);
+          setIsAiGenerated(true);
+        }
+      })
+      .catch(() => {
+        // Fallback to local greeting (already set)
+      })
+      .finally(() => {
+        setAiGreetingLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [selectedStudent?.Student_ID, selectedStudent?.Student_Name, parentLoggedIn, latestBehaviorRecord?.Date, latestBehaviorRecord?.Is_Present, latestBehaviorRecord?.Remark, parentHomework.length]);
+
   // Filtered Behavior Records by date (STRICTLY for active student)
   const filteredBehaviorRecords = useMemo(() => {
     const list = studentBehaviorRecords;
@@ -2619,22 +2821,24 @@ export default function App() {
       return { total: 0, presentCount: 0, bathedCount: 0, nailsCount: 0, uniformCount: 0, disciplineCount: 0, avgScore: 0 };
     }
     const presentCount = list.filter((b) => b.Is_Present).length;
-    const bathedCount = list.filter((b) => b.Is_Bathed).length;
-    const nailsCount = list.filter((b) => b.Nails_Clean).length;
-    const uniformCount = list.filter((b) => b.Uniform_clean).length;
-    const disciplineCount = list.filter((b) => b.Discipline).length;
+    const bathedCount = list.filter((b) => b.Is_Present && b.Is_Bathed).length;
+    const nailsCount = list.filter((b) => b.Is_Present && b.Nails_Clean).length;
+    const uniformCount = list.filter((b) => b.Is_Present && b.Uniform_clean).length;
+    const disciplineCount = list.filter((b) => b.Is_Present && b.Discipline).length;
 
-    const totalPoints = list.reduce((acc, b) => {
-      let pts = 0;
-      if (b.Is_Present) pts++;
-      if (b.Is_Bathed) pts++;
-      if (b.Nails_Clean) pts++;
-      if (b.Uniform_clean) pts++;
-      if (b.Discipline) pts++;
-      return acc + pts;
-    }, 0);
-
-    const avgScore = Math.round((totalPoints / (total * 5)) * 100);
+    const presentRecs = list.filter((b) => b.Is_Present);
+    let avgScore = 0;
+    if (presentRecs.length > 0) {
+      const totalPoints = presentRecs.reduce((acc, b) => {
+        let pts = 1; // 1 pt for being present
+        if (b.Is_Bathed) pts++;
+        if (b.Nails_Clean) pts++;
+        if (b.Uniform_clean) pts++;
+        if (b.Discipline) pts++;
+        return acc + pts;
+      }, 0);
+      avgScore = Math.round((totalPoints / (presentRecs.length * 5)) * 100);
+    }
 
     return { total, presentCount, bathedCount, nailsCount, uniformCount, disciplineCount, avgScore };
   }, [studentBehaviorRecords]);
@@ -2794,15 +2998,30 @@ export default function App() {
     const studentName = selectedStudent?.Student_Name || 'Student';
     const className = getClassName(rec.Class || selectedStudent?.Class);
 
-    let pts = 0;
-    if (rec.Is_Present) pts++;
-    if (rec.Is_Bathed) pts++;
-    if (rec.Nails_Clean) pts++;
-    if (rec.Uniform_clean) pts++;
-    if (rec.Discipline) pts++;
-    const stars = '⭐'.repeat(pts) + '☆'.repeat(5 - pts);
+    let message = '';
+    if (!rec.Is_Present) {
+      message = `*E.V.S. PUBLIC SCHOOL*
+*📢 DAILY ATTENDANCE ALERT (छात्र अनुपस्थिति सूचना)*
+----------------------------------------
+👤 *Student:* ${studentName} (${rec.Student_ID})
+🏫 *Class:* ${className}
+📅 *Date:* ${rec.Date}
+----------------------------------------
+📍 *Attendance:* ❌ अनुपस्थित (Absent)
+ℹ️ *Status:* छात्र आज विद्यालय में उपस्थित नहीं हुआ है। अतः विद्यालय आचरण व स्वच्छता मूल्यांकन लागू नहीं है।
+${rec.Remark ? `📝 *Teacher Remark / Note:* ${rec.Remark}\n` : ''}💡 *Guidance:* ${getBehaviorFeedback(rec)}
+----------------------------------------
+_E.V.S. Public School - Striving for Character & Academic Excellence_`;
+    } else {
+      let pts = 0;
+      if (rec.Is_Present) pts++;
+      if (rec.Is_Bathed) pts++;
+      if (rec.Nails_Clean) pts++;
+      if (rec.Uniform_clean) pts++;
+      if (rec.Discipline) pts++;
+      const stars = '⭐'.repeat(pts) + '☆'.repeat(5 - pts);
 
-    const message = `*E.V.S. PUBLIC SCHOOL*
+      message = `*E.V.S. PUBLIC SCHOOL*
 *📋 DAILY STUDENT BEHAVIOR & HYGIENE REPORT*
 ----------------------------------------
 👤 *Student:* ${studentName} (${rec.Student_ID})
@@ -2810,7 +3029,7 @@ export default function App() {
 📅 *Date:* ${rec.Date}
 🏆 *Overall Score:* ${pts}/5 (${pts * 20}%) ${stars}
 ----------------------------------------
-📍 *Attendance:* ${rec.Is_Present ? '✅ Present (उपस्थित)' : '❌ Absent (अनुपस्थित)'}
+📍 *Attendance:* ✅ Present (उपस्थित)
 🚿 *Bathing / Snan:* ${rec.Is_Bathed ? '✅ Bathed (नहा कर आए)' : '❌ Not Bathed (स्नान नहीं किया)'}
 💅 *Nails Cleanliness:* ${rec.Nails_Clean ? '✅ Clean & Trimmed' : '❌ Needs Trimming/Dirty'}
 👔 *School Uniform:* ${rec.Uniform_clean ? '✅ Clean & Proper' : '❌ Incomplete / Unclean'}
@@ -2820,6 +3039,7 @@ export default function App() {
 💡 *Guidance:* ${getBehaviorFeedback(rec)}
 ----------------------------------------
 _E.V.S. Public School - Striving for Character & Academic Excellence_`;
+    }
 
     if (navigator.clipboard) {
       navigator.clipboard.writeText(message);
@@ -3085,6 +3305,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     } catch (err) {
       console.warn('LocalStorage error:', err);
     }
+    setActiveTab('home');
   };
 
   // Teacher Authentication Handler
@@ -3179,6 +3400,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     } catch (e) {
       console.warn('LocalStorage error:', e);
     }
+    setActiveTab('home');
   };
 
   // QR Code Scanner Result Dispatcher
@@ -3229,19 +3451,22 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
   // Dedicated Handler for Saving Student Daily Behavior & Conduct Record (आचरण वगैरह)
   const handleSaveStudentBehavior = (record: StudentBehaviorInput, sendWhatsApp: boolean) => {
+    const isPres = Boolean(record.Is_Present);
     const newRec: StudentBehaviorRecord = {
       Behavior_ID: record.Behavior_ID || `BEH-${Date.now().toString().slice(-6)}`,
       Student_ID: record.Student_ID,
       Date: record.Date,
       Class: record.Class || '',
-      Is_Bathed: record.Is_Bathed,
-      Nails_Clean: record.Nails_Clean,
-      Uniform_clean: record.Uniform_clean,
-      Good_Manners: record.Good_Manners,
-      Discipline: record.Discipline,
-      Is_Present: record.Is_Present,
-      Remark: record.Remark,
-      AI_Feedback: '',
+      Is_Bathed: isPres ? Boolean(record.Is_Bathed) : false,
+      Nails_Clean: isPres ? Boolean(record.Nails_Clean) : false,
+      Uniform_clean: isPres ? Boolean(record.Uniform_clean) : false,
+      Good_Manners: isPres ? (record.Good_Manners || 'उत्कृष्ट (Excellent)') : 'लागू नहीं (अनुपस्थित)',
+      Discipline: isPres ? Boolean(record.Discipline) : false,
+      Is_Present: isPres,
+      Remark: record.Remark || (isPres ? '' : 'आज छात्र विद्यालय में अनुपस्थित रहा।'),
+      AI_Feedback: isPres
+        ? ''
+        : 'आज छात्र विद्यालय में अनुपस्थित रहा। पढ़ाई और पाठ्यक्रम की निरंतरता के लिए दैनिक उपस्थिति अत्यंत आवश्यक है।',
     };
 
     setBehaviorList((prev) => [newRec, ...prev]);
@@ -3605,120 +3830,125 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               </div>
             </div>
 
-            {/* Navigation Tabs */}
-            <nav className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
-              <button
-                id="nav-tab-home"
-                onClick={() => setActiveTab('home')}
-                className={`px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all duration-150 flex items-center gap-2 cursor-pointer whitespace-nowrap ${
-                  activeTab === 'home'
-                    ? 'bg-amber-400 text-slate-950 shadow-md font-bold'
-                    : 'text-slate-200 hover:bg-white/10 hover:text-white'
-                }`}
-              >
-                <i className="fa-solid fa-house"></i>
-                <span>Home</span>
-              </button>
-
-              <button
-                id="nav-tab-parent"
-                onClick={() => setActiveTab('parent')}
-                className={`px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all duration-150 flex items-center gap-2 cursor-pointer whitespace-nowrap ${
-                  activeTab === 'parent'
-                    ? 'bg-amber-400 text-slate-950 shadow-md font-bold'
-                    : 'text-slate-200 hover:bg-white/10 hover:text-white'
-                }`}
-              >
-                <i className="fa-solid fa-user-group"></i>
-                <span>Parent Portal</span>
-              </button>
-
-              <button
-                id="nav-tab-teacher"
-                onClick={() => setActiveTab('teacher')}
-                className={`px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all duration-150 flex items-center gap-2 cursor-pointer whitespace-nowrap ${
-                  activeTab === 'teacher'
-                    ? 'bg-amber-400 text-slate-950 shadow-md font-bold'
-                    : 'text-slate-200 hover:bg-white/10 hover:text-white'
-                }`}
-              >
-                <i className="fa-solid fa-chalkboard-user"></i>
-                <span>Teacher Portal</span>
-                {teacherUser ? (
-                  <span
-                    className="w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-white/50"
-                    title={`Logged in: ${teacherUser.Name}`}
-                  />
-                ) : (
-                  <i
-                    className="fa-solid fa-lock text-[10px] opacity-70"
-                    title="Teacher Login Required"
-                  />
-                )}
-              </button>
-
-              <button
-                id="nav-tab-manager"
-                onClick={() => setActiveTab('manager')}
-                className={`px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all duration-150 flex items-center gap-2 cursor-pointer whitespace-nowrap ${
-                  activeTab === 'manager'
-                    ? 'bg-amber-400 text-slate-950 shadow-md font-bold'
-                    : 'text-slate-200 hover:bg-white/10 hover:text-white'
-                }`}
-              >
-                <i className="fa-solid fa-user-tie"></i>
-                <span>Manager</span>
-                {managerUser ? (
-                  <span
-                    className="w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-white/50"
-                    title={`Logged in: ${managerUser.Name}`}
-                  />
-                ) : (
-                  <i
-                    className="fa-solid fa-lock text-[10px] opacity-70"
-                    title="Manager Login Required"
-                  />
-                )}
-              </button>
-
-              <button
-                id="nav-tab-driver"
-                onClick={() => setActiveTab('driver')}
-                className={`px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all duration-150 flex items-center gap-2 cursor-pointer whitespace-nowrap ${
-                  activeTab === 'driver'
-                    ? 'bg-amber-400 text-slate-950 shadow-md font-bold'
-                    : 'text-slate-200 hover:bg-white/10 hover:text-white'
-                }`}
-              >
-                <i className="fa-solid fa-van-shuttle"></i>
-                <span>ड्राइवर (Driver)</span>
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              </button>
-
-              {/* Background Sync Indicator & Manual Sync / Refresh Button */}
-              <div className="flex items-center gap-1.5 ml-1">
-                {isBackgroundSyncing ? (
-                  <div
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-400/20 border border-amber-400/40 text-amber-200 text-xs font-semibold animate-pulse shrink-0"
-                    title="डेटा बैकग्राउंड में सिंक हो रहा है... (Syncing fresh records in background)"
-                  >
-                    <i className="fa-solid fa-arrows-rotate fa-spin text-[10px] text-amber-300"></i>
-                    <span className="hidden sm:inline text-xs">सिंक हो रहा है...</span>
+            {/* Navigation Bar: Only authenticated users see their specific portal header */}
+            <nav className="flex items-center gap-2 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
+              {/* CASE 1: PARENT LOGGED IN */}
+              {parentLoggedIn && selectedStudent && (
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-xl border border-white/20 text-xs">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span className="font-extrabold text-white">{selectedStudent.Student_Name}</span>
                   </div>
-                ) : (
                   <button
-                    id="manual-sync-btn"
-                    onClick={() => syncAllData(true)}
-                    disabled={isBackgroundSyncing}
-                    className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-amber-300 hover:text-amber-200 transition-colors text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0 shadow-sm"
-                    title={`अंतिम सिंक: ${getSyncTimeLabel()} (क्लिक करके ताज़ा डेटा लोड करें)`}
+                    onClick={handleParentLogout}
+                    className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+                    title="साइन आउट करें"
                   >
-                    <i className="fa-solid fa-rotate text-xs"></i>
-                    <span className="hidden md:inline">डेटा सिंक (Sync)</span>
-                    <span className="text-[10px] opacity-75 hidden xl:inline">({getSyncTimeLabel()})</span>
+                    <i className="fa-solid fa-right-from-bracket"></i>
+                    <span>लॉगआउट (Logout)</span>
                   </button>
-                )}
-              </div>
+                </div>
+              )}
+
+              {/* CASE 2: MANAGER LOGGED IN */}
+              {managerUser && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex items-center gap-1.5 bg-amber-400 text-slate-950 px-3 py-1.5 rounded-xl font-bold text-xs shadow-xs">
+                    <i className="fa-solid fa-user-tie"></i>
+                    <span>प्रबंधक: {managerUser.Name}</span>
+                  </div>
+
+                  {/* Background Sync Indicator & Manual Sync Button */}
+                  <div className="flex items-center gap-1.5">
+                    {isBackgroundSyncing ? (
+                      <div
+                        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-400/20 border border-amber-400/40 text-amber-200 text-xs font-semibold animate-pulse shrink-0"
+                        title="डेटा बैकग्राउंड में सिंक हो रहा है..."
+                      >
+                        <i className="fa-solid fa-arrows-rotate fa-spin text-[10px] text-amber-300"></i>
+                        <span className="hidden sm:inline text-xs">सिंक हो रहा है...</span>
+                      </div>
+                    ) : (
+                      <button
+                        id="manual-sync-btn"
+                        onClick={() => syncAllData(true)}
+                        disabled={isBackgroundSyncing}
+                        className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-amber-300 hover:text-amber-200 transition-colors text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0 shadow-sm"
+                        title={`अंतिम सिंक: ${getSyncTimeLabel()}`}
+                      >
+                        <i className="fa-solid fa-rotate text-xs"></i>
+                        <span className="hidden md:inline">डेटा सिंक</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={handleManagerLogout}
+                    className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+                    title="प्रबंधक लॉगआउट"
+                  >
+                    <i className="fa-solid fa-right-from-bracket"></i>
+                    <span>लॉगआउट</span>
+                  </button>
+                </div>
+              )}
+
+              {/* CASE 3: TEACHER LOGGED IN (and not manager) */}
+              {teacherUser && !managerUser && (
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-xl border border-white/20 text-xs">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                    <span className="font-extrabold text-white">👩‍🏫 {teacherUser.Name}</span>
+                    <span className="text-[10px] bg-blue-400/30 text-blue-200 border border-blue-400/40 px-2 py-0.5 rounded font-bold">
+                      अध्यापक
+                    </span>
+                  </div>
+                  <button
+                    onClick={handleTeacherLogout}
+                    className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+                    title="टीचर लॉगआउट"
+                  >
+                    <i className="fa-solid fa-right-from-bracket"></i>
+                    <span>लॉगआउट (Logout)</span>
+                  </button>
+                </div>
+              )}
+
+              {/* CASE 4: UN-AUTHENTICATED - ON LOGIN SCREEN */}
+              {!parentLoggedIn && !managerUser && !teacherUser && activeTab !== 'home' && (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setActiveTab('home')}
+                    className="px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-amber-400 hover:text-slate-950 text-amber-200 text-xs font-bold transition-all border border-amber-400/30 flex items-center gap-1.5 cursor-pointer shadow-xs"
+                    title="भूमिका चयन पर वापस जाएं"
+                  >
+                    <i className="fa-solid fa-arrow-left"></i>
+                    <span>← भूमिका चयन (Roles)</span>
+                  </button>
+                  <span className="text-xs text-amber-300 bg-amber-400/20 px-2.5 py-1 rounded-lg border border-amber-400/40 font-bold hidden sm:inline-flex items-center gap-1.5">
+                    <i className="fa-solid fa-lock text-[10px]"></i>
+                    <span>
+                      {activeTab === 'parent'
+                        ? 'अभिभावक सत्यापन'
+                        : activeTab === 'manager'
+                        ? 'प्रबंधक लॉगिन'
+                        : activeTab === 'teacher'
+                        ? 'शिक्षक लॉगिन'
+                        : 'ड्राइवर लॉगिन'}
+                    </span>
+                  </span>
+                </div>
+              )}
+
+              {/* CASE 5: UN-AUTHENTICATED - ON HOME SCREEN */}
+              {!parentLoggedIn && !managerUser && !teacherUser && activeTab === 'home' && (
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/40 text-xs font-bold shadow-xs">
+                    <i className="fa-solid fa-shield-halved text-amber-400"></i>
+                    <span>सुरक्षित डिजिटल पोर्टल (लॉगिन आवश्यक)</span>
+                  </span>
+                </div>
+              )}
             </nav>
           </div>
         </div>
@@ -3787,36 +4017,44 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       {/* MAIN CONTENT AREA */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
         {/* ========================================================================= */}
-        {/* 1. HOME SCREEN / ROLE SELECTION                                           */}
+        {/* 1. APP LAUNCH / INITIAL SCREEN: ROLE SELECTION                            */}
         {/* ========================================================================= */}
         {activeTab === 'home' && (
-          <div className="space-y-8 animate-fadeIn">
-            {/* Hero Welcome Card */}
-            <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#0c2340] via-[#10316b] to-[#1e4485] text-white p-6 sm:p-10 shadow-xl border border-blue-900/40">
-              {/* Decorative background school elements */}
+          <div className="space-y-8 animate-fadeIn max-w-6xl mx-auto">
+            {/* Main Heading & Role Selection Header */}
+            <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-[#0c2340] via-[#10316b] to-[#1e4485] text-white p-6 sm:p-10 shadow-2xl border border-blue-900/50 text-center">
+              {/* Decorative background glow */}
               <div className="absolute right-0 top-0 -mt-10 -mr-10 w-72 h-72 bg-amber-400/10 rounded-full blur-3xl pointer-events-none"></div>
-              <div className="absolute left-1/2 bottom-0 w-80 h-80 bg-blue-400/10 rounded-full blur-3xl pointer-events-none"></div>
+              <div className="absolute left-0 bottom-0 -mb-10 -ml-10 w-72 h-72 bg-blue-400/10 rounded-full blur-3xl pointer-events-none"></div>
 
-              <div className="relative z-10 max-w-3xl">
-                <div className="inline-flex items-center gap-2 bg-amber-400/20 text-amber-300 border border-amber-400/30 px-3 py-1 rounded-full text-xs font-semibold mb-4">
-                  <i className="fa-solid fa-star text-amber-400"></i>
-                  <span>Digital School Administration Portal</span>
+              <div className="relative z-10 max-w-3xl mx-auto">
+                <div className="inline-flex items-center gap-2 bg-amber-400/20 text-amber-300 border border-amber-400/40 px-3.5 py-1 rounded-full text-xs font-bold mb-4 shadow-xs">
+                  <i className="fa-solid fa-school text-amber-400"></i>
+                  <span>E.V.S. Public School • Digital Portal</span>
                 </div>
-                <h2 className="text-2xl sm:text-4xl font-extrabold tracking-tight text-white leading-tight">
-                  Welcome to <span className="text-amber-400">E.V.S. Public School</span>
-                </h2>
-                <p className="mt-3 text-sm sm:text-base text-slate-200 leading-relaxed font-normal">
-                  A unified digital platform connecting Students, Parents, Educators, and School Administrators. Check daily classwork, review student academic records, and upload homework in real time.
+
+                <h1 className="text-3xl sm:text-5xl font-black tracking-tight text-white leading-tight">
+                  आप कौन हैं?
+                </h1>
+                <p className="text-lg sm:text-2xl font-extrabold text-amber-300 mt-1">
+                  Select Your User Role
+                </p>
+
+                <p className="mt-3 text-sm sm:text-base text-slate-200 leading-relaxed font-normal max-w-2xl mx-auto">
+                  कृपया जारी रखने के लिए नीचे दिए गए 4 विकल्पों में से अपनी भूमिका का चयन करें।
+                  <span className="block text-xs sm:text-sm text-slate-300 mt-0.5">
+                    Please choose your role to access your designated portal.
+                  </span>
                 </p>
 
                 {/* Quick stats badge */}
-                <div className="mt-6 flex flex-wrap gap-4 pt-4 border-t border-white/10 text-xs">
+                <div className="mt-6 flex flex-wrap items-center justify-center gap-5 pt-5 border-t border-white/10 text-xs">
                   <div className="flex items-center gap-2 text-slate-200">
-                    <div className="w-7 h-7 rounded-lg bg-white/10 flex items-center justify-center text-amber-400">
+                    <div className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center text-amber-400">
                       <i className="fa-solid fa-users"></i>
                     </div>
-                    <div>
-                      <div className="font-bold text-white text-sm">
+                    <div className="text-left">
+                      <div className="font-extrabold text-white text-sm">
                         {loadingStudents ? '...' : students.length}
                       </div>
                       <div className="text-[11px] text-slate-300">Registered Students</div>
@@ -3824,167 +4062,198 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   </div>
 
                   <div className="flex items-center gap-2 text-slate-200">
-                    <div className="w-7 h-7 rounded-lg bg-white/10 flex items-center justify-center text-amber-400">
-                      <i className="fa-solid fa-book"></i>
+                    <div className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center text-amber-400">
+                      <i className="fa-solid fa-book-open"></i>
                     </div>
-                    <div>
-                      <div className="font-bold text-white text-sm">
+                    <div className="text-left">
+                      <div className="font-extrabold text-white text-sm">
                         {loadingHomework ? '...' : homeworkList.length}
                       </div>
-                      <div className="text-[11px] text-slate-300">Published Homeworks</div>
+                      <div className="text-[11px] text-slate-300">Homework Records</div>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-2 text-slate-200">
-                    <div className="w-7 h-7 rounded-lg bg-white/10 flex items-center justify-center text-amber-400">
-                      <i className="fa-solid fa-school"></i>
+                    <div className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center text-amber-400">
+                      <i className="fa-solid fa-van-shuttle"></i>
                     </div>
-                    <div>
-                      <div className="font-bold text-white text-sm">C1 - C12</div>
-                      <div className="text-[11px] text-slate-300">Academic Batches</div>
+                    <div className="text-left">
+                      <div className="font-extrabold text-white text-sm">Live GPS</div>
+                      <div className="text-[11px] text-slate-300">Van Transport</div>
                     </div>
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* 3 Main Role Selection Cards as requested */}
+            {/* 4 Selection Options / Buttons strictly in order: 1. Parent, 2. Manager, 3. Teacher, 4. Driver */}
             <div>
-              <div className="text-center mb-6">
-                <span className="text-xs font-bold text-blue-900 uppercase tracking-widest bg-blue-50 px-3 py-1 rounded-full border border-blue-200">
-                  Select Your Portal Role
+              <div className="flex items-center justify-between mb-4 px-1">
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-blue-800"></span>
+                  4 भूमिका विकल्प (4 Role Options)
                 </span>
-                <h3 className="text-xl sm:text-2xl font-bold text-[#0c2340] mt-2">
-                  Choose an Access Mode to Proceed
-                </h3>
+                <span className="text-xs text-slate-500">अपनी भूमिका पर क्लिक करें</span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                {/* 1. Parent Portal */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+                {/* 1. Parent */}
                 <div
+                  id="role-btn-parent"
                   onClick={() => setActiveTab('parent')}
-                  className="group bg-white rounded-2xl p-6 sm:p-7 shadow-md hover:shadow-xl transition-all duration-200 border-2 border-slate-100 hover:border-amber-400 flex flex-col justify-between cursor-pointer relative overflow-hidden"
+                  className="group bg-white rounded-2xl p-6 shadow-md hover:shadow-2xl transition-all duration-200 border-2 border-slate-100 hover:border-amber-400 flex flex-col justify-between cursor-pointer relative overflow-hidden"
                 >
                   <div className="absolute top-0 right-0 w-24 h-24 bg-amber-50 rounded-bl-full transition-transform group-hover:scale-110 -z-0"></div>
                   <div className="relative z-10">
-                    <div className="w-14 h-14 rounded-2xl bg-amber-500/10 text-amber-600 flex items-center justify-center text-2xl mb-5 group-hover:bg-amber-500 group-hover:text-white transition-colors duration-200">
+                    <div className="flex items-center justify-between mb-4">
+                      <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 text-[11px] font-black tracking-wider uppercase">
+                        1. Parent
+                      </span>
+                      <span className="text-[11px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded">
+                        मोबाइल लॉगिन
+                      </span>
+                    </div>
+
+                    <div className="w-14 h-14 rounded-2xl bg-amber-500/10 text-amber-600 flex items-center justify-center text-2xl mb-4 group-hover:bg-amber-500 group-hover:text-white transition-colors duration-200 shadow-xs">
                       <i className="fa-solid fa-user-group"></i>
                     </div>
-                    <span className="text-[11px] font-bold text-amber-700 uppercase tracking-wider">
-                      For Families & Students
-                    </span>
-                    <h4 className="text-xl font-bold text-slate-900 mt-1 mb-2 group-hover:text-blue-900 transition-colors">
-                      Parent Portal
-                    </h4>
-                    <p className="text-xs sm:text-sm text-slate-600 leading-relaxed mb-6">
-                      Log in using your registered mobile number to view your ward&apos;s daily homework, teacher remarks, student profile, and dues status.
+
+                    <h2 className="text-xl font-black text-slate-900 group-hover:text-blue-900 transition-colors">
+                      Parent
+                    </h2>
+                    <p className="text-xs font-bold text-amber-700 mb-2">
+                      (अभिभावक)
+                    </p>
+                    <p className="text-xs text-slate-600 leading-relaxed mb-6">
+                      पंजीकृत मोबाइल नंबर दर्ज कर अपने बच्चे का दैनिक गृहकार्य (Homework), उपस्थिति, फीस व रिमार्क देखें।
                     </p>
                   </div>
 
                   <div className="relative z-10 pt-4 border-t border-slate-100 flex items-center justify-between">
-                    <span className="text-xs font-semibold text-blue-900 group-hover:text-amber-600 flex items-center gap-1">
-                      Access Portal
+                    <span className="text-xs font-bold text-blue-900 group-hover:text-amber-600 flex items-center gap-1.5">
+                      <span>मोबाइल नंबर दर्ज करें</span>
                       <i className="fa-solid fa-arrow-right text-xs group-hover:translate-x-1 transition-transform"></i>
-                    </span>
-                    <span className="text-[10px] bg-amber-100 text-amber-800 font-medium px-2 py-0.5 rounded">
-                      Mobile Login
                     </span>
                   </div>
                 </div>
 
-                {/* 2. Teacher Dashboard */}
+                {/* 2. Manager */}
                 <div
-                  onClick={() => setActiveTab('teacher')}
-                  className="group bg-white rounded-2xl p-6 sm:p-7 shadow-md hover:shadow-xl transition-all duration-200 border-2 border-slate-100 hover:border-blue-800 flex flex-col justify-between cursor-pointer relative overflow-hidden"
-                >
-                  <div className="absolute top-0 right-0 w-24 h-24 bg-blue-50 rounded-bl-full transition-transform group-hover:scale-110 -z-0"></div>
-                  <div className="relative z-10">
-                    <div className="w-14 h-14 rounded-2xl bg-blue-900/10 text-blue-900 flex items-center justify-center text-2xl mb-5 group-hover:bg-[#0c2340] group-hover:text-amber-400 transition-colors duration-200">
-                      <i className="fa-solid fa-chalkboard-user"></i>
-                    </div>
-                    <span className="text-[11px] font-bold text-blue-800 uppercase tracking-wider">
-                      For Educators
-                    </span>
-                    <h4 className="text-xl font-bold text-slate-900 mt-1 mb-2 group-hover:text-blue-900 transition-colors">
-                      Teacher Dashboard
-                    </h4>
-                    <p className="text-xs sm:text-sm text-slate-600 leading-relaxed mb-6">
-                      Publish daily class homework assignments by class and subject with instant Google Sheets cloud synchronization.
-                    </p>
-                  </div>
-
-                  <div className="relative z-10 pt-4 border-t border-slate-100 flex items-center justify-between">
-                    <span className="text-xs font-semibold text-blue-900 group-hover:text-blue-700 flex items-center gap-1">
-                      Upload Homework
-                      <i className="fa-solid fa-arrow-right text-xs group-hover:translate-x-1 transition-transform"></i>
-                    </span>
-                    <span className="text-[10px] bg-blue-100 text-blue-900 font-medium px-2 py-0.5 rounded">
-                      Direct Post
-                    </span>
-                  </div>
-                </div>
-
-                {/* 3. Manager Dashboard */}
-                <div
+                  id="role-btn-manager"
                   onClick={() => setActiveTab('manager')}
-                  className="group bg-white rounded-2xl p-6 sm:p-7 shadow-md hover:shadow-xl transition-all duration-200 border-2 border-slate-100 hover:border-slate-800 flex flex-col justify-between cursor-pointer relative overflow-hidden"
+                  className="group bg-white rounded-2xl p-6 shadow-md hover:shadow-2xl transition-all duration-200 border-2 border-slate-100 hover:border-slate-800 flex flex-col justify-between cursor-pointer relative overflow-hidden"
                 >
                   <div className="absolute top-0 right-0 w-24 h-24 bg-slate-100 rounded-bl-full transition-transform group-hover:scale-110 -z-0"></div>
                   <div className="relative z-10">
-                    <div className="w-14 h-14 rounded-2xl bg-slate-900/10 text-slate-900 flex items-center justify-center text-2xl mb-5 group-hover:bg-slate-900 group-hover:text-white transition-colors duration-200">
+                    <div className="flex items-center justify-between mb-4">
+                      <span className="px-2.5 py-0.5 rounded-full bg-slate-200 text-slate-900 text-[11px] font-black tracking-wider uppercase">
+                        2. Manager
+                      </span>
+                      <span className="text-[11px] font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded">
+                        आईडी व पासवर्ड
+                      </span>
+                    </div>
+
+                    <div className="w-14 h-14 rounded-2xl bg-slate-900/10 text-slate-900 flex items-center justify-center text-2xl mb-4 group-hover:bg-slate-900 group-hover:text-white transition-colors duration-200 shadow-xs">
                       <i className="fa-solid fa-user-tie"></i>
                     </div>
-                    <span className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">
-                      Administration
-                    </span>
-                    <h4 className="text-xl font-bold text-slate-900 mt-1 mb-2 group-hover:text-blue-900 transition-colors">
-                      Manager Dashboard
-                    </h4>
-                    <p className="text-xs sm:text-sm text-slate-600 leading-relaxed mb-6">
-                      Comprehensive oversight of all student records, fee collections, homework, and live van GPS tracking.
+
+                    <h2 className="text-xl font-black text-slate-900 group-hover:text-blue-900 transition-colors">
+                      Manager
+                    </h2>
+                    <p className="text-xs font-bold text-slate-700 mb-2">
+                      (स्कूल प्रबंधक)
+                    </p>
+                    <p className="text-xs text-slate-600 leading-relaxed mb-6">
+                      संपूर्ण स्कूल प्रशासन, सभी छात्र रिकॉर्ड्स, अध्यापकों का कार्य, फीस कलेक्शन एवं वैन लाइव जीपीएस ट्रैकिंग।
                     </p>
                   </div>
 
                   <div className="relative z-10 pt-4 border-t border-slate-100 flex items-center justify-between">
-                    <span className="text-xs font-semibold text-slate-900 group-hover:text-blue-900 flex items-center gap-1">
-                      Manage School
+                    <span className="text-xs font-bold text-blue-900 group-hover:text-slate-900 flex items-center gap-1.5">
+                      <span>लॉगिन करें</span>
                       <i className="fa-solid fa-arrow-right text-xs group-hover:translate-x-1 transition-transform"></i>
-                    </span>
-                    <span className="text-[10px] bg-slate-200 text-slate-800 font-medium px-2 py-0.5 rounded">
-                      Full Roster
                     </span>
                   </div>
                 </div>
 
-                {/* 4. Driver Portal */}
+                {/* 3. Teacher */}
                 <div
-                  onClick={() => setActiveTab('driver')}
-                  className="group bg-white rounded-2xl p-6 sm:p-7 shadow-md hover:shadow-xl transition-all duration-200 border-2 border-slate-100 hover:border-emerald-500 flex flex-col justify-between cursor-pointer relative overflow-hidden"
+                  id="role-btn-teacher"
+                  onClick={() => setActiveTab('teacher')}
+                  className="group bg-white rounded-2xl p-6 shadow-md hover:shadow-2xl transition-all duration-200 border-2 border-slate-100 hover:border-blue-800 flex flex-col justify-between cursor-pointer relative overflow-hidden"
                 >
-                  <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-50 rounded-bl-full transition-transform group-hover:scale-110 -z-0"></div>
+                  <div className="absolute top-0 right-0 w-24 h-24 bg-blue-50 rounded-bl-full transition-transform group-hover:scale-110 -z-0"></div>
                   <div className="relative z-10">
-                    <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center text-2xl mb-5 group-hover:bg-emerald-600 group-hover:text-white transition-colors duration-200">
-                      <i className="fa-solid fa-van-shuttle"></i>
+                    <div className="flex items-center justify-between mb-4">
+                      <span className="px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-950 text-[11px] font-black tracking-wider uppercase">
+                        3. Teacher
+                      </span>
+                      <span className="text-[11px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded">
+                        आईडी व पासवर्ड
+                      </span>
                     </div>
-                    <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider">
-                      Transport & Safety
-                    </span>
-                    <h4 className="text-xl font-bold text-slate-900 mt-1 mb-2 group-hover:text-emerald-700 transition-colors">
-                      Driver Portal
-                    </h4>
-                    <p className="text-xs sm:text-sm text-slate-600 leading-relaxed mb-6">
-                      वैन ड्राइवर के लिए लाइव जीपीएस लोकेशन प्रसारण, रूट स्टॉप, ट्रिप स्थिति एवं प्रबंधक के साथ रीयल-टाइम संचार।
+
+                    <div className="w-14 h-14 rounded-2xl bg-blue-900/10 text-blue-900 flex items-center justify-center text-2xl mb-4 group-hover:bg-[#0c2340] group-hover:text-amber-400 transition-colors duration-200 shadow-xs">
+                      <i className="fa-solid fa-chalkboard-user"></i>
+                    </div>
+
+                    <h2 className="text-xl font-black text-slate-900 group-hover:text-blue-900 transition-colors">
+                      Teacher
+                    </h2>
+                    <p className="text-xs font-bold text-blue-800 mb-2">
+                      (स्कूल शिक्षक)
+                    </p>
+                    <p className="text-xs text-slate-600 leading-relaxed mb-6">
+                      दैनिक होमवर्क (गृहकार्य) अपलोड करें, छात्रों के कार्य की जांच करें एवं कक्षा उपस्थिति मार्क करें।
                     </p>
                   </div>
 
                   <div className="relative z-10 pt-4 border-t border-slate-100 flex items-center justify-between">
-                    <span className="text-xs font-semibold text-emerald-700 group-hover:text-emerald-900 flex items-center gap-1">
-                      Start GPS Sharing
+                    <span className="text-xs font-bold text-blue-900 group-hover:text-blue-700 flex items-center gap-1.5">
+                      <span>लॉगिन करें</span>
                       <i className="fa-solid fa-arrow-right text-xs group-hover:translate-x-1 transition-transform"></i>
                     </span>
-                    <span className="text-[10px] bg-emerald-100 text-emerald-800 font-medium px-2 py-0.5 rounded flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
-                      Live GPS
+                  </div>
+                </div>
+
+                {/* 4. Driver */}
+                <div
+                  id="role-btn-driver"
+                  onClick={() => setActiveTab('driver')}
+                  className="group bg-white rounded-2xl p-6 shadow-md hover:shadow-2xl transition-all duration-200 border-2 border-slate-100 hover:border-emerald-500 flex flex-col justify-between cursor-pointer relative overflow-hidden"
+                >
+                  <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-50 rounded-bl-full transition-transform group-hover:scale-110 -z-0"></div>
+                  <div className="relative z-10">
+                    <div className="flex items-center justify-between mb-4">
+                      <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-950 text-[11px] font-black tracking-wider uppercase">
+                        4. Driver
+                      </span>
+                      <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
+                        लाइव GPS
+                      </span>
+                    </div>
+
+                    <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center text-2xl mb-4 group-hover:bg-emerald-600 group-hover:text-white transition-colors duration-200 shadow-xs">
+                      <i className="fa-solid fa-van-shuttle"></i>
+                    </div>
+
+                    <h2 className="text-xl font-black text-slate-900 group-hover:text-emerald-700 transition-colors">
+                      Driver
+                    </h2>
+                    <p className="text-xs font-bold text-emerald-700 mb-2">
+                      (वैन ड्राइवर)
+                    </p>
+                    <p className="text-xs text-slate-600 leading-relaxed mb-6">
+                      वैन लाइव जीपीएस लोकेशन प्रसारण, रूट स्टॉप एवं प्रबंधक के साथ रीयल-टाइम संचार।
+                    </p>
+                  </div>
+
+                  <div className="relative z-10 pt-4 border-t border-slate-100 flex items-center justify-between">
+                    <span className="text-xs font-bold text-emerald-700 group-hover:text-emerald-900 flex items-center gap-1.5">
+                      <span>लॉगिन करें</span>
+                      <i className="fa-solid fa-arrow-right text-xs group-hover:translate-x-1 transition-transform"></i>
                     </span>
                   </div>
                 </div>
@@ -3998,171 +4267,104 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         {/* ========================================================================= */}
         {activeTab === 'parent' && (
           <div className="space-y-6 animate-fadeIn">
-            {/* Header / Sub-banner */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-4">
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
+            {/* Header / Sub-banner for logged-out view */}
+            {!parentLoggedIn && (
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                <div>
                   <span className="text-xs font-bold text-amber-600 bg-amber-50 px-2.5 py-0.5 rounded-full border border-amber-200">
                     Parent Portal
                   </span>
-                  {parentLoggedIn && selectedStudent && (
-                    <span className="text-xs bg-emerald-100 text-emerald-800 font-semibold px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>
-                      Verified Parent Session
-                    </span>
-                  )}
-                  {parentLoggedIn && parentChildren.length > 1 && (
-                    <span className="text-xs bg-blue-100 text-blue-900 font-bold px-2.5 py-0.5 rounded-full border border-blue-200 flex items-center gap-1">
-                      <i className="fa-solid fa-users text-blue-700"></i>
-                      {parentChildren.length} Children Enrolled
-                    </span>
-                  )}
+                  <h2 className="text-xl sm:text-2xl font-bold text-[#0c2340] mt-1">
+                    अभिभावक लॉगिन (Parent Login)
+                  </h2>
                 </div>
-                <h2 className="text-xl sm:text-2xl font-bold text-[#0c2340] mt-1">
-                  Student Homework & Profile Portal
-                </h2>
-                <p className="text-xs sm:text-sm text-slate-500">
-                  {selectedStudent
-                    ? `Viewing exclusive records for ${selectedStudent.Student_Name} (Class: ${getClassName(selectedStudent.Class)})`
-                    : 'Access homework and school records assigned specifically for your ward.'}
-                </p>
               </div>
-
-              {parentLoggedIn && (
-                <div className="flex items-center gap-2 self-start sm:self-auto">
-                  {selectedStudent && (
-                    <div className="hidden sm:flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200 text-xs">
-                      <StudentAvatar
-                        student={selectedStudent}
-                        photoUrl={getStudentPhoto(selectedStudent)}
-                        size="xs"
-                      />
-                      <span className="font-extrabold text-slate-900">{selectedStudent.Student_Name}</span>
-                      <span className="text-[10px] bg-blue-100 text-blue-900 px-1.5 py-0.2 rounded font-semibold">
-                        Class {getClassName(selectedStudent.Class)}
-                      </span>
-                    </div>
-                  )}
-
-                  <button
-                    onClick={handleParentLogout}
-                    className="px-3.5 py-1.5 bg-slate-100 hover:bg-rose-50 hover:text-rose-700 text-slate-700 text-xs font-semibold rounded-lg border border-slate-200 transition-colors flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <i className="fa-solid fa-arrow-right-from-bracket"></i>
-                    Sign Out
-                  </button>
-                </div>
-              )}
-            </div>
+            )}
 
             {/* Login Form if not logged in */}
             {!parentLoggedIn ? (
-              <div className="max-w-md mx-auto my-8">
-                <div className="bg-white rounded-2xl shadow-lg border border-slate-200/80 p-6 sm:p-8">
-                  <div className="w-12 h-12 rounded-xl bg-amber-500/10 text-amber-600 flex items-center justify-center text-xl mb-4 mx-auto">
-                    <i className="fa-solid fa-lock"></i>
+              <div className="max-w-md mx-auto my-8 animate-fadeIn">
+                {/* Back button to return to Role Selection */}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('home')}
+                  className="inline-flex items-center gap-2 text-xs sm:text-sm font-bold text-slate-700 hover:text-blue-900 bg-white hover:bg-slate-100 border border-slate-200 px-3.5 py-2 rounded-xl transition-all cursor-pointer shadow-xs mb-4"
+                >
+                  <i className="fa-solid fa-arrow-left"></i>
+                  <span>← वापस जाएं (Back to Role Selection)</span>
+                </button>
+
+                <div className="bg-white rounded-3xl shadow-xl border border-slate-200/80 p-6 sm:p-8">
+                  <div className="w-14 h-14 rounded-2xl bg-amber-500/10 text-amber-600 flex items-center justify-center text-2xl mb-4 mx-auto shadow-xs">
+                    <i className="fa-solid fa-mobile-screen-button"></i>
                   </div>
-                  <h3 className="text-lg font-bold text-center text-slate-900">
-                    Parent Verification
-                  </h3>
-                  <p className="text-xs text-center text-slate-500 mt-1 mb-6">
-                    Enter the 10-digit mobile number registered with school records to access your child&apos;s records.
-                    If you have multiple children, all will be available in your portal!
+                  <h2 className="text-xl sm:text-2xl font-black text-center text-slate-900">
+                    अपना मोबाइल नंबर दर्ज करें
+                  </h2>
+                  <p className="text-xs text-center text-amber-700 font-bold mt-0.5">
+                    Parent Verification • Enter Mobile Number
+                  </p>
+                  <p className="text-xs text-center text-slate-500 mt-2 mb-6">
+                    स्कूल रिकॉर्ड में पंजीकृत 10-अंकीय मोबाइल नंबर दर्ज करें। आपके वार्ड का दैनिक होमवर्क, उपस्थिति, फीस व रिमार्क स्वतः लोड हो जाएंगे।
                   </p>
 
                   <form onSubmit={handleParentLogin} className="space-y-4">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        Registered Mobile Number or Student ID
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                        मोबाइल नंबर (Mobile Number) या Student ID:
                       </label>
                       <div className="relative">
-                        <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400 text-sm">
+                        <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 text-sm">
                           <i className="fa-solid fa-phone"></i>
                         </span>
                         <input
-                          type="text"
+                          type="tel"
                           value={parentMobileInput}
                           onChange={(e) => setParentMobileInput(e.target.value)}
-                          placeholder="e.g. 8954555074 or Student ID"
+                          placeholder="10-अंकीय मोबाइल नंबर (उदा. 8954555074)"
                           maxLength={20}
+                          autoFocus
                           required
-                          className="w-full pl-9 pr-4 py-2.5 rounded-lg border border-slate-300 focus:border-blue-800 focus:ring-2 focus:ring-blue-800/20 text-sm outline-none transition-all"
+                          className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-300 focus:border-blue-800 focus:ring-2 focus:ring-blue-800/20 text-sm font-medium outline-none transition-all"
                         />
                       </div>
                     </div>
 
                     <button
                       type="submit"
-                      disabled={loadingStudents}
-                      className="w-full py-2.5 bg-[#0c2340] hover:bg-[#10316b] text-amber-300 hover:text-amber-200 font-bold text-sm rounded-lg shadow transition-colors flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                      disabled={loadingStudents || parentLoginSubmitting}
+                      className="w-full py-3 bg-[#0c2340] hover:bg-[#10316b] text-amber-300 hover:text-amber-200 font-bold text-sm rounded-xl shadow-md transition-colors flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                     >
-                      {loadingStudents ? (
+                      {loadingStudents || parentLoginSubmitting ? (
                         <>
                           <i className="fa-solid fa-spinner fa-spin"></i>
-                          <span>Checking Database...</span>
+                          <span>डेटा लोड हो रहा है... (Fetching Data...)</span>
                         </>
                       ) : (
                         <>
-                          <i className="fa-solid fa-magnifying-glass"></i>
-                          <span>Access Parent Portal</span>
+                          <i className="fa-solid fa-cloud-arrow-down"></i>
+                          <span>डेटा लोड करें / Fetch Data</span>
                         </>
                       )}
                     </button>
                   </form>
 
-                  {/* Helper for testing */}
+                  {/* Security Notice */}
                   <div className="mt-5 pt-4 border-t border-slate-100 text-center">
-                    <p className="text-xs text-slate-500 mb-2">Want to test with sample student data?</p>
-                    <div className="flex flex-wrap items-center justify-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setParentMobileInput('8954555074');
-                          handleParentLogin(undefined, '8954555074');
-                        }}
-                        className="text-xs font-bold text-blue-900 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-3 py-1.5 rounded-lg transition-colors cursor-pointer inline-flex items-center gap-1.5"
-                      >
-                        <i className="fa-solid fa-key text-amber-600"></i>
-                        Farah (8954555074)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setParentMobileInput('9758444577');
-                          handleParentLogin(undefined, '9758444577');
-                        }}
-                        className="text-xs font-bold text-blue-900 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-3 py-1.5 rounded-lg transition-colors cursor-pointer inline-flex items-center gap-1.5"
-                      >
-                        <i className="fa-solid fa-key text-amber-600"></i>
-                        Namra (9758444577)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (students.length >= 2) {
-                            setParentChildren([students[0], students[1]]);
-                            setSelectedStudent(students[0]);
-                            setParentLoggedIn(true);
-                            setParentSearchAttempted(false);
-                          }
-                        }}
-                        className="text-xs font-bold text-emerald-900 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-3 py-1.5 rounded-lg transition-colors cursor-pointer inline-flex items-center gap-1.5"
-                        title="Simulate parents with multiple children enrolled"
-                      >
-                        <i className="fa-solid fa-users text-emerald-600"></i>
-                        Multiple Children Demo (2 Wards)
-                      </button>
-                    </div>
+                    <p className="text-[11px] text-slate-500 flex items-center justify-center gap-1.5">
+                      <i className="fa-solid fa-lock text-amber-500"></i>
+                      <span>केवल स्कूल में पंजीकृत अभिभावक ही अपना मोबाइल नंबर दर्ज कर छात्र का डेटा देख सकते हैं।</span>
+                    </p>
                   </div>
 
                   {/* Search Attempt Failed Notice */}
                   {parentSearchAttempted && !selectedStudent && (
-                    <div className="mt-4 p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-800 text-xs flex items-start gap-2">
-                      <i className="fa-solid fa-circle-exclamation text-rose-600 mt-0.5"></i>
+                    <div className="mt-4 p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-xs flex items-start gap-2.5">
+                      <i className="fa-solid fa-circle-exclamation text-rose-600 mt-0.5 shrink-0 text-sm"></i>
                       <div>
-                        <div className="font-semibold">No student record found.</div>
+                        <div className="font-bold">कोई छात्र रिकॉर्ड नहीं मिला (No Student Found)</div>
                         <p className="mt-0.5 text-rose-700">
-                          Please verify the entered phone number or Student ID matches school records or contact the administrative manager.
+                          दर्ज किया गया मोबाइल नंबर स्कूल रिकॉर्ड में नहीं मिला। कृपया वही मोबाइल नंबर दर्ज करें जो स्कूल में पंजीकृत है।
                         </p>
                       </div>
                     </div>
@@ -4207,13 +4409,6 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             >
                               <StudentAvatar student={child} photoUrl={childPhoto} size="xs" />
                               <span className="font-extrabold">{child.Student_Name}</span>
-                              <span
-                                className={`text-[10px] px-1.5 py-0.2 rounded font-semibold ${
-                                  isCurrent ? 'bg-white/20 text-amber-200' : 'bg-slate-100 text-slate-600'
-                                }`}
-                              >
-                                {getClassName(child.Class)}
-                              </span>
                               {childBal > 0 ? (
                                 <span
                                   className={`text-[9px] font-bold px-1.5 py-0.2 rounded ${
@@ -4293,67 +4488,151 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   </div>
                 )}
 
-                {/* Active Student Header Bar & Quick ID */}
+                {/* AI DAILY GREETING & ACTIVITY BRIEF CARD (Replaces cluttered box) */}
                 {selectedStudent && (
-                  <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-5">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                      <div className="flex items-center gap-3.5">
-                        {/* Student Photo Avatar with Change/Upload Trigger */}
-                        <StudentAvatar
-                          student={selectedStudent}
-                          photoUrl={getStudentPhoto(selectedStudent)}
-                          size="lg"
-                          showUploadBtn={true}
-                          onUpload={() => handleTriggerPhotoUpload(selectedStudent.Student_ID)}
-                        />
+                  <div className="bg-gradient-to-br from-[#0c2340] via-[#10316b] to-[#0c2340] rounded-2xl p-4 sm:p-5 text-white shadow-lg border border-blue-900/60 relative overflow-hidden animate-fadeIn">
+                    {/* Subtle decorative glowing corner */}
+                    <div className="absolute top-0 right-0 w-48 h-48 bg-amber-400/10 rounded-full blur-2xl pointer-events-none -mr-10 -mt-10"></div>
 
-                        <div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="text-lg sm:text-xl font-black text-slate-900">
-                              {selectedStudent.Student_Name || 'Student'}
-                            </h3>
-                            <span className="bg-blue-100 text-blue-900 text-xs font-bold px-2.5 py-0.5 rounded-full border border-blue-200">
-                              कक्षा {getClassName(selectedStudent.Class)}
-                            </span>
-                            {getStudentBalance(selectedStudent) > 0 ? (
-                              <span className="bg-rose-100 text-rose-800 text-[11px] font-bold px-2 py-0.5 rounded-full border border-rose-200">
-                                बकाया: ₹{getStudentBalance(selectedStudent).toLocaleString('en-IN')}
-                              </span>
-                            ) : (
-                              <span className="bg-emerald-100 text-emerald-800 text-[11px] font-bold px-2 py-0.5 rounded-full border border-emerald-200">
-                                फीस चुकता ✓
-                              </span>
-                            )}
+                    <div className="relative z-10">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/10">
+                        <div className="flex items-center gap-3">
+                          {/* Student Photo Avatar */}
+                          <div className="relative shrink-0">
+                            <StudentAvatar
+                              student={selectedStudent}
+                              photoUrl={getStudentPhoto(selectedStudent)}
+                              size="md"
+                              showUploadBtn={true}
+                              onUpload={() => handleTriggerPhotoUpload(selectedStudent.Student_ID)}
+                            />
                           </div>
-                          <p className="text-xs text-slate-500 mt-0.5 flex flex-wrap items-center gap-2">
-                            <span>रोल सं: <strong className="text-slate-800">{selectedStudent.Roll_Number || '1'}</strong></span>
-                            <span>•</span>
-                            <span>आईडी: <strong className="font-mono text-slate-800">{selectedStudent.Student_ID}</strong></span>
-                            <span>•</span>
-                            <span>प्रवेश सं: <strong className="text-slate-800">{selectedStudent.Admission_Number}</strong></span>
-                          </p>
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h3 className="text-base sm:text-lg font-black text-amber-300">
+                                नमस्ते, {selectedStudent.Student_Name} के अभिभावक! 🙏
+                              </h3>
+                              <span className="text-[10px] bg-amber-400/20 text-amber-300 border border-amber-400/40 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                                <i className={`fa-solid fa-sparkles text-amber-400 ${aiGreetingLoading ? 'animate-spin' : ''}`}></i>
+                                <span>{isAiGenerated ? 'AI दैनिक रिपोर्ट' : 'दैनिक गतिविधि सार'}</span>
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-300 mt-0.5">
+                              ई.वी.एस. पब्लिक स्कूल • आपके बच्चे की आज की दैनिक प्रगति
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Useful Quick Action Buttons */}
+                        <div className="flex items-center gap-2 self-start sm:self-center">
+                          <button
+                            type="button"
+                            onClick={() => setPreviewQRStudent(selectedStudent)}
+                            className="px-3 py-1.5 bg-white/15 hover:bg-white/25 text-amber-300 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border border-white/20 shadow-xs cursor-pointer"
+                            title="छात्र QR कोड पास देखें"
+                          >
+                            <i className="fa-solid fa-qrcode text-amber-400"></i>
+                            <span>क्यूआर पास (QR Pass)</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setParentActiveSection('profile')}
+                            className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-slate-200 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 border border-white/20 shadow-xs cursor-pointer"
+                            title="पूरी प्रोफ़ाइल देखें"
+                          >
+                            <i className="fa-solid fa-id-card text-slate-300"></i>
+                            <span className="hidden sm:inline">प्रोफ़ाइल</span>
+                          </button>
+
+                          {/* Text-to-Speech button to read greeting aloud */}
+                          {'speechSynthesis' in window && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                try {
+                                  window.speechSynthesis.cancel();
+                                  const utter = new SpeechSynthesisUtterance(aiGreeting);
+                                  utter.lang = 'hi-IN';
+                                  window.speechSynthesis.speak(utter);
+                                } catch {}
+                              }}
+                              className="w-8 h-8 rounded-xl bg-white/15 hover:bg-white/25 text-white flex items-center justify-center text-xs transition-colors border border-white/20 cursor-pointer"
+                              title="बोलकर सुनें (Listen in Hindi)"
+                            >
+                              <i className="fa-solid fa-volume-high text-amber-300"></i>
+                            </button>
+                          )}
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setPreviewQRStudent(selectedStudent)}
-                          className="px-3 py-2 bg-blue-50 hover:bg-[#0c2340] hover:text-amber-300 text-blue-900 border border-blue-200 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs"
-                          title="Click to view student QR code in full screen"
-                        >
-                          <i className="fa-solid fa-qrcode text-amber-500"></i>
-                          <span>क्यूआर पास (QR Pass)</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setParentActiveSection('profile')}
-                          className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5"
-                          title="View complete profile and family details"
-                        >
-                          <i className="fa-solid fa-id-card text-slate-600"></i>
-                          <span>पूरी प्रोफ़ाइल (Full Profile)</span>
-                        </button>
+                      {/* AI Greeting Message Text */}
+                      <div className="mt-3.5 bg-black/25 rounded-xl p-3.5 border border-white/10 backdrop-blur-xs">
+                        <div className="flex items-start gap-2.5">
+                          <div className="w-7 h-7 rounded-lg bg-amber-400/20 text-amber-300 flex items-center justify-center shrink-0 text-sm mt-0.5">
+                            <i className="fa-solid fa-robot"></i>
+                          </div>
+                          <div className="flex-1">
+                            <p className="text-xs sm:text-sm text-slate-100 leading-relaxed font-medium">
+                              {aiGreeting || 'बच्चे की दैनिक गतिविधि का विश्लेषण हो रहा है...'}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Live Highlights / Activity Badges */}
+                      <div className="flex flex-wrap items-center gap-2 mt-3 pt-2.5 border-t border-white/10 text-[11px]">
+                        {/* Attendance highlight */}
+                        <span className={`px-2.5 py-1 rounded-lg font-bold flex items-center gap-1.5 border ${
+                          latestBehaviorRecord?.Is_Present
+                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                            : latestBehaviorRecord && !latestBehaviorRecord.Is_Present
+                            ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                            : 'bg-white/10 text-slate-200 border-white/20'
+                        }`}>
+                          <i className={`fa-solid ${
+                            latestBehaviorRecord?.Is_Present ? 'fa-circle-check text-emerald-400' : latestBehaviorRecord ? 'fa-circle-xmark text-rose-400' : 'fa-calendar-check text-amber-400'
+                          }`}></i>
+                          <span>
+                            {latestBehaviorRecord?.Is_Present
+                              ? 'आज: उपस्थित (Present)'
+                              : latestBehaviorRecord && !latestBehaviorRecord.Is_Present
+                              ? 'आज: अनुपस्थित (Absent)'
+                              : 'उपस्थिति: नियमित'}
+                          </span>
+                        </span>
+
+                        {/* Homework highlight */}
+                        <span className="px-2.5 py-1 rounded-lg bg-white/10 text-slate-200 border border-white/20 font-semibold flex items-center gap-1.5">
+                          <i className="fa-solid fa-book-open text-amber-300"></i>
+                          <span>
+                            {parentHomework.length > 0
+                              ? `${parentHomework.length} गृहकार्य उपलब्ध`
+                              : 'गृहकार्य: नियमित'}
+                          </span>
+                        </span>
+
+                        {/* Behavior highlight if present */}
+                        {latestBehaviorRecord?.Is_Present && latestBehaviorRecord.Good_Manners && (
+                          <span className="px-2.5 py-1 rounded-lg bg-amber-400/20 text-amber-200 border border-amber-400/30 font-semibold flex items-center gap-1.5">
+                            <i className="fa-solid fa-star text-amber-400"></i>
+                            <span>आचरण: {latestBehaviorRecord.Good_Manners}</span>
+                          </span>
+                        )}
+
+                        {/* Fee highlight */}
+                        <span className={`px-2.5 py-1 rounded-lg font-semibold flex items-center gap-1.5 border ${
+                          getStudentBalance(selectedStudent) > 0
+                            ? 'bg-rose-500/20 text-rose-200 border-rose-500/40'
+                            : 'bg-emerald-500/20 text-emerald-200 border-emerald-500/40'
+                        }`}>
+                          <i className={`fa-solid ${getStudentBalance(selectedStudent) > 0 ? 'fa-receipt' : 'fa-circle-check'}`}></i>
+                          <span>
+                            {getStudentBalance(selectedStudent) > 0
+                              ? `बकाया फ़ीस: ₹${getStudentBalance(selectedStudent).toLocaleString('en-IN')}`
+                              : 'फ़ीस: पूर्ण चुकता ✓'}
+                          </span>
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -5597,138 +5876,177 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                       <span>{rec.Is_Present ? '🟢 स्कूल आए थे (उपस्थित)' : '🔴 स्कूल नहीं आए (अनुपस्थित)'}</span>
                                     </span>
 
-                                    {/* Score Stars */}
-                                    <span className="bg-amber-100 text-amber-900 border border-amber-300 font-extrabold text-xs px-2.5 py-1 rounded-full flex items-center gap-1">
-                                      <i className="fa-solid fa-star text-amber-500"></i>
-                                      <span>{points}/5 अंक</span>
-                                    </span>
+                                    {/* Score / Status Badge */}
+                                    {rec.Is_Present ? (
+                                      <span className="bg-amber-100 text-amber-900 border border-amber-300 font-extrabold text-xs px-2.5 py-1 rounded-full flex items-center gap-1">
+                                        <i className="fa-solid fa-star text-amber-500"></i>
+                                        <span>{points}/5 अंक</span>
+                                      </span>
+                                    ) : (
+                                      <span className="bg-rose-100 text-rose-900 border border-rose-300 font-extrabold text-xs px-2.5 py-1 rounded-full flex items-center gap-1">
+                                        <i className="fa-solid fa-user-xmark text-rose-600"></i>
+                                        <span>अनुपस्थित (आचरण लागू नहीं)</span>
+                                      </span>
+                                    )}
                                   </div>
                                 </div>
 
                                 {/* Card Body */}
                                 <div className="p-4 sm:p-5 space-y-4">
-                                  {/* 4 HABITS GRID IN SIMPLE HINDI */}
-                                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
-                                    {/* Bathing */}
-                                    <div
-                                      className={`p-3 rounded-xl border flex items-center gap-2.5 ${
-                                        rec.Is_Bathed
-                                          ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
-                                          : 'bg-rose-50/70 border-rose-200 text-rose-950'
-                                      }`}
-                                    >
-                                      <div
-                                        className={`w-9 h-9 rounded-lg flex items-center justify-center text-base shrink-0 ${
-                                          rec.Is_Bathed ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'
-                                        }`}
-                                      >
-                                        <i className="fa-solid fa-shower"></i>
-                                      </div>
-                                      <div>
-                                        <div className="text-[10px] font-semibold text-slate-500">दैनिक स्नान</div>
-                                        <div className="text-xs font-bold mt-0.5">
-                                          {rec.Is_Bathed ? '✅ नहा कर आए' : '❌ स्नान नहीं किया'}
-                                        </div>
-                                      </div>
-                                    </div>
-
-                                    {/* Nails */}
-                                    <div
-                                      className={`p-3 rounded-xl border flex items-center gap-2.5 ${
-                                        rec.Nails_Clean
-                                          ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
-                                          : 'bg-rose-50/70 border-rose-200 text-rose-950'
-                                      }`}
-                                    >
-                                      <div
-                                        className={`w-9 h-9 rounded-lg flex items-center justify-center text-base shrink-0 ${
-                                          rec.Nails_Clean ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'
-                                        }`}
-                                      >
-                                        <i className="fa-solid fa-hand-sparkles"></i>
-                                      </div>
-                                      <div>
-                                        <div className="text-[10px] font-semibold text-slate-500">नाखून की सफ़ाई</div>
-                                        <div className="text-xs font-bold mt-0.5">
-                                          {rec.Nails_Clean ? '✅ साफ़ व कटे हुए' : '❌ गंदे या बड़े नाखून'}
-                                        </div>
-                                      </div>
-                                    </div>
-
-                                    {/* Uniform */}
-                                    <div
-                                      className={`p-3 rounded-xl border flex items-center gap-2.5 ${
-                                        rec.Uniform_clean
-                                          ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
-                                          : 'bg-rose-50/70 border-rose-200 text-rose-950'
-                                      }`}
-                                    >
-                                      <div
-                                        className={`w-9 h-9 rounded-lg flex items-center justify-center text-base shrink-0 ${
-                                          rec.Uniform_clean ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'
-                                        }`}
-                                      >
-                                        <i className="fa-solid fa-shirt"></i>
-                                      </div>
-                                      <div>
-                                        <div className="text-[10px] font-semibold text-slate-500">स्कूल की वर्दी (Uniform)</div>
-                                        <div className="text-xs font-bold mt-0.5">
-                                          {rec.Uniform_clean ? '✅ साफ़-सुथरी वर्दी' : '❌ वर्दी साफ़ नहीं थी'}
-                                        </div>
-                                      </div>
-                                    </div>
-
-                                    {/* Discipline */}
-                                    <div
-                                      className={`p-3 rounded-xl border flex items-center gap-2.5 ${
-                                        rec.Discipline
-                                          ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
-                                          : 'bg-rose-50/70 border-rose-200 text-rose-950'
-                                      }`}
-                                    >
-                                      <div
-                                        className={`w-9 h-9 rounded-lg flex items-center justify-center text-base shrink-0 ${
-                                          rec.Discipline ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'
-                                        }`}
-                                      >
-                                        <i className="fa-solid fa-shield-heart"></i>
-                                      </div>
-                                      <div>
-                                        <div className="text-[10px] font-semibold text-slate-500">कक्षा में आचरण</div>
-                                        <div className="text-xs font-bold mt-0.5">
-                                          {rec.Discipline ? '✅ शांत व अनुशासित' : '⚠️ सुधार की ज़रूरत'}
-                                        </div>
-                                      </div>
-                                    </div>
-                                  </div>
-
-                                  {/* Teacher Remark in Natural Hindi */}
-                                  <div className="p-3.5 bg-amber-50/60 rounded-xl border border-amber-200 text-xs space-y-1.5">
-                                    <div className="flex flex-wrap items-center justify-between gap-2">
-                                      <span className="font-bold text-amber-950 flex items-center gap-1.5">
-                                        <i className="fa-solid fa-chalkboard-user text-amber-700"></i>
-                                        <span>शिक्षक की टिप्पणी:</span>
-                                        <span
-                                          className={`px-2 py-0.5 rounded-full font-black text-[10px] border ${
-                                            isFault
-                                              ? 'bg-rose-100 text-rose-800 border-rose-300'
-                                              : 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                  {rec.Is_Present ? (
+                                    <>
+                                      {/* 4 HABITS GRID IN SIMPLE HINDI - ONLY WHEN PRESENT */}
+                                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
+                                        {/* Bathing */}
+                                        <div
+                                          className={`p-3 rounded-xl border flex items-center gap-2.5 ${
+                                            rec.Is_Bathed
+                                              ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
+                                              : 'bg-rose-50/70 border-rose-200 text-rose-950'
                                           }`}
                                         >
-                                          {isFault
-                                            ? (rec.Remark && rec.Remark.toLowerCase() !== 'fault' ? rec.Remark : 'सुधार अपेक्षित')
-                                            : (rec.Remark || 'उत्कृष्ट')}
-                                        </span>
-                                      </span>
-                                      <span className="text-[10px] text-amber-800 font-medium">
-                                        व्यवहार शिष्टाचार: <strong>{rec.Good_Manners === 'Good' ? 'अच्छा (Good)' : (rec.Good_Manners || 'अच्छा')}</strong>
-                                      </span>
-                                    </div>
+                                          <div
+                                            className={`w-9 h-9 rounded-lg flex items-center justify-center text-base shrink-0 ${
+                                              rec.Is_Bathed ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'
+                                            }`}
+                                          >
+                                            <i className="fa-solid fa-shower"></i>
+                                          </div>
+                                          <div>
+                                            <div className="text-[10px] font-semibold text-slate-500">दैनिक स्नान</div>
+                                            <div className="text-xs font-bold mt-0.5">
+                                              {rec.Is_Bathed ? '✅ नहा कर आए' : '❌ स्नान नहीं किया'}
+                                            </div>
+                                          </div>
+                                        </div>
 
-                                    <p className="text-xs text-slate-700 leading-relaxed italic pl-1 font-medium">
-                                      &ldquo;{getBehaviorFeedback(rec)}&rdquo;
-                                    </p>
-                                  </div>
+                                        {/* Nails */}
+                                        <div
+                                          className={`p-3 rounded-xl border flex items-center gap-2.5 ${
+                                            rec.Nails_Clean
+                                              ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
+                                              : 'bg-rose-50/70 border-rose-200 text-rose-950'
+                                          }`}
+                                        >
+                                          <div
+                                            className={`w-9 h-9 rounded-lg flex items-center justify-center text-base shrink-0 ${
+                                              rec.Nails_Clean ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'
+                                            }`}
+                                          >
+                                            <i className="fa-solid fa-hand-sparkles"></i>
+                                          </div>
+                                          <div>
+                                            <div className="text-[10px] font-semibold text-slate-500">नाखून की सफ़ाई</div>
+                                            <div className="text-xs font-bold mt-0.5">
+                                              {rec.Nails_Clean ? '✅ साफ़ व कटे हुए' : '❌ गंदे या बड़े नाखून'}
+                                            </div>
+                                          </div>
+                                        </div>
+
+                                        {/* Uniform */}
+                                        <div
+                                          className={`p-3 rounded-xl border flex items-center gap-2.5 ${
+                                            rec.Uniform_clean
+                                              ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
+                                              : 'bg-rose-50/70 border-rose-200 text-rose-950'
+                                          }`}
+                                        >
+                                          <div
+                                            className={`w-9 h-9 rounded-lg flex items-center justify-center text-base shrink-0 ${
+                                              rec.Uniform_clean ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'
+                                            }`}
+                                          >
+                                            <i className="fa-solid fa-shirt"></i>
+                                          </div>
+                                          <div>
+                                            <div className="text-[10px] font-semibold text-slate-500">स्कूल की वर्दी (Uniform)</div>
+                                            <div className="text-xs font-bold mt-0.5">
+                                              {rec.Uniform_clean ? '✅ साफ़-सुथरी वर्दी' : '❌ वर्दी साफ़ नहीं थी'}
+                                            </div>
+                                          </div>
+                                        </div>
+
+                                        {/* Discipline */}
+                                        <div
+                                          className={`p-3 rounded-xl border flex items-center gap-2.5 ${
+                                            rec.Discipline
+                                              ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
+                                              : 'bg-rose-50/70 border-rose-200 text-rose-950'
+                                          }`}
+                                        >
+                                          <div
+                                            className={`w-9 h-9 rounded-lg flex items-center justify-center text-base shrink-0 ${
+                                              rec.Discipline ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'
+                                            }`}
+                                          >
+                                            <i className="fa-solid fa-shield-heart"></i>
+                                          </div>
+                                          <div>
+                                            <div className="text-[10px] font-semibold text-slate-500">कक्षा में आचरण</div>
+                                            <div className="text-xs font-bold mt-0.5">
+                                              {rec.Discipline ? '✅ शांत व अनुशासित' : '⚠️ सुधार की ज़रूरत'}
+                                            </div>
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      {/* Teacher Remark in Natural Hindi */}
+                                      <div className="p-3.5 bg-amber-50/60 rounded-xl border border-amber-200 text-xs space-y-1.5">
+                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                          <span className="font-bold text-amber-950 flex items-center gap-1.5">
+                                            <i className="fa-solid fa-chalkboard-user text-amber-700"></i>
+                                            <span>शिक्षक की टिप्पणी:</span>
+                                            <span
+                                              className={`px-2 py-0.5 rounded-full font-black text-[10px] border ${
+                                                isFault
+                                                  ? 'bg-rose-100 text-rose-800 border-rose-300'
+                                                  : 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                              }`}
+                                            >
+                                              {isFault
+                                                ? (rec.Remark && rec.Remark.toLowerCase() !== 'fault' ? rec.Remark : 'सुधार अपेक्षित')
+                                                : (rec.Remark || 'उत्कृष्ट')}
+                                            </span>
+                                          </span>
+                                          <span className="text-[10px] text-amber-800 font-medium">
+                                            व्यवहार शिष्टाचार: <strong>{rec.Good_Manners === 'Good' ? 'अच्छा (Good)' : (rec.Good_Manners || 'अच्छा')}</strong>
+                                          </span>
+                                        </div>
+
+                                        <p className="text-xs text-slate-700 leading-relaxed italic pl-1 font-medium">
+                                          &ldquo;{getBehaviorFeedback(rec)}&rdquo;
+                                        </p>
+                                      </div>
+                                    </>
+                                  ) : (
+                                    /* WHEN ABSENT: Show informative absence box without conduct evaluation */
+                                    <div className="p-4 bg-rose-50/80 rounded-xl border border-rose-200 flex items-start gap-3.5">
+                                      <div className="w-11 h-11 rounded-xl bg-rose-600 text-white flex items-center justify-center text-xl shrink-0 shadow-xs">
+                                        <i className="fa-solid fa-user-xmark"></i>
+                                      </div>
+                                      <div className="flex-1 min-w-0">
+                                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                                          <h5 className="font-bold text-rose-950 text-sm">
+                                            छात्र आज विद्यालय में अनुपस्थित (Absent) था
+                                          </h5>
+                                          <span className="text-[10px] font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full border border-rose-200">
+                                            आचरण मूल्यांकन लागू नहीं
+                                          </span>
+                                        </div>
+                                        <p className="text-xs text-rose-800 mt-1 leading-relaxed">
+                                          छात्र के अनुपस्थित होने के कारण विद्यालय आचरण, दैनिक स्वच्छता, यूनिफॉर्म व कक्षा अनुशासन का मूल्यांकन नहीं किया गया है।
+                                        </p>
+                                        {rec.Remark && (
+                                          <div className="mt-2.5 text-xs text-slate-800 bg-white p-2.5 rounded-lg border border-rose-200">
+                                            <span className="font-bold text-slate-900">शिक्षक टिप्पणी / कारण:</span> {rec.Remark}
+                                          </div>
+                                        )}
+                                        <div className="mt-2 text-xs text-slate-600 italic">
+                                          💡 {getBehaviorFeedback(rec)}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
 
                                   {/* Evaluation Footer Note (WhatsApp button removed per request) */}
                                   <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
@@ -6212,6 +6530,16 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         {/* ========================================================================= */}
         {activeTab === 'teacher' && !teacherUser && (
           <div className="max-w-md mx-auto my-8 animate-fadeIn">
+            {/* Back button to return to Role Selection */}
+            <button
+              type="button"
+              onClick={() => setActiveTab('home')}
+              className="inline-flex items-center gap-2 text-xs sm:text-sm font-bold text-slate-700 hover:text-blue-900 bg-white hover:bg-slate-100 border border-slate-200 px-3.5 py-2 rounded-xl transition-all cursor-pointer shadow-xs mb-4"
+            >
+              <i className="fa-solid fa-arrow-left"></i>
+              <span>← वापस जाएं (Back to Role Selection)</span>
+            </button>
+
             <div className="bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden">
               {/* Top Banner */}
               <div className="bg-gradient-to-br from-[#0c2340] via-[#10316b] to-[#0c2340] p-6 text-white text-center relative">
@@ -6308,33 +6636,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   )}
                 </button>
 
-                <div className="pt-2 space-y-2 text-center">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const teacher = usersList.find(
-                        (u) => (u.Designation || '').toLowerCase().includes('teacher')
-                      ) || {
-                        User_ID: 'T1',
-                        Mobile_number: '9876543210',
-                        Username: 'teacher',
-                        Name: 'Mh salik',
-                        Designation: 'Teacher',
-                        Assigned_Class: 'C12',
-                      };
-                      setTeacherUser(teacher);
-                      try {
-                        localStorage.setItem('evs_teacher_user', JSON.stringify(teacher));
-                      } catch {}
-                    }}
-                    className="w-full py-2.5 bg-amber-100 hover:bg-amber-200 text-amber-950 font-bold text-xs rounded-xl border border-amber-300 transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
-                  >
-                    <i className="fa-solid fa-bolt text-amber-600"></i>
-                    <span>⚡ डेमो टीचर के रूप में त्वरित लॉगिन (One-Click Demo Teacher Login)</span>
-                  </button>
-                  <p className="text-[11px] text-slate-400">
+                <div className="pt-2 text-center">
+                  <p className="text-[11px] text-slate-500">
                     <i className="fa-solid fa-shield-halved text-amber-500 mr-1"></i>
-                    यह पोर्टल केवल स्कूल के अध्यापकों एवं स्टाफ सदस्यों के लिए सुरक्षित है।
+                    यह पोर्टल केवल स्कूल के अधिकृत अध्यापकों के लिए सुरक्षित है। बिना लॉगिन कोई डेटा नहीं दिखेगा।
                   </p>
                 </div>
               </form>
@@ -6382,7 +6687,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 </button>
                 <button
                   onClick={handleTeacherLogout}
-                  className="px-3.5 py-1.5 rounded-lg bg-rose-500/80 hover:bg-rose-600 text-white text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm"
+                  className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
                   title="Logout Teacher"
                 >
                   <i className="fa-solid fa-right-from-bracket"></i>
@@ -7138,6 +7443,16 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         {/* ========================================================================= */}
         {activeTab === 'manager' && !managerUser && (
           <div className="max-w-md mx-auto my-8 animate-fadeIn">
+            {/* Back button to return to Role Selection */}
+            <button
+              type="button"
+              onClick={() => setActiveTab('home')}
+              className="inline-flex items-center gap-2 text-xs sm:text-sm font-bold text-slate-700 hover:text-blue-900 bg-white hover:bg-slate-100 border border-slate-200 px-3.5 py-2 rounded-xl transition-all cursor-pointer shadow-xs mb-4"
+            >
+              <i className="fa-solid fa-arrow-left"></i>
+              <span>← वापस जाएं (Back to Role Selection)</span>
+            </button>
+
             <div className="bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden">
               {/* Top Banner */}
               <div className="bg-gradient-to-br from-[#0c2340] via-[#10316b] to-[#0c2340] p-6 text-white text-center relative">
@@ -7234,31 +7549,6 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   )}
                 </button>
 
-                <div className="pt-1 text-center">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const mgr = usersList.find(
-                        (u) => (u.Designation || '').toLowerCase().includes('manager')
-                      ) || {
-                        User_ID: 'U1',
-                        Mobile_number: '9876543210',
-                        Username: 'mahak',
-                        Name: 'Mahak (Manager)',
-                        Designation: 'Manager',
-                      };
-                      setManagerUser(mgr);
-                      try {
-                        localStorage.setItem('evs_manager_user', JSON.stringify(mgr));
-                      } catch {}
-                    }}
-                    className="w-full py-2.5 bg-amber-100 hover:bg-amber-200 text-amber-950 font-bold text-xs rounded-xl border border-amber-300 transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
-                  >
-                    <i className="fa-solid fa-bolt text-amber-600"></i>
-                    <span>⚡ डेमो मैनेजर के रूप में त्वरित लॉगिन (One-Click Demo Manager Login)</span>
-                  </button>
-                </div>
-
                 <div className="p-3 bg-amber-50/80 border border-amber-200/80 rounded-xl text-[11px] text-amber-900 flex items-start gap-2 mt-2">
                   <i className="fa-solid fa-shield-halved text-amber-600 text-xs mt-0.5 shrink-0"></i>
                   <div>
@@ -7343,6 +7633,16 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 </button>
 
                 <button
+                  type="button"
+                  onClick={() => setActiveTab('home')}
+                  className="px-3.5 py-2 bg-white/10 hover:bg-amber-400 hover:text-slate-950 text-amber-200 text-xs font-bold rounded-xl border border-amber-400/30 transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  title="भूमिका बदलें (Change Role)"
+                >
+                  <i className="fa-solid fa-arrow-left"></i>
+                  <span>भूमिका बदलें (Roles)</span>
+                </button>
+
+                <button
                   onClick={handleManagerLogout}
                   className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors flex items-center gap-2 cursor-pointer"
                   title="Log out of Manager Portal"
@@ -7367,6 +7667,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               loadingBehavior={loadingBehavior}
               onSelectStudent={(st) => setSelectedStudentDetail(st)}
               onOpenAddStudent={() => setAddStudentModalOpen(true)}
+              onSyncStudent={syncStudentToSheet}
+              onSyncAllPending={syncAllPendingStudentsToSheet}
+              onOpenSyncSettings={() => setSheetSyncModalOpen(true)}
+              onDeleteStudent={handleDeleteStudent}
             />
 
             {/* Manager Switcher Tabs (5 Tabs) */}
@@ -7659,6 +7963,20 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                   >
                                     <i className="fa-solid fa-qrcode text-amber-500"></i>
                                     <span className="hidden sm:inline text-[10px]">QR</span>
+                                  </button>
+                                  <button
+                                    onClick={async () => {
+                                      const confirmDelete = window.confirm(
+                                        `क्या आप वाकई छात्र "${s.Student_Name || 'Unknown'}" (ID: ${s.Student_ID}) को पोर्टल व Sheet से हटाना चाहते हैं?`
+                                      );
+                                      if (confirmDelete) {
+                                        await handleDeleteStudent(s.Student_ID, s.Student_Name || '');
+                                      }
+                                    }}
+                                    className="p-1 px-2 bg-rose-50 hover:bg-rose-600 hover:text-white text-rose-700 border border-rose-200 rounded text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1"
+                                    title="छात्र हटाएं (Delete Student)"
+                                  >
+                                    <i className="fa-solid fa-trash-can text-[10px]"></i>
                                   </button>
                                 </div>
                               </td>
@@ -8067,51 +8385,63 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
                               {/* Hygiene Checklist Badges */}
                               <td className="px-3.5 py-3">
-                                <div className="flex flex-wrap items-center justify-center gap-1">
-                                  <span
-                                    title={`Bathed: ${rec.Is_Bathed ? 'Yes' : 'No'}`}
-                                    className={`px-1.5 py-0.5 rounded text-[10px] font-semibold flex items-center gap-1 ${
-                                      rec.Is_Bathed ? 'bg-blue-100 text-blue-800' : 'bg-slate-100 text-slate-400 line-through'
-                                    }`}
-                                  >
-                                    <i className="fa-solid fa-shower text-[9px]"></i>
-                                    <span>Bath</span>
-                                  </span>
+                                {rec.Is_Present ? (
+                                  <div className="flex flex-wrap items-center justify-center gap-1">
+                                    <span
+                                      title={`Bathed: ${rec.Is_Bathed ? 'Yes' : 'No'}`}
+                                      className={`px-1.5 py-0.5 rounded text-[10px] font-semibold flex items-center gap-1 ${
+                                        rec.Is_Bathed ? 'bg-blue-100 text-blue-800' : 'bg-slate-100 text-slate-400 line-through'
+                                      }`}
+                                    >
+                                      <i className="fa-solid fa-shower text-[9px]"></i>
+                                      <span>Bath</span>
+                                    </span>
 
-                                  <span
-                                    title={`Nails Clean: ${rec.Nails_Clean ? 'Yes' : 'No'}`}
-                                    className={`px-1.5 py-0.5 rounded text-[10px] font-semibold flex items-center gap-1 ${
-                                      rec.Nails_Clean ? 'bg-purple-100 text-purple-800' : 'bg-slate-100 text-slate-400 line-through'
-                                    }`}
-                                  >
-                                    <i className="fa-solid fa-hand text-[9px]"></i>
-                                    <span>Nails</span>
-                                  </span>
+                                    <span
+                                      title={`Nails Clean: ${rec.Nails_Clean ? 'Yes' : 'No'}`}
+                                      className={`px-1.5 py-0.5 rounded text-[10px] font-semibold flex items-center gap-1 ${
+                                        rec.Nails_Clean ? 'bg-purple-100 text-purple-800' : 'bg-slate-100 text-slate-400 line-through'
+                                      }`}
+                                    >
+                                      <i className="fa-solid fa-hand text-[9px]"></i>
+                                      <span>Nails</span>
+                                    </span>
 
-                                  <span
-                                    title={`Uniform Clean: ${rec.Uniform_clean ? 'Yes' : 'No'}`}
-                                    className={`px-1.5 py-0.5 rounded text-[10px] font-semibold flex items-center gap-1 ${
-                                      rec.Uniform_clean ? 'bg-indigo-100 text-indigo-800' : 'bg-slate-100 text-slate-400 line-through'
-                                    }`}
-                                  >
-                                    <i className="fa-solid fa-shirt text-[9px]"></i>
-                                    <span>Uniform</span>
-                                  </span>
-                                </div>
+                                    <span
+                                      title={`Uniform Clean: ${rec.Uniform_clean ? 'Yes' : 'No'}`}
+                                      className={`px-1.5 py-0.5 rounded text-[10px] font-semibold flex items-center gap-1 ${
+                                        rec.Uniform_clean ? 'bg-indigo-100 text-indigo-800' : 'bg-slate-100 text-slate-400 line-through'
+                                      }`}
+                                    >
+                                      <i className="fa-solid fa-shirt text-[9px]"></i>
+                                      <span>Uniform</span>
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <div className="text-center">
+                                    <span className="text-[10px] text-slate-400 italic font-medium px-2 py-0.5 rounded bg-slate-50 border border-slate-200">
+                                      — लागू नहीं (अनुपस्थित) —
+                                    </span>
+                                  </div>
+                                )}
                               </td>
 
                               {/* Discipline & Manners */}
                               <td className="px-3.5 py-3 text-center">
-                                <span
-                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold ${
-                                    rec.Discipline
-                                      ? 'bg-emerald-100 text-emerald-800'
-                                      : 'bg-amber-100 text-amber-800'
-                                  }`}
-                                >
-                                  <i className={`fa-solid ${rec.Discipline ? 'fa-check' : 'fa-triangle-exclamation'}`}></i>
-                                  <span>{rec.Discipline ? 'Good' : 'Needs Care'}</span>
-                                </span>
+                                {rec.Is_Present ? (
+                                  <span
+                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold ${
+                                      rec.Discipline
+                                        ? 'bg-emerald-100 text-emerald-800'
+                                        : 'bg-amber-100 text-amber-800'
+                                    }`}
+                                  >
+                                    <i className={`fa-solid ${rec.Discipline ? 'fa-check' : 'fa-triangle-exclamation'}`}></i>
+                                    <span>{rec.Discipline ? 'Good' : 'Needs Care'}</span>
+                                  </span>
+                                ) : (
+                                  <span className="text-[11px] text-slate-400 font-medium italic">—</span>
+                                )}
                               </td>
 
                               {/* Remark */}
@@ -8119,7 +8449,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                 {rec.Remark ? (
                                   <span
                                     className={`inline-block px-2 py-0.5 rounded text-[11px] font-semibold ${
-                                      isFault
+                                      !rec.Is_Present
+                                        ? 'bg-rose-50 text-rose-800 border border-rose-200'
+                                        : isFault
                                         ? 'bg-rose-100 text-rose-800 border border-rose-200'
                                         : 'bg-slate-100 text-slate-700'
                                     }`}
@@ -8146,33 +8478,50 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                     const parentMobile = matchedStudent?.Mobile_Number || matchedStudent?.Parent_Mobile || '';
                                     const cleanMobile = String(parentMobile).replace(/\D/g, '');
                                     const cName = getClassName(rec.Class || matchedStudent?.Class);
-                                    let pts = 0;
-                                    if (rec.Is_Present) pts++;
-                                    if (rec.Is_Bathed) pts++;
-                                    if (rec.Nails_Clean) pts++;
-                                    if (rec.Uniform_clean) pts++;
-                                    if (rec.Discipline) pts++;
 
-                                    const msg = `🏫 *School Daily Student Behavior & Hygiene Report*\n` +
-                                      `━━━━━━━━━━━━━━━━━━━━━━\n` +
-                                      `👤 *Student:* ${studentName}\n` +
-                                      `🆔 *Student ID:* ${rec.Student_ID}\n` +
-                                      `📅 *Date:* ${rec.Date}\n` +
-                                      `📚 *Class:* ${cName}\n` +
-                                      `━━━━━━━━━━━━━━━━━━━━━━\n` +
-                                      `📋 *Daily Check Parameters:*\n` +
-                                      `• Attendance: ${rec.Is_Present ? '✅ Present' : '❌ Absent'}\n` +
-                                      `• Morning Bath: ${rec.Is_Bathed ? '✅ Done' : '❌ Incomplete'}\n` +
-                                      `• Clean Nails: ${rec.Nails_Clean ? '✅ Clean & Trimmed' : '❌ Needs Trimming'}\n` +
-                                      `• School Uniform: ${rec.Uniform_clean ? '✅ Clean & Neat' : '❌ Needs Attention'}\n` +
-                                      `• Good Manners: ${rec.Good_Manners || (rec.Discipline ? 'Respectful' : 'Needs guidance')}\n` +
-                                      `• Classroom Discipline: ${rec.Discipline ? '✅ Well Behaved' : '⚠️ Attention Needed'}\n` +
-                                      (rec.Remark ? `• Teacher Remark: ${rec.Remark}\n` : '') +
-                                      `━━━━━━━━━━━━━━━━━━━━━━\n` +
-                                      `🌟 *Overall Daily Score:* ${pts}/5\n` +
-                                      `💡 *Teacher / AI Feedback:* ${getBehaviorFeedback(rec)}\n` +
-                                      `━━━━━━━━━━━━━━━━━━━━━━\n` +
-                                      `_Sent via School Portal._`;
+                                    let msg = '';
+                                    if (!rec.Is_Present) {
+                                      msg = `🏫 *School Daily Attendance Notification*\n` +
+                                        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+                                        `👤 *Student:* ${studentName}\n` +
+                                        `🆔 *Student ID:* ${rec.Student_ID}\n` +
+                                        `📅 *Date:* ${rec.Date}\n` +
+                                        `📚 *Class:* ${cName}\n` +
+                                        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+                                        `• Attendance: ❌ Absent (अनुपस्थित)\n` +
+                                        `• Note: छात्र आज विद्यालय में अनुपस्थित रहा। आचरण व स्वच्छता मूल्यांकन लागू नहीं है।\n` +
+                                        (rec.Remark ? `• Teacher Remark: ${rec.Remark}\n` : '') +
+                                        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+                                        `_Sent via School Portal._`;
+                                    } else {
+                                      let pts = 0;
+                                      if (rec.Is_Present) pts++;
+                                      if (rec.Is_Bathed) pts++;
+                                      if (rec.Nails_Clean) pts++;
+                                      if (rec.Uniform_clean) pts++;
+                                      if (rec.Discipline) pts++;
+
+                                      msg = `🏫 *School Daily Student Behavior & Hygiene Report*\n` +
+                                        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+                                        `👤 *Student:* ${studentName}\n` +
+                                        `🆔 *Student ID:* ${rec.Student_ID}\n` +
+                                        `📅 *Date:* ${rec.Date}\n` +
+                                        `📚 *Class:* ${cName}\n` +
+                                        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+                                        `📋 *Daily Check Parameters:*\n` +
+                                        `• Attendance: ✅ Present\n` +
+                                        `• Morning Bath: ${rec.Is_Bathed ? '✅ Done' : '❌ Incomplete'}\n` +
+                                        `• Clean Nails: ${rec.Nails_Clean ? '✅ Clean & Trimmed' : '❌ Needs Trimming'}\n` +
+                                        `• School Uniform: ${rec.Uniform_clean ? '✅ Clean & Neat' : '❌ Needs Attention'}\n` +
+                                        `• Good Manners: ${rec.Good_Manners || (rec.Discipline ? 'Respectful' : 'Needs guidance')}\n` +
+                                        `• Classroom Discipline: ${rec.Discipline ? '✅ Well Behaved' : '⚠️ Attention Needed'}\n` +
+                                        (rec.Remark ? `• Teacher Remark: ${rec.Remark}\n` : '') +
+                                        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+                                        `🌟 *Overall Daily Score:* ${pts}/5\n` +
+                                        `💡 *Teacher / AI Feedback:* ${getBehaviorFeedback(rec)}\n` +
+                                        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+                                        `_Sent via School Portal._`;
+                                    }
 
                                     const encoded = encodeURIComponent(msg);
                                     const waUrl = cleanMobile.length >= 10

@@ -53,6 +53,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copiedRow, setCopiedRow] = useState<boolean>(false);
+  const [syncStatus, setSyncStatus] = useState<{ state: 'idle' | 'syncing' | 'success' | 'warning'; message?: string; details?: string } | null>(null);
 
   // Copy row formatted for direct paste into Google Sheet as a zero-downtime backup
   const handleCopyRowForSheet = () => {
@@ -101,6 +102,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       setErrorMsg(null);
+      setSyncStatus(null);
       setIsSubmitting(false);
 
       // Auto-generate unique Student ID (e.g. S-1082)
@@ -221,6 +223,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
     }
 
     setIsSubmitting(true);
+    setSyncStatus({ state: 'syncing', message: 'छात्र को ऐप व Google Sheet में सुरक्षित किया जा रहा है...' });
 
     try {
       const generatedQrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(sId)}&size=250x250`;
@@ -243,12 +246,28 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
         QRCode: generatedQrUrl,
       };
 
-      await onStudentAdded(newStudent, sendWelcomeWhatsApp);
+      const result: any = await onStudentAdded(newStudent, sendWelcomeWhatsApp);
       setIsSubmitting(false);
-      onClose();
+
+      if (result && result.success) {
+        setSyncStatus({
+          state: 'success',
+          message: `✅ छात्र ${sName} Google Sheet ('Students' टैब) और पोर्टल में सफलतापूर्वक जुड़ गया है!`,
+        });
+        setTimeout(() => {
+          onClose();
+        }, 1800);
+      } else {
+        setSyncStatus({
+          state: 'warning',
+          message: `⚡ छात्र ${sName} ऐप में सुरक्षित हो गया है! Google Sheet सिंक लंबित है।`,
+          details: result?.error || 'Google Apps Script URL अथवा परमिशन की जांच करें।',
+        });
+      }
     } catch (err: any) {
       setIsSubmitting(false);
       setErrorMsg(err.message || 'छात्र रिकॉर्ड जोड़ने में त्रुटि हुई।');
+      setSyncStatus(null);
     }
   };
 
@@ -284,12 +303,66 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
 
         {/* Modal Body / Form */}
         <form onSubmit={handleSubmit} className="overflow-y-auto p-5 sm:p-6 space-y-4 flex-1">
+          {/* Live Sync Status Banner */}
+          {syncStatus && (
+            <div
+              className={`p-3.5 rounded-2xl border text-xs space-y-2 ${
+                syncStatus.state === 'success'
+                  ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+                  : syncStatus.state === 'warning'
+                  ? 'bg-amber-50 border-amber-300 text-amber-950'
+                  : 'bg-blue-50 border-blue-300 text-blue-950'
+              }`}
+            >
+              <div className="flex items-center gap-2 font-bold">
+                {syncStatus.state === 'syncing' && <i className="fa-solid fa-spinner fa-spin text-blue-600"></i>}
+                {syncStatus.state === 'success' && <i className="fa-solid fa-circle-check text-emerald-600 text-sm"></i>}
+                {syncStatus.state === 'warning' && <i className="fa-solid fa-triangle-exclamation text-amber-600 text-sm"></i>}
+                <span>{syncStatus.message}</span>
+              </div>
+              {syncStatus.details && (
+                <div className="text-[11px] text-amber-900 bg-white/60 p-2 rounded-xl">
+                  {syncStatus.details}
+                </div>
+              )}
+              {syncStatus.state === 'warning' && (
+                <div className="flex items-center gap-2 pt-1 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={handleCopyRowForSheet}
+                    className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-[11px] flex items-center gap-1 cursor-pointer shadow-2xs"
+                  >
+                    <i className="fa-solid fa-copy"></i>
+                    <span>{copiedRow ? 'कॉपी हो गई ✓' : 'Sheet रो कॉपी करें'}</span>
+                  </button>
+                  {onOpenSyncSettings && (
+                    <button
+                      type="button"
+                      onClick={onOpenSyncSettings}
+                      className="px-2.5 py-1 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                    >
+                      <i className="fa-solid fa-gear"></i>
+                      <span>सिंक सेटिंग्स</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className="px-2.5 py-1 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg font-bold text-[11px] cursor-pointer"
+                  >
+                    बंद करें
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Google Sheets Sync Diagnostic Banner */}
           <div className="p-3 bg-blue-50/80 border border-blue-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs text-blue-900">
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0 animate-pulse"></span>
               <span className="font-semibold">
-                छात्र सेव होते ही पोर्टल व Google Sheet (Students शीट) में तुरंत दर्ज होगा।
+                छात्र Google Sheet के <strong>'Students'</strong> टैब में लाइव दर्ज होगा।
               </span>
             </div>
             {onOpenSyncSettings && (

@@ -43,10 +43,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
       const saved = localStorage.getItem('evs_logged_driver');
       if (saved) return JSON.parse(saved);
     } catch {}
-    const amjad = driversFromUsers.find(
-      (u) => String(u.Name || '').toLowerCase() === 'amjad'
-    );
-    return amjad || driversFromUsers[0] || null;
+    return null;
   });
 
   // Login credentials state
@@ -676,6 +673,112 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
   const delta = 0.015;
   const osmEmbedUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${longitude - delta}%2C${latitude - delta}%2C${longitude + delta}%2C${latitude + delta}&layer=mapnik&marker=${latitude}%2C${longitude}`;
 
+  if (!loggedDriver) {
+    return (
+      <div className="max-w-md mx-auto my-8 animate-fadeIn">
+        {/* Back Button */}
+        {(onBackToHome || onBackToApp) && (
+          <button
+            type="button"
+            onClick={() => {
+              if (onBackToHome) onBackToHome();
+              else if (onBackToApp) onBackToApp();
+            }}
+            className="inline-flex items-center gap-2 text-xs sm:text-sm font-bold text-slate-700 hover:text-blue-900 bg-white hover:bg-slate-100 border border-slate-200 px-3.5 py-2 rounded-xl transition-all cursor-pointer shadow-xs mb-4"
+          >
+            <i className="fa-solid fa-arrow-left"></i>
+            <span>← वापस जाएं (Back to Role Selection)</span>
+          </button>
+        )}
+
+        <div className="bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden">
+          <div className="bg-gradient-to-br from-emerald-900 via-teal-900 to-[#0c2340] p-6 text-white text-center relative">
+            <div className="w-16 h-16 rounded-2xl bg-emerald-500 text-white flex items-center justify-center text-3xl mx-auto mb-3 shadow-lg shadow-emerald-600/30 border-2 border-emerald-300">
+              <i className="fa-solid fa-van-shuttle"></i>
+            </div>
+            <span className="inline-block px-3 py-0.5 rounded-full bg-emerald-400/20 text-emerald-300 text-[11px] font-bold tracking-wide border border-emerald-400/30 uppercase mb-1">
+              सुरक्षित वैन परिवहन (Driver Portal)
+            </span>
+            <h2 className="text-xl font-extrabold tracking-tight">ड्राइवर लॉगिन</h2>
+            <p className="text-xs text-emerald-100/80 mt-1">
+              वैन लाइव लोकेशन प्रसारण एवं रूट ट्रैकिंग हेतु कृपया लॉगिन करें
+            </p>
+          </div>
+
+          <div className="p-6 space-y-4">
+            {loginError && (
+              <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-xl font-bold flex items-start gap-2">
+                <i className="fa-solid fa-triangle-exclamation text-rose-600 mt-0.5 shrink-0"></i>
+                <div>{loginError}</div>
+              </div>
+            )}
+
+            <form onSubmit={handleDriverLogin} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  मोबाइल नंबर या यूजरनेम
+                </label>
+                <div className="relative">
+                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-sm pointer-events-none">
+                    <i className="fa-solid fa-phone"></i>
+                  </span>
+                  <input
+                    type="text"
+                    value={loginInput}
+                    onChange={(e) => {
+                      setLoginInput(e.target.value);
+                      if (loginError) setLoginError(null);
+                    }}
+                    placeholder="पंजीकृत मोबाइल नंबर (उदा. 9761081818)"
+                    className="w-full pl-9 pr-3.5 py-2.5 rounded-xl border border-slate-300 text-xs sm:text-sm focus:border-emerald-600 focus:ring-2 focus:ring-emerald-500/20 outline-none"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  पासवर्ड (Password)
+                </label>
+                <div className="relative">
+                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-sm pointer-events-none">
+                    <i className="fa-solid fa-lock"></i>
+                  </span>
+                  <input
+                    type="password"
+                    value={passwordInput}
+                    onChange={(e) => {
+                      setPasswordInput(e.target.value);
+                      if (loginError) setLoginError(null);
+                    }}
+                    placeholder="पासवर्ड दर्ज करें"
+                    className="w-full pl-9 pr-3.5 py-2.5 rounded-xl border border-slate-300 text-xs sm:text-sm focus:border-emerald-600 focus:ring-2 focus:ring-emerald-500/20 outline-none"
+                    required
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-sm shadow-md transition-all cursor-pointer flex items-center justify-center gap-2"
+              >
+                <i className="fa-solid fa-right-from-bracket"></i>
+                <span>लॉगिन करें (Login as Driver)</span>
+              </button>
+            </form>
+
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-[11px] text-slate-600 flex items-start gap-2">
+              <i className="fa-solid fa-shield-halved text-emerald-600 mt-0.5 shrink-0"></i>
+              <div>
+                <span className="font-bold">सुरक्षा नियम:</span> केवल स्कूल में पंजीकृत अधिकृत ड्राइवर ही इस पोर्टल में लॉगिन कर सकते हैं। बिना लॉगिन कोई डेटा नहीं खुलेगा।
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 max-w-5xl mx-auto pb-12">
       {/* HEADER BANNER */}
@@ -741,91 +844,8 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
         </div>
       </div>
 
-      {/* DRIVER AUTHENTICATION STATUS */}
-      {!loggedDriver ? (
-        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 sm:p-8">
-          <div className="max-w-md mx-auto space-y-5">
-            <div className="text-center">
-              <div className="w-16 h-16 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center text-3xl mx-auto mb-3">
-                <i className="fa-solid fa-id-card"></i>
-              </div>
-              <h2 className="text-xl font-black text-slate-900">ड्राइवर लॉगिन (Driver Login)</h2>
-              <p className="text-xs text-slate-500 mt-1">
-                स्कूल "Users" शीट में पंजीकृत मोबाइल नंबर एवं पासवर्ड से प्रवेश करें।
-              </p>
-            </div>
-
-            {loginError && (
-              <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl font-bold">
-                {loginError}
-              </div>
-            )}
-
-            <form onSubmit={handleDriverLogin} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  मोबाइल नंबर / यूज़रनेम:
-                </label>
-                <input
-                  type="text"
-                  value={loginInput}
-                  onChange={(e) => setLoginInput(e.target.value)}
-                  placeholder="जैसे 9761081818 या rukhar24336@gmail.com"
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  पासवर्ड (Password):
-                </label>
-                <input
-                  type="password"
-                  value={passwordInput}
-                  onChange={(e) => setPasswordInput(e.target.value)}
-                  placeholder="पासवर्ड (डिफ़ॉल्ट 1234)"
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  required
-                />
-              </div>
-
-              <button
-                type="submit"
-                className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-sm shadow-md transition-all cursor-pointer flex items-center justify-center gap-2"
-              >
-                <i className="fa-solid fa-right-to-bracket"></i>
-                <span>लॉगिन करें (Login as Driver)</span>
-              </button>
-            </form>
-
-            <div className="pt-4 border-t border-slate-100 text-center">
-              <span className="text-xs text-slate-500 block mb-2">त्वरित लॉगिन (Google Sheet Users):</span>
-              <button
-                type="button"
-                onClick={() => {
-                  const amjad = driversFromUsers[0] || {
-                    User_ID: '2eb81935',
-                    Mobile_number: '9761081818',
-                    Username: 'rukhar24336@gmail.com',
-                    Password: '1234',
-                    Name: 'Amjad',
-                    Designation: 'Driver',
-                  };
-                  setLoggedDriver(amjad);
-                  localStorage.setItem('evs_logged_driver', JSON.stringify(amjad));
-                }}
-                className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-extrabold transition-colors flex items-center justify-center gap-2 cursor-pointer border border-slate-300"
-              >
-                <i className="fa-solid fa-circle-check text-emerald-600"></i>
-                <span>अमजद (ड्राइवर - 9761081818) के रूप में तुरंत शुरू करें</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : (
-        /* LOGGED-IN DRIVER ACTIVE WORKSPACE */
-        <div className="space-y-6">
+      {/* LOGGED-IN DRIVER ACTIVE WORKSPACE */}
+      <div className="space-y-6">
           {/* DRIVER INFO & SHEET CONNECTION CARD */}
           <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-4 sm:p-5 flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-3">
@@ -1152,7 +1172,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
             </div>
           </div>
         </div>
-      )}
+
       {/* GOOGLE APPS SCRIPT SETUP MODAL */}
       <GoogleSheetSyncModal
         isOpen={showScriptModal}
