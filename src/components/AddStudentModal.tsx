@@ -19,10 +19,11 @@ export interface NewStudentData {
 interface AddStudentModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onStudentAdded: (student: Student, sendWhatsApp: boolean) => Promise<void> | void;
+  onStudentAdded: (student: Student, sendWhatsApp: boolean) => Promise<any> | void;
   existingStudents: Student[];
   classMap?: Record<string, string>;
   getClassName?: (c: string | undefined | null) => string;
+  onOpenSyncSettings?: () => void;
 }
 
 export const AddStudentModal: React.FC<AddStudentModalProps> = ({
@@ -32,6 +33,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
   existingStudents,
   classMap = {},
   getClassName = (c) => c || 'N/A',
+  onOpenSyncSettings,
 }) => {
   // Form Fields
   const [studentId, setStudentId] = useState<string>('');
@@ -50,6 +52,45 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
   const [qrPreviewUrl, setQrPreviewUrl] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [copiedRow, setCopiedRow] = useState<boolean>(false);
+
+  // Copy row formatted for direct paste into Google Sheet as a zero-downtime backup
+  const handleCopyRowForSheet = () => {
+    const qrFormula = `=IMAGE(CONCATENATE("https://api.qrserver.com/v1/create-qr-code/?data=", "${studentId.trim()}", "&size=250x250"))`;
+    const rowValues = [
+      studentId.trim(),
+      admissionNumber.trim(),
+      rollNumber.trim(),
+      studentName.trim(),
+      selectedClass,
+      fatherName.trim(),
+      motherName.trim(),
+      parentMobile.trim(),
+      studentPhotoUrl.trim(),
+      villageRoute.trim(),
+      '', // Adhar_Card
+      '', // Adhar_Photo
+      '', // Col 13
+      openingBalance ? String(openingBalance) : '0',
+      qrFormula,
+    ];
+    const tsv = rowValues.join('\t');
+    try {
+      navigator.clipboard.writeText(tsv).then(() => {
+        setCopiedRow(true);
+        setTimeout(() => setCopiedRow(false), 3000);
+      });
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = tsv;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      setCopiedRow(true);
+      setTimeout(() => setCopiedRow(false), 3000);
+    }
+  };
 
   // Available classes list
   const classKeys = Object.keys(classMap).length > 0
@@ -243,6 +284,26 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
 
         {/* Modal Body / Form */}
         <form onSubmit={handleSubmit} className="overflow-y-auto p-5 sm:p-6 space-y-4 flex-1">
+          {/* Google Sheets Sync Diagnostic Banner */}
+          <div className="p-3 bg-blue-50/80 border border-blue-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs text-blue-900">
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0 animate-pulse"></span>
+              <span className="font-semibold">
+                छात्र सेव होते ही पोर्टल व Google Sheet (Students शीट) में तुरंत दर्ज होगा।
+              </span>
+            </div>
+            {onOpenSyncSettings && (
+              <button
+                type="button"
+                onClick={onOpenSyncSettings}
+                className="text-xs font-bold text-blue-700 hover:text-blue-900 underline flex items-center gap-1 self-start sm:self-auto cursor-pointer"
+              >
+                <i className="fa-solid fa-gear text-[11px]"></i>
+                <span>Google Sheet Sync सेटिंग्स</span>
+              </button>
+            )}
+          </div>
+
           {errorMsg && (
             <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-start gap-2.5">
               <i className="fa-solid fa-triangle-exclamation text-rose-600 text-sm mt-0.5 shrink-0"></i>
@@ -485,31 +546,43 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
           </div>
 
           {/* Buttons */}
-          <div className="pt-2 flex items-center justify-end gap-3 border-t border-slate-100">
+          <div className="pt-2 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100">
             <button
               type="button"
-              onClick={onClose}
-              className="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-bold cursor-pointer transition-colors"
+              onClick={handleCopyRowForSheet}
+              className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Copy row to paste directly into Google Sheet"
             >
-              रद्द करें (Cancel)
+              <i className="fa-solid fa-copy text-slate-500"></i>
+              <span>{copiedRow ? '✓ पंक्ति कॉपी हो गई!' : 'Sheet पंक्ति कॉपी करें'}</span>
             </button>
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="px-6 py-2.5 bg-gradient-to-r from-[#0c2340] via-[#10316b] to-[#0c2340] hover:brightness-110 text-amber-300 text-xs font-extrabold rounded-xl shadow-md transition-all flex items-center gap-2 cursor-pointer disabled:opacity-60"
-            >
-              {isSubmitting ? (
-                <>
-                  <i className="fa-solid fa-spinner fa-spin"></i>
-                  <span>जोड़ा जा रहा है...</span>
-                </>
-              ) : (
-                <>
-                  <i className="fa-solid fa-user-check"></i>
-                  <span>छात्र सुरक्षित करें (Save Student)</span>
-                </>
-              )}
-            </button>
+
+            <div className="flex items-center gap-2.5">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-bold cursor-pointer transition-colors"
+              >
+                रद्द करें (Cancel)
+              </button>
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="px-6 py-2.5 bg-gradient-to-r from-[#0c2340] via-[#10316b] to-[#0c2340] hover:brightness-110 text-amber-300 text-xs font-extrabold rounded-xl shadow-md transition-all flex items-center gap-2 cursor-pointer disabled:opacity-60"
+              >
+                {isSubmitting ? (
+                  <>
+                    <i className="fa-solid fa-spinner fa-spin"></i>
+                    <span>जोड़ा जा रहा है...</span>
+                  </>
+                ) : (
+                  <>
+                    <i className="fa-solid fa-user-check"></i>
+                    <span>छात्र सुरक्षित करें (Save Student)</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </form>
       </div>

@@ -222,6 +222,79 @@ async function startServer() {
     }
   });
 
+  // Forward any action payload (addStudent, addFee, etc.) to Google Apps Script
+  app.post('/api/forward-apps-script', async (req, res) => {
+    try {
+      let payload = req.body;
+      if (typeof payload === 'string') {
+        try {
+          payload = JSON.parse(payload);
+        } catch {}
+      }
+
+      const targetUrl = currentAppsScriptUrl;
+      console.log(`[AppsScriptForwarder] Action: ${payload?.action}, Target: ${targetUrl}`);
+
+      const response = await fetch(targetUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload),
+      });
+
+      const responseText = await response.text();
+
+      // Check for Google Apps Script 404 / access error
+      if (responseText.includes('Page not found') || responseText.includes('unable to open the file')) {
+        return res.status(502).json({
+          success: false,
+          error: 'Google Apps Script Web App unshared or not found. Please deploy as Web App with "Anyone" access.',
+          needsDeployment: true,
+        });
+      }
+
+      let parsedJson: any = null;
+      try {
+        parsedJson = JSON.parse(responseText);
+      } catch {}
+
+      if (response.ok && (!parsedJson || parsedJson.status !== 'error')) {
+        return res.json({
+          success: true,
+          data: parsedJson || responseText,
+        });
+      }
+
+      return res.status(response.status || 500).json({
+        success: false,
+        error: parsedJson?.message || responseText || 'Apps Script returned error',
+      });
+    } catch (err: any) {
+      console.error('[AppsScriptForwarder] Connection Error:', err.message);
+      return res.status(502).json({
+        success: false,
+        error: err.message || 'Failed to connect to Google Apps Script Web App',
+      });
+    }
+  });
+
+  // Ping/Test current Google Apps Script connection
+  app.get('/api/test-apps-script', async (_req, res) => {
+    try {
+      const response = await fetch(`${currentAppsScriptUrl}?action=ping`, { method: 'GET' });
+      const text = await response.text();
+      if (text.includes('Page not found') || text.includes('unable to open the file')) {
+        return res.json({
+          ok: false,
+          configured: false,
+          error: 'Google Apps Script Web App not found. Deploy with "Anyone" access.',
+        });
+      }
+      return res.json({ ok: response.ok, configured: true, response: text.slice(0, 200) });
+    } catch (err: any) {
+      return res.json({ ok: false, configured: false, error: err.message });
+    }
+  });
+
   // GET live bus telemetry (all buses)
   app.get('/api/bus-tracking', (_req, res) => {
     res.json(liveTelemetryStore);

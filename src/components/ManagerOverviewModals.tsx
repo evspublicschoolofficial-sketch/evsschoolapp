@@ -14,6 +14,7 @@ interface ManagerOverviewModalsProps {
   loadingFees?: boolean;
   loadingBehavior?: boolean;
   onSelectStudent?: (student: Student) => void;
+  onOpenAddStudent?: () => void;
 }
 
 export type ManagerModalType = 'totalStudents' | 'feesOverview' | 'absentToday' | 'faultyBehavior' | null;
@@ -47,6 +48,7 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
   loadingFees = false,
   loadingBehavior = false,
   onSelectStudent,
+  onOpenAddStudent,
 }) => {
   const [activeModal, setActiveModal] = useState<ManagerModalType>(null);
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -608,6 +610,22 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                     </option>
                   ))}
                 </select>
+
+                {/* Quick Add Student button inside Total Students Modal */}
+                {activeModal === 'totalStudents' && onOpenAddStudent && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveModal(null);
+                      onOpenAddStudent();
+                    }}
+                    className="px-3 py-2 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors shrink-0"
+                    title="नया छात्र जोड़ें"
+                  >
+                    <i className="fa-solid fa-user-plus text-[11px]"></i>
+                    <span className="hidden sm:inline">नया छात्र जोड़ें</span>
+                  </button>
+                )}
 
                 {/* Sub-tabs for Fees Modal */}
                 {activeModal === 'feesOverview' && (

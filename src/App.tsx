@@ -21,10 +21,23 @@ import { DriverPortal } from './components/DriverPortal';
 import { ManagerVanTracker } from './components/ManagerVanTracker';
 import { StudentAvatar } from './components/StudentAvatar';
 import { ManagerOverviewModals } from './components/ManagerOverviewModals';
+import { GoogleSheetSyncModal } from './components/GoogleSheetSyncModal';
 import studentFarahPhoto from './assets/images/student_farah_1789483069291.jpg';
 import studentNamraPhoto from './assets/images/student_namra_1789483091505.jpg';
 
-const API_URL = 'https://script.google.com/macros/s/AKfycbwVy51K14qu6IXipAZXP4NspFcAUHpLcYv8-zjhkYnBlUI17TzGi_KaJU9TRmNT8D5vvQ/exec';
+export const DEFAULT_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwVy51K14qu6IXipAZXP4NspFcAUHpLcYv8-zjhkYnBlUI17TzGi_KaJU9TRmNT8D5vvQ/exec';
+
+export const getEffectiveApiUrl = (): string => {
+  if (typeof window !== 'undefined') {
+    const custom = localStorage.getItem('evs_custom_apps_script_url');
+    if (custom && custom.trim().startsWith('https://script.google.com/macros/s/')) {
+      return custom.trim();
+    }
+  }
+  return DEFAULT_SCRIPT_URL;
+};
+
+const API_URL = DEFAULT_SCRIPT_URL;
 
 // Types
 export interface Student {
@@ -1317,6 +1330,9 @@ export default function App() {
   const [addStudentModalOpen, setAddStudentModalOpen] = useState<boolean>(false);
   const [studentNotificationSuccess, setStudentNotificationSuccess] = useState<string | null>(null);
 
+  // Google Sheet Sync Modal State (Web App Script URL & Live Status)
+  const [sheetSyncModalOpen, setSheetSyncModalOpen] = useState<boolean>(false);
+
   // Selected Student for Manager Fee Explorer (Manager Portal)
   const [managerSelectedFeeStudent, setManagerSelectedFeeStudent] = useState<Student | null>(null);
 
@@ -1479,9 +1495,27 @@ export default function App() {
             }
             return s;
           });
-        setStudents(valid);
+
+        // Merge locally saved custom students so newly added students are NEVER overwritten or lost
+        let customStudents: Student[] = [];
         try {
-          localStorage.setItem(CACHE_KEY_STUDENTS, JSON.stringify(valid));
+          const customStr = localStorage.getItem('evs_custom_students');
+          if (customStr) {
+            customStudents = JSON.parse(customStr);
+          }
+        } catch {}
+
+        const parsedIdSet = new Set(
+          valid.map((s) => String(s.Student_ID || '').toLowerCase().trim())
+        );
+        const uniqueCustom = customStudents.filter(
+          (s) => !parsedIdSet.has(String(s.Student_ID || '').toLowerCase().trim())
+        );
+        const mergedStudents = [...uniqueCustom, ...valid];
+
+        setStudents(mergedStudents);
+        try {
+          localStorage.setItem(CACHE_KEY_STUDENTS, JSON.stringify(mergedStudents));
         } catch (e) {
           console.warn('Could not cache students in localStorage:', e);
         }
@@ -2049,11 +2083,37 @@ export default function App() {
     return `${elapsedHours}h पहले`;
   };
 
-  // Manager: Handle Add Student with optimistic UI and local persistence
+  // Manager: Handle Add Student with optimistic UI, local persistence and dual-channel Google Sheet sync
   const handleStudentAdded = async (newStudent: Student, sendWhatsApp = false) => {
-    // 1. Optimistically add to state and localStorage cache
+    // 1. Tag student as custom and locally stored
+    const customStudent: Student = {
+      ...newStudent,
+      _isCustom: true,
+      _createdAt: new Date().toISOString(),
+      _sheetSynced: false,
+    } as any;
+
+    // 2. Persist in evs_custom_students so it is NEVER lost on page reload or GViz background fetch
+    try {
+      const saved = localStorage.getItem('evs_custom_students');
+      const list: Student[] = saved ? JSON.parse(saved) : [];
+      const updatedList = [
+        customStudent,
+        ...list.filter(
+          (s) => String(s.Student_ID).toLowerCase().trim() !== String(newStudent.Student_ID).toLowerCase().trim()
+        ),
+      ];
+      localStorage.setItem('evs_custom_students', JSON.stringify(updatedList));
+    } catch (e) {
+      console.warn('Error saving custom students list:', e);
+    }
+
+    // 3. Optimistically update local students state and CACHE_KEY_STUDENTS
     setStudents((prev) => {
-      const updated = [newStudent, ...prev];
+      const filtered = prev.filter(
+        (s) => String(s.Student_ID).toLowerCase().trim() !== String(newStudent.Student_ID).toLowerCase().trim()
+      );
+      const updated = [customStudent, ...filtered];
       try {
         localStorage.setItem(CACHE_KEY_STUDENTS, JSON.stringify(updated));
       } catch (e) {
@@ -2062,32 +2122,95 @@ export default function App() {
       return updated;
     });
 
-    setStudentNotificationSuccess(`छात्र ${newStudent.Student_Name} (${newStudent.Admission_Number || newStudent.Student_ID}) सफलतापूर्वक दर्ज कर लिया गया है!`);
-    setTimeout(() => setStudentNotificationSuccess(null), 4000);
+    setStudentNotificationSuccess(`छात्र ${newStudent.Student_Name} (${newStudent.Admission_Number || newStudent.Student_ID}) पोर्टल में सुरक्षित हो गया है! Google Sheet में सिंक किया जा रहा है...`);
 
-    // 2. Background sync to Google Apps Script
+    // 4. Dual-channel sync to Google Sheet: Primary via /api/forward-apps-script (avoids CORS) and secondary direct Apps Script fetch
+    const payload = {
+      action: 'addStudent',
+      student_id: newStudent.Student_ID,
+      admission_number: newStudent.Admission_Number,
+      roll_number: newStudent.Roll_Number,
+      student_name: newStudent.Student_Name,
+      class: newStudent.Class,
+      father_name: newStudent.Father_Name,
+      mother_name: newStudent.Mother_Name,
+      parent_mobile: newStudent.Parent_Mobile,
+      village: newStudent['Village/rRoute'] || newStudent.Village || '',
+      village_route: newStudent['Village/rRoute'] || newStudent.Village || '',
+      student_photo: newStudent.Student_Photo || '',
+      balance_amount: newStudent.Balance_Amount || 0,
+    };
+
+    let syncSuccess = false;
+    let syncErrorDetail = '';
+
+    // Step A: Try server proxy endpoint
     try {
-      fetch(API_URL, {
+      const proxyRes = await fetch('/api/forward-apps-script', {
         method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({
-          action: 'addStudent',
-          student_id: newStudent.Student_ID,
-          admission_number: newStudent.Admission_Number,
-          roll_number: newStudent.Roll_Number,
-          student_name: newStudent.Student_Name,
-          class: newStudent.Class,
-          father_name: newStudent.Father_Name,
-          mother_name: newStudent.Mother_Name,
-          parent_mobile: newStudent.Parent_Mobile,
-          village: newStudent['Village/rRoute'] || newStudent.Village,
-          student_photo: newStudent.Student_Photo,
-          balance_amount: newStudent.Balance_Amount || 0,
-        }),
-      }).catch((e) => console.warn('Background addStudent sync warning:', e));
-    } catch {}
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (proxyRes.ok) {
+        const data = await proxyRes.json();
+        if (data.success) {
+          syncSuccess = true;
+        } else {
+          syncErrorDetail = data.error || '';
+        }
+      } else {
+        const errJson = await proxyRes.json().catch(() => null);
+        syncErrorDetail = errJson?.error || `HTTP ${proxyRes.status}`;
+      }
+    } catch (e: any) {
+      syncErrorDetail = e.message || '';
+    }
 
-    // 3. Optional WhatsApp notification to parent
+    // Step B: Direct fallback if proxy was not successful
+    if (!syncSuccess) {
+      try {
+        const directUrl = getEffectiveApiUrl();
+        const directRes = await fetch(directUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify(payload),
+        });
+        if (directRes.ok) {
+          const directText = await directRes.text();
+          if (directText.includes('success') || directText.includes('Student added')) {
+            syncSuccess = true;
+          }
+        }
+      } catch (directErr: any) {
+        if (!syncErrorDetail) syncErrorDetail = directErr.message || '';
+      }
+    }
+
+    if (syncSuccess) {
+      // Mark as sheet synced in evs_custom_students
+      try {
+        const saved = localStorage.getItem('evs_custom_students');
+        if (saved) {
+          const list: any[] = JSON.parse(saved);
+          const updated = list.map((st) =>
+            String(st.Student_ID).toLowerCase().trim() === String(newStudent.Student_ID).toLowerCase().trim()
+              ? { ...st, _sheetSynced: true }
+              : st
+          );
+          localStorage.setItem('evs_custom_students', JSON.stringify(updated));
+        }
+      } catch {}
+
+      setStudentNotificationSuccess(`✅ छात्र ${newStudent.Student_Name} (${newStudent.Admission_Number || newStudent.Student_ID}) Google Sheet व पोर्टल में सफलतापूर्वक जुड़ गया है!`);
+      setTimeout(() => setStudentNotificationSuccess(null), 5000);
+    } else {
+      setStudentNotificationSuccess(
+        `⚡ छात्र ${newStudent.Student_Name} पोर्टल में सुरक्षित हो गया है! Google Sheet सिंक लंबित है (Apps Script URL कनेक्ट करें)।`
+      );
+      setTimeout(() => setStudentNotificationSuccess(null), 8000);
+    }
+
+    // 5. Optional WhatsApp notification to parent
     if (sendWhatsApp && newStudent.Parent_Mobile) {
       const cleanMobile = String(newStudent.Parent_Mobile).replace(/\D/g, '');
       const studentClass = getClassName(newStudent.Class);
@@ -7210,6 +7333,16 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 </button>
 
                 <button
+                  type="button"
+                  onClick={() => setSheetSyncModalOpen(true)}
+                  className="px-3.5 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 text-xs font-bold rounded-xl border border-emerald-400/40 transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  title="Google Sheets & Apps Script Sync सेटिंग्स"
+                >
+                  <i className="fa-solid fa-file-excel text-emerald-400"></i>
+                  <span>Sheet Sync</span>
+                </button>
+
+                <button
                   onClick={handleManagerLogout}
                   className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors flex items-center gap-2 cursor-pointer"
                   title="Log out of Manager Portal"
@@ -7233,6 +7366,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               loadingFees={loadingFees}
               loadingBehavior={loadingBehavior}
               onSelectStudent={(st) => setSelectedStudentDetail(st)}
+              onOpenAddStudent={() => setAddStudentModalOpen(true)}
             />
 
             {/* Manager Switcher Tabs (5 Tabs) */}
@@ -7387,6 +7521,17 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       <i className="fa-solid fa-user-plus"></i>
                       <span>नया छात्र जोड़ें</span>
                     </button>
+
+                    {/* Google Sheet Sync Button */}
+                    <button
+                      type="button"
+                      onClick={() => setSheetSyncModalOpen(true)}
+                      className="px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-900 border border-blue-200 font-bold rounded-lg text-xs flex items-center gap-1.5 shadow-xs cursor-pointer shrink-0 transition-colors"
+                      title="Google Sheet Sync सेटिंग्स व स्थिति"
+                    >
+                      <i className="fa-solid fa-cloud-arrow-up text-blue-600"></i>
+                      <span className="hidden sm:inline">Sheet Sync</span>
+                    </button>
                   </div>
                 </div>
 
@@ -7432,7 +7577,21 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                 </span>
                               </td>
                               <td className="px-4 py-3">
-                                <div className="font-bold text-blue-950">{s.Student_Name || 'Unknown'}</div>
+                                <div className="font-bold text-blue-950 flex items-center gap-1.5 flex-wrap">
+                                  <span>{s.Student_Name || 'Unknown'}</span>
+                                  {(s as any)._isCustom && (
+                                    <span
+                                      className={`text-[9px] px-1.5 py-0.2 rounded-full font-bold uppercase tracking-wider ${
+                                        (s as any)._sheetSynced
+                                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                          : 'bg-amber-100 text-amber-800 border border-amber-300'
+                                      }`}
+                                      title={(s as any)._sheetSynced ? 'Google Sheet में सिंक हो चुका है' : 'पोर्टल में सुरक्षित है - Google Sheet सिंक लंबित'}
+                                    >
+                                      {(s as any)._sheetSynced ? '✓ Sheet Synced' : '⚡ Local Saved'}
+                                    </span>
+                                  )}
+                                </div>
                                 <div className="text-[10px] text-slate-400 font-mono">{s.Student_ID}</div>
                               </td>
                               <td className="px-4 py-3">
@@ -8606,6 +8765,17 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         existingStudents={students}
         classMap={classMap}
         getClassName={getClassName}
+        onOpenSyncSettings={() => setSheetSyncModalOpen(true)}
+      />
+
+      {/* Google Sheets & Apps Script Sync Diagnostics Modal */}
+      <GoogleSheetSyncModal
+        isOpen={sheetSyncModalOpen}
+        onClose={() => {
+          setSheetSyncModalOpen(false);
+          // Sync all data to pick up any new updates
+          fetchStudents();
+        }}
       />
 
       {/* ========================================================================= */}

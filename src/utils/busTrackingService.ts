@@ -506,29 +506,53 @@ function doPost(e) {
     if (action === "addStudent") {
       var sheet = ss.getSheetByName("Students");
       if (!sheet) sheet = ss.insertSheet("Students");
-      if (sheet.getLastRow() === 0) {
+      var lastRow = sheet.getLastRow();
+      if (lastRow === 0) {
         sheet.appendRow([
           "Student_ID", "Admission_Number", "Roll_Number", "Student_Name", "Class",
-          "Father_Name", "Mother_Name", "Parent_Mobile", "Village/rRoute", "Balance_Amount",
-          "Student_Photo", "QR code"
+          "Father_Name", "Mother_Name", "Parent_Mobile", "Student_Photo", "Village/rRoute",
+          "Adhar_Card", "Adhar_Photo", "Balance_Amount", "QR code"
         ]);
+        lastRow = 1;
       }
+      
+      var lastCol = sheet.getLastColumn() || 15;
+      var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
       var studentId = data.student_id || ("S-" + Date.now());
       var qrFormula = '=IMAGE(CONCATENATE("https://api.qrserver.com/v1/create-qr-code/?data=", "' + studentId + '", "&size=250x250"))';
-      sheet.appendRow([
-        studentId,
-        data.admission_number || "",
-        data.roll_number || "",
-        data.student_name || "",
-        data.class || "",
-        data.father_name || "",
-        data.mother_name || "",
-        data.parent_mobile || "",
-        data.village_route || data.village || "",
-        data.balance_amount !== undefined ? Number(data.balance_amount) : 0,
-        data.student_photo || "",
-        qrFormula
-      ]);
+      
+      var row = [];
+      for (var i = 0; i < headers.length; i++) {
+        var h = String(headers[i] || "").trim().toLowerCase();
+        if (h === "student_id" || h === "student id" || h === "id") {
+          row.push(studentId);
+        } else if (h === "admission_number" || h === "admission no" || h === "adm_no") {
+          row.push(data.admission_number || "");
+        } else if (h === "roll_number" || h === "roll no" || h === "roll") {
+          row.push(data.roll_number || "");
+        } else if (h === "student_name" || h === "name" || h === "student name") {
+          row.push(data.student_name || "");
+        } else if (h === "class") {
+          row.push(data.class || "");
+        } else if (h === "father_name" || h === "father name") {
+          row.push(data.father_name || "");
+        } else if (h === "mother_name" || h === "mother name") {
+          row.push(data.mother_name || "");
+        } else if (h === "parent_mobile" || h === "mobile" || h === "parent mobile" || h === "phone") {
+          row.push(data.parent_mobile || "");
+        } else if (h === "student_photo" || h === "photo") {
+          row.push(data.student_photo || "");
+        } else if (h.indexOf("village") !== -1 || h.indexOf("route") !== -1) {
+          row.push(data.village_route || data.village || "");
+        } else if (h.indexOf("balance") !== -1) {
+          row.push(data.balance_amount !== undefined ? Number(data.balance_amount) : 0);
+        } else if (h.indexOf("qr") !== -1) {
+          row.push(qrFormula);
+        } else {
+          row.push("");
+        }
+      }
+      sheet.appendRow(row);
       return ContentService.createTextOutput(JSON.stringify({
         status: "success",
         message: "Student added successfully to Students sheet!",
