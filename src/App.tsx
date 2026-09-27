@@ -338,6 +338,7 @@ interface StudentQRCodeCardProps {
   variant?: 'modal' | 'profile' | 'compact';
   onEnlarge?: () => void;
   onRemove?: () => void;
+  hideClassAndAdmission?: boolean;
 }
 
 export const StudentQRCodeCard: React.FC<StudentQRCodeCardProps> = ({
@@ -347,6 +348,7 @@ export const StudentQRCodeCard: React.FC<StudentQRCodeCardProps> = ({
   variant = 'modal',
   onEnlarge,
   onRemove,
+  hideClassAndAdmission = false,
 }) => {
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [imageError, setImageError] = useState<boolean>(false);
@@ -601,10 +603,18 @@ export const StudentQRCodeCard: React.FC<StudentQRCodeCardProps> = ({
                 <img src="${printQrSrc}" alt="QR" />
               </div>
               <div class="student-name">${sName}</div>
-              <div class="student-class">Class: ${cName} | Student ID: ${student.Student_ID}</div>
+              ${hideClassAndAdmission ? `
+                <div class="student-class" style="color: #0c2340; font-size: 13px; font-weight: 800; margin-bottom: 12px;">Roll Number: ${student.Roll_Number || '1'}</div>
+              ` : `
+                <div class="student-class">Class: ${cName} | Student ID: ${student.Student_ID}</div>
+              `}
               <table class="data-table">
-                <tr><td class="lbl">Admission No:</td><td class="val">${student.Admission_Number || '—'}</td></tr>
-                <tr><td class="lbl">Roll Number:</td><td class="val">${student.Roll_Number || '—'}</td></tr>
+                ${hideClassAndAdmission ? `
+                  <tr><td class="lbl">Roll Number:</td><td class="val">${student.Roll_Number || '1'}</td></tr>
+                ` : `
+                  <tr><td class="lbl">Admission No:</td><td class="val">${student.Admission_Number || '—'}</td></tr>
+                  <tr><td class="lbl">Roll Number:</td><td class="val">${student.Roll_Number || '—'}</td></tr>
+                `}
                 <tr><td class="lbl">Father's Name:</td><td class="val">${student.Father_Name || '—'}</td></tr>
                 <tr><td class="lbl">Mother's Name:</td><td class="val">${student.Mother_Name || '—'}</td></tr>
                 <tr><td class="lbl">Parent Mobile:</td><td class="val">${student.Parent_Mobile || '—'}</td></tr>
@@ -733,12 +743,21 @@ export const StudentQRCodeCard: React.FC<StudentQRCodeCardProps> = ({
             </span>
           </div>
 
-          <div className="text-xs text-slate-700">
-            <span className="font-semibold">Student ID:</span>{' '}
-            <span className="font-mono font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">
-              {student.Student_ID}
-            </span>
-          </div>
+          {hideClassAndAdmission ? (
+            <div className="text-xs text-slate-700">
+              <span className="font-semibold">रोल नंबर (Roll No):</span>{' '}
+              <span className="font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">
+                {student.Roll_Number || '1'}
+              </span>
+            </div>
+          ) : (
+            <div className="text-xs text-slate-700">
+              <span className="font-semibold">Student ID:</span>{' '}
+              <span className="font-mono font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">
+                {student.Student_ID}
+              </span>
+            </div>
+          )}
 
           <p className="text-[11px] text-slate-500 leading-relaxed">
             Present this QR code for gate entry, morning attendance tracking, and school fee counter verification.
@@ -2747,16 +2766,16 @@ export default function App() {
       return;
     }
 
-    // Instant smart rule-based greeting in pure Hindi
+    // Instant smart rule-based greeting in pure respectful Islamic/Hindi tone
     let localGreeting = '';
     if (isAbsent) {
-      localGreeting = `नमस्ते! आज ${sName} विद्यालय में उपस्थित नहीं था। आशा है सब सकुशल है। छूटी हुई पढ़ाई व गृहकार्य का विवरण नीचे गृहकार्य अनुभाग में देखें।`;
+      localGreeting = `अस्सलाम वालेकुम! आज ${sName} स्कूल में गैर-हाज़िर (अनुपस्थित) रहे। अल्लाह से दुआ है कि वे बाखैरियत व सेहतमंद हों। छूटे हुए सबक व गृहकार्य का विवरण नीचे गृहकार्य अनुभाग में देखें।`;
     } else if (latestBehaviorRecord) {
-      localGreeting = `नमस्ते! आज ${sName} विद्यालय में उपस्थित रहा और कक्षा में अनुशासित आचरण प्रदर्शित किया। ${
-        remark && !remark.toLowerCase().includes('fault') ? `शिक्षक टिप्पणी: "${remark}"। ` : ''
-      }${hwCount > 0 ? `आज ${hwSubjects || `${hwCount} विषयों`} का गृहकार्य दिया गया है, कृपया शाम को समय पर पूरा करवाएं।` : 'दैनिक गृहकार्य व उपस्थिति नीचे उपलब्ध है।'}`;
+      localGreeting = `अस्सलाम वालेकुम! हमें यह बताते हुए बेहद खुशी हो रही है कि आज ${sName} स्कूल में हाज़िर रहे और बड़े अदब व लगन के साथ तालीम हासिल की। ${
+        remark && !remark.toLowerCase().includes('fault') ? `उस्ताद (शिक्षक) की टिप्पणी: "${remark}"। ` : ''
+      }${hwCount > 0 ? `आज ${hwSubjects || `${hwCount} विषयों`} का गृहकार्य दिया गया है, बराए मेहरबानी शाम को इसे पूरा करवाएं।` : 'दैनिक गृहकार्य व उपस्थिति नीचे उपलब्ध है।'} अल्लाह आपके बच्चे को इल्म व नेक तरबियत से नवाज़े।`;
     } else {
-      localGreeting = `नमस्ते! ${sName} की आज की दैनिक विद्यालय गतिविधियां नीचे प्रस्तुत हैं। दैनिक उपस्थिति, गृहकार्य व शिक्षक की टिप्पणी नीचे काम की चीजों में देख सकते हैं।`;
+      localGreeting = `अस्सलाम वालेकुम! हमें यह बताते हुए खुशी हो रही है कि ${sName} की आज की दैनिक स्कूल गतिविधियां नीचे प्रस्तुत हैं। दैनिक उपस्थिति, गृहकार्य व शिक्षक की टिप्पणी नीचे काम की चीजों में देख सकते हैं।`;
     }
 
     setAiGreeting(localGreeting);
@@ -4510,7 +4529,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           <div>
                             <div className="flex items-center gap-2 flex-wrap">
                               <h3 className="text-base sm:text-lg font-black text-amber-300">
-                                नमस्ते, {selectedStudent.Student_Name} के अभिभावक! 🙏
+                                अस्सलाम वालेकुम, {selectedStudent.Student_Name} के अभिभावक! 🌸
                               </h3>
                               <span className="text-[10px] bg-amber-400/20 text-amber-300 border border-amber-400/40 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
                                 <i className={`fa-solid fa-sparkles text-amber-400 ${aiGreetingLoading ? 'animate-spin' : ''}`}></i>
@@ -4518,7 +4537,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                               </span>
                             </div>
                             <p className="text-[11px] text-slate-300 mt-0.5">
-                              ई.वी.एस. पब्लिक स्कूल • आपके बच्चे की आज की दैनिक प्रगति
+                              ई.वी.एस. पब्लिक स्कूल • रोल नंबर: {selectedStudent.Roll_Number || '1'} • दैनिक प्रगति
                             </p>
                           </div>
                         </div>
@@ -4809,7 +4828,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex flex-wrap items-center justify-between gap-2">
                       <div className="flex items-center gap-2 text-xs text-slate-700">
                         <i className="fa-solid fa-id-card text-blue-800 text-sm"></i>
-                        <span>छात्र का पूर्ण विवरण, प्रवेश संख्या, पिता का नाम और क्यूआर पास:</span>
+                        <span>छात्र का पूर्ण विवरण, रोल नंबर, अभिभावक का नाम और क्यूआर पास:</span>
                       </div>
                       <button
                         type="button"
@@ -4909,7 +4928,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             Classwork & Homework Assignments
                           </h4>
                           <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-900 border border-blue-200">
-                            कक्षा: {getClassName(selectedStudent?.Class)}
+                            रोल नंबर: {selectedStudent?.Roll_Number || '1'}
                           </span>
                         </div>
                         <p className="text-xs text-slate-500 mt-1">
@@ -4918,8 +4937,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                               ? `आज का गृहकार्य दिखाया जा रहा है (दिनांक: ${currentHomeworkPeriodInfo.dateLabel})`
                               : currentHomeworkPeriodInfo.dateLabel
                               ? `पिछला 1 दिन का गृहकार्य दिखाया जा रहा है (दिनांक: ${currentHomeworkPeriodInfo.dateLabel})`
-                              : `कक्षा ${getClassName(selectedStudent?.Class)} के लिए नवीनतम गृहकार्य`
-                            : `कक्षा ${getClassName(selectedStudent?.Class)} का संपूर्ण ऐतिहासिक गृहकार्य।`}
+                              : `छात्र के लिए नवीनतम गृहकार्य`
+                            : `छात्र का संपूर्ण ऐतिहासिक गृहकार्य।`}
                         </p>
                       </div>
 
@@ -5015,8 +5034,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                 ? "आज का गृहकार्य (Today's Homework):"
                                 : "पिछला 1 दिन का गृहकार्य (Previous Day's Homework):"}
                             </strong>{' '}
-                            दिनांक <strong>{currentHomeworkPeriodInfo.dateLabel}</strong> • कक्षा{' '}
-                            <strong>{getClassName(selectedStudent?.Class)}</strong>
+                            दिनांक <strong>{currentHomeworkPeriodInfo.dateLabel}</strong> • रोल नंबर{' '}
+                            <strong>{selectedStudent?.Roll_Number || '1'}</strong>
                             {!currentHomeworkPeriodInfo.isToday && (
                               <span className="text-amber-800 ml-1 font-normal">
                                 (आज का नया गृहकार्य अभी अपलोड नहीं हुआ है)
@@ -5051,7 +5070,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             : 'कोई गृहकार्य नहीं मिला'}
                         </h5>
                         <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
-                          कक्षा {getClassName(selectedStudent?.Class)} के लिए{' '}
+                          छात्र के लिए{' '}
                           {hwDaysFilter === 'latest'
                             ? 'आज या पिछले 1 दिन का गृहकार्य दर्ज नहीं है।'
                             : 'चुने गए फ़िल्टर के अनुसार कोई गृहकार्य नहीं मिला।'}
@@ -5102,7 +5121,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
                                 <h5 className="text-sm font-bold text-slate-900 mb-1.5 flex items-center justify-between">
                                   <span>
-                                    {hw.Subject} - Class {getClassName(hw.Class || selectedStudent?.Class)}
+                                    {hw.Subject}
                                   </span>
                                 </h5>
 
@@ -5210,10 +5229,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           </span>
                         </div>
                         <p className="text-xs text-slate-500 mt-1">
-                          Tracking homework completion status for student{' '}
-                          <strong className="text-slate-800">{selectedStudent.Student_Name}</strong> (Class:{' '}
-                          <strong>{getClassName(selectedStudent.Class)}</strong>, ID:{' '}
-                          <span className="font-mono">{selectedStudent.Student_ID}</span>)
+                          छात्र: <strong className="text-slate-800">{selectedStudent.Student_Name}</strong> • रोल नंबर:{' '}
+                          <strong className="text-slate-800">{selectedStudent.Roll_Number || '1'}</strong>
                         </p>
                       </div>
 
@@ -5477,9 +5494,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           </span>
                         </div>
                         <p className="text-xs text-slate-500 mt-1">
-                          छात्र: <strong className="text-slate-800">{selectedStudent.Student_Name}</strong> • कक्षा:{' '}
-                          <strong className="text-slate-800">{getClassName(selectedStudent.Class)}</strong> • प्रवेश सं:{' '}
-                          <span className="font-mono font-bold text-slate-700">{selectedStudent.Admission_Number}</span>
+                          छात्र: <strong className="text-slate-800">{selectedStudent.Student_Name}</strong> • रोल नंबर:{' '}
+                          <strong className="text-slate-800">{selectedStudent.Roll_Number || '1'}</strong>
                         </p>
                       </div>
 
@@ -6266,7 +6282,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           ₹{studentFeeSummary.totalFee.toLocaleString('en-IN')}
                         </div>
                         <div className="text-[11px] text-slate-500 mt-1">
-                          कक्षा {getClassName(selectedStudent.Class)} वार्षिक फीस विवरण
+                          छात्र (रोल नं: {selectedStudent.Roll_Number || '1'}) वार्षिक फीस विवरण
                         </div>
                       </div>
 
@@ -6341,7 +6357,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           </div>
                           <h5 className="font-bold text-slate-700 text-sm">कोई रसीद दर्ज नहीं है</h5>
                           <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
-                            इस छात्र ({selectedStudent.Student_Name} - ID: {selectedStudent.Student_ID}) के लिए अभी तक कोई ऑनलाइन फीस रसीद दर्ज नहीं हुई है। यदि आपने हाल ही में फीस जमा की है, तो कृपया स्कूल काउंटर पर संपर्क करें।
+                            इस छात्र ({selectedStudent.Student_Name} - रोल नंबर: {selectedStudent.Roll_Number || '1'}) के लिए अभी तक कोई ऑनलाइन फीस रसीद दर्ज नहीं हुई है। यदि आपने हाल ही में फीस जमा की है, तो कृपया स्कूल काउंटर पर संपर्क करें।
                           </p>
                         </div>
                       ) : (
@@ -6393,7 +6409,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          const text = `*E.V.S. Public School - Fee Receipt*\nStudent: ${selectedStudent.Student_Name} (Class ${getClassName(selectedStudent.Class)})\nReceipt No: #${receiptId}\nDate: ${dateStr}\nAmount Paid: ₹${amt}\nMode: ${mode}\nReceived By: ${collector}`;
+                                          const text = `*E.V.S. Public School - Fee Receipt*\nStudent: ${selectedStudent.Student_Name} (Roll No: ${selectedStudent.Roll_Number || '1'})\nReceipt No: #${receiptId}\nDate: ${dateStr}\nAmount Paid: ₹${amt}\nMode: ${mode}\nReceived By: ${collector}`;
                                           window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
                                         }}
                                         className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-600 hover:text-white text-emerald-800 border border-emerald-200 rounded text-[11px] font-bold transition-all cursor-pointer inline-flex items-center gap-1"
@@ -6438,7 +6454,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           छात्र प्रोफ़ाइल एवं डिजिटल आई-कार्ड (Student Profile & Digital ID Pass)
                         </h4>
                         <p className="text-xs text-slate-500 mt-1">
-                          प्रवेश विवरण, अभिभावक का नाम, पता, रोल नंबर और आधिकारिक क्यूआर कोड
+                          रोल नंबर, अभिभावक का नाम, पता और आधिकारिक डिजिटल क्यूआर पास
                         </p>
                       </div>
                     </div>
@@ -6455,20 +6471,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                               <span className="font-bold text-slate-900 text-sm">{selectedStudent.Student_Name}</span>
                             </div>
                             <div>
-                              <span className="text-slate-400 block text-[11px]">कक्षा (Class)</span>
-                              <span className="font-bold text-blue-900">Class {getClassName(selectedStudent.Class)}</span>
-                            </div>
-                            <div>
                               <span className="text-slate-400 block text-[11px]">रोल नंबर (Roll No)</span>
-                              <span className="font-bold text-slate-900">{selectedStudent.Roll_Number || '1'}</span>
-                            </div>
-                            <div>
-                              <span className="text-slate-400 block text-[11px]">छात्र आईडी (Student ID)</span>
-                              <span className="font-mono font-bold text-slate-800">{selectedStudent.Student_ID}</span>
-                            </div>
-                            <div>
-                              <span className="text-slate-400 block text-[11px]">प्रवेश संख्या (Admission No)</span>
-                              <span className="font-bold text-slate-900">{selectedStudent.Admission_Number}</span>
+                              <span className="font-bold text-emerald-800 text-sm">{selectedStudent.Roll_Number || '1'}</span>
                             </div>
                             <div>
                               <span className="text-slate-400 block text-[11px]">पिता का नाम (Father's Name)</span>
@@ -6493,8 +6497,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       <div className="lg:col-span-1">
                         <StudentQRCodeCard
                           student={selectedStudent}
-                          classNameTitle={getClassName(selectedStudent.Class)}
                           variant="profile"
+                          hideClassAndAdmission={true}
                           photoUrl={getStudentPhoto(selectedStudent)}
                           onEnlarge={() => setPreviewQRStudent(selectedStudent)}
                         />
@@ -9244,15 +9248,34 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   {previewQRStudent.Student_Name}
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Class: <span className="font-semibold text-blue-900">{getClassName(previewQRStudent.Class)}</span> | ID: <span className="font-mono font-bold text-slate-800">{previewQRStudent.Student_ID}</span>
+                  {parentLoggedIn ? (
+                    <>
+                      रोल नंबर:{' '}
+                      <span className="font-bold text-slate-800">
+                        {previewQRStudent.Roll_Number || '1'}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      Class:{' '}
+                      <span className="font-semibold text-blue-900">
+                        {getClassName(previewQRStudent.Class)}
+                      </span>{' '}
+                      | ID:{' '}
+                      <span className="font-mono font-bold text-slate-800">
+                        {previewQRStudent.Student_ID}
+                      </span>
+                    </>
+                  )}
                 </p>
               </div>
             </div>
 
             <StudentQRCodeCard
               student={previewQRStudent}
-              classNameTitle={getClassName(previewQRStudent.Class)}
+              classNameTitle={parentLoggedIn ? undefined : getClassName(previewQRStudent.Class)}
               variant="modal"
+              hideClassAndAdmission={parentLoggedIn}
             />
 
             <div className="mt-4 pt-3 border-t border-slate-100 flex justify-end">
