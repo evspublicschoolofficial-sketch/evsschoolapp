@@ -86,3 +86,15 @@ export interface SchoolUser {
   Assigned_Class?: string;
   Last_AI_Run?: string;
 }
+
+export interface SchoolNotice {
+  id: string;
+  title: string;
+  date: string;
+  category: 'emergency' | 'urgent' | 'holiday' | 'exam' | 'ptm' | 'event' | 'general';
+  description: string;
+  targetClass?: string;
+  issuedBy?: string;
+  isPinned?: boolean;
+  isEmergency?: boolean;
+}

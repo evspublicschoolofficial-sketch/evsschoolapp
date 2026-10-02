@@ -191,9 +191,9 @@ export const StudentBehaviorModal: React.FC<StudentBehaviorModalProps> = ({
         {/* Student Info Bar */}
         <div className="bg-amber-50/70 border-b border-amber-200/80 px-4 py-2.5 flex items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
-            {getStudentPhoto(student) ? (
+            {Boolean(getStudentPhoto && getStudentPhoto(student)?.trim()) ? (
               <img
-                src={getStudentPhoto(student)}
+                src={getStudentPhoto(student) || undefined}
                 alt={student.Student_Name}
                 className="w-10 h-10 rounded-full object-cover border border-amber-300 shrink-0"
               />
@@ -226,14 +226,62 @@ export const StudentBehaviorModal: React.FC<StudentBehaviorModalProps> = ({
           {/* Date & Attendance */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">तारीख (Date):</label>
-              <input
-                type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                required
-                className="w-full px-3 py-1.5 rounded-lg border border-slate-300 text-xs focus:ring-1 focus:ring-blue-800 bg-white"
-              />
+              <div className="flex items-center justify-between mb-1">
+                <label className="block font-semibold text-slate-700">तारीख (Date):</label>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setDate(new Date().toISOString().split('T')[0])}
+                    className={`text-[10px] px-1.5 py-0.5 rounded font-bold transition-colors cursor-pointer ${
+                      date === new Date().toISOString().split('T')[0]
+                        ? 'bg-blue-900 text-amber-300'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    आज (Today)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const d = new Date();
+                      d.setDate(d.getDate() - 1);
+                      setDate(d.toISOString().split('T')[0]);
+                    }}
+                    className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 hover:bg-slate-200 font-bold transition-colors cursor-pointer"
+                  >
+                    कल (Yesterday)
+                  </button>
+                </div>
+              </div>
+              <div className="relative flex items-center">
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  onClick={(e) => {
+                    try {
+                      (e.currentTarget as any).showPicker?.();
+                    } catch {}
+                  }}
+                  required
+                  className="w-full pl-9 pr-3 py-1.5 rounded-lg border border-slate-300 text-xs focus:ring-1 focus:ring-blue-800 bg-white cursor-pointer font-bold text-slate-800"
+                />
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    const inp = (e.currentTarget.parentElement?.querySelector('input[type="date"]')) as any;
+                    try {
+                      inp?.showPicker?.();
+                    } catch {
+                      inp?.focus();
+                    }
+                  }}
+                  className="absolute left-2.5 text-blue-900 hover:text-blue-700 cursor-pointer text-sm"
+                  title="कैलेंडर खोलें (Open Calendar)"
+                >
+                  <i className="fa-solid fa-calendar-days"></i>
+                </button>
+              </div>
             </div>
             <div>
               <label className="block font-semibold text-slate-700 mb-1">हाजिरी (Attendance):</label>

@@ -22,6 +22,12 @@ import { ManagerVanTracker } from './components/ManagerVanTracker';
 import { StudentAvatar } from './components/StudentAvatar';
 import { ManagerOverviewModals } from './components/ManagerOverviewModals';
 import { GoogleSheetSyncModal } from './components/GoogleSheetSyncModal';
+import { OfficialFeeReceiptModal } from './components/OfficialFeeReceiptModal';
+import { AttendanceCalendarModal } from './components/AttendanceCalendarModal';
+import { SchoolNoticeBoard, DEFAULT_SEED_NOTICES } from './components/SchoolNoticeBoard';
+import { EmergencyAlertBanner } from './components/EmergencyAlertBanner';
+import { playSirenPreview } from './utils/sirenAudio';
+import { SchoolNotice } from './types';
 import studentFarahPhoto from './assets/images/student_farah_1789483069291.jpg';
 import studentNamraPhoto from './assets/images/student_namra_1789483091505.jpg';
 
@@ -599,9 +605,11 @@ export const StudentQRCodeCard: React.FC<StudentQRCodeCardProps> = ({
                   <img src="${effectivePhoto}" alt="${sName}" />
                 </div>
               ` : ''}
+              ${printQrSrc ? `
               <div class="qr-wrapper">
                 <img src="${printQrSrc}" alt="QR" />
               </div>
+              ` : ''}
               <div class="student-name">${sName}</div>
               ${hideClassAndAdmission ? `
                 <div class="student-class" style="color: #0c2340; font-size: 13px; font-weight: 800; margin-bottom: 12px;">Roll Number: ${student.Roll_Number || '1'}</div>
@@ -687,7 +695,7 @@ export const StudentQRCodeCard: React.FC<StudentQRCodeCardProps> = ({
         <div className="w-7 h-7 rounded bg-white border border-slate-200 flex items-center justify-center p-0.5 overflow-hidden shrink-0">
           {effectiveQrSrc ? (
             <img
-              src={effectiveQrSrc}
+              src={effectiveQrSrc || undefined}
               alt="QR"
               className="w-full h-full object-contain"
               onError={() => setImageError(true)}
@@ -716,7 +724,7 @@ export const StudentQRCodeCard: React.FC<StudentQRCodeCardProps> = ({
         >
           {effectiveQrSrc ? (
             <img
-              src={effectiveQrSrc}
+              src={effectiveQrSrc || undefined}
               alt={`QR Code of ${student.Student_Name}`}
               className="w-24 h-24 sm:w-28 sm:h-28 object-contain rounded-md"
               onError={() => setImageError(true)}
@@ -841,7 +849,7 @@ export const StudentQRCodeCard: React.FC<StudentQRCodeCardProps> = ({
         >
           {effectiveQrSrc ? (
             <img
-              src={effectiveQrSrc}
+              src={effectiveQrSrc || undefined}
               alt={`QR of ${student.Student_Name}`}
               className="w-28 h-28 object-contain rounded-md"
               onError={() => setImageError(true)}
@@ -993,9 +1001,9 @@ const HomeworkMediaCard: React.FC<HomeworkMediaCardProps> = ({ item, onOpen }) =
     >
       <div className="flex items-center gap-2.5 min-w-0 pr-2">
         <div className="relative w-10 h-10 rounded-lg overflow-hidden border border-blue-300/80 bg-white shrink-0 flex items-center justify-center shadow-2xs">
-          {!loadFailed && item.url ? (
+          {!loadFailed && Boolean(item.url && item.url.trim()) ? (
             <img
-              src={item.url}
+              src={item.url || undefined}
               alt={item.title}
               className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-200"
               onError={() => setLoadFailed(true)}
@@ -1043,8 +1051,148 @@ const HomeworkMediaCard: React.FC<HomeworkMediaCardProps> = ({ item, onOpen }) =
 
 type TabType = 'home' | 'parent' | 'teacher' | 'manager' | 'driver';
 
+export interface InitialSessionData {
+  parentLoggedIn: boolean;
+  selectedStudent: Student | null;
+  parentChildren: Student[];
+  parentMobileInput: string;
+  managerUser: SchoolUser | null;
+  teacherUser: SchoolUser | null;
+  driverUser: SchoolUser | null;
+  initialTab: TabType;
+}
+
+export const getSingleInitialSession = (): InitialSessionData => {
+  if (typeof window === 'undefined') {
+    return {
+      parentLoggedIn: false,
+      selectedStudent: null,
+      parentChildren: [],
+      parentMobileInput: '',
+      managerUser: null,
+      teacherUser: null,
+      driverUser: null,
+      initialTab: 'home',
+    };
+  }
+
+  try {
+    let savedTab = (localStorage.getItem('evs_active_tab') || 'home') as TabType;
+    if (!['home', 'parent', 'teacher', 'manager', 'driver'].includes(savedTab)) {
+      savedTab = 'home';
+    }
+
+    const hasParent = localStorage.getItem('evs_parent_logged_in') === 'true';
+    let parentStudent: Student | null = null;
+    let parentChildrenList: Student[] = [];
+    let parentMobile = localStorage.getItem('evs_parent_mobile_input') || '';
+    if (hasParent) {
+      try {
+        const s = localStorage.getItem('evs_parent_selected_student');
+        if (s) parentStudent = JSON.parse(s);
+        const c = localStorage.getItem('evs_parent_children');
+        if (c) parentChildrenList = JSON.parse(c);
+      } catch {}
+    }
+
+    let manager: SchoolUser | null = null;
+    const mStr = localStorage.getItem('evs_manager_user');
+    if (mStr) {
+      try { manager = JSON.parse(mStr); } catch {}
+    }
+
+    let teacher: SchoolUser | null = null;
+    const tStr = localStorage.getItem('evs_teacher_user');
+    if (tStr) {
+      try { teacher = JSON.parse(tStr); } catch {}
+    }
+
+    let driver: SchoolUser | null = null;
+    const dStr = localStorage.getItem('evs_logged_driver');
+    if (dStr) {
+      try { driver = JSON.parse(dStr); } catch {}
+    }
+
+    // Determine how many distinct sessions are stored
+    const activeRoles: ('parent' | 'manager' | 'teacher' | 'driver')[] = [];
+    if (hasParent && parentStudent) activeRoles.push('parent');
+    if (manager) activeRoles.push('manager');
+    if (teacher) activeRoles.push('teacher');
+    if (driver) activeRoles.push('driver');
+
+    // If more than 1 session was stored in localStorage from before, enforce SINGLE session rule immediately
+    if (activeRoles.length > 1) {
+      // Pick the single winning role
+      let winningRole: 'parent' | 'manager' | 'teacher' | 'driver' = activeRoles[0];
+      if (activeRoles.includes(savedTab as any)) {
+        winningRole = savedTab as any;
+      } else {
+        // Priority order: manager > teacher > parent > driver
+        if (activeRoles.includes('manager')) winningRole = 'manager';
+        else if (activeRoles.includes('teacher')) winningRole = 'teacher';
+        else if (activeRoles.includes('parent')) winningRole = 'parent';
+        else winningRole = 'driver';
+      }
+
+      // Purge every other session from localStorage
+      if (winningRole !== 'parent') {
+        localStorage.removeItem('evs_parent_logged_in');
+        localStorage.removeItem('evs_parent_selected_student');
+        localStorage.removeItem('evs_parent_children');
+        localStorage.removeItem('evs_parent_mobile');
+        localStorage.removeItem('evs_parent_mobile_input');
+        parentStudent = null;
+        parentChildrenList = [];
+        parentMobile = '';
+      }
+      if (winningRole !== 'manager') {
+        localStorage.removeItem('evs_manager_user');
+        manager = null;
+      }
+      if (winningRole !== 'teacher') {
+        localStorage.removeItem('evs_teacher_user');
+        teacher = null;
+      }
+      if (winningRole !== 'driver') {
+        localStorage.removeItem('evs_logged_driver');
+        driver = null;
+      }
+
+      savedTab = winningRole;
+      localStorage.setItem('evs_active_tab', savedTab);
+    }
+
+    const finalParent = activeRoles.length > 1 ? (activeRoles.includes(savedTab as any) && savedTab === 'parent') : (hasParent && !!parentStudent);
+
+    return {
+      parentLoggedIn: finalParent,
+      selectedStudent: finalParent ? parentStudent : null,
+      parentChildren: finalParent ? parentChildrenList : [],
+      parentMobileInput: finalParent ? parentMobile : '',
+      managerUser: manager,
+      teacherUser: teacher,
+      driverUser: driver,
+      initialTab: savedTab,
+    };
+  } catch (e) {
+    console.warn('Error reading single initial session:', e);
+    return {
+      parentLoggedIn: false,
+      selectedStudent: null,
+      parentChildren: [],
+      parentMobileInput: '',
+      managerUser: null,
+      teacherUser: null,
+      driverUser: null,
+      initialTab: 'home',
+    };
+  }
+};
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState<TabType>('home');
+  const initialSession = useMemo(() => getSingleInitialSession(), []);
+
+  const [activeTab, setActiveTab] = useState<TabType>(initialSession.initialTab);
 
   // Persist activeTab so when user re-opens the app or browser, it opens exactly where they were
   useEffect(() => {
@@ -1094,36 +1242,10 @@ export default function App() {
   const [syncToastMessage, setSyncToastMessage] = useState<string | null>(null);
 
   // Parent Portal State (persisted so parents stay on their child's portal on refresh)
-  const [parentMobileInput, setParentMobileInput] = useState<string>(() => {
-    try {
-      return localStorage.getItem('evs_parent_mobile_input') || '';
-    } catch {
-      return '';
-    }
-  });
-  const [selectedStudent, setSelectedStudent] = useState<Student | null>(() => {
-    try {
-      const saved = localStorage.getItem('evs_parent_selected_student');
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
-  const [parentChildren, setParentChildren] = useState<Student[]>(() => {
-    try {
-      const saved = localStorage.getItem('evs_parent_children');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-  const [parentLoggedIn, setParentLoggedIn] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('evs_parent_logged_in') === 'true';
-    } catch {
-      return false;
-    }
-  });
+  const [parentMobileInput, setParentMobileInput] = useState<string>(initialSession.parentMobileInput);
+  const [selectedStudent, setSelectedStudent] = useState<Student | null>(initialSession.selectedStudent);
+  const [parentChildren, setParentChildren] = useState<Student[]>(initialSession.parentChildren);
+  const [parentLoggedIn, setParentLoggedIn] = useState<boolean>(initialSession.parentLoggedIn);
 
   // Sync parent login session to localStorage
   useEffect(() => {
@@ -1156,7 +1278,7 @@ export default function App() {
   const [manualLinkSuccess, setManualLinkSuccess] = useState<string | null>(null);
   const [hwFilterType, setHwFilterType] = useState<'all' | 'class' | 'student'>('all');
   const [hwDaysFilter, setHwDaysFilter] = useState<'latest' | 'all'>('latest');
-  const [parentActiveSection, setParentActiveSection] = useState<'overview' | 'homework' | 'tracker' | 'behavior' | 'fees' | 'profile'>('overview');
+  const [parentActiveSection, setParentActiveSection] = useState<'overview' | 'homework' | 'tracker' | 'behavior' | 'fees' | 'calendar' | 'notices' | 'profile'>('overview');
   const [trackerStatusFilter, setTrackerStatusFilter] = useState<'all' | 'completed' | 'incompleted'>('all');
 
   // AI Daily Greeting & Activity Summary for Parent Portal
@@ -1271,14 +1393,7 @@ export default function App() {
   // Users Sheet & Manager Authentication State
   const [usersList, setUsersList] = useState<SchoolUser[]>(() => getCachedData<SchoolUser[]>(CACHE_KEY_USERS, []));
   const [loadingUsers, setLoadingUsers] = useState<boolean>(false);
-  const [managerUser, setManagerUser] = useState<SchoolUser | null>(() => {
-    try {
-      const saved = localStorage.getItem('evs_manager_user');
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
+  const [managerUser, setManagerUser] = useState<SchoolUser | null>(initialSession.managerUser);
   const [managerLoginInput, setManagerLoginInput] = useState<string>('');
   const [managerPasswordInput, setManagerPasswordInput] = useState<string>('');
   const [managerLoginError, setManagerLoginError] = useState<string | null>(null);
@@ -1292,37 +1407,107 @@ export default function App() {
   const [activeTeacherName, setActiveTeacherName] = useState<string>('Mh salik');
 
   // Teacher Authentication & Dashboard State (Requires login from Users sheet)
-  const [teacherUser, setTeacherUser] = useState<SchoolUser | null>(() => {
-    try {
-      const saved = localStorage.getItem('evs_teacher_user');
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
+  const [teacherUser, setTeacherUser] = useState<SchoolUser | null>(initialSession.teacherUser);
 
-  // Strict role isolation: only the authenticated user can access their role's section
-  useEffect(() => {
+  // Driver Authentication State (from Users sheet / Bus tracking)
+  const [driverUser, setDriverUser] = useState<SchoolUser | null>(initialSession.driverUser);
+
+  // Modal prompt when a user tries to access a different role while an active session exists
+  const [roleSwitchModal, setRoleSwitchModal] = useState<{ targetRole: TabType; targetLabel: string } | null>(null);
+
+  // Centralized Single-Active-Session descriptor
+  const activeSession = useMemo(() => {
+    if (managerUser) {
+      return {
+        role: 'manager' as const,
+        labelHindi: 'स्कूल प्रबंधक (Manager)',
+        name: managerUser.Name || 'Manager',
+        userId: managerUser.User_ID,
+      };
+    }
+    if (teacherUser) {
+      return {
+        role: 'teacher' as const,
+        labelHindi: 'स्कूल शिक्षक (Teacher)',
+        name: teacherUser.Name || 'Teacher',
+        userId: teacherUser.User_ID,
+      };
+    }
     if (parentLoggedIn && selectedStudent) {
-      if (activeTab !== 'parent') {
-        setActiveTab('parent');
+      return {
+        role: 'parent' as const,
+        labelHindi: 'अभिभावक (Parent)',
+        name: selectedStudent.Student_Name,
+        childId: selectedStudent.Student_ID,
+      };
+    }
+    if (driverUser) {
+      return {
+        role: 'driver' as const,
+        labelHindi: 'वैन ड्राइवर (Driver)',
+        name: driverUser.Name || 'Driver',
+        userId: driverUser.User_ID,
+      };
+    }
+    return null;
+  }, [managerUser, teacherUser, parentLoggedIn, selectedStudent, driverUser]);
+
+  // Enforce single-session login across the entire device
+  const purgeAllSessionsExcept = (roleKeep: 'parent' | 'manager' | 'teacher' | 'driver' | 'none') => {
+    try {
+      if (roleKeep !== 'parent') {
+        setParentLoggedIn(false);
+        setSelectedStudent(null);
+        setParentChildren([]);
+        setParentMobileInput('');
+        setParentSearchAttempted(false);
+        localStorage.removeItem('evs_parent_logged_in');
+        localStorage.removeItem('evs_parent_selected_student');
+        localStorage.removeItem('evs_parent_children');
+        localStorage.removeItem('evs_parent_mobile');
+        localStorage.removeItem('evs_parent_mobile_input');
       }
-    } else if (teacherUser && !managerUser) {
-      if (activeTab !== 'teacher') {
-        setActiveTab('teacher');
+      if (roleKeep !== 'manager') {
+        setManagerUser(null);
+        setManagerLoginInput('');
+        setManagerPasswordInput('');
+        setManagerLoginError(null);
+        localStorage.removeItem('evs_manager_user');
+      }
+      if (roleKeep !== 'teacher') {
+        setTeacherUser(null);
+        setTeacherLoginInput('');
+        setTeacherPasswordInput('');
+        setTeacherLoginError(null);
+        localStorage.removeItem('evs_teacher_user');
+      }
+      if (roleKeep !== 'driver') {
+        setDriverUser(null);
+        localStorage.removeItem('evs_logged_driver');
+      }
+    } catch (e) {
+      console.warn('Error purging sessions:', e);
+    }
+  };
+
+  // Strict role isolation: if a user is logged in, their session locks this device to their portal
+  useEffect(() => {
+    if (activeSession) {
+      if (activeTab !== activeSession.role) {
+        setActiveTab(activeSession.role);
       }
     }
-  }, [parentLoggedIn, selectedStudent, teacherUser, managerUser, activeTab]);
+  }, [activeSession, activeTab]);
   const [teacherLoginInput, setTeacherLoginInput] = useState<string>('');
   const [teacherPasswordInput, setTeacherPasswordInput] = useState<string>('');
   const [teacherLoginError, setTeacherLoginError] = useState<string | null>(null);
   const [teacherLoginSubmitting, setTeacherLoginSubmitting] = useState<boolean>(false);
   const [showTeacherPassword, setShowTeacherPassword] = useState<boolean>(false);
-  const [teacherPortalTab, setTeacherPortalTab] = useState<'upload' | 'tracker' | 'submissions'>(() => {
+  const [teacherPortalTab, setTeacherPortalTab] = useState<'upload' | 'tracker' | 'submissions' | 'notices'>(() => {
     try {
       const saved = localStorage.getItem('evs_teacher_portal_tab');
-      if (saved && ['upload', 'tracker', 'submissions'].includes(saved)) {
-        return saved as 'upload' | 'tracker' | 'submissions';
+      if (saved && ['upload', 'tracker', 'submissions', 'notices'].includes(saved)) {
+        return saved as 'upload' | 'tracker' | 'submissions' | 'notices';
       }
     } catch {}
     return 'upload';
@@ -1364,14 +1549,45 @@ export default function App() {
   // Google Sheet Sync Modal State (Web App Script URL & Live Status)
   const [sheetSyncModalOpen, setSheetSyncModalOpen] = useState<boolean>(false);
 
+  // Official Printable Fee Receipt Modal State
+  const [activeReceiptModalData, setActiveReceiptModalData] = useState<{
+    student: Student;
+    fee: FeeCollectionRecord;
+  } | null>(null);
+
+  // Attendance Calendar & Absent Alert Modal State
+  const [isAttendanceCalendarOpen, setIsAttendanceCalendarOpen] = useState<boolean>(false);
+  const [attendanceCalendarMode, setAttendanceCalendarMode] = useState<'calendar' | 'absent_list'>('calendar');
+
+  // Persistent School Notices (with Emergency Siren Alert syncing across all portals)
+  const [schoolNotices, setSchoolNotices] = useState<SchoolNotice[]>(() => {
+    try {
+      const stored = localStorage.getItem('evs_school_notices');
+      if (stored !== null) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {
+      console.warn('Could not read stored notices:', e);
+    }
+    return DEFAULT_SEED_NOTICES;
+  });
+
+  const handleUpdateSchoolNotices = (updatedNotices: SchoolNotice[]) => {
+    setSchoolNotices(updatedNotices);
+    try {
+      localStorage.setItem('evs_school_notices', JSON.stringify(updatedNotices));
+    } catch (e) {}
+  };
+
   // Selected Student for Manager Fee Explorer (Manager Portal)
   const [managerSelectedFeeStudent, setManagerSelectedFeeStudent] = useState<Student | null>(null);
 
   // Manager Dashboard State
-  const [managerTab, setManagerTab] = useState<'students' | 'homework' | 'behavior' | 'fees' | 'users' | 'vanTracking'>(() => {
+  const [managerTab, setManagerTab] = useState<'students' | 'homework' | 'behavior' | 'fees' | 'users' | 'vanTracking' | 'attendance' | 'notices'>(() => {
     try {
       const saved = localStorage.getItem('evs_manager_tab');
-      if (saved && ['students', 'homework', 'behavior', 'fees', 'users', 'vanTracking'].includes(saved)) {
+      if (saved && ['students', 'homework', 'behavior', 'fees', 'users', 'vanTracking', 'attendance', 'notices'].includes(saved)) {
         return saved as any;
       }
     } catch {}
@@ -2466,13 +2682,19 @@ export default function App() {
     setParentLoginSubmitting(false);
 
     if (matched.length > 0) {
+      purgeAllSessionsExcept('parent');
       setParentChildren(matched);
       setSelectedStudent(matched[0]);
       setParentLoggedIn(true);
       setParentSearchAttempted(false);
+      setActiveTab('parent');
       try {
         localStorage.setItem('evs_parent_logged_in', 'true');
+        localStorage.setItem('evs_parent_selected_student', JSON.stringify(matched[0]));
+        localStorage.setItem('evs_parent_children', JSON.stringify(matched));
         localStorage.setItem('evs_parent_mobile', query);
+        localStorage.setItem('evs_parent_mobile_input', query);
+        localStorage.setItem('evs_active_tab', 'parent');
       } catch {}
     } else {
       setParentChildren([]);
@@ -2525,18 +2747,10 @@ export default function App() {
   };
 
   const handleParentLogout = () => {
-    setParentLoggedIn(false);
-    setSelectedStudent(null);
-    setParentChildren([]);
-    setParentMobileInput('');
-    setParentSearchAttempted(false);
+    purgeAllSessionsExcept('none');
     setManualLinkOpen(false);
     setManualLinkError(null);
     setManualLinkSuccess(null);
-    try {
-      localStorage.removeItem('evs_parent_logged_in');
-      localStorage.removeItem('evs_parent_mobile');
-    } catch {}
     setActiveTab('home');
   };
 
@@ -3303,9 +3517,12 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       }
 
       // Successful login
+      purgeAllSessionsExcept('manager');
       setManagerUser(user);
+      setActiveTab('manager');
       try {
         localStorage.setItem('evs_manager_user', JSON.stringify(user));
+        localStorage.setItem('evs_active_tab', 'manager');
       } catch (err) {
         console.warn('LocalStorage error:', err);
       }
@@ -3318,12 +3535,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
   };
 
   const handleManagerLogout = () => {
-    setManagerUser(null);
-    try {
-      localStorage.removeItem('evs_manager_user');
-    } catch (err) {
-      console.warn('LocalStorage error:', err);
-    }
+    purgeAllSessionsExcept('none');
     setActiveTab('home');
   };
 
@@ -3392,9 +3604,12 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     }
 
     // Success
+    purgeAllSessionsExcept('teacher');
     setTeacherUser(user);
+    setActiveTab('teacher');
     try {
       localStorage.setItem('evs_teacher_user', JSON.stringify(user));
+      localStorage.setItem('evs_active_tab', 'teacher');
     } catch (e) {
       console.warn('LocalStorage error:', e);
     }
@@ -3413,12 +3628,25 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
   };
 
   const handleTeacherLogout = () => {
-    setTeacherUser(null);
+    purgeAllSessionsExcept('none');
+    setActiveTab('home');
+  };
+
+  // Driver Authentication Handlers
+  const handleDriverLogin = (user: SchoolUser) => {
+    purgeAllSessionsExcept('driver');
+    setDriverUser(user);
+    setActiveTab('driver');
     try {
-      localStorage.removeItem('evs_teacher_user');
+      localStorage.setItem('evs_logged_driver', JSON.stringify(user));
+      localStorage.setItem('evs_active_tab', 'driver');
     } catch (e) {
       console.warn('LocalStorage error:', e);
     }
+  };
+
+  const handleDriverLogout = () => {
+    purgeAllSessionsExcept('none');
     setActiveTab('home');
   };
 
@@ -3853,14 +4081,53 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
             <nav className="flex items-center gap-2 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
               {/* CASE 1: PARENT LOGGED IN */}
               {parentLoggedIn && selectedStudent && (
-                <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-xl border border-white/20 text-xs">
+                <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                  {/* Child's Name Badge */}
+                  <div className="flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-xl border border-white/20 text-xs shrink-0">
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
                     <span className="font-extrabold text-white">{selectedStudent.Student_Name}</span>
                   </div>
+
+                  {/* Baki Fees (Remaining / Due Fees) */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setParentActiveSection('fees');
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer shadow-xs active:scale-95 shrink-0 ${
+                      studentFeeSummary.hasDues
+                        ? 'bg-rose-500/25 hover:bg-rose-500/35 text-rose-100 border-rose-400/50 hover:border-rose-300'
+                        : 'bg-emerald-500/25 hover:bg-emerald-500/35 text-emerald-100 border-emerald-400/50 hover:border-emerald-300'
+                    }`}
+                    title="फ़ीस विवरण देखने हेतु क्लिक करें"
+                  >
+                    <i
+                      className={`fa-solid text-[11px] ${
+                        studentFeeSummary.hasDues
+                          ? 'fa-triangle-exclamation text-amber-300'
+                          : 'fa-circle-check text-emerald-300'
+                      }`}
+                    ></i>
+                    <span className="text-[11px] text-white/80 font-medium">बाकी फ़ीस:</span>
+                    <span className={`font-black text-xs ${studentFeeSummary.hasDues ? 'text-amber-200' : 'text-emerald-200'}`}>
+                      ₹{studentFeeSummary.balance.toLocaleString('en-IN')}
+                    </span>
+                    {studentFeeSummary.hasDues ? (
+                      <span className="text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0.2 rounded bg-rose-600/80 text-white ml-0.5">
+                        Due
+                      </span>
+                    ) : (
+                      <span className="text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0.2 rounded bg-emerald-600/80 text-white ml-0.5">
+                        Paid ✓
+                      </span>
+                    )}
+                  </button>
+
+                  {/* Logout Button */}
                   <button
                     onClick={handleParentLogout}
-                    className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+                    className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer shrink-0"
                     title="साइन आउट करें"
                   >
                     <i className="fa-solid fa-right-from-bracket"></i>
@@ -3972,6 +4239,13 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
           </div>
         </div>
       </header>
+
+      {/* EMERGENCY SIREN ALERT TOP BANNER & POPUP MODAL */}
+      <EmergencyAlertBanner
+        notices={schoolNotices}
+        schoolName="E.V.S. PUBLIC SCHOOL"
+        isParentView={activeTab === 'parent'}
+      />
 
       {/* Subtle Background Sync Bar at Top */}
       {isBackgroundSyncing && (
@@ -4277,6 +4551,16 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   </div>
                 </div>
               </div>
+            </div>
+
+            {/* Feature 5: School Digital Notice Board & Holidays on Home Tab */}
+            <div className="pt-2">
+              <SchoolNoticeBoard
+                schoolName="E.V.S. PUBLIC SCHOOL"
+                isManager={false}
+                notices={schoolNotices}
+                onNoticesUpdate={handleUpdateSchoolNotices}
+              />
             </div>
           </div>
         )}
@@ -4660,6 +4944,60 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 {/* WHEN ON OVERVIEW: SHOW THE 4 INTERACTIVE CARDS */}
                 {parentActiveSection === 'overview' ? (
                   <div className="space-y-4 animate-fadeIn">
+                    {/* Emergency Siren Alert Banner Card in Parent Portal */}
+                    {schoolNotices.some((n) => n.isEmergency || n.category === 'emergency') && (() => {
+                      const emerg = schoolNotices.find((n) => n.isEmergency || n.category === 'emergency')!;
+                      return (
+                        <div className="p-4 sm:p-5 bg-gradient-to-r from-rose-700 via-red-600 to-rose-700 text-white rounded-2xl shadow-xl border-2 border-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-fadeIn">
+                          <div className="flex items-start gap-3.5">
+                            <div className="w-12 h-12 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center text-2xl font-black shrink-0 shadow-md animate-pulse">
+                              <i className="fa-solid fa-triangle-exclamation text-rose-700"></i>
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-white text-rose-800 shadow-2xs">
+                                  🚨 आपातकालीन स्कूल सूचना
+                                </span>
+                                <span className="text-xs text-amber-200 font-bold">
+                                  दिनांक: {emerg.date}
+                                </span>
+                              </div>
+                              <h4 className="text-sm sm:text-base font-black text-white mt-1 leading-snug">
+                                {emerg.title}
+                              </h4>
+                              <p className="text-xs text-rose-100 line-clamp-2 mt-1 font-medium">
+                                {emerg.description}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-rose-500/50 justify-end">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                playSirenPreview(8);
+                              }}
+                              className="px-3.5 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black rounded-xl text-xs flex items-center gap-1.5 shadow-md cursor-pointer transition-transform active:scale-95"
+                              title="सायरन ध्वनि सुनें"
+                            >
+                              <i className="fa-solid fa-volume-high text-rose-700 text-sm"></i>
+                              <span>🔊 सायरन बजाएं</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setParentActiveSection('notices');
+                                window.scrollTo({ top: 0, behavior: 'smooth' });
+                              }}
+                              className="px-4 py-2 bg-white hover:bg-amber-100 text-rose-950 font-black rounded-xl text-xs flex items-center gap-1 shadow-md cursor-pointer transition-transform active:scale-95"
+                            >
+                              <span>पूरी सूचना पढ़ें →</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
                     <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center justify-between gap-2 shadow-2xs">
                       <div className="flex items-center gap-2">
                         <i className="fa-solid fa-hand-pointer text-amber-600 text-sm animate-bounce"></i>
@@ -4788,14 +5126,14 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         id="parent-tab-daily-behavior"
                         type="button"
                         onClick={() => {
-                          setParentActiveSection('behavior');
+                          setParentActiveSection('calendar');
                           window.scrollTo({ top: 0, behavior: 'smooth' });
                         }}
                         className="p-4 rounded-2xl border text-left transition-all cursor-pointer relative overflow-hidden flex flex-col justify-between group bg-white hover:bg-slate-50 text-slate-800 border-slate-200 shadow-xs hover:border-slate-300 active:scale-[0.98]"
                       >
                         <div className="flex items-start justify-between gap-2">
-                          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg shrink-0 transition-transform group-hover:scale-105 bg-purple-100 text-purple-900">
-                            <i className="fa-solid fa-clipboard-check"></i>
+                          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg shrink-0 transition-transform group-hover:scale-105 bg-emerald-100 text-emerald-900">
+                            <i className="fa-solid fa-calendar-check"></i>
                           </div>
                           <span className={`text-[10px] sm:text-xs font-black px-2.5 py-0.5 rounded-full ${
                             latestBehaviorRecord
@@ -4814,13 +5152,56 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
                         <div className="mt-3">
                           <div className="text-xs sm:text-sm font-black flex items-center justify-between">
-                            <span>4. हाजिरी व आचरण</span>
+                            <span>4. हाजिरी कैलेंडर व आचरण</span>
                             <i className="fa-solid fa-chevron-right text-xs text-slate-300 group-hover:text-slate-500"></i>
                           </div>
                           <div className="text-[11px] mt-0.5 text-slate-500">
-                            उपस्थिति, ड्रेस व स्वच्छता
+                            मासिक हाजिरी कैलेंडर, उपस्थिति व आचरण
                           </div>
                         </div>
+                      </button>
+                    </div>
+
+                    {/* Quick Row for Calendar & Notices */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setParentActiveSection('calendar');
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        className="p-3 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-2xl flex items-center justify-between gap-3 text-left transition-all cursor-pointer group"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <span className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold text-sm shadow-2xs">
+                            <i className="fa-solid fa-calendar-check"></i>
+                          </span>
+                          <div>
+                            <span className="font-extrabold text-xs text-emerald-950 block">मासिक उपस्थिति कैलेंडर</span>
+                            <span className="text-[11px] text-emerald-700">तारीखवार उपस्थिति व अवकाश देखें</span>
+                          </div>
+                        </div>
+                        <i className="fa-solid fa-chevron-right text-xs text-emerald-600 group-hover:translate-x-1 transition-transform"></i>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setParentActiveSection('notices');
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        className="p-3 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-2xl flex items-center justify-between gap-3 text-left transition-all cursor-pointer group"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <span className="w-9 h-9 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center font-bold text-sm shadow-2xs">
+                            <i className="fa-solid fa-bullhorn"></i>
+                          </span>
+                          <div>
+                            <span className="font-extrabold text-xs text-amber-950 block">सूचना पट्ट व स्कूल अवकाश</span>
+                            <span className="text-[11px] text-amber-800">त्योहार, छुट्टियाँ व परीक्षा तिथियाँ</span>
+                          </div>
+                        </div>
+                        <i className="fa-solid fa-chevron-right text-xs text-amber-600 group-hover:translate-x-1 transition-transform"></i>
                       </button>
                     </div>
 
@@ -4839,7 +5220,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         className="px-3.5 py-1.5 bg-[#0c2340] hover:bg-blue-950 text-amber-300 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 shadow-xs"
                       >
                         <i className="fa-solid fa-user"></i>
-                        <span>5. पूरी प्रोफ़ाइल देखें</span>
+                        <span>7. पूरी प्रोफ़ाइल देखें</span>
                       </button>
                     </div>
                   </div>
@@ -4855,7 +5236,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       className="flex items-center gap-2 px-3.5 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black rounded-xl text-xs sm:text-sm transition-all cursor-pointer shadow-sm active:scale-95 shrink-0"
                     >
                       <i className="fa-solid fa-arrow-left"></i>
-                      <span>← वापस मुख्य 4 कार्ड्स (Back to Cards)</span>
+                      <span>← वापस मुख्य कार्ड्स (Back to Cards)</span>
                     </button>
 
                     <div className="flex items-center gap-1.5 flex-wrap">
@@ -4884,12 +5265,28 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         💰 3. फीस
                       </button>
                       <button
+                        onClick={() => setParentActiveSection('calendar')}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                          parentActiveSection === 'calendar' ? 'bg-emerald-300 text-slate-950 shadow-xs' : 'bg-white/15 hover:bg-white/25 text-white'
+                        }`}
+                      >
+                        📅 4. हाजिरी
+                      </button>
+                      <button
                         onClick={() => setParentActiveSection('behavior')}
                         className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                           parentActiveSection === 'behavior' ? 'bg-purple-300 text-slate-950 shadow-xs' : 'bg-white/15 hover:bg-white/25 text-white'
                         }`}
                       >
-                        🌟 4. आचरण
+                        🌟 5. आचरण
+                      </button>
+                      <button
+                        onClick={() => setParentActiveSection('notices')}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                          parentActiveSection === 'notices' ? 'bg-amber-400 text-slate-950 shadow-xs' : 'bg-white/15 hover:bg-white/25 text-white'
+                        }`}
+                      >
+                        📢 6. सूचनाएं
                       </button>
                       <button
                         onClick={() => setParentActiveSection('profile')}
@@ -4897,7 +5294,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           parentActiveSection === 'profile' ? 'bg-blue-300 text-slate-950 shadow-xs' : 'bg-white/15 hover:bg-white/25 text-white'
                         }`}
                       >
-                        🪪 5. प्रोफ़ाइल
+                        🪪 7. प्रोफ़ाइल
                       </button>
                       <button
                         type="button"
@@ -5542,8 +5939,20 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           </select>
                         </div>
 
-                        {/* View Mode Toggle: Cards vs Table */}
+                        {/* View Mode Toggle: Cards vs Table vs Calendar */}
                         <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg text-xs font-semibold">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setParentActiveSection('calendar');
+                              window.scrollTo({ top: 0, behavior: 'smooth' });
+                            }}
+                            className="px-2.5 py-1 rounded-md transition-colors cursor-pointer flex items-center gap-1 bg-emerald-600 text-white shadow-xs font-bold hover:bg-emerald-700"
+                            title="मासिक उपस्थिति कैलेंडर देखें"
+                          >
+                            <i className="fa-solid fa-calendar-check"></i>
+                            <span>📅 हाजिरी कैलेंडर</span>
+                          </button>
                           <button
                             type="button"
                             onClick={() => setBehaviorViewMode('cards')}
@@ -5632,7 +6041,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           ></div>
                         </div>
 
-                        <div className="mt-2.5 flex items-center justify-between text-xs">
+                        <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
                           <span className="text-slate-600">
                             {behaviorStats.total > 0 &&
                             Math.round((behaviorStats.presentCount / behaviorStats.total) * 100) >= 75 ? (
@@ -5641,13 +6050,26 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                               <strong className="text-amber-700">⚠️ ध्यान दें: न्यूनतम 75% हाजिरी आवश्यक है।</strong>
                             )}
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => setShowAttendanceChart((prev) => !prev)}
-                            className="text-blue-900 hover:text-blue-700 font-bold underline cursor-pointer text-[11px]"
-                          >
-                            {showAttendanceChart ? 'ग्राफ छिपाएं' : '30-दिन ग्राफ देखें'}
-                          </button>
+                          <div className="flex items-center gap-3">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setParentActiveSection('calendar');
+                                window.scrollTo({ top: 0, behavior: 'smooth' });
+                              }}
+                              className="text-emerald-800 hover:text-emerald-950 font-black underline cursor-pointer text-xs flex items-center gap-1"
+                            >
+                              <i className="fa-solid fa-calendar-days"></i>
+                              <span>मासिक हाजिरी कैलेंडर खोलें →</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setShowAttendanceChart((prev) => !prev)}
+                              className="text-blue-900 hover:text-blue-700 font-bold underline cursor-pointer text-[11px]"
+                            >
+                              {showAttendanceChart ? 'ग्राफ छिपाएं' : '30-दिन ग्राफ देखें'}
+                            </button>
+                          </div>
                         </div>
                       </div>
 
@@ -6406,17 +6828,29 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                       {collector}
                                     </td>
                                     <td className="px-3.5 py-3 text-center whitespace-nowrap">
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          const text = `*E.V.S. Public School - Fee Receipt*\nStudent: ${selectedStudent.Student_Name} (Roll No: ${selectedStudent.Roll_Number || '1'})\nReceipt No: #${receiptId}\nDate: ${dateStr}\nAmount Paid: ₹${amt}\nMode: ${mode}\nReceived By: ${collector}`;
-                                          window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
-                                        }}
-                                        className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-600 hover:text-white text-emerald-800 border border-emerald-200 rounded text-[11px] font-bold transition-all cursor-pointer inline-flex items-center gap-1"
-                                      >
-                                        <i className="fa-brands fa-whatsapp text-emerald-600"></i>
-                                        <span>रसीद शेयर</span>
-                                      </button>
+                                      <div className="flex items-center justify-center gap-1.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => setActiveReceiptModalData({ student: selectedStudent, fee })}
+                                          className="px-2.5 py-1 bg-blue-900 hover:bg-blue-800 text-amber-300 rounded-lg text-[11px] font-bold transition-all cursor-pointer inline-flex items-center gap-1 shadow-2xs"
+                                          title="आधिकारिक रसीद प्रिंट या PDF में डाउनलोड करें"
+                                        >
+                                          <i className="fa-solid fa-print text-xs"></i>
+                                          <span>रसीद प्रिंट</span>
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const text = `*E.V.S. Public School - Fee Receipt*\nStudent: ${selectedStudent.Student_Name} (Roll No: ${selectedStudent.Roll_Number || '1'})\nReceipt No: #${receiptId}\nDate: ${dateStr}\nAmount Paid: ₹${amt}\nMode: ${mode}\nReceived By: ${collector}`;
+                                            window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
+                                          }}
+                                          className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-600 hover:text-white text-emerald-800 border border-emerald-200 rounded-lg text-[11px] font-bold transition-all cursor-pointer inline-flex items-center gap-1"
+                                          title="WhatsApp पर रसीद शेयर करें"
+                                        >
+                                          <i className="fa-brands fa-whatsapp text-emerald-600"></i>
+                                          <span>शेयर</span>
+                                        </button>
+                                      </div>
                                     </td>
                                   </tr>
                                 );
@@ -6440,6 +6874,105 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           <span>← वापस मुख्य 4 कार्ड्स पर जाएं (Back to Cards)</span>
                         </button>
                       </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* VIEW 4: ATTENDANCE CALENDAR (मासिक उपस्थिति कैलेंडर) */}
+                {parentActiveSection === 'calendar' && selectedStudent && (
+                  <div className="space-y-5 animate-fadeIn">
+                    <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center text-sm font-bold shadow-2xs">
+                            <i className="fa-solid fa-calendar-check"></i>
+                          </span>
+                          <h4 className="text-base sm:text-lg font-black text-[#0c2340]">
+                            मासिक उपस्थिति कैलेंडर (Attendance Calendar)
+                          </h4>
+                        </div>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          छात्र: <strong className="text-slate-800">{selectedStudent.Student_Name}</strong> • रोल नं: <strong className="text-slate-800">{selectedStudent.Roll_Number || '1'}</strong> • कक्षा: <strong className="text-slate-800">{selectedStudent.Class}</strong>
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAttendanceCalendarMode('calendar');
+                            setIsAttendanceCalendarOpen(true);
+                          }}
+                          className="px-3.5 py-1.5 bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-2xs cursor-pointer transition-colors"
+                          title="पूरी स्क्रीन में कैलेंडर खोलें"
+                        >
+                          <i className="fa-solid fa-expand"></i>
+                          <span>फुल स्क्रीन (Full Screen)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setParentActiveSection('behavior');
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }}
+                          className="px-3.5 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200 font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-2xs cursor-pointer transition-colors"
+                        >
+                          <i className="fa-solid fa-clipboard-check text-purple-600"></i>
+                          <span>आचरण रिपोर्ट →</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Directly Embedded Monthly Attendance Calendar */}
+                    <AttendanceCalendarModal
+                      embedded={true}
+                      isOpen={true}
+                      selectedStudent={selectedStudent}
+                      allStudents={parentChildren.length > 0 ? parentChildren : [selectedStudent]}
+                      behaviorRecords={behaviorList}
+                      initialMode="calendar"
+                      schoolName="E.V.S. PUBLIC SCHOOL"
+                      onSelectStudent={(st) => setSelectedStudent(st)}
+                    />
+
+                    <div className="pt-2 border-t border-slate-200 flex justify-center">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setParentActiveSection('overview');
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        className="px-5 py-2.5 bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-bold rounded-xl text-xs sm:text-sm flex items-center gap-2 shadow-sm cursor-pointer transition-all active:scale-95"
+                      >
+                        <i className="fa-solid fa-arrow-left"></i>
+                        <span>← वापस मुख्य 4 कार्ड्स पर जाएं (Back to Cards)</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* VIEW 6: SCHOOL NOTICE BOARD & HOLIDAYS */}
+                {parentActiveSection === 'notices' && (
+                  <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 sm:p-6 space-y-6 animate-fadeIn">
+                    <SchoolNoticeBoard
+                      schoolName="E.V.S. PUBLIC SCHOOL"
+                      isManager={false}
+                      notices={schoolNotices}
+                      onNoticesUpdate={handleUpdateSchoolNotices}
+                    />
+
+                    <div className="pt-4 border-t border-slate-200 flex justify-center">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setParentActiveSection('overview');
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        className="px-5 py-2.5 bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-bold rounded-xl text-xs sm:text-sm flex items-center gap-2 shadow-sm cursor-pointer transition-all active:scale-95"
+                      >
+                        <i className="fa-solid fa-arrow-left"></i>
+                        <span>← वापस मुख्य 4 कार्ड्स पर जाएं (Back to Cards)</span>
+                      </button>
                     </div>
                   </div>
                 )}
@@ -6742,6 +7275,44 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 <span className="px-2 py-0.2 rounded-full bg-blue-100 text-blue-800 text-[11px]">
                   {homeworkList.length}
                 </span>
+              </button>
+
+              <button
+                onClick={() => setTeacherPortalTab('notices')}
+                className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                  teacherPortalTab === 'notices'
+                    ? 'bg-[#0c2340] text-amber-300 shadow-sm'
+                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                }`}
+              >
+                <i className="fa-solid fa-bullhorn text-amber-400"></i>
+                <span>सूचना पट्ट (Notices)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setAttendanceCalendarMode('absent_list');
+                  setIsAttendanceCalendarOpen(true);
+                }}
+                className="px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-300 transition-all cursor-pointer shadow-2xs"
+                title="आज के अनुपस्थित छात्र देखें और WhatsApp अलर्ट भेजें"
+              >
+                <i className="fa-solid fa-user-xmark text-rose-600"></i>
+                <span>अनुपस्थित छात्र (WhatsApp)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setAttendanceCalendarMode('calendar');
+                  setIsAttendanceCalendarOpen(true);
+                }}
+                className="px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 transition-all cursor-pointer shadow-2xs"
+                title="मासिक हाजिरी कैलेंडर देखें"
+              >
+                <i className="fa-solid fa-calendar-check text-emerald-600"></i>
+                <span>हाजिरी कैलेंडर</span>
               </button>
 
               {/* Universal Student Finder & QR Scanner button */}
@@ -7439,6 +8010,18 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 </div>
               </div>
             )}
+
+            {/* TAB 4: SCHOOL NOTICE BOARD FOR TEACHER */}
+            {teacherPortalTab === 'notices' && (
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 space-y-4 animate-fadeIn">
+                <SchoolNoticeBoard
+                  schoolName="E.V.S. PUBLIC SCHOOL"
+                  isTeacher={true}
+                  notices={schoolNotices}
+                  onNoticesUpdate={handleUpdateSchoolNotices}
+                />
+              </div>
+            )}
           </div>
         )}
 
@@ -7675,6 +8258,11 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               onSyncAllPending={syncAllPendingStudentsToSheet}
               onOpenSyncSettings={() => setSheetSyncModalOpen(true)}
               onDeleteStudent={handleDeleteStudent}
+              onOpenAttendanceCalendar={(st) => {
+                if (st) setSelectedStudent(st);
+                setAttendanceCalendarMode('calendar');
+                setIsAttendanceCalendarOpen(true);
+              }}
             />
 
             {/* Manager Switcher Tabs (5 Tabs) */}
@@ -7752,6 +8340,30 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 <i className="fa-solid fa-van-shuttle text-amber-500"></i>
                 <span>वैन लाइव ट्रैकिंग (Van Tracking)</span>
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              </button>
+
+              <button
+                onClick={() => setManagerTab('attendance')}
+                className={`pb-3 px-3 text-xs sm:text-sm font-bold flex items-center gap-2 border-b-2 cursor-pointer transition-colors ${
+                  managerTab === 'attendance'
+                    ? 'border-blue-900 text-blue-900'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <i className="fa-solid fa-calendar-check text-emerald-600"></i>
+                <span>उपस्थिति व अनुपस्थित अलर्ट (Attendance & Absent)</span>
+              </button>
+
+              <button
+                onClick={() => setManagerTab('notices')}
+                className={`pb-3 px-3 text-xs sm:text-sm font-bold flex items-center gap-2 border-b-2 cursor-pointer transition-colors ${
+                  managerTab === 'notices'
+                    ? 'border-blue-900 text-blue-900'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <i className="fa-solid fa-bullhorn text-amber-500"></i>
+                <span>सूचना पट्ट व अवकाश (Notices)</span>
               </button>
 
               {/* Universal Student Finder & QR Scanner button */}
@@ -7959,6 +8571,19 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                   >
                                     <i className="fa-solid fa-plus text-[10px]"></i>
                                     <span>Fee</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedStudent(s);
+                                      setAttendanceCalendarMode('calendar');
+                                      setIsAttendanceCalendarOpen(true);
+                                    }}
+                                    className="px-2 py-1 bg-purple-50 hover:bg-[#0c2340] hover:text-amber-300 text-purple-900 border border-purple-200 rounded text-[11px] font-bold transition-colors cursor-pointer flex items-center gap-1"
+                                    title="इस छात्र का मासिक हाजिरी कैलेंडर देखें"
+                                  >
+                                    <i className="fa-solid fa-calendar-check text-[10px] text-purple-600"></i>
+                                    <span>हाजिरी</span>
                                   </button>
                                   <button
                                     onClick={() => setPreviewQRStudent(s)}
@@ -8827,6 +9452,91 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 getClassName={getClassName}
               />
             )}
+
+            {/* VIEW 7: MANAGER ATTENDANCE & ABSENT ALERTS */}
+            {managerTab === 'attendance' && (
+              <div className="space-y-4 animate-fadeIn">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 sm:p-5 rounded-3xl border border-slate-200 shadow-2xs">
+                  <div>
+                    <h3 className="font-black text-lg text-slate-900 flex items-center gap-2">
+                      <i className="fa-solid fa-calendar-check text-emerald-600"></i>
+                      <span>उपस्थिति व अनुपस्थित छात्र अलर्ट हब (Attendance & Absent Alerts)</span>
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      कक्षावार छात्रों की मासिक हाजिरी कैलेंडर देखें अथवा आज के अनुपस्थित छात्रों को 1-क्लिक में WhatsApp सूचना भेजें।
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAttendanceCalendarMode('calendar');
+                      }}
+                      className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                        attendanceCalendarMode === 'calendar'
+                          ? 'bg-blue-900 text-amber-300 shadow-xs'
+                          : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                      }`}
+                    >
+                      <i className="fa-solid fa-calendar-days"></i>
+                      <span>मासिक कैलेंडर व्यू</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAttendanceCalendarMode('absent_list');
+                      }}
+                      className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                        attendanceCalendarMode === 'absent_list'
+                          ? 'bg-rose-600 text-white shadow-xs'
+                          : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                      }`}
+                    >
+                      <i className="fa-solid fa-user-xmark"></i>
+                      <span>अनुपस्थित छात्र (WhatsApp)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAttendanceCalendarOpen(true);
+                      }}
+                      className="px-3.5 py-2 rounded-xl text-xs font-bold bg-[#0c2340] hover:bg-[#10316b] text-amber-300 flex items-center gap-1.5 shadow-2xs cursor-pointer transition-colors"
+                      title="पूरी स्क्रीन में खोलें"
+                    >
+                      <i className="fa-solid fa-expand"></i>
+                      <span>फुल स्क्रीन (Full Screen)</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Directly Embedded Attendance & Absent Management Hub */}
+                <AttendanceCalendarModal
+                  embedded={true}
+                  isOpen={true}
+                  selectedStudent={selectedStudent || previewQRStudent || students[0]}
+                  allStudents={students}
+                  behaviorRecords={behaviorList}
+                  initialMode={attendanceCalendarMode}
+                  schoolName="E.V.S. PUBLIC SCHOOL"
+                  onSelectStudent={(st) => setSelectedStudent(st)}
+                />
+              </div>
+            )}
+
+            {/* VIEW 8: MANAGER SCHOOL NOTICE BOARD */}
+            {managerTab === 'notices' && (
+              <div className="bg-white rounded-3xl p-5 sm:p-6 border border-slate-200 shadow-sm animate-fadeIn">
+                <SchoolNoticeBoard
+                  schoolName="E.V.S. PUBLIC SCHOOL"
+                  isManager={true}
+                  notices={schoolNotices}
+                  onNoticesUpdate={handleUpdateSchoolNotices}
+                />
+              </div>
+            )}
           </div>
         )}
 
@@ -9035,20 +9745,36 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         </button>
                       </div>
 
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setActiveTab('manager');
-                          setManagerTab('fees');
-                          setAddFeeInitialStudentId(selectedStudentDetail.Student_ID);
-                          setAddFeeModalOpen(true);
-                          setSelectedStudentDetail(null);
-                        }}
-                        className="px-2.5 py-1 bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-bold rounded-lg text-[11px] shadow-2xs cursor-pointer flex items-center gap-1 transition-colors"
-                      >
-                        <i className="fa-solid fa-plus text-amber-400"></i>
-                        <span>फ़ीस जमा करें</span>
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedStudent(selectedStudentDetail);
+                            setAttendanceCalendarMode('calendar');
+                            setIsAttendanceCalendarOpen(true);
+                          }}
+                          className="px-2.5 py-1 bg-purple-50 hover:bg-[#0c2340] hover:text-amber-300 text-purple-900 border border-purple-200 font-bold rounded-lg text-[11px] shadow-2xs cursor-pointer flex items-center gap-1 transition-colors"
+                          title="इस छात्र का मासिक हाजिरी कैलेंडर खोलें"
+                        >
+                          <i className="fa-solid fa-calendar-check text-purple-600"></i>
+                          <span>हाजिरी कैलेंडर</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveTab('manager');
+                            setManagerTab('fees');
+                            setAddFeeInitialStudentId(selectedStudentDetail.Student_ID);
+                            setAddFeeModalOpen(true);
+                            setSelectedStudentDetail(null);
+                          }}
+                          className="px-2.5 py-1 bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-bold rounded-lg text-[11px] shadow-2xs cursor-pointer flex items-center gap-1 transition-colors"
+                        >
+                          <i className="fa-solid fa-plus text-amber-400"></i>
+                          <span>फ़ीस जमा करें</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 );
@@ -9462,26 +10188,28 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               {activeMediaModal.type === 'image' ? (
                 <div className="flex flex-col items-center justify-center w-full h-full">
                   <div className="overflow-auto max-w-full max-h-full flex items-center justify-center p-2">
-                    <img
-                      src={activeMediaModal.url}
-                      alt={activeMediaModal.title}
-                      style={{
-                        transform: `scale(${mediaZoom}) rotate(${mediaRotation}deg)`,
-                        transformOrigin: 'center center',
-                        transition: 'transform 0.15s ease-out',
-                      }}
-                      className="max-h-[65vh] max-w-full object-contain rounded-lg shadow-xl"
-                      onError={(e) => {
-                        const target = e.currentTarget;
-                        if (activeMediaModal.fallbackUrl && target.src !== activeMediaModal.fallbackUrl) {
-                          target.src = activeMediaModal.fallbackUrl;
-                        } else {
-                          target.style.display = 'none';
-                          const errBox = document.getElementById('media-err-box');
-                          if (errBox) errBox.style.display = 'block';
-                        }
-                      }}
-                    />
+                    {Boolean(activeMediaModal.url && activeMediaModal.url.trim()) ? (
+                      <img
+                        src={activeMediaModal.url || undefined}
+                        alt={activeMediaModal.title}
+                        style={{
+                          transform: `scale(${mediaZoom}) rotate(${mediaRotation}deg)`,
+                          transformOrigin: 'center center',
+                          transition: 'transform 0.15s ease-out',
+                        }}
+                        className="max-h-[65vh] max-w-full object-contain rounded-lg shadow-xl"
+                        onError={(e) => {
+                          const target = e.currentTarget;
+                          if (activeMediaModal.fallbackUrl && target.src !== activeMediaModal.fallbackUrl) {
+                            target.src = activeMediaModal.fallbackUrl;
+                          } else {
+                            target.style.display = 'none';
+                            const errBox = document.getElementById('media-err-box');
+                            if (errBox) errBox.style.display = 'block';
+                          }
+                        }}
+                      />
+                    ) : null}
                   </div>
                   <div id="media-err-box" style={{ display: 'none' }} className="text-center p-6 bg-slate-900 rounded-xl border border-slate-700 max-w-md">
                     <i className="fa-solid fa-triangle-exclamation text-amber-400 text-3xl mb-2"></i>
@@ -9522,11 +10250,13 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       <span>Google Drive / नए टैब में खोलें</span>
                     </a>
                   </div>
-                  <iframe
-                    src={activeMediaModal.url}
-                    className="w-full flex-1 rounded-xl bg-white border border-slate-700 min-h-[45vh]"
-                    title={activeMediaModal.title}
-                  ></iframe>
+                  {Boolean(activeMediaModal.url && activeMediaModal.url.trim()) ? (
+                    <iframe
+                      src={activeMediaModal.url || undefined}
+                      className="w-full flex-1 rounded-xl bg-white border border-slate-700 min-h-[45vh]"
+                      title={activeMediaModal.title}
+                    ></iframe>
+                  ) : null}
                 </div>
               )}
             </div>
@@ -9545,6 +10275,28 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
           </div>
         </div>
       )}
+
+      {/* Official Printable Fee Receipt Modal */}
+      <OfficialFeeReceiptModal
+        isOpen={Boolean(activeReceiptModalData)}
+        onClose={() => setActiveReceiptModalData(null)}
+        student={activeReceiptModalData?.student}
+        feeRecord={activeReceiptModalData?.fee}
+        schoolName="E.V.S. PUBLIC SCHOOL"
+        managerName={managerUser?.Name || 'School Office'}
+      />
+
+      {/* Monthly Attendance Calendar & Absent Alert Modal */}
+      <AttendanceCalendarModal
+        isOpen={isAttendanceCalendarOpen}
+        onClose={() => setIsAttendanceCalendarOpen(false)}
+        selectedStudent={selectedStudent || previewQRStudent || students[0]}
+        allStudents={students}
+        behaviorRecords={behaviorList}
+        initialMode={attendanceCalendarMode}
+        schoolName="E.V.S. PUBLIC SCHOOL"
+        onSelectStudent={(st) => setSelectedStudent(st)}
+      />
 
       {/* FOOTER */}
       <footer className="bg-[#0c2340] text-slate-300 border-t-2 border-amber-400 mt-auto">

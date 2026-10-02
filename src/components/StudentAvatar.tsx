@@ -102,7 +102,7 @@ export const StudentAvatar: React.FC<StudentAvatarProps> = ({
   const studentName = student?.Student_Name || altText || 'Student';
   const initial = studentName.trim().charAt(0).toUpperCase() || 'S';
 
-  const shouldRenderImage = Boolean(formattedUrl) && !imageError;
+  const shouldRenderImage = Boolean(formattedUrl && formattedUrl.trim()) && !imageError;
 
   return (
     <div className={`relative group shrink-0 inline-block ${className}`}>
@@ -111,7 +111,7 @@ export const StudentAvatar: React.FC<StudentAvatarProps> = ({
       >
         {shouldRenderImage ? (
           <img
-            src={formattedUrl}
+            src={formattedUrl || undefined}
             alt={studentName}
             className={`w-full h-full object-cover transition-opacity duration-200 ${imgClassName}`}
             referrerPolicy="no-referrer"

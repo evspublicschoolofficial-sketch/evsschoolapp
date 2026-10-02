@@ -19,6 +19,7 @@ interface ManagerOverviewModalsProps {
   onSyncAllPending?: () => Promise<void>;
   onOpenSyncSettings?: () => void;
   onDeleteStudent?: (studentId: string, studentName: string) => Promise<boolean>;
+  onOpenAttendanceCalendar?: (student?: Student) => void;
 }
 
 export type ManagerModalType = 'totalStudents' | 'feesOverview' | 'absentToday' | 'faultyBehavior' | null;
@@ -57,6 +58,7 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
   onSyncAllPending,
   onOpenSyncSettings,
   onDeleteStudent,
+  onOpenAttendanceCalendar,
 }) => {
   const [activeModal, setActiveModal] = useState<ManagerModalType>(null);
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -1135,6 +1137,26 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                     </span>
                   </div>
 
+                  {onOpenAttendanceCalendar && (
+                    <div className="mb-3 flex items-center justify-between gap-2 p-2.5 bg-blue-50/70 border border-blue-200/80 rounded-xl">
+                      <span className="text-xs text-blue-900 font-bold flex items-center gap-1.5">
+                        <i className="fa-solid fa-calendar-days text-blue-700"></i>
+                        <span>पूरे स्कूल का उपस्थिति व अनुपस्थिति कैलेंडर:</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onOpenAttendanceCalendar();
+                          setActiveModal(null);
+                        }}
+                        className="px-3 py-1.5 bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-2xs cursor-pointer transition-colors"
+                      >
+                        <i className="fa-solid fa-calendar-check text-amber-400"></i>
+                        <span>📅 मासिक हाजिरी कैलेंडर खोलें</span>
+                      </button>
+                    </div>
+                  )}
+
                   {filteredAbsentees.length === 0 ? (
                     <div className="text-center py-12 text-slate-400">
                       <i className="fa-solid fa-calendar-check text-4xl mb-3 text-emerald-500"></i>
@@ -1192,6 +1214,20 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                             </div>
 
                             <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100">
+                              {onOpenAttendanceCalendar && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onOpenAttendanceCalendar(st || undefined);
+                                    setActiveModal(null);
+                                  }}
+                                  className="px-2.5 py-1.5 bg-blue-50 hover:bg-[#0c2340] hover:text-amber-300 text-blue-900 border border-blue-200 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                                  title="इस छात्र का मासिक हाजिरी कैलेंडर खोलें"
+                                >
+                                  <i className="fa-solid fa-calendar-days text-[10px]"></i>
+                                  <span>कैलेंडर (Calendar)</span>
+                                </button>
+                              )}
                               {phone ? (
                                 <a
                                   href={`tel:${phone}`}

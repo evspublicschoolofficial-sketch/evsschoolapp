@@ -12,6 +12,8 @@ import {
 } from 'recharts';
 import { StudentRecordForScan } from './StudentQRScannerModal';
 import { FeeCollectionRecord } from './AddFeeModal';
+import { OfficialFeeReceiptModal } from './OfficialFeeReceiptModal';
+import { Student } from '../types';
 
 // Academic session months mapping (April through March)
 const ACADEMIC_MONTHS = [
@@ -256,6 +258,10 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
   const [ledgerSearch, setLedgerSearch] = useState<string>('');
   const [ledgerClassFilter, setLedgerClassFilter] = useState<string>('all');
   const [copiedReceipt, setCopiedReceipt] = useState<string | null>(null);
+  const [printingReceiptRecord, setPrintingReceiptRecord] = useState<{
+    student: Student;
+    fee: FeeCollectionRecord;
+  } | null>(null);
 
   // Monthly Fee Trends state controls
   const [trendsMetricFilter, setTrendsMetricFilter] = useState<'all' | 'collectionOnly' | 'collectionVsDue'>('all');
@@ -881,9 +887,9 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                     className="p-2.5 bg-white hover:bg-amber-50/70 border border-slate-200 hover:border-amber-300 rounded-xl text-left flex items-center gap-2.5 text-xs transition-colors cursor-pointer group"
                   >
                     <div className="w-9 h-9 rounded-xl bg-[#0c2340] text-amber-400 font-bold flex items-center justify-center text-xs shrink-0 overflow-hidden">
-                      {getStudentPhoto ? (
+                      {Boolean(getStudentPhoto && getStudentPhoto(st)) ? (
                         <img
-                          src={getStudentPhoto(st)}
+                          src={getStudentPhoto(st) || undefined}
                           alt={st.Student_Name}
                           className="w-full h-full object-cover"
                           onError={(e) => {
@@ -1479,9 +1485,9 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                 <div className="flex items-start sm:items-center gap-4">
                   {/* Photo */}
                   <div className="w-20 h-20 sm:w-22 sm:h-22 rounded-2xl bg-[#0c2340] text-amber-400 font-black text-2xl flex items-center justify-center border-2 border-amber-300 shadow-md shrink-0 overflow-hidden">
-                    {getStudentPhoto ? (
+                    {Boolean(getStudentPhoto && getStudentPhoto(selectedStudent)) ? (
                       <img
-                        src={getStudentPhoto(selectedStudent)}
+                        src={getStudentPhoto(selectedStudent) || undefined}
                         alt={selectedStudent.Student_Name}
                         className="w-full h-full object-cover"
                         onError={(e) => {
@@ -1753,15 +1759,29 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                                 {fee.Received_By || managerName}
                               </td>
                               <td className="px-3.5 py-3 text-center whitespace-nowrap">
-                                <button
-                                  type="button"
-                                  onClick={() => handleShareSingleReceipt(fee)}
-                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] transition-colors shadow-2xs cursor-pointer"
-                                  title="Share WhatsApp Receipt with Parent"
-                                >
-                                  <i className="fa-brands fa-whatsapp text-xs"></i>
-                                  <span>Receipt</span>
-                                </button>
+                                <div className="flex items-center justify-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const st = (selectedStudent || students.find((s) => String(s.Student_ID).toLowerCase() === String(fee.Student_ID).toLowerCase())) as Student;
+                                      if (st) setPrintingReceiptRecord({ student: st, fee });
+                                    }}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-900 hover:bg-blue-800 text-amber-300 font-bold text-[11px] transition-colors shadow-2xs cursor-pointer"
+                                    title="आधिकारिक रसीद प्रिंट / PDF करें"
+                                  >
+                                    <i className="fa-solid fa-print text-xs"></i>
+                                    <span>प्रिंट</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleShareSingleReceipt(fee)}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] transition-colors shadow-2xs cursor-pointer"
+                                    title="Share WhatsApp Receipt with Parent"
+                                  >
+                                    <i className="fa-brands fa-whatsapp text-xs"></i>
+                                    <span>Receipt</span>
+                                  </button>
+                                </div>
                               </td>
                             </tr>
                           );
@@ -1956,15 +1976,29 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                           {fee.Received_By || managerName}
                         </td>
                         <td className="px-3.5 py-2.5 text-center whitespace-nowrap">
-                          <button
-                            type="button"
-                            onClick={() => handleShareSingleReceipt(fee)}
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] transition-colors shadow-2xs cursor-pointer"
-                            title="Share WhatsApp Receipt"
-                          >
-                            <i className="fa-brands fa-whatsapp text-xs"></i>
-                            <span>रसीद</span>
-                          </button>
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const st = (selectedStudent || students.find((s) => String(s.Student_ID).toLowerCase() === String(fee.Student_ID).toLowerCase())) as Student;
+                                if (st) setPrintingReceiptRecord({ student: st, fee });
+                              }}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded bg-blue-900 hover:bg-blue-800 text-amber-300 font-bold text-[11px] transition-colors shadow-2xs cursor-pointer"
+                              title="आधिकारिक रसीद प्रिंट / PDF करें"
+                            >
+                              <i className="fa-solid fa-print text-xs"></i>
+                              <span>प्रिंट</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleShareSingleReceipt(fee)}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] transition-colors shadow-2xs cursor-pointer"
+                              title="Share WhatsApp Receipt"
+                            >
+                              <i className="fa-brands fa-whatsapp text-xs"></i>
+                              <span>रसीद</span>
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -1975,6 +2009,16 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
           </div>
         </div>
       )}
+
+      {/* Official Printable Fee Receipt Modal for Manager */}
+      <OfficialFeeReceiptModal
+        isOpen={Boolean(printingReceiptRecord)}
+        onClose={() => setPrintingReceiptRecord(null)}
+        student={printingReceiptRecord?.student}
+        feeRecord={printingReceiptRecord?.fee}
+        schoolName="E.V.S. PUBLIC SCHOOL"
+        managerName={managerName}
+      />
     </div>
   );
 };

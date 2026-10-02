@@ -19,6 +19,11 @@ interface DriverPortalProps {
   onBackToHome?: () => void;
   onOpenManagerTracker?: () => void;
   initialDriverName?: string;
+  loggedDriverUser?: SchoolUser | null;
+  onDriverLogin?: (user: SchoolUser) => void;
+  onDriverLogout?: () => void;
+  activeOtherSession?: { role: string; labelHindi: string; name: string } | null;
+  onLogoutOtherSession?: () => void;
 }
 
 export const DriverPortal: React.FC<DriverPortalProps> = ({
@@ -26,6 +31,11 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
   onBackToApp,
   onBackToHome,
   onOpenManagerTracker,
+  loggedDriverUser,
+  onDriverLogin,
+  onDriverLogout,
+  activeOtherSession,
+  onLogoutOtherSession,
 }) => {
   // Find registered drivers from Users sheet
   const driversFromUsers = useMemo(() => {
@@ -37,14 +47,21 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
     );
   }, [users]);
 
-  // Logged-in Driver state (stored in localStorage)
+  // Logged-in Driver state (stored in localStorage and synced with App)
   const [loggedDriver, setLoggedDriver] = useState<SchoolUser | null>(() => {
+    if (loggedDriverUser !== undefined) return loggedDriverUser;
     try {
       const saved = localStorage.getItem('evs_logged_driver');
       if (saved) return JSON.parse(saved);
     } catch {}
     return null;
   });
+
+  useEffect(() => {
+    if (loggedDriverUser !== undefined) {
+      setLoggedDriver(loggedDriverUser);
+    }
+  }, [loggedDriverUser]);
 
   // Login credentials state
   const [loginInput, setLoginInput] = useState('');
@@ -653,6 +670,9 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
     if (matched) {
       setLoggedDriver(matched);
       localStorage.setItem('evs_logged_driver', JSON.stringify(matched));
+      if (onDriverLogin) {
+        onDriverLogin(matched);
+      }
       setLoginInput('');
       setPasswordInput('');
     } else {
@@ -666,6 +686,9 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
     }
     setLoggedDriver(null);
     localStorage.removeItem('evs_logged_driver');
+    if (onDriverLogout) {
+      onDriverLogout();
+    }
   };
 
   // Map Embed URLs
@@ -706,6 +729,40 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
           </div>
 
           <div className="p-6 space-y-4">
+            {/* Single Device Active Session Lock Notification */}
+            {activeOtherSession && (
+              <div className="p-4 bg-amber-50 border-2 border-amber-300 rounded-2xl text-xs space-y-2">
+                <div className="flex items-center gap-2 font-black text-amber-900">
+                  <i className="fa-solid fa-shield-halved text-amber-600"></i>
+                  <span>एकल डिवाइस सुरक्षा (Single Session Rule)</span>
+                </div>
+                <p className="text-amber-800 leading-relaxed">
+                  इस डिवाइस पर वर्तमान में <strong>{activeOtherSession.labelHindi} ({activeOtherSession.name})</strong> लॉगिन हैं। स्कूल नियमानुसार एक समय में केवल एक ही व्यक्ति लॉगिन रह सकता है।
+                </p>
+                <div className="pt-2 flex flex-wrap gap-2">
+                  {onLogoutOtherSession && (
+                    <button
+                      type="button"
+                      onClick={onLogoutOtherSession}
+                      className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg cursor-pointer text-xs flex items-center gap-1.5 shadow-xs"
+                    >
+                      <i className="fa-solid fa-right-from-bracket"></i>
+                      <span>वर्तमान सत्र लॉगआउट करें</span>
+                    </button>
+                  )}
+                  {onBackToHome && (
+                    <button
+                      type="button"
+                      onClick={onBackToHome}
+                      className="px-3.5 py-1.5 bg-[#0c2340] text-amber-300 font-bold rounded-lg cursor-pointer text-xs"
+                    >
+                      <span>पोर्टल पर वापस जाएं</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             {loginError && (
               <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-xl font-bold flex items-start gap-2">
                 <i className="fa-solid fa-triangle-exclamation text-rose-600 mt-0.5 shrink-0"></i>

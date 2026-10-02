@@ -386,9 +386,9 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
 
           {/* Top Quick Bar: Student ID & QR Preview */}
           <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 flex flex-col sm:flex-row items-center gap-4">
-            {qrPreviewUrl ? (
+            {Boolean(qrPreviewUrl && qrPreviewUrl.trim()) ? (
               <div className="p-1 bg-white rounded-xl border border-slate-300 shadow-2xs shrink-0 text-center">
-                <img src={qrPreviewUrl} alt="QR" className="w-20 h-20 rounded-lg mx-auto" />
+                <img src={qrPreviewUrl || undefined} alt="QR" className="w-20 h-20 rounded-lg mx-auto" />
                 <span className="text-[9px] font-mono text-slate-500 font-bold block mt-0.5">
                   {studentId || 'STUDENT QR'}
                 </span>

@@ -421,9 +421,9 @@ export const StudentHomeworkQRTrackerModal: React.FC<StudentHomeworkQRTrackerMod
             <div className="bg-gradient-to-br from-slate-50 to-blue-50/50 p-4 rounded-2xl border border-slate-200/90 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
               <div className="flex items-center gap-3.5">
                 <div className="w-16 h-16 rounded-2xl bg-[#0c2340] border-2 border-amber-300 shadow-md overflow-hidden shrink-0 flex items-center justify-center text-amber-400 font-bold text-xl">
-                  {getStudentPhoto ? (
+                  {Boolean(getStudentPhoto && getStudentPhoto(student)?.trim()) ? (
                     <img
-                      src={getStudentPhoto(student)}
+                      src={getStudentPhoto(student) || undefined}
                       alt={student.Student_Name || 'Student'}
                       className="w-full h-full object-cover"
                       onError={(e) => {
