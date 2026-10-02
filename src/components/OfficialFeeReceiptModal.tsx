@@ -64,9 +64,14 @@ export const OfficialFeeReceiptModal: React.FC<OfficialFeeReceiptModalProps> = (
   const receiptNo = feeRecord.Receipt_Number || 'REC-' + Date.now().toString().slice(-6);
   const paidAmount = Number(feeRecord.Amount_Paid || 0);
   const totalAmount = Number(feeRecord.Total_Amount || paidAmount);
-  const balanceAmount = feeRecord.Balance_Amount !== null && feeRecord.Balance_Amount !== undefined
+  const calculatedBal = totalAmount - paidAmount;
+  const rawBalance = feeRecord.Balance_Amount !== null && feeRecord.Balance_Amount !== undefined
     ? Number(feeRecord.Balance_Amount)
-    : Math.max(0, totalAmount - paidAmount);
+    : calculatedBal;
+  // If paid > total, true balance is negative (advance, e.g. 600 - 700 = -100)
+  const balanceAmount = (paidAmount > totalAmount && rawBalance >= 0)
+    ? calculatedBal
+    : rawBalance;
 
   const receiptDate = feeRecord.Date || new Date().toISOString().slice(0, 10);
   const paymentMode = feeRecord.Payment_Mode || 'Cash';
@@ -273,10 +278,12 @@ export const OfficialFeeReceiptModal: React.FC<OfficialFeeReceiptModalProps> = (
                 </tr>
                 <tr>
                   <td colSpan={4} className="p-2.5 text-right text-slate-700">
-                    शेष बकाया राशि (Remaining Due Balance):
+                    {balanceAmount < 0 ? 'अग्रिम जमा राशि (Advance Paid Balance):' : 'शेष बकाया राशि (Remaining Due Balance):'}
                   </td>
-                  <td className={`p-2.5 text-right font-black text-sm ${balanceAmount > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
-                    ₹{balanceAmount.toLocaleString('en-IN')}
+                  <td className={`p-2.5 text-right font-black text-sm ${balanceAmount < 0 ? 'text-purple-700' : balanceAmount > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                    {balanceAmount < 0
+                      ? `-₹${Math.abs(balanceAmount).toLocaleString('en-IN')}`
+                      : `₹${balanceAmount.toLocaleString('en-IN')}`}
                   </td>
                 </tr>
               </tfoot>

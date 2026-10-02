@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Student, FeeCollectionRecord, StudentBehaviorRecord } from '../types';
 import { StudentAvatar } from './StudentAvatar';
+import { computeStudentFeeMetrics, computeSchoolFeeTotals } from '../utils/feeCalculation';
 
 interface ManagerOverviewModalsProps {
   students: Student[];
@@ -168,22 +169,26 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
     return feeRecords.reduce((acc, f) => acc + (Number(f.Amount_Paid) || 0), 0);
   }, [collectedThisMonthList, feeRecords]);
 
-  // Pending Fees List: Students with unpaid dues
+  // Overall School Fee Metrics (Calculated on individual student totals)
+  const schoolFeeTotals = useMemo(() => {
+    return computeSchoolFeeTotals(students, feeRecords);
+  }, [students, feeRecords]);
+
+  // Pending Fees List: Students with unpaid dues (calculated per individual student)
   const pendingFeesList = useMemo(() => {
     const list: { student: Student; pendingAmount: number; lastDate?: string }[] = [];
     students.forEach((st) => {
-      const sId = String(st.Student_ID || '').toLowerCase().trim();
-      const bal = feeBalances[sId] !== undefined ? feeBalances[sId] : Number(st.Balance_Amount || 0);
-      if (bal > 0) {
-        list.push({ student: st, pendingAmount: bal });
+      const metrics = computeStudentFeeMetrics(st, feeRecords);
+      if (metrics.hasDues) {
+        list.push({ student: st, pendingAmount: metrics.dueBalance });
       }
     });
     return list.sort((a, b) => b.pendingAmount - a.pendingAmount);
-  }, [students, feeBalances]);
+  }, [students, feeRecords]);
 
   const totalPendingAmount = useMemo(() => {
-    return pendingFeesList.reduce((acc, item) => acc + item.pendingAmount, 0);
-  }, [pendingFeesList]);
+    return schoolFeeTotals.totalPendingDues;
+  }, [schoolFeeTotals]);
 
   // 3. Absent Students Metrics
   // Check if date matches today
@@ -451,12 +456,18 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
             </span>
             <div className="flex items-baseline gap-2 mt-0.5">
               <span className="text-xl sm:text-2xl font-black text-emerald-700">
-                {loadingFees ? '...' : `₹${formatIndianCurrency(totalCollectedThisMonth)}`}
+                {loadingFees ? '...' : `₹${formatIndianCurrency(schoolFeeTotals.totalCollected)}`}
               </span>
-              <span className="text-[11px] text-slate-500 font-semibold">Collected</span>
+              <span className="text-[11px] text-slate-500 font-semibold">Total Collected</span>
             </div>
-            <div className="mt-1 text-xs text-slate-600 font-medium">
-              <span className="text-rose-600 font-bold">₹{formatIndianCurrency(totalPendingAmount)}</span> Pending Dues
+            <div className="mt-1 text-xs text-slate-600 font-medium flex items-center gap-1.5 flex-wrap">
+              <span className="text-rose-600 font-bold">₹{formatIndianCurrency(totalPendingAmount)}</span>
+              <span>Pending Dues</span>
+              {schoolFeeTotals.totalAdvance > 0 && (
+                <span className="text-purple-700 font-bold text-[10px] bg-purple-50 px-1.5 py-0.2 rounded border border-purple-200">
+                  ₹{formatIndianCurrency(schoolFeeTotals.totalAdvance)} Advance
+                </span>
+              )}
             </div>
           </div>
 

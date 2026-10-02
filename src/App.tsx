@@ -28,6 +28,7 @@ import { SchoolNoticeBoard, DEFAULT_SEED_NOTICES } from './components/SchoolNoti
 import { EmergencyAlertBanner } from './components/EmergencyAlertBanner';
 import { playSirenPreview } from './utils/sirenAudio';
 import { SchoolNotice } from './types';
+import { computeStudentFeeMetrics, computeSchoolFeeTotals, normalizeStudentId } from './utils/feeCalculation';
 import studentFarahPhoto from './assets/images/student_farah_1789483069291.jpg';
 import studentNamraPhoto from './assets/images/student_namra_1789483091505.jpg';
 
@@ -2268,19 +2269,11 @@ export default function App() {
     return str;
   };
 
-  // Get student balance from Fee_Collection or Student record
+  // Get student balance: Total Session Fee - Total Paid Amount (negative if advance, e.g. 600 - 700 = -100)
   const getStudentBalance = (student: Student | null | undefined): number => {
     if (!student) return 0;
-    const sId = String(student.Student_ID || '').trim().toLowerCase();
-    if (sId && feeBalances[sId] !== undefined) {
-      return feeBalances[sId];
-    }
-    // Fallback to student record's Balance_Amount
-    if (student.Balance_Amount !== undefined && student.Balance_Amount !== null && student.Balance_Amount !== '') {
-      const num = Number(student.Balance_Amount);
-      return isNaN(num) ? 0 : num;
-    }
-    return 0;
+    const metrics = computeStudentFeeMetrics(student, feeRecords);
+    return metrics.dueBalance;
   };
 
   // Background Synchronization with LocalStorage persistence & Stale-While-Revalidate
@@ -3097,23 +3090,29 @@ export default function App() {
   // Student Fee Summary (computed balance, total paid, etc.)
   const studentFeeSummary = useMemo(() => {
     if (!selectedStudent) {
-      return { balance: 0, rawBalance: 0, totalPaid: 0, totalFee: 0, hasDues: false, receiptsCount: 0 };
+      return {
+        balance: 0,
+        rawBalance: 0,
+        totalPaid: 0,
+        totalFee: 0,
+        hasDues: false,
+        isAdvance: false,
+        advanceAmount: 0,
+        receiptsCount: 0,
+      };
     }
-    const rawBalance = getStudentBalance(selectedStudent);
-    const records = selectedStudentFeeRecords;
-    const totalPaid = records.reduce((sum, r) => sum + (Number(r.Amount_Paid) || 0), 0);
-    // If raw balance is negative (e.g. -100) or 0, parent owes ₹0 (no dues or advance paid)
-    const balance = rawBalance > 0 ? rawBalance : 0;
-    const totalFee = (rawBalance > 0 ? rawBalance : 0) + totalPaid;
+    const metrics = computeStudentFeeMetrics(selectedStudent, feeRecords);
     return {
-      balance,
-      rawBalance,
-      totalPaid,
-      totalFee: totalFee > 0 ? totalFee : totalPaid,
-      hasDues: rawBalance > 0,
-      receiptsCount: records.length,
+      balance: metrics.dueBalance,
+      rawBalance: metrics.dueBalance,
+      totalPaid: metrics.totalPaid,
+      totalFee: metrics.totalSessionFee,
+      hasDues: metrics.hasDues,
+      isAdvance: metrics.isAdvance,
+      advanceAmount: metrics.advanceAmount,
+      receiptsCount: metrics.receiptsCount,
     };
-  }, [selectedStudent, getStudentBalance, selectedStudentFeeRecords]);
+  }, [selectedStudent, feeRecords]);
 
   // Attendance Trend Data (Last 30 Days) for Recharts Line Chart
   const attendanceChartData = useMemo(() => {
@@ -3853,9 +3852,17 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     // Prepend to state
     setFeeRecords((prev) => [newRec, ...prev]);
 
-    // Update fee balance mapping
+    // Update fee balance mapping accurately via computeStudentFeeMetrics
     const sId = (newRec.Student_ID || '').toLowerCase();
-    if (sId && newRec.Balance_Amount !== null && newRec.Balance_Amount !== undefined) {
+    const updatedRecords = [newRec, ...feeRecords];
+    const targetStudent = students.find((s) => (s.Student_ID || '').toLowerCase() === sId);
+    if (targetStudent) {
+      const metrics = computeStudentFeeMetrics(targetStudent, updatedRecords);
+      setFeeBalances((prev) => ({
+        ...prev,
+        [sId]: metrics.dueBalance,
+      }));
+    } else if (sId && newRec.Balance_Amount !== null && newRec.Balance_Amount !== undefined) {
       setFeeBalances((prev) => ({
         ...prev,
         [sId]: newRec.Balance_Amount as number,
@@ -3910,6 +3917,123 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         : `https://wa.me/?text=${encodeURIComponent(text)}`;
       window.open(url, '_blank');
     }
+  };
+
+  // Edit Fee Record Handler (Manager)
+  const handleEditFee = async (updatedRec: FeeCollectionRecord, originalReceiptNo: string) => {
+    const updatedRecords = feeRecords.map((r) =>
+      (r.Receipt_Number && r.Receipt_Number.toLowerCase() === originalReceiptNo.toLowerCase())
+        ? updatedRec
+        : r
+    );
+    setFeeRecords(updatedRecords);
+
+    // Sync student balance
+    const sId = (updatedRec.Student_ID || '').toLowerCase();
+    const targetStudent = students.find((s) => (s.Student_ID || '').toLowerCase() === sId);
+    if (targetStudent) {
+      const metrics = computeStudentFeeMetrics(targetStudent, updatedRecords);
+      setFeeBalances((prev) => ({
+        ...prev,
+        [sId]: metrics.dueBalance,
+      }));
+    }
+
+    // Save to localStorage
+    try {
+      const existing = localStorage.getItem('evs_custom_fee_records');
+      let list: FeeCollectionRecord[] = existing ? JSON.parse(existing) : [];
+      let found = false;
+      list = list.map((r) => {
+        if (r.Receipt_Number && r.Receipt_Number.toLowerCase() === originalReceiptNo.toLowerCase()) {
+          found = true;
+          return updatedRec;
+        }
+        return r;
+      });
+      if (!found) {
+        list.unshift(updatedRec);
+      }
+      localStorage.setItem('evs_custom_fee_records', JSON.stringify(list));
+      localStorage.setItem(CACHE_KEY_FEES_RECORDS, JSON.stringify(updatedRecords));
+    } catch (e) {
+      console.warn('Could not update custom fee cache:', e);
+    }
+
+    setFeeNotificationSuccess(`रसीद #${updatedRec.Receipt_Number} सफलतापूर्वक संशोधित (Updated) कर दी गई!`);
+    setTimeout(() => setFeeNotificationSuccess(null), 4000);
+
+    // Send to Google Apps Script
+    try {
+      fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'editFee',
+          original_receipt_no: originalReceiptNo,
+          receipt_no: updatedRec.Receipt_Number,
+          student_id: updatedRec.Student_ID,
+          date: updatedRec.Date,
+          fee_type: updatedRec.Fee_Type,
+          month: updatedRec.Month,
+          total_amount: updatedRec.Total_Amount,
+          amount_paid: updatedRec.Amount_Paid,
+          balance_amount: updatedRec.Balance_Amount,
+          payment_mode: updatedRec.Payment_Mode,
+          received_by: updatedRec.Received_By || managerUser?.Name || 'School Manager',
+        }),
+      }).catch((e) => console.warn('Background fee edit note:', e));
+    } catch {}
+  };
+
+  // Delete Fee Record Handler (Manager)
+  const handleDeleteFee = async (receiptNo: string, studentId: string) => {
+    const updatedRecords = feeRecords.filter(
+      (r) => !(r.Receipt_Number && r.Receipt_Number.toLowerCase() === receiptNo.toLowerCase())
+    );
+    setFeeRecords(updatedRecords);
+
+    // Sync student balance
+    const sId = (studentId || '').toLowerCase();
+    const targetStudent = students.find((s) => (s.Student_ID || '').toLowerCase() === sId);
+    if (targetStudent) {
+      const metrics = computeStudentFeeMetrics(targetStudent, updatedRecords);
+      setFeeBalances((prev) => ({
+        ...prev,
+        [sId]: metrics.dueBalance,
+      }));
+    }
+
+    // Save to localStorage
+    try {
+      const existing = localStorage.getItem('evs_custom_fee_records');
+      if (existing) {
+        const list: FeeCollectionRecord[] = JSON.parse(existing);
+        const filtered = list.filter(
+          (r) => !(r.Receipt_Number && r.Receipt_Number.toLowerCase() === receiptNo.toLowerCase())
+        );
+        localStorage.setItem('evs_custom_fee_records', JSON.stringify(filtered));
+      }
+      localStorage.setItem(CACHE_KEY_FEES_RECORDS, JSON.stringify(updatedRecords));
+    } catch (e) {
+      console.warn('Could not update cache after deleting fee:', e);
+    }
+
+    setFeeNotificationSuccess(`रसीद #${receiptNo} सफलतापूर्वक हटा दी गई!`);
+    setTimeout(() => setFeeNotificationSuccess(null), 4000);
+
+    // Send to Google Apps Script
+    try {
+      fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'deleteFee',
+          receipt_no: receiptNo,
+          student_id: studentId,
+        }),
+      }).catch((e) => console.warn('Background fee delete note:', e));
+    } catch {}
   };
 
   // Filtered Homework Tracker records for Teacher Dashboard
@@ -3993,16 +4117,19 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     return Array.from(roles).sort();
   }, [usersList]);
 
-  // Fee totals for Manager
+  // Fee totals for Manager (Overall School Summary Total based on individual student totals)
   const managerFeeTotals = useMemo(() => {
-    let collected = 0;
-    let balance = 0;
-    filteredManagerFees.forEach((f) => {
-      collected += Number(f.Amount_Paid) || 0;
-      balance += Number(f.Balance_Amount) || 0;
-    });
-    return { collected, balance };
-  }, [filteredManagerFees]);
+    const totals = computeSchoolFeeTotals(
+      students,
+      filteredManagerFees.length === feeRecords.length ? feeRecords : filteredManagerFees
+    );
+    return {
+      collected: totals.totalCollected,
+      balance: totals.totalPendingDues,
+      totalAdvance: totals.totalAdvance,
+      totalBilled: totals.totalBilled,
+    };
+  }, [students, filteredManagerFees, feeRecords]);
 
   // Unique classes from students and homework + standard classes
   const classOptions = useMemo(() => {
@@ -4098,6 +4225,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer shadow-xs active:scale-95 shrink-0 ${
                       studentFeeSummary.hasDues
                         ? 'bg-rose-500/25 hover:bg-rose-500/35 text-rose-100 border-rose-400/50 hover:border-rose-300'
+                        : studentFeeSummary.isAdvance
+                        ? 'bg-purple-500/25 hover:bg-purple-500/35 text-purple-100 border-purple-400/50 hover:border-purple-300'
                         : 'bg-emerald-500/25 hover:bg-emerald-500/35 text-emerald-100 border-emerald-400/50 hover:border-emerald-300'
                     }`}
                     title="फ़ीस विवरण देखने हेतु क्लिक करें"
@@ -4106,16 +4235,34 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       className={`fa-solid text-[11px] ${
                         studentFeeSummary.hasDues
                           ? 'fa-triangle-exclamation text-amber-300'
+                          : studentFeeSummary.isAdvance
+                          ? 'fa-hand-holding-dollar text-purple-200'
                           : 'fa-circle-check text-emerald-300'
                       }`}
                     ></i>
-                    <span className="text-[11px] text-white/80 font-medium">बाकी फ़ीस:</span>
-                    <span className={`font-black text-xs ${studentFeeSummary.hasDues ? 'text-amber-200' : 'text-emerald-200'}`}>
-                      ₹{studentFeeSummary.balance.toLocaleString('en-IN')}
+                    <span className="text-[11px] text-white/80 font-medium">
+                      {studentFeeSummary.isAdvance ? 'अग्रिम फ़ीस:' : 'बाकी फ़ीस:'}
+                    </span>
+                    <span
+                      className={`font-black text-xs ${
+                        studentFeeSummary.hasDues
+                          ? 'text-amber-200'
+                          : studentFeeSummary.isAdvance
+                          ? 'text-purple-200'
+                          : 'text-emerald-200'
+                      }`}
+                    >
+                      {studentFeeSummary.isAdvance
+                        ? `-₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')}`
+                        : `₹${studentFeeSummary.balance.toLocaleString('en-IN')}`}
                     </span>
                     {studentFeeSummary.hasDues ? (
                       <span className="text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0.2 rounded bg-rose-600/80 text-white ml-0.5">
                         Due
+                      </span>
+                    ) : studentFeeSummary.isAdvance ? (
+                      <span className="text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0.2 rounded bg-purple-600/80 text-white ml-0.5">
+                        Advance
                       </span>
                     ) : (
                       <span className="text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0.2 rounded bg-emerald-600/80 text-white ml-0.5">
@@ -4718,7 +4865,15 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                     isCurrent ? 'bg-rose-500/30 text-rose-200' : 'bg-rose-50 text-rose-700 border border-rose-200'
                                   }`}
                                 >
-                                  ₹{childBal}
+                                  ₹{childBal} Due
+                                </span>
+                              ) : childBal < 0 ? (
+                                <span
+                                  className={`text-[9px] font-bold px-1.5 py-0.2 rounded ${
+                                    isCurrent ? 'bg-purple-500/30 text-purple-200' : 'bg-purple-50 text-purple-700 border border-purple-200'
+                                  }`}
+                                >
+                                  -₹{Math.abs(childBal)} Adv
                                 </span>
                               ) : null}
                               {isCurrent && (
@@ -4925,14 +5080,24 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
                         {/* Fee highlight */}
                         <span className={`px-2.5 py-1 rounded-lg font-semibold flex items-center gap-1.5 border ${
-                          getStudentBalance(selectedStudent) > 0
+                          studentFeeSummary.hasDues
                             ? 'bg-rose-500/20 text-rose-200 border-rose-500/40'
+                            : studentFeeSummary.isAdvance
+                            ? 'bg-purple-500/20 text-purple-200 border-purple-500/40'
                             : 'bg-emerald-500/20 text-emerald-200 border-emerald-500/40'
                         }`}>
-                          <i className={`fa-solid ${getStudentBalance(selectedStudent) > 0 ? 'fa-receipt' : 'fa-circle-check'}`}></i>
+                          <i className={`fa-solid ${
+                            studentFeeSummary.hasDues
+                              ? 'fa-receipt'
+                              : studentFeeSummary.isAdvance
+                              ? 'fa-hand-holding-dollar'
+                              : 'fa-circle-check'
+                          }`}></i>
                           <span>
-                            {getStudentBalance(selectedStudent) > 0
-                              ? `बकाया फ़ीस: ₹${getStudentBalance(selectedStudent).toLocaleString('en-IN')}`
+                            {studentFeeSummary.hasDues
+                              ? `बकाया फ़ीस: ₹${studentFeeSummary.balance.toLocaleString('en-IN')}`
+                              : studentFeeSummary.isAdvance
+                              ? `अग्रिम फ़ीस: -₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')} (Advance)`
                               : 'फ़ीस: पूर्ण चुकता ✓'}
                           </span>
                         </span>
@@ -5102,10 +5267,14 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           <span className={`text-[10px] sm:text-xs font-black px-2.5 py-0.5 rounded-full ${
                             studentFeeSummary.hasDues
                               ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                              : studentFeeSummary.isAdvance
+                              ? 'bg-purple-100 text-purple-800 border border-purple-200'
                               : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
                           }`}>
                             {studentFeeSummary.hasDues
                               ? `बकाया ₹${studentFeeSummary.balance.toLocaleString('en-IN')}`
+                              : studentFeeSummary.isAdvance
+                              ? `अग्रिम -₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')}`
                               : 'पूरी जमा ✓'}
                           </span>
                         </div>
@@ -5116,7 +5285,11 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             <i className="fa-solid fa-chevron-right text-xs text-slate-300 group-hover:text-slate-500"></i>
                           </div>
                           <div className="text-[11px] mt-0.5 text-slate-500">
-                            {studentFeeSummary.hasDues ? 'जमा विवरण देखें' : 'सभी रसीदें सुरक्षित'}
+                            {studentFeeSummary.hasDues
+                              ? 'जमा विवरण देखें'
+                              : studentFeeSummary.isAdvance
+                              ? 'अग्रिम जमा रसीदें देखें'
+                              : 'सभी रसीदें सुरक्षित'}
                           </div>
                         </div>
                       </button>
@@ -6722,34 +6895,62 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         </div>
                       </div>
 
-                      {/* Balance Due */}
+                      {/* Balance Due / Advance Card */}
                       <div className={`rounded-2xl p-4 border ${
                         studentFeeSummary.hasDues
                           ? 'bg-rose-50 border-rose-300'
+                          : studentFeeSummary.isAdvance
+                          ? 'bg-purple-50 border-purple-300'
                           : 'bg-emerald-50 border-emerald-300'
                       }`}>
                         <div className="flex items-center justify-between text-xs font-semibold mb-1">
-                          <span className={studentFeeSummary.hasDues ? 'text-rose-800' : 'text-emerald-800'}>
-                            बकाया फीस (Pending Due Balance)
+                          <span className={
+                            studentFeeSummary.hasDues
+                              ? 'text-rose-800'
+                              : studentFeeSummary.isAdvance
+                              ? 'text-purple-800'
+                              : 'text-emerald-800'
+                          }>
+                            {studentFeeSummary.isAdvance
+                              ? 'अग्रिम जमा (Advance Payment)'
+                              : 'बकाया फीस (Pending Due Balance)'}
                           </span>
                           <span className={`text-[10px] px-2 py-0.2 rounded font-extrabold uppercase ${
                             studentFeeSummary.hasDues
                               ? 'bg-rose-200 text-rose-900 border border-rose-300'
+                              : studentFeeSummary.isAdvance
+                              ? 'bg-purple-200 text-purple-900 border border-purple-300'
                               : 'bg-emerald-200 text-emerald-900 border border-emerald-300'
                           }`}>
-                            {studentFeeSummary.hasDues ? 'बकाया है' : 'पूरी जमा'}
+                            {studentFeeSummary.hasDues
+                              ? 'बकाया है'
+                              : studentFeeSummary.isAdvance
+                              ? 'अग्रिम जमा'
+                              : 'पूरी जमा'}
                           </span>
                         </div>
                         <div className={`text-2xl font-black ${
-                          studentFeeSummary.hasDues ? 'text-rose-950' : 'text-emerald-950'
+                          studentFeeSummary.hasDues
+                            ? 'text-rose-950'
+                            : studentFeeSummary.isAdvance
+                            ? 'text-purple-950'
+                            : 'text-emerald-950'
                         }`}>
-                          ₹{studentFeeSummary.balance.toLocaleString('en-IN')}
+                          {studentFeeSummary.isAdvance
+                            ? `-₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')}`
+                            : `₹${studentFeeSummary.balance.toLocaleString('en-IN')}`}
                         </div>
                         <div className={`text-[11px] mt-1 ${
-                          studentFeeSummary.hasDues ? 'text-rose-700' : 'text-emerald-700'
+                          studentFeeSummary.hasDues
+                            ? 'text-rose-700'
+                            : studentFeeSummary.isAdvance
+                            ? 'text-purple-700'
+                            : 'text-emerald-700'
                         }`}>
                           {studentFeeSummary.hasDues
                             ? 'कृपया अंतिम तिथि से पूर्व स्कूल कार्यालय में जमा कराएं'
+                            : studentFeeSummary.isAdvance
+                            ? `₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')} अग्रिम जमा है (भविष्य के शुल्क में समायोजित होगा)`
                             : 'धन्यवाद! सभी वर्तमान देय राशि जमा है'}
                         </div>
                       </div>
@@ -8533,18 +8734,28 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                   className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg font-bold text-xs border shadow-2xs ${
                                     isDue
                                       ? 'text-red-600 bg-red-50 border-red-200'
+                                      : balance < 0
+                                      ? 'text-purple-700 bg-purple-50 border-purple-200'
                                       : 'text-emerald-700 bg-emerald-50 border-emerald-200'
                                   }`}
                                   title={`Student ID: ${s.Student_ID} | Fee Collection Balance: ₹${balance}`}
                                 >
                                   <i
                                     className={`fa-solid text-[10px] ${
-                                      isDue ? 'fa-triangle-exclamation text-red-600' : 'fa-circle-check text-emerald-600'
+                                      isDue
+                                        ? 'fa-triangle-exclamation text-red-600'
+                                        : balance < 0
+                                        ? 'fa-hand-holding-dollar text-purple-600'
+                                        : 'fa-circle-check text-emerald-600'
                                     }`}
                                   ></i>
-                                  <span>₹{balance.toLocaleString('en-IN')}</span>
+                                  <span>
+                                    {balance < 0
+                                      ? `-₹${Math.abs(balance).toLocaleString('en-IN')}`
+                                      : `₹${balance.toLocaleString('en-IN')}`}
+                                  </span>
                                   <span className="text-[9px] uppercase font-bold tracking-tight">
-                                    {isDue ? 'Due' : 'Cleared'}
+                                    {isDue ? 'Due' : balance < 0 ? 'Advance' : 'Cleared'}
                                   </span>
                                 </span>
                               </td>
@@ -9217,6 +9428,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     setFeeBalances((prev) => ({ ...prev, [sId]: 0 }));
                   }
                 }}
+                onEditFee={handleEditFee}
+                onDeleteFee={handleDeleteFee}
               />
             )}
 
@@ -9633,6 +9846,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     className={`col-span-2 p-3.5 rounded-xl border flex flex-col gap-2.5 transition-colors ${
                       isDue
                         ? 'bg-rose-50 border-rose-300 text-rose-950 shadow-2xs'
+                        : bal < 0
+                        ? 'bg-purple-50 border-purple-300 text-purple-950 shadow-2xs'
                         : 'bg-emerald-50 border-emerald-300 text-emerald-950 shadow-2xs'
                     }`}
                   >
@@ -9640,39 +9855,65 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       <div className="flex items-center gap-2.5">
                         <div
                           className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0 ${
-                            isDue ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'
+                            isDue
+                              ? 'bg-rose-600 text-white'
+                              : bal < 0
+                              ? 'bg-purple-600 text-white'
+                              : 'bg-emerald-600 text-white'
                           }`}
                         >
-                          <i className={`fa-solid ${isDue ? 'fa-triangle-exclamation' : 'fa-circle-check'}`}></i>
+                          <i className={`fa-solid ${
+                            isDue
+                              ? 'fa-triangle-exclamation'
+                              : bal < 0
+                              ? 'fa-hand-holding-dollar'
+                              : 'fa-circle-check'
+                          }`}></i>
                         </div>
                         <div>
                           <div
                             className={`text-[10px] uppercase font-bold tracking-wider flex items-center gap-1.5 ${
-                              isDue ? 'text-rose-800' : 'text-emerald-800'
+                              isDue
+                                ? 'text-rose-800'
+                                : bal < 0
+                                ? 'text-purple-800'
+                                : 'text-emerald-800'
                             }`}
                           >
-                            <span>FEE DUE STATUS</span>
+                            <span>{bal < 0 ? 'FEE ADVANCE STATUS' : 'FEE DUE STATUS'}</span>
                             <span
                               className={`text-[9px] px-1.5 py-0.2 rounded font-extrabold uppercase ${
                                 isDue
                                   ? 'bg-rose-200 text-rose-900 border border-rose-300'
+                                  : bal < 0
+                                  ? 'bg-purple-200 text-purple-900 border border-purple-300'
                                   : 'bg-emerald-200 text-emerald-900 border border-emerald-300'
                               }`}
                             >
-                              {isDue ? 'PAYMENT DUE' : 'CLEARED'}
+                              {isDue ? 'PAYMENT DUE' : bal < 0 ? 'ADVANCE PAID' : 'CLEARED'}
                             </span>
                           </div>
-                          <div className={`text-xs font-semibold ${isDue ? 'text-rose-700' : 'text-emerald-700'}`}>
-                            {isDue ? 'Pending Balance from Fee Collection' : 'Zero Balance (All fees paid)'}
+                          <div className={`text-xs font-semibold ${
+                            isDue ? 'text-rose-700' : bal < 0 ? 'text-purple-700' : 'text-emerald-700'
+                          }`}>
+                            {isDue
+                              ? 'Pending Balance from Fee Collection'
+                              : bal < 0
+                              ? `₹${Math.abs(bal)} Advance Paid (अग्रिम शुल्क जमा)`
+                              : 'Zero Balance (All fees paid)'}
                           </div>
                         </div>
                       </div>
                       <div className="text-right">
-                        <div className={`text-base font-extrabold ${isDue ? 'text-rose-900' : 'text-emerald-900'}`}>
-                          ₹{bal.toLocaleString('en-IN')}
+                        <div className={`text-base font-extrabold ${
+                          isDue ? 'text-rose-900' : bal < 0 ? 'text-purple-900' : 'text-emerald-900'
+                        }`}>
+                          {bal < 0 ? `-₹${Math.abs(bal).toLocaleString('en-IN')}` : `₹${bal.toLocaleString('en-IN')}`}
                         </div>
-                        <div className={`text-[10px] font-bold uppercase tracking-wider ${isDue ? 'text-rose-700' : 'text-emerald-700'}`}>
-                          {isDue ? 'DUE' : 'NIL'}
+                        <div className={`text-[10px] font-bold uppercase tracking-wider ${
+                          isDue ? 'text-rose-700' : bal < 0 ? 'text-purple-700' : 'text-emerald-700'
+                        }`}>
+                          {isDue ? 'DUE' : bal < 0 ? 'ADVANCE' : 'NIL'}
                         </div>
                       </div>
                     </div>
@@ -9868,6 +10109,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         }}
         onFeeAdded={handleFeeAdded}
         students={students}
+        feeRecords={feeRecords}
         managerName={managerUser?.Name || 'Manager'}
         classMap={classMap}
         getClassName={getClassName}

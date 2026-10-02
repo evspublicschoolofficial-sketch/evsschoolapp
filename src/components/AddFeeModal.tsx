@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { StudentRecordForScan } from './StudentQRScannerModal';
+import { computeStudentFeeMetrics } from '../utils/feeCalculation';
 
 export interface FeeCollectionRecord {
   Receipt_Number: string;
@@ -19,6 +20,7 @@ interface AddFeeModalProps {
   onClose: () => void;
   onFeeAdded: (record: FeeCollectionRecord, sendWhatsApp: boolean) => Promise<void> | void;
   students: StudentRecordForScan[];
+  feeRecords?: FeeCollectionRecord[];
   managerName?: string;
   classMap?: Record<string, string>;
   getClassName?: (c: string | undefined | null) => string;
@@ -35,6 +37,7 @@ const MONTHS_LIST = [
 
 const FEE_TYPES = [
   'Monthly Tuition Fee (मासिक शिक्षण शुल्क)',
+  'Advance Fee Deposit (अग्रिम शुल्क जमा)',
   'Admission Fee (प्रवेश शुल्क)',
   'Examination Fee (परीक्षा शुल्क)',
   'Annual Charges (वार्षिक शुल्क)',
@@ -50,6 +53,7 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
   onClose,
   onFeeAdded,
   students,
+  feeRecords = [],
   managerName = 'Principal / Manager',
   getClassName = (c) => c || 'N/A',
   feeBalances = {},
@@ -63,6 +67,7 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
 
   const [receiptNumber, setReceiptNumber] = useState<string>('');
   const [date, setDate] = useState<string>('');
+  const [isAdvanceMode, setIsAdvanceMode] = useState<boolean>(false);
   const [feeType, setFeeType] = useState<string>('Monthly Tuition Fee (मासिक शिक्षण शुल्क)');
   const [month, setMonth] = useState<string>('');
   const [totalAmount, setTotalAmount] = useState<string>('600');
@@ -74,15 +79,15 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Auto calculate balance amount
-  const calculatedBalance = useMemo(() => {
-    const total = parseFloat(totalAmount) || 0;
-    const paid = parseFloat(amountPaid) || 0;
-    return Math.max(0, total - paid);
-  }, [totalAmount, amountPaid]);
+  // Compute selected student's fee metrics
+  const studentMetrics = useMemo(() => {
+    if (!selectedStudent) return null;
+    return computeStudentFeeMetrics(selectedStudent as any, feeRecords);
+  }, [selectedStudent, feeRecords]);
 
-  // Current balance of selected student from feeBalances or student record
+  // Current balance of selected student from computed metrics, feeBalances, or student record
   const currentPendingBalance = useMemo(() => {
+    if (studentMetrics) return studentMetrics.dueBalance;
     if (!selectedStudent) return 0;
     const sId = String(selectedStudent.Student_ID || '').trim().toLowerCase();
     if (sId && feeBalances[sId] !== undefined) {
@@ -93,7 +98,14 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
       return isNaN(num) ? 0 : num;
     }
     return 0;
-  }, [selectedStudent, feeBalances]);
+  }, [selectedStudent, studentMetrics, feeBalances]);
+
+  // Auto calculate balance amount (allows negative for advance payments, e.g. 600 - 700 = -100 or 0 - 1000 = -1000)
+  const calculatedBalance = useMemo(() => {
+    const total = isAdvanceMode ? 0 : (totalAmount.trim() === '' ? 0 : (parseFloat(totalAmount) || 0));
+    const paid = amountPaid.trim() === '' ? 0 : (parseFloat(amountPaid) || 0);
+    return total - paid;
+  }, [isAdvanceMode, totalAmount, amountPaid]);
 
   // Filter students based on search input
   const filteredStudents = useMemo(() => {
@@ -176,15 +188,16 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
       setErrorMsg('कृपया रसीद संख्या (Receipt Number) दर्ज करें।');
       return;
     }
-    const total = parseFloat(totalAmount);
-    const paid = parseFloat(amountPaid);
+    // For advance payment, totalAmount can be 0 or blank
+    const total = totalAmount.trim() === '' ? 0 : parseFloat(totalAmount);
+    const paid = amountPaid.trim() === '' ? 0 : parseFloat(amountPaid);
 
     if (isNaN(total) || total < 0) {
       setErrorMsg('कुल देय राशि अमान्य है।');
       return;
     }
-    if (isNaN(paid) || paid < 0) {
-      setErrorMsg('जमा की गई राशि अमान्य है।');
+    if (isNaN(paid) || paid <= 0) {
+      setErrorMsg('कृपया वैध जमा राशि दर्ज करें (जमा राशि 0 से अधिक होनी चाहिए)।');
       return;
     }
 
@@ -359,10 +372,78 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
                 </div>
 
                 <div className="text-right">
-                  <span className="text-[10px] text-slate-500 block">वर्तमान बकाया:</span>
-                  <span className={`text-xs font-bold ${currentPendingBalance > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
-                    ₹{currentPendingBalance.toLocaleString('en-IN')}
+                  <span className="text-[10px] text-slate-500 block">
+                    {currentPendingBalance < 0 ? 'वर्तमान अग्रिम (Advance):' : 'वर्तमान बकाया (Dues):'}
                   </span>
+                  <span
+                    className={`text-xs font-black ${
+                      currentPendingBalance < 0
+                        ? 'text-purple-700 bg-purple-100 px-2 py-0.5 rounded border border-purple-200'
+                        : currentPendingBalance > 0
+                        ? 'text-rose-700 font-bold'
+                        : 'text-emerald-700 font-bold'
+                    }`}
+                  >
+                    {currentPendingBalance < 0
+                      ? `-₹${Math.abs(currentPendingBalance).toLocaleString('en-IN')}`
+                      : `₹${currentPendingBalance.toLocaleString('en-IN')}`}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Mode Switcher: Regular vs Advance Deposit */}
+            <div className="mt-3 flex items-center gap-2 p-1 bg-slate-100 rounded-xl border border-slate-200">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAdvanceMode(false);
+                  if (feeType.includes('Advance') || feeType.includes('अग्रिम')) {
+                    setFeeType('Monthly Tuition Fee (मासिक शिक्षण शुल्क)');
+                  }
+                  if (totalAmount === '0') {
+                    setTotalAmount(currentPendingBalance > 0 ? String(currentPendingBalance) : '600');
+                  }
+                }}
+                className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                  !isAdvanceMode
+                    ? 'bg-blue-900 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                }`}
+              >
+                <i className="fa-solid fa-receipt"></i>
+                <span>नियमित फीस जमा (Regular Fee)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAdvanceMode(true);
+                  setFeeType('Advance Fee Deposit (अग्रिम शुल्क जमा)');
+                  setTotalAmount('0');
+                  if (amountPaid === '0' || amountPaid === '600') {
+                    setAmountPaid('700');
+                  }
+                }}
+                className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                  isAdvanceMode
+                    ? 'bg-purple-700 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                }`}
+              >
+                <i className="fa-solid fa-bolt text-amber-300"></i>
+                <span>अग्रिम फीस जमा (Advance Deposit)</span>
+              </button>
+            </div>
+
+            {isAdvanceMode && (
+              <div className="mt-2.5 p-2.5 rounded-xl bg-purple-50 border border-purple-200 text-purple-900 text-xs flex items-start gap-2">
+                <i className="fa-solid fa-circle-info text-purple-700 mt-0.5"></i>
+                <div>
+                  <div className="font-bold">⚡ अग्रिम फीस जमा मोड (Advance Deposit Active)</div>
+                  <div className="text-[11px] text-purple-700">
+                    छात्र के खाते में यह राशि सीधे अग्रिम जमा (Advance) होगी। कोई नया बिल नहीं जुड़ेगा (Total = ₹0), जिससे शेष बैलेंस माइनस (-₹{amountPaid || 0}) में अग्रिम दर्ज होगा।
+                  </div>
                 </div>
               </div>
             )}
@@ -405,7 +486,13 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
               </label>
               <select
                 value={feeType}
-                onChange={(e) => setFeeType(e.target.value)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setFeeType(val);
+                  if (val.includes('Advance') || val.includes('अग्रिम')) {
+                    setTotalAmount('0');
+                  }
+                }}
                 className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs focus:border-blue-800 outline-none bg-white font-medium"
               >
                 {FEE_TYPES.map((ft) => (
@@ -438,52 +525,90 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3.5 rounded-xl bg-slate-50 border border-slate-200">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">
-                कुल देय (Total Amount ₹) <span className="text-rose-500">*</span>
+                कुल देय (Total Amount ₹){' '}
+                <span className="text-[10px] text-slate-400 font-normal">
+                  {isAdvanceMode ? '(अग्रिम में ₹0)' : '(अग्रिम में 0 या खाली छोड़ें)'}
+                </span>
               </label>
-              <input
-                type="number"
-                min="0"
-                step="10"
-                value={totalAmount}
-                onChange={(e) => setTotalAmount(e.target.value)}
-                required
-                className="w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm font-bold text-slate-800 outline-none focus:border-blue-800 bg-white"
-              />
+              {isAdvanceMode ? (
+                <div className="w-full px-3 py-1.5 rounded-lg border border-purple-200 bg-purple-50 text-sm font-bold text-purple-900 flex items-center justify-between">
+                  <span>₹0</span>
+                  <span className="text-[10px] font-semibold text-purple-700 bg-purple-200/80 px-1.5 py-0.5 rounded">
+                    अग्रिम (No Bill)
+                  </span>
+                </div>
+              ) : (
+                <input
+                  type="number"
+                  min="0"
+                  step="10"
+                  value={totalAmount}
+                  onChange={(e) => setTotalAmount(e.target.value)}
+                  placeholder="0"
+                  className="w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm font-bold text-slate-800 outline-none focus:border-blue-800 bg-white"
+                />
+              )}
             </div>
 
             <div>
               <label className="block text-xs font-bold text-emerald-800 mb-1">
-                जमा राशि (Amount Paid ₹) <span className="text-rose-500">*</span>
+                {isAdvanceMode ? 'अग्रिम जमा राशि (Advance Paid ₹)' : 'जमा राशि (Amount Paid ₹)'}{' '}
+                <span className="text-rose-500">*</span>
               </label>
               <input
                 type="number"
-                min="0"
+                min="1"
                 step="10"
                 value={amountPaid}
                 onChange={(e) => setAmountPaid(e.target.value)}
                 required
+                placeholder={isAdvanceMode ? '700' : '600'}
                 className="w-full px-3 py-1.5 rounded-lg border border-emerald-300 text-sm font-bold text-emerald-900 outline-none focus:border-emerald-600 bg-white"
               />
             </div>
 
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">
-                शेष बकाया (Balance Due ₹)
+                {calculatedBalance < 0 ? 'अग्रिम जमा (Advance Payment ₹)' : 'शेष बकाया (Balance Due ₹)'}
               </label>
               <div
                 className={`w-full px-3 py-1.5 rounded-lg border text-sm font-black flex items-center justify-between ${
-                  calculatedBalance > 0
+                  calculatedBalance < 0
+                    ? 'bg-purple-100/90 border-purple-300 text-purple-950 shadow-2xs'
+                    : calculatedBalance > 0
                     ? 'bg-rose-50 border-rose-300 text-rose-800'
                     : 'bg-emerald-50 border-emerald-300 text-emerald-800'
                 }`}
               >
-                <span>₹{calculatedBalance.toLocaleString('en-IN')}</span>
-                <span className="text-[10px] font-bold uppercase">
-                  {calculatedBalance === 0 ? 'Clear' : 'Due'}
+                <span>
+                  {calculatedBalance < 0
+                    ? `-₹${Math.abs(calculatedBalance).toLocaleString('en-IN')}`
+                    : `₹${calculatedBalance.toLocaleString('en-IN')}`}
+                </span>
+                <span
+                  className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${
+                    calculatedBalance < 0
+                      ? 'bg-purple-200 text-purple-900'
+                      : calculatedBalance === 0
+                      ? 'bg-emerald-200 text-emerald-900'
+                      : 'bg-rose-200 text-rose-900'
+                  }`}
+                >
+                  {calculatedBalance < 0 ? 'Advance (अग्रिम)' : calculatedBalance === 0 ? 'Clear (पूर्ण)' : 'Due (बकाया)'}
                 </span>
               </div>
             </div>
           </div>
+
+          {calculatedBalance < 0 && (
+            <div className="p-2.5 rounded-xl bg-purple-50/90 border border-purple-200 text-purple-900 text-xs font-medium flex items-center gap-2">
+              <i className="fa-solid fa-sparkles text-purple-600 text-sm"></i>
+              <span>
+                छात्र <strong>₹{Math.abs(calculatedBalance).toLocaleString('en-IN')}</strong> अग्रिम (Advance) जमा कर रहा है। रसीद में बैलेंस{' '}
+                <strong className="font-mono">-₹{Math.abs(calculatedBalance).toLocaleString('en-IN')}</strong> दर्ज होगा।
+              </span>
+            </div>
+          )}
 
           {/* Payment Mode & Received By */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

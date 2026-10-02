@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import {
   ResponsiveContainer,
   LineChart,
@@ -14,6 +14,11 @@ import { StudentRecordForScan } from './StudentQRScannerModal';
 import { FeeCollectionRecord } from './AddFeeModal';
 import { OfficialFeeReceiptModal } from './OfficialFeeReceiptModal';
 import { Student } from '../types';
+import {
+  computeStudentFeeMetrics,
+  computeSchoolFeeTotals,
+  computeReceiptBalance,
+} from '../utils/feeCalculation';
 
 // Academic session months mapping (April through March)
 const ACADEMIC_MONTHS = [
@@ -29,6 +34,25 @@ const ACADEMIC_MONTHS = [
   { key: 'jan', name: 'January', short: 'Jan', hindi: 'जनवरी', order: 10 },
   { key: 'feb', name: 'February', short: 'Feb', hindi: 'फ़रवरी', order: 11 },
   { key: 'mar', name: 'March', short: 'Mar', hindi: 'मार्च', order: 12 },
+];
+
+export const LEDGER_FEE_TYPES = [
+  'Monthly Tuition Fee (मासिक शिक्षण शुल्क)',
+  'Advance Fee Deposit (अग्रिम शुल्क जमा)',
+  'Admission Fee (प्रवेश शुल्क)',
+  'Examination Fee (परीक्षा शुल्क)',
+  'Annual Charges (वार्षिक शुल्क)',
+  'Transportation / Bus Fee (वाहन शुल्क)',
+  'Books & Stationery (पुस्तकालय / पुस्तकें)',
+  'School Uniform Fee (यूनिफॉर्म)',
+  'Late Fee / Fine (विलंब शुल्क)',
+  'Miscellaneous / Other (अन्य)',
+];
+
+export const LEDGER_MONTHS = [
+  'April', 'May', 'June', 'July', 'August', 'September',
+  'October', 'November', 'December', 'January', 'February', 'March',
+  'Quarter 1 (Apr-Jun)', 'Quarter 2 (Jul-Sep)', 'Quarter 3 (Oct-Dec)', 'Quarter 4 (Jan-Mar)', 'Full Academic Session', 'Advance Deposit'
 ];
 
 // Helper to extract academic month from a fee collection record
@@ -235,6 +259,8 @@ interface ManagerFeeDashboardProps {
   managerName?: string;
   initialSelectedStudent?: StudentRecordForScan | null;
   onClearBalance?: (student: StudentRecordForScan, currentDue: number) => void;
+  onEditFee?: (updatedRecord: FeeCollectionRecord, originalReceiptNo: string) => Promise<void> | void;
+  onDeleteFee?: (receiptNo: string, studentId: string) => Promise<boolean | void> | void;
 }
 
 export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
@@ -250,6 +276,8 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
   managerName = 'School Manager',
   initialSelectedStudent = null,
   onClearBalance,
+  onEditFee,
+  onDeleteFee,
 }) => {
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [classFilter, setClassFilter] = useState<string>('all');
@@ -263,10 +291,30 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
     fee: FeeCollectionRecord;
   } | null>(null);
 
+  // Edit Fee Modal State for Manager
+  const [editingFee, setEditingFee] = useState<FeeCollectionRecord | null>(null);
+  const [editReceiptNo, setEditReceiptNo] = useState<string>('');
+  const [editDate, setEditDate] = useState<string>('');
+  const [editFeeType, setEditFeeType] = useState<string>('Monthly Tuition Fee (मासिक शिक्षण शुल्क)');
+  const [editMonth, setEditMonth] = useState<string>('September');
+  const [editTotalAmount, setEditTotalAmount] = useState<string>('0');
+  const [editAmountPaid, setEditAmountPaid] = useState<string>('0');
+  const [editPaymentMode, setEditPaymentMode] = useState<string>('Cash');
+  const [editReceivedBy, setEditReceivedBy] = useState<string>(managerName);
+  const [editIsSubmitting, setEditIsSubmitting] = useState<boolean>(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  // Delete Fee Modal State for Manager
+  const [deletingFee, setDeletingFee] = useState<FeeCollectionRecord | null>(null);
+  const [deleteIsSubmitting, setDeleteIsSubmitting] = useState<boolean>(false);
+
   // Monthly Fee Trends state controls
   const [trendsMetricFilter, setTrendsMetricFilter] = useState<'all' | 'collectionOnly' | 'collectionVsDue'>('all');
   const [trendsScope, setTrendsScope] = useState<'allSession' | 'activeOnly'>('allSession');
   const [trendsClassFilter, setTrendsClassFilter] = useState<string>('all');
+
+  // School Ledger section ref for auto-scrolling
+  const ledgerSectionRef = useRef<HTMLDivElement | null>(null);
 
   // Sync initial student if provided from parent (e.g. after QR scan)
   React.useEffect(() => {
@@ -276,18 +324,70 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
     }
   }, [initialSelectedStudent]);
 
-  // Format date helper
-  const formatDate = (dateStr: string | null | undefined): string => {
-    if (!dateStr) return 'N/A';
-    try {
-      const d = new Date(dateStr);
-      if (!isNaN(d.getTime())) {
-        return `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1)
-          .toString()
-          .padStart(2, '0')}/${d.getFullYear()}`;
+  // Robust date parser supporting Google Visualization Date(Y,M,D), ISO strings, and Indian formats
+  const parseGVizOrStandardDate = (dateVal: any): Date | null => {
+    if (!dateVal) return null;
+    if (dateVal instanceof Date && !isNaN(dateVal.getTime())) return dateVal;
+    const str = String(dateVal).trim();
+    if (!str) return null;
+
+    // Handle Google Visualization Date(2026,9,2) or Date(2026, 9, 2)
+    const gvizMatch = str.match(/Date\((\d+),\s*(\d+),\s*(\d+)(?:,\s*(\d+))?(?:,\s*(\d+))?(?:,\s*(\d+))?\)/i);
+    if (gvizMatch) {
+      const y = parseInt(gvizMatch[1], 10);
+      const m = parseInt(gvizMatch[2], 10); // 0-indexed in JS GViz
+      const d = parseInt(gvizMatch[3], 10);
+      const hr = gvizMatch[4] ? parseInt(gvizMatch[4], 10) : 0;
+      const min = gvizMatch[5] ? parseInt(gvizMatch[5], 10) : 0;
+      const sec = gvizMatch[6] ? parseInt(gvizMatch[6], 10) : 0;
+      return new Date(y, m, d, hr, min, sec);
+    }
+
+    // Handle DD/MM/YYYY or DD-MM-YYYY
+    const parts = str.split(/[-/]/);
+    if (parts.length === 3) {
+      if (parts[0].length === 4) {
+        // YYYY-MM-DD
+        const d = new Date(str);
+        if (!isNaN(d.getTime())) return d;
+      } else if (parts[2].length === 4) {
+        // DD/MM/YYYY
+        const day = parseInt(parts[0], 10);
+        const mon = parseInt(parts[1], 10) - 1;
+        const yr = parseInt(parts[2], 10);
+        const d = new Date(yr, mon, day);
+        if (!isNaN(d.getTime())) return d;
       }
-    } catch {}
+    }
+
+    const d = new Date(str);
+    if (!isNaN(d.getTime())) return d;
+    return null;
+  };
+
+  // Format date helper with robust parsing
+  const formatDate = (dateStr: string | null | undefined): string => {
+    if (!dateStr) return '—';
+    const parsed = parseGVizOrStandardDate(dateStr);
+    if (parsed) {
+      return `${parsed.getDate().toString().padStart(2, '0')}/${(parsed.getMonth() + 1)
+        .toString()
+        .padStart(2, '0')}/${parsed.getFullYear()}`;
+    }
     return String(dateStr);
+  };
+
+  // Click handler to directly navigate/redirect and auto-scroll to the School Ledger section
+  const handleNavigateToLedger = () => {
+    setActiveViewMode('allLedger');
+    setTimeout(() => {
+      if (ledgerSectionRef.current) {
+        ledgerSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } else {
+        const el = document.getElementById('school-ledger-section');
+        el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 60);
   };
 
   // Get balance for any student
@@ -302,6 +402,100 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
       return isNaN(num) ? 0 : num;
     }
     return 0;
+  };
+
+  // Start editing a fee record
+  const handleStartEditFee = (fee: FeeCollectionRecord) => {
+    setEditingFee(fee);
+    setEditReceiptNo(fee.Receipt_Number || '');
+    let cleanDate = fee.Date || new Date().toISOString().split('T')[0];
+    if (cleanDate.includes('T')) cleanDate = cleanDate.split('T')[0];
+    setEditDate(cleanDate);
+    setEditFeeType(fee.Fee_Type || 'Monthly Tuition Fee (मासिक शिक्षण शुल्क)');
+    setEditMonth(fee.Month || 'September');
+    setEditTotalAmount(fee.Total_Amount !== null && fee.Total_Amount !== undefined ? String(fee.Total_Amount) : '0');
+    setEditAmountPaid(fee.Amount_Paid !== null && fee.Amount_Paid !== undefined ? String(fee.Amount_Paid) : '0');
+    setEditPaymentMode(fee.Payment_Mode || 'Cash');
+    setEditReceivedBy(fee.Received_By || managerName);
+    setEditError(null);
+  };
+
+  // Real-time calculated balance in Edit modal (allows negative for advance payments)
+  const editCalculatedBalance = useMemo(() => {
+    const isAdvance = editFeeType.toLowerCase().includes('advance') || editFeeType.includes('अग्रिम');
+    const total = isAdvance ? 0 : (editTotalAmount.trim() === '' ? 0 : (parseFloat(editTotalAmount) || 0));
+    const paid = editAmountPaid.trim() === '' ? 0 : (parseFloat(editAmountPaid) || 0);
+    return total - paid;
+  }, [editFeeType, editTotalAmount, editAmountPaid]);
+
+  // Save edited fee record
+  const handleSaveEditFee = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingFee) return;
+    setEditError(null);
+
+    const isAdvance = editFeeType.toLowerCase().includes('advance') || editFeeType.includes('अग्रिम');
+    const total = isAdvance ? 0 : (editTotalAmount.trim() === '' ? 0 : parseFloat(editTotalAmount));
+    const paid = editAmountPaid.trim() === '' ? 0 : parseFloat(editAmountPaid);
+
+    if (isNaN(total) || total < 0) {
+      setEditError('कुल देय राशि अमान्य है।');
+      return;
+    }
+    if (isNaN(paid) || paid <= 0) {
+      setEditError('कृपया वैध जमा राशि दर्ज करें (जमा राशि 0 से अधिक होनी चाहिए)।');
+      return;
+    }
+
+    setEditIsSubmitting(true);
+    try {
+      const cleanFeeType = editFeeType.split('(')[0].trim();
+      const updated: FeeCollectionRecord = {
+        ...editingFee,
+        Receipt_Number: editReceiptNo.trim() || editingFee.Receipt_Number,
+        Date: editDate,
+        Fee_Type: cleanFeeType,
+        Month: editMonth.trim(),
+        Total_Amount: total,
+        Amount_Paid: paid,
+        Balance_Amount: editCalculatedBalance,
+        Payment_Mode: editPaymentMode,
+        Received_By: editReceivedBy.trim(),
+      };
+
+      if (onEditFee) {
+        await onEditFee(updated, editingFee.Receipt_Number || '');
+      }
+      setEditingFee(null);
+    } catch (err: any) {
+      setEditError(err.message || 'त्रुटि: रिकॉर्ड अपडेट नहीं हो सका।');
+    } finally {
+      setEditIsSubmitting(false);
+    }
+  };
+
+  // Open custom in-app Delete Confirmation Modal
+  const handleDeleteFeeClick = (fee: FeeCollectionRecord) => {
+    setDeletingFee(fee);
+  };
+
+  // Confirm delete fee record
+  const handleConfirmDelete = async () => {
+    if (!deletingFee) return;
+    setDeleteIsSubmitting(true);
+    try {
+      if (onDeleteFee) {
+        await onDeleteFee(deletingFee.Receipt_Number || '', deletingFee.Student_ID || '');
+      }
+      if (editingFee && editingFee.Receipt_Number === deletingFee.Receipt_Number) {
+        setEditingFee(null);
+      }
+      setDeletingFee(null);
+    } catch (err) {
+      console.error('Error deleting fee record:', err);
+    } finally {
+      setDeleteIsSubmitting(false);
+    }
   };
 
   // Filter students for the search bar & suggestions
@@ -327,52 +521,65 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
     });
   }, [students, searchTerm, classFilter, getClassName]);
 
-  // Fee records strictly for the active selected student
+  // Fee records strictly for the active selected student (Sorted descending: newest first)
   const studentFeeRecords = useMemo(() => {
     if (!selectedStudent) return [];
     const sid = String(selectedStudent.Student_ID || '').trim().toLowerCase();
-    return feeRecords.filter((r) => {
+    const list = feeRecords.filter((r) => {
       const rSid = String(r.Student_ID || '').trim().toLowerCase();
       return Boolean(rSid && (rSid === sid || sid.includes(rSid) || rSid.includes(sid)));
+    });
+
+    return [...list].sort((a, b) => {
+      const dateA = parseGVizOrStandardDate(a.Date)?.getTime() || 0;
+      const dateB = parseGVizOrStandardDate(b.Date)?.getTime() || 0;
+      if (dateB !== dateA) return dateB - dateA;
+      const recA = String(a.Receipt_Number || '');
+      const recB = String(b.Receipt_Number || '');
+      return recB.localeCompare(recA, undefined, { numeric: true, sensitivity: 'base' });
     });
   }, [selectedStudent, feeRecords]);
 
   // Student Fee Summary Metrics
   const studentFeeSummary = useMemo(() => {
     if (!selectedStudent) {
-      return { totalFee: 0, totalPaid: 0, balance: 0, isDue: false, count: 0 };
+      return {
+        totalFee: 0,
+        totalPaid: 0,
+        balance: 0,
+        isDue: false,
+        isAdvance: false,
+        advanceAmount: 0,
+        count: 0,
+      };
     }
-    const rawBalance = getStudentBalance(selectedStudent);
-    const totalPaid = studentFeeRecords.reduce((sum, r) => sum + (Number(r.Amount_Paid) || 0), 0);
-    const balance = rawBalance > 0 ? rawBalance : 0;
-    const totalFee = balance + totalPaid;
+    const metrics = computeStudentFeeMetrics(selectedStudent, feeRecords);
     return {
-      totalFee: totalFee > 0 ? totalFee : totalPaid,
-      totalPaid,
-      balance,
-      isDue: balance > 0,
-      count: studentFeeRecords.length,
+      totalFee: metrics.totalSessionFee,
+      totalPaid: metrics.totalPaid,
+      balance: metrics.dueBalance,
+      isDue: metrics.hasDues,
+      isAdvance: metrics.isAdvance,
+      advanceAmount: metrics.advanceAmount,
+      count: metrics.receiptsCount,
     };
-  }, [selectedStudent, studentFeeRecords, feeBalances]);
+  }, [selectedStudent, feeRecords]);
 
-  // Overall School Fee Metrics
+  // Overall School Fee Metrics (Calculated on individual student totals to prevent duplicate entries)
   const schoolFeeTotals = useMemo(() => {
-    let collected = 0;
-    let balance = 0;
-    feeRecords.forEach((f) => {
-      collected += Number(f.Amount_Paid) || 0;
-      balance += Number(f.Balance_Amount) || 0;
-    });
+    const totals = computeSchoolFeeTotals(students, feeRecords);
     return {
-      totalReceipts: feeRecords.length,
-      collected,
-      balance,
+      totalReceipts: totals.totalReceipts,
+      collected: totals.totalCollected,
+      balance: totals.totalPendingDues,
+      totalAdvance: totals.totalAdvance,
+      totalBilled: totals.totalBilled,
     };
-  }, [feeRecords]);
+  }, [students, feeRecords]);
 
-  // Filtered All School Ledger
+  // Filtered All School Ledger (Default sorting order: Newest / Latest entries at the TOP)
   const filteredAllLedger = useMemo(() => {
-    return feeRecords.filter((r) => {
+    const list = feeRecords.filter((r) => {
       const q = ledgerSearch.toLowerCase().trim();
       const matchSearch =
         q === '' ||
@@ -392,6 +599,16 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
           getClassName(matchedStudent.Class).toLowerCase() === ledgerClassFilter.toLowerCase());
 
       return matchSearch && matchClass;
+    });
+
+    // Sort descending: newest entries at the TOP by Date, then by Receipt ID
+    return [...list].sort((a, b) => {
+      const dateA = parseGVizOrStandardDate(a.Date)?.getTime() || 0;
+      const dateB = parseGVizOrStandardDate(b.Date)?.getTime() || 0;
+      if (dateB !== dateA) return dateB - dateA;
+      const recA = String(a.Receipt_Number || '');
+      const recB = String(b.Receipt_Number || '');
+      return recB.localeCompare(recA, undefined, { numeric: true, sensitivity: 'base' });
     });
   }, [feeRecords, ledgerSearch, ledgerClassFilter, students, getClassName]);
 
@@ -745,41 +962,69 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
 
         {/* Global Summary Stats */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-5 border-t border-white/10 text-slate-200">
-          <div className="bg-white/5 backdrop-blur-xs p-3 rounded-2xl border border-white/10">
-            <div className="text-[10px] text-slate-300 uppercase tracking-wider font-semibold">
-              कुल स्कूल रसीदें (Total Receipts)
+          {/* Card 1: Total Receipts (Clickable to jump to School Ledger) */}
+          <div
+            onClick={handleNavigateToLedger}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleNavigateToLedger();
+              }
+            }}
+            className="bg-white/5 hover:bg-white/15 backdrop-blur-xs p-3 rounded-2xl border border-white/10 hover:border-amber-400/50 cursor-pointer transition-all duration-200 hover:scale-[1.02] active:scale-98 group shadow-sm flex flex-col justify-between"
+            title="क्लिक करें: सीधे 'समस्त स्कूल लेजर' पर जाएं"
+          >
+            <div className="flex items-center justify-between">
+              <div className="text-[10px] text-slate-300 uppercase tracking-wider font-semibold group-hover:text-amber-200 transition-colors">
+                कुल स्कूल रसीदें (Total Receipts)
+              </div>
+              <span className="text-[9px] text-amber-300 bg-amber-400/20 px-1.5 py-0.5 rounded font-bold group-hover:bg-amber-400 group-hover:text-slate-950 transition-colors flex items-center gap-1">
+                <span>लेजर</span>
+                <i className="fa-solid fa-arrow-down text-[8px]"></i>
+              </span>
             </div>
-            <div className="text-lg sm:text-xl font-black text-amber-300 mt-0.5">
-              {schoolFeeTotals.totalReceipts}
+            <div className="text-lg sm:text-xl font-black text-amber-300 mt-1 flex items-baseline justify-between">
+              <span>{schoolFeeTotals.totalReceipts}</span>
+              <span className="text-[10px] font-bold text-slate-300 group-hover:text-amber-200 flex items-center gap-1">
+                <span>देखें</span>
+                <i className="fa-solid fa-chevron-right text-[8px]"></i>
+              </span>
             </div>
           </div>
 
-          <div className="bg-white/5 backdrop-blur-xs p-3 rounded-2xl border border-white/10">
+          <div className="bg-white/5 backdrop-blur-xs p-3 rounded-2xl border border-white/10 flex flex-col justify-between">
             <div className="text-[10px] text-slate-300 uppercase tracking-wider font-semibold">
               प्राप्त कुल राशि (Total Collected)
             </div>
-            <div className="text-lg sm:text-xl font-black text-emerald-300 mt-0.5">
+            <div className="text-lg sm:text-xl font-black text-emerald-300 mt-1">
               ₹{schoolFeeTotals.collected.toLocaleString('en-IN')}
             </div>
           </div>
 
-          <div className="bg-white/5 backdrop-blur-xs p-3 rounded-2xl border border-white/10">
+          <div className="bg-white/5 backdrop-blur-xs p-3 rounded-2xl border border-white/10 flex flex-col justify-between">
             <div className="text-[10px] text-slate-300 uppercase tracking-wider font-semibold">
               अपेक्षित कुल बकाया (Pending Dues)
             </div>
-            <div className="text-lg sm:text-xl font-black text-rose-300 mt-0.5">
+            <div className="text-lg sm:text-xl font-black text-rose-300 mt-1">
               ₹{schoolFeeTotals.balance.toLocaleString('en-IN')}
             </div>
           </div>
 
-          <div className="bg-white/5 backdrop-blur-xs p-3 rounded-2xl border border-white/10 flex items-center justify-between">
-            <div>
+          {/* Card 4: Total Advance Fee (Replaced Manager Name) */}
+          <div className="bg-white/5 backdrop-blur-xs p-3 rounded-2xl border border-white/10 flex flex-col justify-between">
+            <div className="flex items-center justify-between">
               <div className="text-[10px] text-slate-300 uppercase tracking-wider font-semibold">
-                प्रबंधक प्राधिकृत
+                कुल अग्रिम जमा (TOTAL ADVANCE FEE)
               </div>
-              <div className="text-xs font-bold text-white mt-0.5 truncate">{managerName}</div>
+              <span className="text-[9px] font-black uppercase px-1.5 py-0.2 rounded bg-purple-400/25 text-purple-200 border border-purple-400/40">
+                Advance
+              </span>
             </div>
-            <i className="fa-solid fa-shield-check text-amber-400 text-lg"></i>
+            <div className="text-lg sm:text-xl font-black text-purple-300 mt-1">
+              ₹{(schoolFeeTotals.totalAdvance || 0).toLocaleString('en-IN')}
+            </div>
           </div>
         </div>
       </div>
@@ -1608,7 +1853,9 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
 
                 <div
                   className={`p-4 rounded-2xl border shadow-2xs ${
-                    studentFeeSummary.isDue
+                    studentFeeSummary.isAdvance
+                      ? 'bg-purple-50 border-purple-300 text-purple-950'
+                      : studentFeeSummary.isDue
                       ? 'bg-rose-50 border-rose-300 text-rose-950'
                       : 'bg-emerald-50 border-emerald-200 text-emerald-950'
                   }`}
@@ -1616,27 +1863,43 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                   <div className="flex items-center justify-between">
                     <span
                       className={`text-[11px] font-bold uppercase tracking-wide ${
-                        studentFeeSummary.isDue ? 'text-rose-700' : 'text-emerald-700'
+                        studentFeeSummary.isAdvance
+                          ? 'text-purple-700'
+                          : studentFeeSummary.isDue
+                          ? 'text-rose-700'
+                          : 'text-emerald-700'
                       }`}
                     >
-                      {studentFeeSummary.isDue ? 'वर्तमान बकाया (DUE)' : 'बकाया स्थिति (STATUS)'}
+                      {studentFeeSummary.isAdvance
+                        ? 'अग्रिम जमा (ADVANCE)'
+                        : studentFeeSummary.isDue
+                        ? 'वर्तमान बकाया (DUE)'
+                        : 'बकाया स्थिति (STATUS)'}
                     </span>
                     <span
                       className={`text-[9px] px-1.5 py-0.2 rounded font-extrabold uppercase ${
-                        studentFeeSummary.isDue
+                        studentFeeSummary.isAdvance
+                          ? 'bg-purple-200 text-purple-900'
+                          : studentFeeSummary.isDue
                           ? 'bg-rose-200 text-rose-900'
                           : 'bg-emerald-200 text-emerald-900'
                       }`}
                     >
-                      {studentFeeSummary.isDue ? 'PENDING' : 'CLEARED'}
+                      {studentFeeSummary.isAdvance ? 'ADVANCE' : studentFeeSummary.isDue ? 'PENDING' : 'CLEARED'}
                     </span>
                   </div>
                   <span
                     className={`text-xl sm:text-2xl font-black mt-1 block ${
-                      studentFeeSummary.isDue ? 'text-rose-900' : 'text-emerald-900'
+                      studentFeeSummary.isAdvance
+                        ? 'text-purple-900'
+                        : studentFeeSummary.isDue
+                        ? 'text-rose-900'
+                        : 'text-emerald-900'
                     }`}
                   >
-                    ₹{studentFeeSummary.balance.toLocaleString('en-IN')}
+                    {studentFeeSummary.isAdvance
+                      ? `-₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')}`
+                      : `₹${studentFeeSummary.balance.toLocaleString('en-IN')}`}
                   </span>
                 </div>
 
@@ -1714,7 +1977,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                       </thead>
                       <tbody className="divide-y divide-slate-200 bg-white">
                         {studentFeeRecords.map((fee, idx) => {
-                          const isPending = (fee.Balance_Amount || 0) > 0;
+                          const recBal = computeReceiptBalance(fee);
 
                           return (
                             <tr
@@ -1740,15 +2003,22 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                                 ₹{(fee.Amount_Paid || 0).toLocaleString('en-IN')}
                               </td>
                               <td className="px-3.5 py-3 text-right whitespace-nowrap">
-                                <span
-                                  className={`px-2 py-0.5 rounded text-[11px] font-bold ${
-                                    isPending
-                                      ? 'bg-rose-100 text-rose-800'
-                                      : 'bg-emerald-100 text-emerald-800'
-                                  }`}
-                                >
-                                  ₹{(fee.Balance_Amount || 0).toLocaleString('en-IN')}
-                                </span>
+                                {recBal.isAdvance ? (
+                                  <span className="px-2 py-0.5 rounded text-[11px] font-black bg-purple-100 text-purple-900 border border-purple-200 inline-flex items-center gap-1">
+                                    <span>-₹{Math.abs(recBal.balance).toLocaleString('en-IN')}</span>
+                                    <span className="text-[9px] uppercase font-bold text-purple-700 bg-purple-200/80 px-1 py-0.2 rounded">
+                                      Adv
+                                    </span>
+                                  </span>
+                                ) : recBal.isPending ? (
+                                  <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-rose-100 text-rose-800">
+                                    ₹{recBal.balance.toLocaleString('en-IN')}
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-100 text-emerald-800">
+                                    ₹0
+                                  </span>
+                                )}
                               </td>
                               <td className="px-3.5 py-3 text-slate-600 whitespace-nowrap">
                                 <span className="inline-block px-2 py-0.5 rounded bg-slate-100 text-[10px] font-semibold text-slate-700">
@@ -1781,6 +2051,28 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                                     <i className="fa-brands fa-whatsapp text-xs"></i>
                                     <span>Receipt</span>
                                   </button>
+                                  {onEditFee && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleStartEditFee(fee)}
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-[11px] transition-colors shadow-2xs cursor-pointer"
+                                      title="इस फीस प्रविष्टि को संपादित करें (Edit Fee)"
+                                    >
+                                      <i className="fa-solid fa-pen-to-square text-xs"></i>
+                                      <span>एडिट</span>
+                                    </button>
+                                  )}
+                                  {onDeleteFee && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteFeeClick(fee)}
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-[11px] transition-colors shadow-2xs cursor-pointer"
+                                      title="इस फीस प्रविष्टि को हटाएं (Delete Fee)"
+                                    >
+                                      <i className="fa-solid fa-trash-can text-xs"></i>
+                                      <span>हटाएं</span>
+                                    </button>
+                                  )}
                                 </div>
                               </td>
                             </tr>
@@ -1862,7 +2154,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
 
       {/* 4. VIEW MODE: ALL SCHOOL FEE LEDGER */}
       {activeViewMode === 'allLedger' && (
-        <div className="px-6 pb-6 space-y-4">
+        <div ref={ledgerSectionRef} id="school-ledger-section" className="px-6 pb-6 space-y-4 scroll-mt-6">
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
             <div className="relative flex-1 max-w-md">
               <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-xs pointer-events-none">
@@ -1913,7 +2205,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                     );
                     const studentName = matchedStudent?.Student_Name || fee.Student_ID;
                     const classNameStr = matchedStudent?.Class ? getClassName(matchedStudent.Class) : '';
-                    const isPending = (fee.Balance_Amount || 0) > 0;
+                    const recBal = computeReceiptBalance(fee);
 
                     return (
                       <tr key={fee.Receipt_Number || idx} className="hover:bg-slate-50 transition-colors">
@@ -1959,13 +2251,22 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                           ₹{(fee.Amount_Paid || 0).toLocaleString('en-IN')}
                         </td>
                         <td className="px-3.5 py-2.5 text-right whitespace-nowrap">
-                          <span
-                            className={`px-2 py-0.5 rounded text-[11px] font-bold ${
-                              isPending ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
-                            }`}
-                          >
-                            ₹{(fee.Balance_Amount || 0).toLocaleString('en-IN')}
-                          </span>
+                          {recBal.isAdvance ? (
+                            <span className="px-2 py-0.5 rounded text-[11px] font-black bg-purple-100 text-purple-900 border border-purple-200 inline-flex items-center gap-1">
+                              <span>-₹{Math.abs(recBal.balance).toLocaleString('en-IN')}</span>
+                              <span className="text-[9px] uppercase font-bold text-purple-700 bg-purple-200/80 px-1 py-0.2 rounded">
+                                Adv
+                              </span>
+                            </span>
+                          ) : recBal.isPending ? (
+                            <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-rose-100 text-rose-800">
+                              ₹{recBal.balance.toLocaleString('en-IN')}
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-100 text-emerald-800">
+                              ₹0
+                            </span>
+                          )}
                         </td>
                         <td className="px-3.5 py-2.5 text-slate-600 whitespace-nowrap">
                           <span className="inline-block px-2 py-0.5 rounded bg-slate-100 text-[10px] font-semibold text-slate-700">
@@ -1998,6 +2299,28 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                               <i className="fa-brands fa-whatsapp text-xs"></i>
                               <span>रसीद</span>
                             </button>
+                            {onEditFee && (
+                              <button
+                                type="button"
+                                onClick={() => handleStartEditFee(fee)}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-[11px] transition-colors shadow-2xs cursor-pointer"
+                                title="इस फीस प्रविष्टि को संपादित करें (Edit Fee)"
+                              >
+                                <i className="fa-solid fa-pen-to-square text-xs"></i>
+                                <span>एडिट</span>
+                              </button>
+                            )}
+                            {onDeleteFee && (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteFeeClick(fee)}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-rose-600 hover:bg-rose-700 text-white font-bold text-[11px] transition-colors shadow-2xs cursor-pointer"
+                                title="इस फीस प्रविष्टि को हटाएं (Delete Fee)"
+                              >
+                                <i className="fa-solid fa-trash-can text-xs"></i>
+                                <span>हटाएं</span>
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -2006,6 +2329,371 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                 )}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Fee Record Modal for Manager */}
+      {editingFee && (
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs animate-fadeIn overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-xl w-full overflow-hidden shadow-2xl border border-slate-200 my-auto max-h-[95vh] flex flex-col">
+            {/* Modal Header */}
+            <div className="bg-[#0c2340] px-5 py-4 text-white flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center font-bold text-base shadow-sm">
+                  <i className="fa-solid fa-pen-to-square"></i>
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-amber-300 leading-tight">
+                    फीस रसीद संपादित करें (Edit Fee Receipt)
+                  </h3>
+                  <p className="text-[11px] text-slate-300">
+                    रसीद संख्या: <span className="font-mono text-amber-200">#{editingFee.Receipt_Number}</span>
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingFee(null)}
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-sm cursor-pointer transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Form */}
+            <form onSubmit={handleSaveEditFee} className="p-5 overflow-y-auto space-y-4 flex-1">
+              {editError && (
+                <div className="p-3 bg-rose-50 border border-rose-300 rounded-xl text-rose-900 text-xs font-semibold flex items-center gap-2">
+                  <i className="fa-solid fa-circle-exclamation text-rose-600 text-sm"></i>
+                  <span>{editError}</span>
+                </div>
+              )}
+
+              {/* Student Info Card */}
+              {(() => {
+                const matched = students.find((s) => String(s.Student_ID).toLowerCase() === String(editingFee.Student_ID).toLowerCase());
+                return (
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-10 h-10 rounded-full bg-blue-900 text-amber-300 font-bold flex items-center justify-center text-sm">
+                        {matched?.Student_Name ? matched.Student_Name.charAt(0) : 'S'}
+                      </div>
+                      <div>
+                        <div className="font-bold text-slate-900 text-sm">{matched?.Student_Name || editingFee.Student_ID}</div>
+                        <div className="text-[11px] text-slate-500">
+                          ID: <span className="font-mono text-slate-700 font-bold">{editingFee.Student_ID}</span>
+                          {matched?.Class && <span> • कक्षा: {getClassName(matched.Class)}</span>}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Receipt Number & Date */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    रसीद संख्या (Receipt No) <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={editReceiptNo}
+                    onChange={(e) => setEditReceiptNo(e.target.value)}
+                    required
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 font-mono text-xs focus:border-blue-800 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    भुगतान तिथि (Date) <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={editDate}
+                    onChange={(e) => setEditDate(e.target.value)}
+                    required
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs focus:border-blue-800 outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* Fee Type & Month */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    शुल्क प्रकार (Fee Type) <span className="text-rose-500">*</span>
+                  </label>
+                  <select
+                    value={editFeeType}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setEditFeeType(val);
+                      if (val.toLowerCase().includes('advance') || val.includes('अग्रिम')) {
+                        setEditTotalAmount('0');
+                      }
+                    }}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs focus:border-blue-800 outline-none bg-white font-medium"
+                  >
+                    <option value="Monthly Tuition Fee (मासिक शिक्षण शुल्क)">Monthly Tuition Fee (मासिक शिक्षण शुल्क)</option>
+                    <option value="Advance Fee Deposit (अग्रिम शुल्क जमा)">Advance Fee Deposit (अग्रिम शुल्क जमा)</option>
+                    <option value="Admission Fee (प्रवेश शुल्क)">Admission Fee (प्रवेश शुल्क)</option>
+                    <option value="Examination Fee (परीक्षा शुल्क)">Examination Fee (परीक्षा शुल्क)</option>
+                    <option value="Annual Charges (वार्षिक शुल्क)">Annual Charges (वार्षिक शुल्क)</option>
+                    <option value="Transportation / Bus Fee (वाहन शुल्क)">Transportation / Bus Fee (वाहन शुल्क)</option>
+                    <option value="Books & Stationery (पुस्तकालय / पुस्तकें)">Books & Stationery (पुस्तकालय / पुस्तकें)</option>
+                    <option value="School Uniform Fee (यूनिफॉर्म)">School Uniform Fee (यूनिफॉर्म)</option>
+                    <option value="Late Fee / Fine (विलंब शुल्क)">Late Fee / Fine (विलंब शुल्क)</option>
+                    <option value="Miscellaneous / Other (अन्य)">Miscellaneous / Other (अन्य)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    माह / अवधि (Fee Month) <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={editMonth}
+                    onChange={(e) => setEditMonth(e.target.value)}
+                    placeholder="e.g. September, Quarter 1"
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs focus:border-blue-800 outline-none bg-white font-medium"
+                  />
+                </div>
+              </div>
+
+              {/* Financials: Total, Paid, Balance */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3.5 rounded-xl bg-slate-50 border border-slate-200">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    कुल देय (Total Amount ₹){' '}
+                    <span className="text-[10px] text-slate-400 font-normal">
+                      {(editFeeType.toLowerCase().includes('advance') || editFeeType.includes('अग्रिम')) ? '(अग्रिम में ₹0)' : ''}
+                    </span>
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="10"
+                    value={editTotalAmount}
+                    onChange={(e) => setEditTotalAmount(e.target.value)}
+                    placeholder="0"
+                    className="w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm font-bold text-slate-800 outline-none focus:border-blue-800 bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-emerald-800 mb-1">
+                    जमा राशि (Amount Paid ₹) <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    step="10"
+                    value={editAmountPaid}
+                    onChange={(e) => setEditAmountPaid(e.target.value)}
+                    required
+                    className="w-full px-3 py-1.5 rounded-lg border border-emerald-300 text-sm font-bold text-emerald-900 outline-none focus:border-emerald-600 bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    {editCalculatedBalance < 0 ? 'अग्रिम जमा (Advance ₹)' : 'शेष बकाया (Balance Due ₹)'}
+                  </label>
+                  <div
+                    className={`w-full px-3 py-1.5 rounded-lg border text-sm font-black flex items-center justify-between ${
+                      editCalculatedBalance < 0
+                        ? 'bg-purple-100 border-purple-300 text-purple-950'
+                        : editCalculatedBalance > 0
+                        ? 'bg-rose-50 border-rose-300 text-rose-800'
+                        : 'bg-emerald-50 border-emerald-300 text-emerald-800'
+                    }`}
+                  >
+                    <span>
+                      {editCalculatedBalance < 0
+                        ? `-₹${Math.abs(editCalculatedBalance).toLocaleString('en-IN')}`
+                        : `₹${editCalculatedBalance.toLocaleString('en-IN')}`}
+                    </span>
+                    <span
+                      className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${
+                        editCalculatedBalance < 0
+                          ? 'bg-purple-200 text-purple-900'
+                          : editCalculatedBalance === 0
+                          ? 'bg-emerald-200 text-emerald-900'
+                          : 'bg-rose-200 text-rose-900'
+                      }`}
+                    >
+                      {editCalculatedBalance < 0 ? 'Advance' : editCalculatedBalance === 0 ? 'Clear' : 'Due'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Payment Mode & Received By */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    भुगतान माध्यम (Payment Mode)
+                  </label>
+                  <select
+                    value={editPaymentMode}
+                    onChange={(e) => setEditPaymentMode(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs focus:border-blue-800 outline-none bg-white font-medium"
+                  >
+                    <option value="Cash">Cash (नकद)</option>
+                    <option value="UPI / Online">UPI / PhonePe / Paytm / GPay</option>
+                    <option value="Bank Transfer">Bank Transfer / NEFT / IMPS</option>
+                    <option value="Cheque">Cheque / Demand Draft</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    प्राप्तकर्ता (Received By)
+                  </label>
+                  <input
+                    type="text"
+                    value={editReceivedBy}
+                    onChange={(e) => setEditReceivedBy(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs focus:border-blue-800 outline-none bg-white"
+                  />
+                </div>
+              </div>
+
+              {/* Form Action Buttons */}
+              <div className="pt-3 border-t border-slate-200 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setEditingFee(null)}
+                  disabled={editIsSubmitting}
+                  className="px-4 py-2 rounded-xl border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-bold transition-colors cursor-pointer"
+                >
+                  रद्द करें (Cancel)
+                </button>
+                <button
+                  type="submit"
+                  disabled={editIsSubmitting}
+                  className="px-5 py-2 rounded-xl bg-blue-900 hover:bg-blue-950 text-amber-300 text-xs font-bold shadow-md transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  {editIsSubmitting ? (
+                    <>
+                      <i className="fa-solid fa-circle-notch fa-spin"></i>
+                      <span>अपडेट हो रहा है...</span>
+                    </>
+                  ) : (
+                    <>
+                      <i className="fa-solid fa-floppy-disk"></i>
+                      <span>अपडेट सेव करें (Save Changes)</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Fee Confirmation Modal for Manager */}
+      {deletingFee && (
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs animate-fadeIn overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-md w-full overflow-hidden shadow-2xl border border-slate-200 my-auto">
+            {/* Modal Header */}
+            <div className="bg-rose-700 px-5 py-4 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-white/20 text-white flex items-center justify-center font-bold text-base">
+                  <i className="fa-solid fa-triangle-exclamation"></i>
+                </div>
+                <div>
+                  <h3 className="text-base font-bold leading-tight">
+                    फीस रसीद स्थायी रूप से हटाएं
+                  </h3>
+                  <p className="text-[11px] text-rose-100">
+                    Delete Fee Receipt Confirmation
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDeletingFee(null)}
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-sm cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 space-y-4">
+              <p className="text-xs text-slate-700 leading-relaxed">
+                क्या आप वाकई इस फीस रसीद को स्थायी रूप से हटाना चाहते हैं? यह प्रविष्टि लेजर, रिपोर्ट और छात्र के फीस बैलेंस से हटा दी जाएगी।
+              </p>
+
+              <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl space-y-2 text-xs">
+                {(() => {
+                  const matched = students.find((s) => String(s.Student_ID).toLowerCase() === String(deletingFee.Student_ID).toLowerCase());
+                  return (
+                    <>
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-500 font-medium">छात्र का नाम:</span>
+                        <span className="font-bold text-slate-900">{matched?.Student_Name || deletingFee.Student_ID}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-500 font-medium">छात्र ID:</span>
+                        <span className="font-mono font-bold text-slate-700">{deletingFee.Student_ID}</span>
+                      </div>
+                    </>
+                  );
+                })()}
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 font-medium">रसीद सं (Receipt No):</span>
+                  <span className="font-mono font-bold text-rose-800">#{deletingFee.Receipt_Number}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 font-medium">जमा राशि (Amount Paid):</span>
+                  <span className="font-bold text-emerald-800 text-sm">₹{Number(deletingFee.Amount_Paid || 0).toLocaleString('en-IN')}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 font-medium">माह / शुल्क प्रकार:</span>
+                  <span className="font-medium text-slate-800">{deletingFee.Month || '—'} • {deletingFee.Fee_Type || 'Tuition'}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 font-medium">भुगतान तिथि:</span>
+                  <span className="font-medium text-slate-700">{formatDate(deletingFee.Date)}</span>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="pt-2 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setDeletingFee(null)}
+                  disabled={deleteIsSubmitting}
+                  className="px-4 py-2 rounded-xl border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-bold transition-colors cursor-pointer"
+                >
+                  रद्द करें (Cancel)
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDelete}
+                  disabled={deleteIsSubmitting}
+                  className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-md transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  {deleteIsSubmitting ? (
+                    <>
+                      <i className="fa-solid fa-circle-notch fa-spin"></i>
+                      <span>हटाया जा रहा है...</span>
+                    </>
+                  ) : (
+                    <>
+                      <i className="fa-solid fa-trash-can"></i>
+                      <span>हाँ, स्थायी रूप से हटाएं</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
