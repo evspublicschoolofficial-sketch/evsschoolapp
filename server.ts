@@ -144,6 +144,22 @@ async function startServer() {
             }
           }
         }
+
+        // Real-Time Data Mutation Broadcast (Fees, Students, Notices, Behavior, Homework)
+        if (parsed.type === 'DATA_MUTATED' || parsed.type === 'APP_DATA_UPDATED') {
+          const updateBroadcast = JSON.stringify({
+            type: 'APP_DATA_UPDATED',
+            entity: parsed.entity || 'all',
+            action: parsed.action || '',
+            details: parsed.details || {},
+            timestamp: Date.now(),
+          });
+          for (const client of clients) {
+            if (client !== ws && client.readyState === WebSocket.OPEN) {
+              client.send(updateBroadcast);
+            }
+          }
+        }
       } catch (err) {
         console.warn('WebSocket message error:', err);
       }
@@ -275,6 +291,29 @@ async function startServer() {
       } catch {}
 
       if (response.ok && (!parsedJson || parsedJson.status !== 'error')) {
+        // Broadcast real-time update to all connected clients
+        try {
+          const act = String(payload?.action || '');
+          let entity = 'all';
+          if (act.includes('Fee')) entity = 'fee';
+          else if (act.includes('Student')) entity = 'student';
+          else if (act.includes('Notice')) entity = 'notice';
+          else if (act.includes('Behavior')) entity = 'behavior';
+          else if (act.includes('Homework')) entity = 'homework';
+
+          const broadcastMsg = JSON.stringify({
+            type: 'APP_DATA_UPDATED',
+            action: act,
+            entity,
+            timestamp: Date.now(),
+          });
+          for (const client of clients) {
+            if (client.readyState === WebSocket.OPEN) {
+              client.send(broadcastMsg);
+            }
+          }
+        } catch {}
+
         return res.json({
           success: true,
           data: parsedJson || responseText,
@@ -291,6 +330,35 @@ async function startServer() {
         success: false,
         error: err.message || 'Failed to connect to Google Apps Script Web App',
       });
+    }
+  });
+
+  // Direct HTTP broadcast endpoint (notifies all connected clients in real time)
+  app.post('/api/notify-update', (req, res) => {
+    try {
+      const entity = req.body?.entity || 'all';
+      const action = req.body?.action || '';
+      const details = req.body?.details || {};
+
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity,
+        action,
+        details,
+        timestamp: Date.now(),
+      });
+
+      let sentCount = 0;
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(broadcastMsg);
+          sentCount++;
+        }
+      }
+
+      res.json({ success: true, clientsNotified: sentCount });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
     }
   });
 

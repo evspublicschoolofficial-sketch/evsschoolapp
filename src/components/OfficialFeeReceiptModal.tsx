@@ -63,13 +63,18 @@ export const OfficialFeeReceiptModal: React.FC<OfficialFeeReceiptModalProps> = (
 
   const receiptNo = feeRecord.Receipt_Number || 'REC-' + Date.now().toString().slice(-6);
   const paidAmount = Number(feeRecord.Amount_Paid || 0);
-  const totalAmount = Number(feeRecord.Total_Amount || paidAmount);
-  const calculatedBal = totalAmount - paidAmount;
+  const totalAmount = Number(feeRecord.Total_Amount !== undefined && feeRecord.Total_Amount !== null ? feeRecord.Total_Amount : paidAmount);
+  const discountAmount = Number((feeRecord as any).Discount_Amount || 0);
+  const netPayable = (feeRecord as any).Net_Payable !== undefined && (feeRecord as any).Net_Payable !== null
+    ? Number((feeRecord as any).Net_Payable)
+    : Math.max(0, totalAmount - discountAmount);
+
+  const calculatedBal = netPayable - paidAmount;
   const rawBalance = feeRecord.Balance_Amount !== null && feeRecord.Balance_Amount !== undefined
     ? Number(feeRecord.Balance_Amount)
     : calculatedBal;
-  // If paid > total, true balance is negative (advance, e.g. 600 - 700 = -100)
-  const balanceAmount = (paidAmount > totalAmount && rawBalance >= 0)
+  // If paid > netPayable, true balance is negative (advance, e.g. 600 - 700 = -100)
+  const balanceAmount = (paidAmount > netPayable && rawBalance >= 0)
     ? calculatedBal
     : rawBalance;
 
@@ -77,6 +82,19 @@ export const OfficialFeeReceiptModal: React.FC<OfficialFeeReceiptModalProps> = (
   const paymentMode = feeRecord.Payment_Mode || 'Cash';
   const feeHead = feeRecord.Fee_Type || feeRecord.Month || 'शैक्षणिक शुल्क (School Tuition Fee)';
   const receiver = feeRecord.Received_By || managerName;
+  const allocationsSummary = (feeRecord as any).Allocations_Summary || '';
+  const notes = (feeRecord as any).Notes || '';
+
+  // Free student check
+  const isFree = student && (
+    student.Is_Free_Student === true ||
+    String(student.Is_Free_Student).toLowerCase() === 'true' ||
+    String(student.Fee_Waiver || '').toLowerCase().includes('true') ||
+    String(student.Fee_Waiver || '').toLowerCase().includes('yes') ||
+    String(student.Fee_Waiver || '').toLowerCase().includes('100') ||
+    String(student.Fee_Waiver || '').toLowerCase().includes('माफ') ||
+    String(notes).toLowerCase().includes('100% fee waived')
+  );
 
   const amountInWords = numberToWordsINR(paidAmount);
 
@@ -86,6 +104,15 @@ export const OfficialFeeReceiptModal: React.FC<OfficialFeeReceiptModalProps> = (
 
   const handleWhatsAppShare = () => {
     const parentMobile = String(student.Parent_Mobile || '').replace(/\D/g, '');
+    let discSection = '';
+    if (discountAmount > 0) {
+      discSection = `💵 *मानक शुल्क:* ₹${totalAmount.toLocaleString('en-IN')}\n🎁 *छूट / रियायत:* -₹${discountAmount.toLocaleString('en-IN')}\n💰 *शुद्ध देय राशि:* ₹${netPayable.toLocaleString('en-IN')}\n`;
+    }
+    let allocSection = '';
+    if (allocationsSummary) {
+      allocSection = `📋 *शामिल माह/अवधि:* ${allocationsSummary}\n`;
+    }
+
     const message =
       `*🏛️ ${schoolName}*\n` +
       `*आधिकारिक डिजिटल फीस रसीद (Official Fee Receipt)*\n` +
@@ -98,9 +125,10 @@ export const OfficialFeeReceiptModal: React.FC<OfficialFeeReceiptModalProps> = (
       `👨‍👦 *पिता का नाम:* ${student.Father_Name || '—'}\n` +
       `━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
       `🏷️ *शुल्क विवरण:* ${feeHead}\n` +
-      `💵 *कुल देय शुल्क:* ₹${totalAmount.toLocaleString('en-IN')}\n` +
+      (discSection || `💵 *कुल देय शुल्क:* ₹${totalAmount.toLocaleString('en-IN')}\n`) +
       `✅ *जमा की गई राशि:* ₹${paidAmount.toLocaleString('en-IN')}\n` +
-      `⚠️ *शेष बकाया राशि:* ₹${balanceAmount.toLocaleString('en-IN')}\n` +
+      `⚠️ *${balanceAmount < 0 ? 'अग्रिम जमा राशि' : 'शेष बकाया राशि'}:* ${balanceAmount < 0 ? '-₹' + Math.abs(balanceAmount).toLocaleString('en-IN') : '₹' + balanceAmount.toLocaleString('en-IN')}\n` +
+      allocSection +
       `💳 *भुगतान माध्यम:* ${paymentMode}\n` +
       `✍️ *प्राप्तकर्ता:* ${receiver}\n` +
       `━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -238,8 +266,21 @@ export const OfficialFeeReceiptModal: React.FC<OfficialFeeReceiptModalProps> = (
             </div>
           </div>
 
+          {/* 100% Fee Waiver Ribbon / Badge */}
+          {isFree && (
+            <div className="mt-4 p-2.5 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-900 text-xs font-bold flex items-center justify-between">
+              <span className="flex items-center gap-2">
+                <i className="fa-solid fa-graduation-cap text-emerald-600"></i>
+                <span>100% शुल्क माफी (100% FEE WAIVED - CONCESSION APPROVED)</span>
+              </span>
+              <span className="text-[10px] bg-emerald-200 px-2 py-0.5 rounded text-emerald-950 font-black">
+                FREE STUDENT
+              </span>
+            </div>
+          )}
+
           {/* Breakdown Table */}
-          <div className="mt-6 border border-slate-300 rounded-2xl overflow-hidden shadow-2xs">
+          <div className="mt-5 border border-slate-300 rounded-2xl overflow-hidden shadow-2xs">
             <table className="w-full text-xs text-left">
               <thead className="bg-[#0c2340] text-white">
                 <tr>
@@ -254,7 +295,12 @@ export const OfficialFeeReceiptModal: React.FC<OfficialFeeReceiptModalProps> = (
                 <tr className="bg-white">
                   <td className="p-3 font-medium text-slate-600">1.</td>
                   <td className="p-3 font-bold text-slate-900">
-                    {feeHead}
+                    <div>{feeHead}</div>
+                    {allocationsSummary && (
+                      <div className="text-[11px] text-blue-900 font-semibold mt-1 bg-blue-50/80 p-1.5 rounded border border-blue-200">
+                        <span className="font-bold">आवंटन विवरण: </span>{allocationsSummary}
+                      </div>
+                    )}
                   </td>
                   <td className="p-3 text-slate-600">
                     {feeRecord.Month || 'Current Academic Session'}
@@ -268,6 +314,34 @@ export const OfficialFeeReceiptModal: React.FC<OfficialFeeReceiptModalProps> = (
                 </tr>
               </tbody>
               <tfoot className="bg-slate-50 divide-y divide-slate-200 font-bold">
+                {discountAmount > 0 && (
+                  <>
+                    <tr>
+                      <td colSpan={4} className="p-2 text-right text-slate-600">
+                        मानक शुल्क (Standard Amount):
+                      </td>
+                      <td className="p-2 text-right text-slate-800">
+                        ₹{totalAmount.toLocaleString('en-IN')}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td colSpan={4} className="p-2 text-right text-amber-800">
+                        विशेष छूट / रियायत (Discount / Concession):
+                      </td>
+                      <td className="p-2 text-right text-amber-800 font-bold">
+                        -₹{discountAmount.toLocaleString('en-IN')}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td colSpan={4} className="p-2 text-right text-blue-900 font-extrabold">
+                        शुद्ध देय राशि (Net Payable Amount):
+                      </td>
+                      <td className="p-2 text-right text-blue-950 font-extrabold">
+                        ₹{netPayable.toLocaleString('en-IN')}
+                      </td>
+                    </tr>
+                  </>
+                )}
                 <tr>
                   <td colSpan={4} className="p-2.5 text-right text-slate-700">
                     जमा की गई राशि (Total Amount Paid):

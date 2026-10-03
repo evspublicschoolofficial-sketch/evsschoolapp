@@ -13,12 +13,14 @@ import {
 import { StudentRecordForScan } from './StudentQRScannerModal';
 import { FeeCollectionRecord } from './AddFeeModal';
 import { OfficialFeeReceiptModal } from './OfficialFeeReceiptModal';
+import { FeeMasterModal } from './FeeMasterModal';
 import { Student } from '../types';
 import {
   computeStudentFeeMetrics,
   computeSchoolFeeTotals,
   computeReceiptBalance,
 } from '../utils/feeCalculation';
+import { APPS_SCRIPT_FEE_CODE } from '../utils/feeMaster';
 
 // Academic session months mapping (April through March)
 const ACADEMIC_MONTHS = [
@@ -312,6 +314,9 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
   const [trendsMetricFilter, setTrendsMetricFilter] = useState<'all' | 'collectionOnly' | 'collectionVsDue'>('all');
   const [trendsScope, setTrendsScope] = useState<'allSession' | 'activeOnly'>('allSession');
   const [trendsClassFilter, setTrendsClassFilter] = useState<string>('all');
+  const [showAppsScriptModal, setShowAppsScriptModal] = useState<boolean>(false);
+  const [appsScriptCopied, setAppsScriptCopied] = useState<boolean>(false);
+  const [isFeeMasterModalOpen, setIsFeeMasterModalOpen] = useState<boolean>(false);
 
   // School Ledger section ref for auto-scrolling
   const ledgerSectionRef = useRef<HTMLDivElement | null>(null);
@@ -945,6 +950,26 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
             >
               <i className="fa-solid fa-chart-line text-sm text-amber-300"></i>
               <span>मासिक ट्रेंड्स सारांश</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowAppsScriptModal(true)}
+              className="px-3.5 py-2.5 bg-indigo-600/70 hover:bg-indigo-600 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer transition-all active:scale-95 border border-indigo-400/40 shadow-xs"
+              title="Google Apps Script मासिक फीस ऑटो जेनरेशन ट्रिगर कोड देखें"
+            >
+              <i className="fa-solid fa-code text-amber-300"></i>
+              <span>ऑटो मासिक फीस (Apps Script)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsFeeMasterModalOpen(true)}
+              className="px-3.5 py-2.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-black rounded-xl text-xs flex items-center gap-1.5 cursor-pointer transition-all active:scale-95 shadow-md"
+              title="हर क्लास की फीस (मासिक, एडमिशन, एग्जाम, ऑटो/वाहन) निर्धारित करें"
+            >
+              <i className="fa-solid fa-sliders text-sm"></i>
+              <span>⚙️ फीस मास्टर सेटिंग्स</span>
             </button>
 
             <button
@@ -1991,13 +2016,23 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                                 {formatDate(fee.Date)}
                               </td>
                               <td className="px-3.5 py-3 font-medium text-slate-800 whitespace-nowrap">
-                                {fee.Fee_Type || 'Monthly Tuition Fee'}
+                                <div>{fee.Fee_Type || 'Monthly Tuition Fee'}</div>
+                                {(fee as any).Allocations_Summary && (
+                                  <div className="text-[10px] text-indigo-700 font-bold max-w-[170px] truncate" title={(fee as any).Allocations_Summary}>
+                                    {(fee as any).Allocations_Summary}
+                                  </div>
+                                )}
                               </td>
                               <td className="px-3.5 py-3 text-slate-600 whitespace-nowrap">
                                 {fee.Month || '—'}
                               </td>
                               <td className="px-3.5 py-3 text-right font-medium text-slate-700 whitespace-nowrap">
-                                ₹{(fee.Total_Amount || 0).toLocaleString('en-IN')}
+                                <div>₹{(fee.Total_Amount || 0).toLocaleString('en-IN')}</div>
+                                {(fee as any).Discount_Amount > 0 && (
+                                  <div className="text-[10px] font-bold text-amber-700">
+                                    -₹{Number((fee as any).Discount_Amount).toLocaleString('en-IN')} छूट
+                                  </div>
+                                )}
                               </td>
                               <td className="px-3.5 py-3 text-right font-bold text-emerald-700 whitespace-nowrap">
                                 ₹{(fee.Amount_Paid || 0).toLocaleString('en-IN')}
@@ -2239,13 +2274,23 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                           </div>
                         </td>
                         <td className="px-3.5 py-2.5 font-medium text-slate-800 whitespace-nowrap">
-                          {fee.Fee_Type || 'Monthly Tuition'}
+                          <div>{fee.Fee_Type || 'Monthly Tuition'}</div>
+                          {(fee as any).Allocations_Summary && (
+                            <div className="text-[10px] text-indigo-700 font-bold max-w-[170px] truncate" title={(fee as any).Allocations_Summary}>
+                              {(fee as any).Allocations_Summary}
+                            </div>
+                          )}
                         </td>
                         <td className="px-3.5 py-2.5 text-slate-600 whitespace-nowrap">
                           {fee.Month || '—'}
                         </td>
                         <td className="px-3.5 py-2.5 text-right font-medium text-slate-700 whitespace-nowrap">
-                          ₹{(fee.Total_Amount || 0).toLocaleString('en-IN')}
+                          <div>₹{(fee.Total_Amount || 0).toLocaleString('en-IN')}</div>
+                          {(fee as any).Discount_Amount > 0 && (
+                            <div className="text-[10px] font-bold text-amber-700">
+                              -₹{Number((fee as any).Discount_Amount).toLocaleString('en-IN')} छूट
+                            </div>
+                          )}
                         </td>
                         <td className="px-3.5 py-2.5 text-right font-bold text-emerald-700 whitespace-nowrap">
                           ₹{(fee.Amount_Paid || 0).toLocaleString('en-IN')}
@@ -2706,6 +2751,135 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
         feeRecord={printingReceiptRecord?.fee}
         schoolName="E.V.S. PUBLIC SCHOOL"
         managerName={managerName}
+      />
+
+      {/* Google Apps Script Monthly Dues Trigger Code Modal */}
+      {showAppsScriptModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-xs animate-fadeIn overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border border-slate-200 overflow-hidden my-auto max-h-[92vh] flex flex-col">
+            <div className="bg-gradient-to-r from-[#0c2340] to-indigo-950 px-5 py-4 text-white flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center font-black text-base shadow-sm">
+                  <i className="fa-solid fa-clock"></i>
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-amber-300">
+                    मासिक फीस ऑटो-जेनरेशन (Google Apps Script Trigger)
+                  </h3>
+                  <p className="text-[11px] text-blue-200">
+                    हर महीने की 1 तारीख को सक्रिय छात्रों के खाते में मासिक फीस स्वतः जोड़ने हेतु कोड
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAppsScriptModal(false)}
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-sm cursor-pointer transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto space-y-4 text-xs text-slate-800">
+              {/* Highlight cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200">
+                  <div className="font-bold text-amber-950 flex items-center gap-1.5 mb-1">
+                    <i className="fa-solid fa-bolt text-amber-600"></i>
+                    <span>generateMonthlyDues()</span>
+                  </div>
+                  <p className="text-[11px] text-amber-900 leading-relaxed">
+                    यह फ़ंक्शन हर महीने की 1 तारीख को टाइम-ड्रिवन ट्रिगर से अपने आप चलता है और 'Students' शीट से सभी नॉन-फ्री छात्रों का मासिक बिल तैयार करता है।
+                  </p>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200">
+                  <div className="font-bold text-emerald-950 flex items-center gap-1.5 mb-1">
+                    <i className="fa-solid fa-graduation-cap text-emerald-600"></i>
+                    <span>100% फीस माफी छात्र सुरक्षा</span>
+                  </div>
+                  <p className="text-[11px] text-emerald-900 leading-relaxed">
+                    जिन छात्रों पर 'Fee_Waiver' या '100% Free Student' या 'RTE' टैग है, उनके खाते में कोई मासिक बिल नहीं जुड़ेगा।
+                  </p>
+                </div>
+              </div>
+
+              {/* Instructions */}
+              <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
+                <div className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                  <i className="fa-solid fa-list-ol text-blue-900"></i>
+                  <span>गूगल शीट में सेटअप करने के 3 आसान कदम:</span>
+                </div>
+                <ol className="list-decimal list-inside space-y-1.5 text-[11px] text-slate-700 pl-1">
+                  <li>
+                    अपनी Google Sheet खोलें और ऊपर मेन्यू में <strong>Extensions &gt; Apps Script</strong> पर क्लिक करें।
+                  </li>
+                  <li>
+                    नीचे दिए गए नीले बटन <strong>"Apps Script कोड कॉपी करें"</strong> पर क्लिक करें और Apps Script एडिटर में पेस्ट कर दें।
+                  </li>
+                  <li>
+                    एडिटर में <code>installMonthlyFeeTrigger</code> फंक्शन चुनकर <strong>Run</strong> दबाएँ (यह हर 1 तारीख को रात 1 बजे का ऑटो ट्रिगर सक्रिय कर देगा)।
+                  </li>
+                </ol>
+              </div>
+
+              {/* Code Preview Box */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="font-bold text-slate-700 flex items-center gap-1.5">
+                    <i className="fa-solid fa-file-code text-indigo-700"></i>
+                    <span>Code.gs (Apps Script कोड)</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(APPS_SCRIPT_FEE_CODE);
+                        setAppsScriptCopied(true);
+                        setTimeout(() => setAppsScriptCopied(false), 3000);
+                      } catch {
+                        const ta = document.createElement('textarea');
+                        ta.value = APPS_SCRIPT_FEE_CODE;
+                        document.body.appendChild(ta);
+                        ta.select();
+                        document.execCommand('copy');
+                        document.body.removeChild(ta);
+                        setAppsScriptCopied(true);
+                        setTimeout(() => setAppsScriptCopied(false), 3000);
+                      }
+                    }}
+                    className="px-3 py-1 bg-blue-900 hover:bg-blue-800 text-amber-300 font-bold text-xs rounded-lg flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                  >
+                    <i className={`fa-solid ${appsScriptCopied ? 'fa-check text-emerald-300' : 'fa-copy'}`}></i>
+                    <span>{appsScriptCopied ? 'कोड कॉपी हो गया! ✓' : 'पूरा Apps Script कोड कॉपी करें'}</span>
+                  </button>
+                </div>
+                <pre className="p-3.5 bg-slate-950 text-emerald-400 font-mono text-[10px] rounded-2xl max-h-56 overflow-y-auto leading-relaxed border border-slate-800">
+                  {APPS_SCRIPT_FEE_CODE}
+                </pre>
+              </div>
+            </div>
+
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end">
+              <button
+                type="button"
+                onClick={() => setShowAppsScriptModal(false)}
+                className="px-5 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold text-xs cursor-pointer"
+              >
+                बंद करें (Close)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Fee Master Setup Modal (Option B: Auto-creates Fee_Master in Google Sheets) */}
+      <FeeMasterModal
+        isOpen={isFeeMasterModalOpen}
+        onClose={() => setIsFeeMasterModalOpen(false)}
+        onFeeMasterUpdated={() => {
+          if (onRefreshFees) onRefreshFees();
+        }}
       />
     </div>
   );

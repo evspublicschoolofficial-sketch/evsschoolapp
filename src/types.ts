@@ -31,10 +31,14 @@ export interface FeeCollectionRecord {
   Fee_Type?: string;
   Month?: string;
   Total_Amount?: number | null;
+  Discount_Amount?: number | null;
+  Net_Payable?: number | null;
   Amount_Paid?: number | null;
   Balance_Amount?: number | null;
   Payment_Mode?: string;
   Received_By?: string;
+  Allocations_Summary?: string;
+  Notes?: string;
 }
 
 export interface Homework {

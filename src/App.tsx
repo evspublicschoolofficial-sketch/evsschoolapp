@@ -29,6 +29,7 @@ import { EmergencyAlertBanner } from './components/EmergencyAlertBanner';
 import { playSirenPreview } from './utils/sirenAudio';
 import { SchoolNotice } from './types';
 import { computeStudentFeeMetrics, computeSchoolFeeTotals, normalizeStudentId } from './utils/feeCalculation';
+import { realtimeSync } from './utils/realtimeSync';
 import studentFarahPhoto from './assets/images/student_farah_1789483069291.jpg';
 import studentNamraPhoto from './assets/images/student_namra_1789483091505.jpg';
 
@@ -2510,6 +2511,9 @@ export default function App() {
       window.open(waUrl, '_blank');
     }
 
+    // Broadcast real-time update to all tabs and devices
+    realtimeSync.broadcastUpdate('student', 'addStudent', newStudent);
+
     return syncResult;
   };
 
@@ -2560,15 +2564,56 @@ export default function App() {
       console.warn('Could not forward delete request to Google Apps Script:', err);
     }
 
+    // Broadcast real-time update to all tabs and devices
+    realtimeSync.broadcastUpdate('student', 'deleteStudent', { studentId: sId });
+
     setStudentNotificationSuccess(`छात्र "${studentName || sId}" को पोर्टल से हटा दिया गया!`);
     setTimeout(() => setStudentNotificationSuccess(null), 4000);
     return true;
   };
 
-  // Initial load - Stale While Revalidate background sync
+  // Real-Time Synchronization & Automatic Background Polling
   useEffect(() => {
-    // Instantly renders cached state, and executes background sync
+    // 1. Instantly renders cached state, and executes background sync
     syncAllData(false);
+
+    // 2. Subscribe to real-time data updates (cross-tab via BroadcastChannel & cross-device via WebSocket)
+    const unsubscribe = realtimeSync.subscribe((event) => {
+      console.log('[RealtimeSync] Auto-refreshing data for entity:', event.entity);
+      if (event.entity === 'fee') {
+        fetchFeeCollection();
+      } else if (event.entity === 'student') {
+        fetchStudents(true);
+        fetchFeeCollection();
+      } else if (event.entity === 'homework') {
+        fetchHomework(true);
+        fetchHomeworkTracker();
+      } else if (event.entity === 'behavior') {
+        fetchStudentBehavior();
+      } else {
+        syncAllData(false);
+      }
+
+      setSyncToastMessage('⚡ लाइव अपडेट: नया डेटा अपने-आप रिफ्रेश हो गया!');
+      setTimeout(() => setSyncToastMessage(null), 3000);
+    });
+
+    // 3. Smart Background Polling (Every 20 seconds)
+    // Refreshes data silently without disturbing user if typing in input
+    const pollingInterval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        const activeEl = document.activeElement;
+        const isUserTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT');
+        if (!isUserTyping) {
+          syncAllData(false);
+        }
+      }
+    }, 20000);
+
+    return () => {
+      unsubscribe();
+      clearInterval(pollingInterval);
+    };
   }, []);
 
   // Parse Date string into comparable timestamp at midnight (00:00:00)
@@ -3748,6 +3793,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         }),
       }).catch((err) => console.warn('Background sync behavior error:', err));
     } catch {}
+
+    // Broadcast real-time update to all tabs and devices
+    realtimeSync.broadcastUpdate('behavior', 'addBehavior', newRec);
   };
 
   // Dedicated Handler for Student Homework QR Tracker Modal (Complete/Incomplete)
@@ -3810,6 +3858,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         }),
       }).catch((err) => console.warn('Background sync status note:', err));
     } catch {}
+
+    // Broadcast real-time update to all tabs and devices
+    realtimeSync.broadcastUpdate('homework', 'updateHomeworkTracker', { recordId, studentId, status });
   };
 
   // One-Click Toggle Homework Tracker Status (Completed / Incompleted)
@@ -3845,6 +3896,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         }),
       }).catch((err) => console.warn('Background sync status note:', err));
     } catch {}
+
+    // Broadcast real-time update to all tabs and devices
+    realtimeSync.broadcastUpdate('homework', 'toggleHomeworkStatus', { recordId, studentId, nextStatus });
   };
 
   // Add Fee Handler (Manager & Principal)
@@ -3897,19 +3951,33 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
           fee_type: newRec.Fee_Type,
           month: newRec.Month,
           total_amount: newRec.Total_Amount,
+          discount_amount: (newRec as any).Discount_Amount || 0,
+          net_payable: (newRec as any).Net_Payable !== undefined ? (newRec as any).Net_Payable : newRec.Total_Amount,
           amount_paid: newRec.Amount_Paid,
           balance_amount: newRec.Balance_Amount,
           payment_mode: newRec.Payment_Mode,
           received_by: newRec.Received_By || managerUser?.Name || 'School Manager',
+          allocations_summary: (newRec as any).Allocations_Summary || '',
+          notes: (newRec as any).Notes || '',
         }),
       }).catch((e) => console.warn('Background fee upload note:', e));
     } catch {}
+
+    // Broadcast real-time update to all tabs and devices
+    realtimeSync.broadcastUpdate('fee', 'addFee', newRec);
 
     // Send WhatsApp receipt if requested
     if (sendWhatsApp) {
       const st = students.find((s) => String(s.Student_ID || '').toLowerCase() === sId);
       const parentPhone = st ? String(st.Parent_Mobile || '').replace(/\D/g, '') : '';
-      const text = `*E.V.S. PUBLIC SCHOOL - फीस रसीद (FEE RECEIPT)*\n--------------------------------\n*रसीद सं (Receipt No):* ${newRec.Receipt_Number}\n*दिनांक (Date):* ${newRec.Date}\n*छात्र (Student):* ${st?.Student_Name || newRec.Student_ID}\n*कक्षा (Class):* ${getClassName(st?.Class)}\n*शुल्क प्रकार (Fee Type):* ${newRec.Fee_Type}\n*माह (Month):* ${newRec.Month}\n*कुल शुल्क (Total Fee):* ₹${newRec.Total_Amount}\n*जमा राशि (Paid Amount):* ₹${newRec.Amount_Paid}\n*शेष बकाया (Balance Due):* ₹${newRec.Balance_Amount}\n*माध्यम (Mode):* ${newRec.Payment_Mode}\n*प्राप्तकर्ता (Received By):* ${newRec.Received_By || managerUser?.Name || 'School Office'}\n--------------------------------\nधन्यवाद!\n*E.V.S. Public School*`;
+      const discText = (newRec as any).Discount_Amount > 0
+        ? `\n*मानक शुल्क (Standard Fee):* ₹${newRec.Total_Amount}\n*छूट / रियायत (Discount):* -₹${(newRec as any).Discount_Amount}\n*शुद्ध देय (Net Payable):* ₹${(newRec as any).Net_Payable}`
+        : `\n*कुल शुल्क (Total Fee):* ₹${newRec.Total_Amount}`;
+      const allocText = (newRec as any).Allocations_Summary
+        ? `\n*आवंटन (Allocations):* ${(newRec as any).Allocations_Summary}`
+        : '';
+
+      const text = `*E.V.S. PUBLIC SCHOOL - फीस रसीद (FEE RECEIPT)*\n--------------------------------\n*रसीद सं (Receipt No):* ${newRec.Receipt_Number}\n*दिनांक (Date):* ${newRec.Date}\n*छात्र (Student):* ${st?.Student_Name || newRec.Student_ID}\n*कक्षा (Class):* ${getClassName(st?.Class)}\n*शुल्क प्रकार (Fee Type):* ${newRec.Fee_Type}\n*माह (Month):* ${newRec.Month}${discText}\n*जमा राशि (Paid Amount):* ₹${newRec.Amount_Paid}\n*शेष बकाया (Balance Due):* ₹${newRec.Balance_Amount}${allocText}\n*माध्यम (Mode):* ${newRec.Payment_Mode}\n*प्राप्तकर्ता (Received By):* ${newRec.Received_By || managerUser?.Name || 'School Office'}\n--------------------------------\nधन्यवाद!\n*E.V.S. Public School*`;
 
       const cleanPhone = parentPhone.length === 10 ? `91${parentPhone}` : parentPhone;
       const url = cleanPhone
@@ -3984,6 +4052,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         }),
       }).catch((e) => console.warn('Background fee edit note:', e));
     } catch {}
+
+    // Broadcast real-time update to all tabs and devices
+    realtimeSync.broadcastUpdate('fee', 'editFee', updatedRec);
   };
 
   // Delete Fee Record Handler (Manager)
@@ -4018,6 +4089,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     } catch (e) {
       console.warn('Could not update cache after deleting fee:', e);
     }
+
+    // Broadcast real-time update to all tabs and devices
+    realtimeSync.broadcastUpdate('fee', 'deleteFee', { receiptNo, studentId });
 
     setFeeNotificationSuccess(`रसीद #${receiptNo} सफलतापूर्वक हटा दी गई!`);
     setTimeout(() => setFeeNotificationSuccess(null), 4000);

@@ -378,6 +378,23 @@ function doGet(e) {
     return handleUpdateBusTracking(ss, e.parameter || {});
   }
 
+  // 6. AUTOMATIC MONTHLY FEE GENERATION VIA GET
+  if (action === "generateMonthlyDues" || action === "autoBill") {
+    var genResult = generateMonthlyDues();
+    return ContentService.createTextOutput(JSON.stringify(genResult))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  // 7. GET FEE MASTER (Option B: Auto-Creates Fee_Master sheet if not present)
+  if (action === "getFeeMaster") {
+    return handleGetFeeMaster(ss);
+  }
+
+  // 8. GET NOTICES (Option B: Auto-Creates School_Notices sheet if not present)
+  if (action === "getNotices") {
+    return handleGetNotices(ss);
+  }
+
   return ContentService.createTextOutput(JSON.stringify({
     status: "error",
     message: "Invalid Action: " + action
@@ -435,26 +452,124 @@ function doPost(e) {
       return handleUpdateBusTracking(ss, data);
     }
 
-    // 3. ADD FEE RECORD
+    // 3. ADD FEE RECORD (Supports Discount, Net Payable & Multi-Month Allocation)
     if (action === "addFee") {
       var sheet = ss.getSheetByName("Fee_Collection");
-      if (!sheet) sheet = ss.insertSheet("Fee_Collection");
+      if (!sheet) {
+        sheet = ss.insertSheet("Fee_Collection");
+        sheet.appendRow([
+          "Receipt_Number", "Student_ID", "Date", "Fee_Type", "Month",
+          "Total_Amount", "Discount_Amount", "Net_Payable", "Amount_Paid",
+          "Balance_Amount", "Payment_Mode", "Received_By", "Allocations_Summary"
+        ]);
+      }
       sheet.appendRow([
         data.receipt_no || "REC-" + Date.now(),
         data.student_id || "",
         data.date || new Date().toISOString().split("T")[0],
         data.fee_type || "Monthly",
         data.month || "",
-        data.total_amount || 0,
-        data.amount_paid || 0,
-        data.balance_amount || 0,
+        data.total_amount !== undefined ? Number(data.total_amount) : 0,
+        data.discount_amount !== undefined ? Number(data.discount_amount) : 0,
+        data.net_payable !== undefined ? Number(data.net_payable) : (Number(data.total_amount || 0) - Number(data.discount_amount || 0)),
+        data.amount_paid !== undefined ? Number(data.amount_paid) : 0,
+        data.balance_amount !== undefined ? Number(data.balance_amount) : 0,
         data.payment_mode || "Cash",
-        data.received_by || "Manager"
+        data.received_by || "Manager",
+        data.allocations_summary || data.notes || ""
       ]);
       return ContentService.createTextOutput(JSON.stringify({
         status: "success",
         message: "Fee Record Saved Successfully!"
       })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 3B. EDIT FEE RECORD (Manager Edit)
+    if (action === "editFee") {
+      var sheet = ss.getSheetByName("Fee_Collection");
+      if (!sheet) {
+        return ContentService.createTextOutput(JSON.stringify({
+          status: "error",
+          message: "Fee_Collection sheet not found"
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
+      var targetReceipt = String(data.original_receipt_no || data.receipt_no || "").trim().toLowerCase();
+      var rows = sheet.getDataRange().getValues();
+      var foundRow = -1;
+      for (var r = 1; r < rows.length; r++) {
+        var rowRec = String(rows[r][0] || "").trim().toLowerCase();
+        if (rowRec === targetReceipt) {
+          foundRow = r + 1;
+          break;
+        }
+      }
+      if (foundRow !== -1) {
+        sheet.getRange(foundRow, 1, 1, 12).setValues([[
+          data.receipt_no || rows[foundRow - 1][0],
+          data.student_id || rows[foundRow - 1][1],
+          data.date || rows[foundRow - 1][2],
+          data.fee_type || rows[foundRow - 1][3],
+          data.month || rows[foundRow - 1][4],
+          data.total_amount !== undefined ? Number(data.total_amount) : rows[foundRow - 1][5],
+          data.discount_amount !== undefined ? Number(data.discount_amount) : 0,
+          data.net_payable !== undefined ? Number(data.net_payable) : (Number(data.total_amount || 0) - Number(data.discount_amount || 0)),
+          data.amount_paid !== undefined ? Number(data.amount_paid) : rows[foundRow - 1][6],
+          data.balance_amount !== undefined ? Number(data.balance_amount) : rows[foundRow - 1][7],
+          data.payment_mode || rows[foundRow - 1][8],
+          data.received_by || rows[foundRow - 1][9]
+        ]]);
+        return ContentService.createTextOutput(JSON.stringify({
+          status: "success",
+          message: "Fee Record Updated in Sheet!"
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "not_found",
+        message: "Receipt #" + targetReceipt + " not found to edit"
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 3C. DELETE FEE RECORD (Manager Delete)
+    if (action === "deleteFee") {
+      var sheet = ss.getSheetByName("Fee_Collection");
+      if (!sheet) {
+        return ContentService.createTextOutput(JSON.stringify({
+          status: "error",
+          message: "Fee_Collection sheet not found"
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
+      var delReceipt = String(data.receipt_no || "").trim().toLowerCase();
+      var rows = sheet.getDataRange().getValues();
+      var deleted = false;
+      for (var r = rows.length - 1; r >= 1; r--) {
+        var rowRec = String(rows[r][0] || "").trim().toLowerCase();
+        if (rowRec === delReceipt) {
+          sheet.deleteRow(r + 1);
+          deleted = true;
+          break;
+        }
+      }
+      return ContentService.createTextOutput(JSON.stringify({
+        status: deleted ? "success" : "not_found",
+        message: deleted ? "Fee receipt deleted from sheet" : "Receipt not found in sheet"
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 3D. RUN MONTHLY DUES TRIGGER (Manual trigger invoke)
+    if (action === "generateMonthlyDues" || action === "autoBill") {
+      var genRes = generateMonthlyDues();
+      return ContentService.createTextOutput(JSON.stringify(genRes))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 3E. SAVE FEE MASTER (Option B: Auto-Creates or Updates Fee_Master sheet)
+    if (action === "saveFeeMaster") {
+      return handleSaveFeeMaster(ss, data.configs || data);
+    }
+
+    // 3F. SYNC SCHOOL NOTICES (Option B: Auto-Creates or Updates School_Notices sheet)
+    if (action === "syncNotices" || action === "saveNotice") {
+      return handleSyncNotices(ss, data);
     }
 
     // 4. ADD BEHAVIOR
@@ -676,7 +791,441 @@ function handleUpdateBusTracking(ss, data) {
     location: location,
     updated_at: istTimestamp
   })).setMimeType(ContentService.MimeType.JSON);
-}`;
+}
+
+/**
+ * AUTOMATIC MONTHLY FEE GENERATION (APPS SCRIPT TRIGGER)
+ * Trigger: Runs automatically on the 1st of every month.
+ * Iterates through active students in 'Students' sheet.
+ * Skips 100% Fee Waived (Free) students.
+ * Appends monthly tuition dues for active non-free students to 'Fee_Collection'.
+ */
+function generateMonthlyDues() {
+  var ss = getSpreadsheet();
+  if (!ss) {
+    Logger.log("Error: Spreadsheet not accessible.");
+    return { status: "error", message: "Spreadsheet not accessible" };
+  }
+
+  var studentsSheet = ss.getSheetByName("Students");
+  if (!studentsSheet) {
+    Logger.log("Error: 'Students' sheet not found.");
+    return { status: "error", message: "'Students' sheet not found" };
+  }
+
+  var feeSheet = ss.getSheetByName("Fee_Collection");
+  if (!feeSheet) {
+    feeSheet = ss.insertSheet("Fee_Collection");
+    feeSheet.appendRow([
+      "Receipt_Number", "Student_ID", "Date", "Fee_Type", "Month",
+      "Total_Amount", "Discount_Amount", "Net_Payable", "Amount_Paid",
+      "Balance_Amount", "Payment_Mode", "Received_By"
+    ]);
+  }
+
+  var today = new Date();
+  var monthNames = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+  ];
+  var curMonthName = monthNames[today.getMonth()];
+  var curYear = today.getFullYear();
+  var dateStr = Utilities.formatDate(today, "Asia/Kolkata", "yyyy-MM-dd");
+
+  var feeMaster = {
+    'play': 500, 'nursery': 600, 'lkg': 600, 'ukg': 600,
+    '1st': 650, '2nd': 650, '3rd': 650, '4th': 700, '5th': 700,
+    '6th': 800, '7th': 800, '8th': 850
+  };
+
+  var studentsData = studentsSheet.getDataRange().getValues();
+  if (studentsData.length <= 1) return { status: "empty", count: 0 };
+
+  var headers = studentsData[0].map(function(h) { return String(h || "").trim().toLowerCase(); });
+  var idIdx = headers.indexOf("student_id");
+  if (idIdx === -1) idIdx = headers.indexOf("id");
+  var nameIdx = headers.indexOf("student_name");
+  var classIdx = headers.indexOf("class");
+  var monthlyFeeIdx = headers.indexOf("monthly_fee");
+  var waiverIdx = headers.indexOf("fee_waiver");
+  if (waiverIdx === -1) waiverIdx = headers.indexOf("is_free_student");
+  var categoryIdx = headers.indexOf("category");
+  var remarkIdx = headers.indexOf("remark");
+
+  // Load existing fee collection rows for this month to avoid duplicates
+  var feeData = feeSheet.getDataRange().getValues();
+  var billedThisMonth = {};
+  for (var f = 1; f < feeData.length; f++) {
+    var fStudentId = String(feeData[f][1] || "").trim().toLowerCase();
+    var fMonth = String(feeData[f][4] || "").trim().toLowerCase();
+    var fType = String(feeData[f][3] || "").trim().toLowerCase();
+    if (fMonth.indexOf(curMonthName.toLowerCase()) !== -1 && (fType.indexOf("monthly") !== -1 || fType.indexOf("मासिक") !== -1)) {
+      billedThisMonth[fStudentId] = true;
+    }
+  }
+
+  var generatedCount = 0;
+  var skippedFreeCount = 0;
+  var alreadyBilledCount = 0;
+
+  for (var i = 1; i < studentsData.length; i++) {
+    var row = studentsData[i];
+    var sId = idIdx !== -1 ? String(row[idIdx] || "").trim() : "";
+    if (!sId) continue;
+
+    // Check if student has 100% Fee Waiver (Free Student)
+    var isFree = false;
+    if (waiverIdx !== -1) {
+      var wVal = String(row[waiverIdx] || "").toLowerCase();
+      if (wVal === "true" || wVal === "yes" || wVal.indexOf("100") !== -1 || wVal.indexOf("free") !== -1 || wVal.indexOf("माफ") !== -1) {
+        isFree = true;
+      }
+    }
+    if (categoryIdx !== -1) {
+      var catVal = String(row[categoryIdx] || "").toLowerCase();
+      if (catVal.indexOf("rte") !== -1 || catVal.indexOf("free") !== -1 || catVal.indexOf("माफ") !== -1) {
+        isFree = true;
+      }
+    }
+    if (remarkIdx !== -1) {
+      var remVal = String(row[remarkIdx] || "").toLowerCase();
+      if (remVal.indexOf("फीस माफ") !== -1 || remVal.indexOf("100% waiver") !== -1) {
+        isFree = true;
+      }
+    }
+
+    if (isFree) {
+      skippedFreeCount++;
+      continue;
+    }
+
+    // Skip if already billed for this month
+    if (billedThisMonth[sId.toLowerCase()]) {
+      alreadyBilledCount++;
+      continue;
+    }
+
+    // Determine Monthly Tuition amount
+    var sClass = classIdx !== -1 ? String(row[classIdx] || "").toLowerCase().trim() : "nursery";
+    var customFee = monthlyFeeIdx !== -1 ? Number(row[monthlyFeeIdx]) : 0;
+    var monthlyAmount = 600;
+
+    if (!isNaN(customFee) && customFee > 0) {
+      monthlyAmount = customFee;
+    } else {
+      for (var k in feeMaster) {
+        if (sClass.indexOf(k) !== -1) {
+          monthlyAmount = feeMaster[k];
+          break;
+        }
+      }
+    }
+
+    var receiptNo = "BILL-" + curYear + "-" + (today.getMonth() + 1) + "-" + sId;
+    feeSheet.appendRow([
+      receiptNo,
+      sId,
+      dateStr,
+      "Monthly Tuition Fee",
+      curMonthName,
+      monthlyAmount,
+      0, // Discount
+      monthlyAmount, // Net Payable
+      0, // Amount Paid (Initial Due)
+      monthlyAmount, // Balance Amount
+      "System Auto-Bill",
+      "Automated Trigger (1st of Month)"
+    ]);
+
+    billedThisMonth[sId.toLowerCase()] = true;
+    generatedCount++;
+  }
+
+  var msg = "generateMonthlyDues complete for " + curMonthName + " " + curYear +
+            ": Billed: " + generatedCount +
+            ", Skipped Free: " + skippedFreeCount +
+            ", Already Billed: " + alreadyBilledCount;
+  Logger.log(msg);
+
+  return {
+    status: "success",
+    message: msg,
+    month: curMonthName + " " + curYear,
+    generatedCount: generatedCount,
+    skippedFreeCount: skippedFreeCount,
+    alreadyBilledCount: alreadyBilledCount
+  };
+}
+
+/**
+ * ONE-CLICK TRIGGER INSTALLER
+ * Sets up generateMonthlyDues() to execute on the 1st of every month at 01:00 AM.
+ */
+function installMonthlyFeeTrigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === "generateMonthlyDues") {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+
+  ScriptApp.newTrigger("generateMonthlyDues")
+    .timeBased()
+    .onMonthDay(1)
+    .atHour(1)
+    .create();
+
+  Logger.log("Trigger Installed: generateMonthlyDues will run on 1st of every month at 1:00 AM.");
+  return { status: "success", message: "Monthly Trigger installed for 1st of every month!" };
+}
+
+/**
+ * OPTION B: GET FEE MASTER (Auto-Creates Fee_Master sheet if not present)
+ */
+function handleGetFeeMaster(ss) {
+  var sheet = ss.getSheetByName("Fee_Master");
+  var defaultClasses = [
+    { key: "play", name: "Play Group (प्ले ग्रुप)", monthlyTuition: 500, admissionFee: 1500, examFee: 300, transportFee: 500, annualFee: 1000, booksFee: 800, uniformFee: 800, lateFine: 50 },
+    { key: "nursery", name: "Nursery (नर्सरी)", monthlyTuition: 600, admissionFee: 1500, examFee: 300, transportFee: 500, annualFee: 1000, booksFee: 1000, uniformFee: 800, lateFine: 50 },
+    { key: "lkg", name: "L.K.G. (एल.के.जी.)", monthlyTuition: 600, admissionFee: 1500, examFee: 300, transportFee: 500, annualFee: 1000, booksFee: 1000, uniformFee: 800, lateFine: 50 },
+    { key: "ukg", name: "U.K.G. (यू.के.जी.)", monthlyTuition: 600, admissionFee: 1500, examFee: 300, transportFee: 500, annualFee: 1000, booksFee: 1000, uniformFee: 800, lateFine: 50 },
+    { key: "1st", name: "Class 1st (कक्षा 1)", monthlyTuition: 650, admissionFee: 2000, examFee: 350, transportFee: 500, annualFee: 1200, booksFee: 1200, uniformFee: 800, lateFine: 50 },
+    { key: "2nd", name: "Class 2nd (कक्षा 2)", monthlyTuition: 650, admissionFee: 2000, examFee: 350, transportFee: 500, annualFee: 1200, booksFee: 1200, uniformFee: 800, lateFine: 50 },
+    { key: "3rd", name: "Class 3rd (कक्षा 3)", monthlyTuition: 650, admissionFee: 2000, examFee: 350, transportFee: 500, annualFee: 1200, booksFee: 1200, uniformFee: 800, lateFine: 50 },
+    { key: "4th", name: "Class 4th (कक्षा 4)", monthlyTuition: 700, admissionFee: 2000, examFee: 400, transportFee: 500, annualFee: 1200, booksFee: 1400, uniformFee: 800, lateFine: 50 },
+    { key: "5th", name: "Class 5th (कक्षा 5)", monthlyTuition: 700, admissionFee: 2000, examFee: 400, transportFee: 500, annualFee: 1200, booksFee: 1400, uniformFee: 800, lateFine: 50 },
+    { key: "6th", name: "Class 6th (कक्षा 6)", monthlyTuition: 800, admissionFee: 2500, examFee: 450, transportFee: 600, annualFee: 1500, booksFee: 1600, uniformFee: 900, lateFine: 50 },
+    { key: "7th", name: "Class 7th (कक्षा 7)", monthlyTuition: 800, admissionFee: 2500, examFee: 450, transportFee: 600, annualFee: 1500, booksFee: 1600, uniformFee: 900, lateFine: 50 },
+    { key: "8th", name: "Class 8th (कक्षा 8)", monthlyTuition: 850, admissionFee: 2500, examFee: 500, transportFee: 600, annualFee: 1500, booksFee: 1800, uniformFee: 900, lateFine: 50 }
+  ];
+
+  if (!sheet) {
+    sheet = ss.insertSheet("Fee_Master");
+    sheet.appendRow([
+      "Class_Key", "Class_Name", "Monthly_Tuition", "Admission_Fee", "Exam_Fee",
+      "Transport_Auto_Fee", "Annual_Fee", "Books_Fee", "Uniform_Fee", "Late_Fine", "Last_Updated"
+    ]);
+    var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "dd/MM/yyyy HH:mm");
+    for (var i = 0; i < defaultClasses.length; i++) {
+      var d = defaultClasses[i];
+      sheet.appendRow([
+        d.key, d.name, d.monthlyTuition, d.admissionFee, d.examFee,
+        d.transportFee, d.annualFee, d.booksFee, d.uniformFee, d.lateFine, nowStr
+      ]);
+    }
+  }
+
+  var rows = sheet.getDataRange().getValues();
+  var result = {};
+  if (rows.length > 1) {
+    for (var r = 1; r < rows.length; r++) {
+      var row = rows[r];
+      var key = String(row[0] || "").toLowerCase().trim();
+      if (!key) continue;
+      result[key] = {
+        monthlyTuition: Number(row[2]) || 600,
+        admissionFee: Number(row[3]) || 2000,
+        examFee: Number(row[4]) || 400,
+        transportFee: Number(row[5]) || 500,
+        annualFee: Number(row[6]) || 1200,
+        booksFee: Number(row[7]) || 1000,
+        uniformFee: Number(row[8]) || 800,
+        lateFine: Number(row[9]) || 50
+      };
+    }
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    source: "Fee_Master sheet",
+    configs: result
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * OPTION B: SAVE/UPDATE FEE MASTER SHEET
+ */
+function handleSaveFeeMaster(ss, configs) {
+  if (!configs || typeof configs !== "object") {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "error",
+      message: "No fee master configuration data provided."
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  var sheet = ss.getSheetByName("Fee_Master");
+  if (!sheet) {
+    sheet = ss.insertSheet("Fee_Master");
+    sheet.appendRow([
+      "Class_Key", "Class_Name", "Monthly_Tuition", "Admission_Fee", "Exam_Fee",
+      "Transport_Auto_Fee", "Annual_Fee", "Books_Fee", "Uniform_Fee", "Late_Fine", "Last_Updated"
+    ]);
+  }
+
+  var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "dd/MM/yyyy HH:mm:ss");
+  var existingRows = sheet.getDataRange().getValues();
+  var keyToRow = {};
+  for (var r = 1; r < existingRows.length; r++) {
+    var k = String(existingRows[r][0] || "").toLowerCase().trim();
+    if (k) keyToRow[k] = r + 1;
+  }
+
+  var updatedCount = 0;
+  var insertedCount = 0;
+
+  for (var classKey in configs) {
+    var conf = configs[classKey];
+    if (!conf || typeof conf !== "object") continue;
+    var rowData = [
+      classKey.toLowerCase(),
+      String(conf.name || classKey.toUpperCase()),
+      Number(conf.monthlyTuition !== undefined ? conf.monthlyTuition : 600),
+      Number(conf.admissionFee !== undefined ? conf.admissionFee : 2000),
+      Number(conf.examFee !== undefined ? conf.examFee : 400),
+      Number(conf.transportFee !== undefined ? conf.transportFee : 500),
+      Number(conf.annualFee !== undefined ? conf.annualFee : 1200),
+      Number(conf.booksFee !== undefined ? conf.booksFee : 1000),
+      Number(conf.uniformFee !== undefined ? conf.uniformFee : 800),
+      Number(conf.lateFine !== undefined ? conf.lateFine : 50),
+      nowStr
+    ];
+
+    if (keyToRow[classKey.toLowerCase()]) {
+      sheet.getRange(keyToRow[classKey.toLowerCase()], 1, 1, rowData.length).setValues([rowData]);
+      updatedCount++;
+    } else {
+      sheet.appendRow(rowData);
+      insertedCount++;
+    }
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Fee_Master sheet updated successfully! (" + updatedCount + " updated, " + insertedCount + " added)",
+    updatedAt: nowStr
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * OPTION B: GET NOTICES (Auto-Creates School_Notices sheet if not present)
+ */
+function handleGetNotices(ss) {
+  var sheet = ss.getSheetByName("School_Notices");
+  if (!sheet) {
+    sheet = ss.insertSheet("School_Notices");
+    sheet.appendRow([
+      "Notice_ID", "Date", "Category", "Title", "Description", "Target_Class", "Issued_By", "Is_Pinned", "Is_Emergency", "Created_At"
+    ]);
+    sheet.appendRow([
+      "not-01",
+      Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd"),
+      "general",
+      "सत्र 2026-27 फीस स्ट्रक्चर व दिशानिर्देश",
+      "विद्यालय के सभी वर्गों (Play, Nursery, Primary, Middle) का नया फीस स्ट्रक्चर जारी कर दिया गया है।",
+      "All",
+      "प्रधानाचार्य (Principal)",
+      "TRUE",
+      "FALSE",
+      Utilities.formatDate(new Date(), "Asia/Kolkata", "dd/MM/yyyy HH:mm")
+    ]);
+  }
+
+  var rows = sheet.getDataRange().getValues();
+  var noticesList = [];
+  if (rows.length > 1) {
+    for (var r = 1; r < rows.length; r++) {
+      var row = rows[r];
+      var id = String(row[0] || "").trim();
+      if (!id) continue;
+      noticesList.push({
+        id: id,
+        date: String(row[1] || "").trim(),
+        category: String(row[2] || "general").toLowerCase().trim(),
+        title: String(row[3] || "").trim(),
+        description: String(row[4] || "").trim(),
+        targetClass: String(row[5] || "All").trim(),
+        issuedBy: String(row[6] || "Management").trim(),
+        isPinned: String(row[7] || "").toUpperCase() === "TRUE",
+        isEmergency: String(row[8] || "").toUpperCase() === "TRUE"
+      });
+    }
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    notices: noticesList
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * OPTION B: SYNC NOTICES TO School_Notices SHEET
+ */
+function handleSyncNotices(ss, data) {
+  var sheet = ss.getSheetByName("School_Notices");
+  if (!sheet) {
+    sheet = ss.insertSheet("School_Notices");
+    sheet.appendRow([
+      "Notice_ID", "Date", "Category", "Title", "Description", "Target_Class", "Issued_By", "Is_Pinned", "Is_Emergency", "Created_At"
+    ]);
+  }
+
+  var notices = data.notices;
+  var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "dd/MM/yyyy HH:mm:ss");
+
+  if (Array.isArray(notices)) {
+    if (sheet.getLastRow() > 1) {
+      sheet.deleteRows(2, sheet.getLastRow() - 1);
+    }
+    var rowsToInsert = [];
+    for (var i = 0; i < notices.length; i++) {
+      var n = notices[i];
+      if (!n || !n.title) continue;
+      rowsToInsert.push([
+        n.id || ("not-" + Date.now().toString().slice(-6) + i),
+        n.date || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd"),
+        n.category || "general",
+        n.title || "",
+        n.description || "",
+        n.targetClass || "All",
+        n.issuedBy || "स्कूल प्रबंधन",
+        n.isPinned ? "TRUE" : "FALSE",
+        n.isEmergency ? "TRUE" : "FALSE",
+        nowStr
+      ]);
+    }
+    if (rowsToInsert.length > 0) {
+      sheet.getRange(2, 1, rowsToInsert.length, 10).setValues(rowsToInsert);
+    }
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      message: "School_Notices sheet synchronized with " + rowsToInsert.length + " notices!",
+      count: rowsToInsert.length,
+      updatedAt: nowStr
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  var nObj = data.notice || data;
+  var singleRow = [
+    nObj.id || ("not-" + Date.now().toString().slice(-6)),
+    nObj.date || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd"),
+    nObj.category || "general",
+    nObj.title || "",
+    nObj.description || "",
+    nObj.targetClass || "All",
+    nObj.issuedBy || "स्कूल प्रबंधन",
+    nObj.isPinned ? "TRUE" : "FALSE",
+    nObj.isEmergency ? "TRUE" : "FALSE",
+    nowStr
+  ];
+  sheet.appendRow(singleRow);
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Single notice appended to School_Notices sheet!",
+    notice_id: singleRow[0]
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+`;
 
 export interface SheetSyncDiagnostic {
   configured: boolean;

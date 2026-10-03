@@ -5,6 +5,12 @@ import {
   stopEmergencySiren,
   playEmergencyChime,
 } from '../utils/sirenAudio';
+import {
+  syncNoticesToGoogleSheet,
+  fetchNoticesFromGoogleSheet,
+} from '../utils/feeMaster';
+import { getAppsScriptUrl } from '../utils/busTrackingService';
+import { realtimeSync } from '../utils/realtimeSync';
 
 interface SchoolNoticeBoardProps {
   isManager?: boolean;
@@ -111,6 +117,8 @@ export const SchoolNoticeBoard: React.FC<SchoolNoticeBoardProps> = ({
   const [noticeToDelete, setNoticeToDelete] = useState<SchoolNotice | null>(null);
   const [deleteToast, setDeleteToast] = useState<string | null>(null);
   const [playingSirenNoticeId, setPlayingSirenNoticeId] = useState<string | null>(null);
+  const [isSyncingSheet, setIsSyncingSheet] = useState<boolean>(false);
+  const [sheetSyncMsg, setSheetSyncMsg] = useState<string | null>(null);
 
   // Form State for Adding Notice
   const [newTitle, setNewTitle] = useState<string>('');
@@ -137,6 +145,85 @@ export const SchoolNoticeBoard: React.FC<SchoolNoticeBoardProps> = ({
       stopEmergencySiren();
     };
   }, []);
+
+  // Fetch notices from Google Sheet (Option B) on mount and on real-time update
+  useEffect(() => {
+    let isMounted = true;
+    const fetchLatestNotices = async () => {
+      try {
+        const url = getAppsScriptUrl();
+        const sheetNotices = await fetchNoticesFromGoogleSheet(url);
+        if (isMounted && sheetNotices && sheetNotices.length > 0) {
+          setNotices(sheetNotices);
+        }
+      } catch (e) {
+        // silent fallback to local/seed
+      }
+    };
+    fetchLatestNotices();
+
+    // Subscribe to cross-tab / cross-device real-time updates for notices
+    const unsubscribe = realtimeSync.subscribe((event) => {
+      if (event.entity === 'notice' || event.entity === 'all') {
+        // Re-read from localStorage or Google Sheet
+        try {
+          const stored = localStorage.getItem('evs_school_notices');
+          if (stored) {
+            const parsed = JSON.parse(stored);
+            if (Array.isArray(parsed) && isMounted) {
+              setNotices(parsed);
+              return;
+            }
+          }
+        } catch {}
+        fetchLatestNotices();
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, []);
+
+  const handleSyncToSheet = async () => {
+    setIsSyncingSheet(true);
+    setSheetSyncMsg(null);
+    try {
+      const url = getAppsScriptUrl();
+      const res = await syncNoticesToGoogleSheet(notices, url);
+      if (res.success) {
+        setSheetSyncMsg('✅ Google Sheet में "School_Notices" शीट सफलतापूर्वक अपडेट हो गई!');
+      } else {
+        setSheetSyncMsg(`⚠️ नोट: ${res.message || 'लोकल में सुरक्षित'}`);
+      }
+    } catch (e: any) {
+      setSheetSyncMsg('⚠️ सिंक त्रुटि: कृपया Apps Script लिंक जांचें');
+    } finally {
+      setIsSyncingSheet(false);
+      setTimeout(() => setSheetSyncMsg(null), 4000);
+    }
+  };
+
+  const handleFetchFromSheet = async () => {
+    setIsSyncingSheet(true);
+    setSheetSyncMsg(null);
+    try {
+      const url = getAppsScriptUrl();
+      const sheetNotices = await fetchNoticesFromGoogleSheet(url);
+      if (sheetNotices && sheetNotices.length > 0) {
+        setNotices(sheetNotices);
+        setSheetSyncMsg(`✅ Google Sheet से ${sheetNotices.length} नोटिस लोड किए गए!`);
+      } else {
+        setSheetSyncMsg('ℹ️ Google Sheet में कोई अतिरिक्त नोटिस नहीं मिले');
+      }
+    } catch (e) {
+      setSheetSyncMsg('⚠️ Google Sheet से लोड करने में त्रुटि');
+    } finally {
+      setIsSyncingSheet(false);
+      setTimeout(() => setSheetSyncMsg(null), 4000);
+    }
+  };
 
   const filteredNotices = useMemo(() => {
     return notices
@@ -183,12 +270,24 @@ export const SchoolNoticeBoard: React.FC<SchoolNoticeBoardProps> = ({
       isEmergency: newIsEmergency,
     };
 
-    setNotices((prev) => [notice, ...prev]);
+    const nextList = [notice, ...notices];
+    setNotices(nextList);
     setIsAddModalOpen(false);
     setNewTitle('');
     setNewDescription('');
     setNewIsPinned(false);
     setNewIsEmergency(false);
+
+    // Option B: Auto-sync to Google Sheet School_Notices
+    try {
+      const url = getAppsScriptUrl();
+      syncNoticesToGoogleSheet(nextList, url);
+    } catch (err) {
+      console.warn('Google Sheet notice auto-sync note:', err);
+    }
+
+    // Broadcast real-time update to all tabs and devices
+    realtimeSync.broadcastUpdate('notice', 'addNotice', notice);
   };
 
   const handleDeleteNotice = (id: string) => {
@@ -202,10 +301,22 @@ export const SchoolNoticeBoard: React.FC<SchoolNoticeBoardProps> = ({
     if (!noticeToDelete) return;
     const targetId = noticeToDelete.id;
     const targetTitle = noticeToDelete.title;
-    setNotices((prev) => prev.filter((n) => n.id !== targetId));
+    const nextList = notices.filter((n) => n.id !== targetId);
+    setNotices(nextList);
     setNoticeToDelete(null);
     setDeleteToast(`सूचना "${targetTitle}" सफलतापूर्वक हटा दी गई है।`);
     setTimeout(() => setDeleteToast(null), 3500);
+
+    // Option B: Auto-sync updated notices to Google Sheet
+    try {
+      const url = getAppsScriptUrl();
+      syncNoticesToGoogleSheet(nextList, url);
+    } catch (err) {
+      console.warn('Google Sheet notice auto-sync note:', err);
+    }
+
+    // Broadcast real-time update to all tabs and devices
+    realtimeSync.broadcastUpdate('notice', 'deleteNotice', { id: targetId });
   };
 
   const handleShareOnWhatsApp = (notice: SchoolNotice) => {
@@ -307,19 +418,60 @@ export const SchoolNoticeBoard: React.FC<SchoolNoticeBoardProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {(isManager || isTeacher) && (
-            <button
-              type="button"
-              onClick={() => setIsAddModalOpen(true)}
-              className="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-md cursor-pointer transition-transform active:scale-95 shrink-0"
-            >
-              <i className="fa-solid fa-plus"></i>
-              <span>नई सूचना जारी करें</span>
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={handleSyncToSheet}
+                disabled={isSyncingSheet}
+                title="Google Sheet में 'School_Notices' टैब में सभी सूचनाएं सिंक करें"
+                className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs flex items-center gap-1.5 border border-white/20 shadow-xs cursor-pointer transition-colors active:scale-95 disabled:opacity-50 shrink-0"
+              >
+                <i className={`fa-solid ${isSyncingSheet ? 'fa-spinner fa-spin' : 'fa-cloud-arrow-up'} text-amber-300`}></i>
+                <span>{isSyncingSheet ? 'सिंक हो रहा है...' : 'Sheet में सहेजें (Option B)'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleFetchFromSheet}
+                disabled={isSyncingSheet}
+                title="Google Sheet 'School_Notices' से ताज़ा नोटिस लोड करें"
+                className="px-3 py-2 rounded-xl bg-blue-900/60 hover:bg-blue-900 text-blue-200 hover:text-white font-semibold text-xs flex items-center gap-1 border border-blue-700/60 cursor-pointer transition-colors active:scale-95 shrink-0"
+              >
+                <i className="fa-solid fa-rotate text-xs"></i>
+                <span className="hidden md:inline">Sheet से लोड</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsAddModalOpen(true)}
+                className="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-md cursor-pointer transition-transform active:scale-95 shrink-0"
+              >
+                <i className="fa-solid fa-plus"></i>
+                <span>नई सूचना जारी करें</span>
+              </button>
+            </>
           )}
         </div>
       </div>
+
+      {/* Sync Status Banner */}
+      {sheetSyncMsg && (
+        <div className="p-3 bg-emerald-50 border border-emerald-300 text-emerald-950 rounded-xl text-xs font-bold flex items-center justify-between shadow-xs animate-fadeIn">
+          <div className="flex items-center gap-2">
+            <i className="fa-solid fa-circle-check text-emerald-600 text-sm"></i>
+            <span>{sheetSyncMsg}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSheetSyncMsg(null)}
+            className="text-slate-400 hover:text-slate-700 cursor-pointer"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Filter Tabs & Search Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
