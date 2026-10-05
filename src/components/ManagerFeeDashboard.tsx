@@ -679,7 +679,6 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
       const monthInfo = extractMonthInfo(fee);
       const paid = Number(fee.Amount_Paid) || 0;
       const billed = Number(fee.Total_Amount) || 0;
-      const due = Number(fee.Balance_Amount) || 0;
       const mode = String(fee.Payment_Mode || 'Cash').trim() || 'Cash';
 
       let target = monthMap[monthInfo.key];
@@ -702,7 +701,6 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
 
       target.collected += paid;
       target.totalBilled += billed;
-      target.balance += due;
       target.receiptCount += 1;
       target.modes[mode] = (target.modes[mode] || 0) + 1;
     });
@@ -719,11 +717,18 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
 
     let prevCollected: number | null = null;
     return combined.map((m) => {
+      // 1. FORMULA CORRECTION FOR MONTHLY DUE:
+      // Net_Due = Math.max(0, Billed_Amount - Paid_Amount)
+      // For May & June (Billed ₹750, Paid ₹750) -> Net Due MUST show ₹0 (Cleared)
+      // For July (Billed ₹750, Paid ₹600) -> Net Due MUST show ₹150 (Pending balance)
+      const netDue = Math.max(0, m.totalBilled - m.collected);
+
+      // 2. COLLECTION EFFICIENCY (%) FORMULA:
+      // Efficiency = Billed_Amount > 0 ? Math.min(100, Math.round((Paid_Amount / Billed_Amount) * 100)) : 0
+      // For July (600 / 750 * 100), Efficiency shows 80%
       const recoveryRate =
         m.totalBilled > 0
           ? Math.min(100, Math.round((m.collected / m.totalBilled) * 100))
-          : m.collected > 0
-          ? 100
           : 0;
 
       let topMode = 'Cash';
@@ -748,6 +753,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
 
       return {
         ...m,
+        balance: netDue,
         avgPerReceipt,
         recoveryRate,
         growthPct,
@@ -757,10 +763,13 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
   }, [trendsFeeRecords, trendsScope]);
 
   // Overall KPIs for the trends summary
+  // 3. SESSION TOTAL ROW RE-CALCULATION:
+  // Total Billed = SUM of all monthly billed amounts.
+  // Total Paid = SUM of all monthly paid amounts.
+  // Total Session Due = Total Billed - Total Paid (Ensure total due correctly sums up to ₹2,550 instead of ₹4,650).
   const trendsKPIs = useMemo(() => {
     let totalCollected = 0;
     let totalBilled = 0;
-    let totalBalance = 0;
     let totalReceipts = 0;
     let peakMonth: { name: string; amount: number; receipts: number } | null = null;
     const modeCounts: Record<string, number> = {};
@@ -768,7 +777,6 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
     monthlyTrendsData.forEach((m) => {
       totalCollected += m.collected;
       totalBilled += m.totalBilled;
-      totalBalance += m.balance;
       totalReceipts += m.receiptCount;
 
       if (!peakMonth || m.collected > peakMonth.amount) {
@@ -782,10 +790,11 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
       });
     });
 
+    const totalBalance = Math.max(0, totalBilled - totalCollected);
     const activeMonthsCount = monthlyTrendsData.filter((m) => m.collected > 0).length || 1;
     const avgMonthly = Math.round(totalCollected / activeMonthsCount);
     const overallRecovery =
-      totalBilled > 0 ? Math.min(100, Math.round((totalCollected / totalBilled) * 100)) : 100;
+      totalBilled > 0 ? Math.min(100, Math.round((totalCollected / totalBilled) * 100)) : 0;
 
     let topOverallMode = 'Cash';
     let maxModeCount = 0;
@@ -1558,8 +1567,8 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                     <th className="px-3 py-3 text-center">रसीदें</th>
                     <th className="px-4 py-3 text-right">जमा वसूली (Paid ₹)</th>
                     <th className="px-4 py-3 text-right">कुल देय (Billed ₹)</th>
-                    <th className="px-4 py-3 text-right">शेष बकाया (Due ₹)</th>
-                    <th className="px-3.5 py-3 text-center">वसूली दक्षता</th>
+                    <th className="px-4 py-3 text-right">शुद्ध बकाया (Net Due ₹)</th>
+                    <th className="px-3.5 py-3 text-center">वसूली दक्षता (Efficiency %)</th>
                     <th className="px-3.5 py-3 text-center">वृद्धि दर (Trend)</th>
                     <th className="px-3.5 py-3">प्रमुख माध्यम</th>
                     <th className="px-3 py-3 text-center">लेजर देखें</th>
@@ -1615,14 +1624,25 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                           ₹{m.totalBilled.toLocaleString('en-IN')}
                         </td>
 
-                        {/* Balance Due */}
-                        <td className="px-4 py-3 text-right whitespace-nowrap font-mono font-bold text-rose-700">
-                          ₹{m.balance.toLocaleString('en-IN')}
+                        {/* Balance / Net Due */}
+                        <td className="px-4 py-3 text-right whitespace-nowrap font-mono font-bold">
+                          {m.balance === 0 && m.totalBilled > 0 ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              <i className="fa-solid fa-circle-check text-[10px]"></i>
+                              <span>₹0 (Cleared)</span>
+                            </span>
+                          ) : m.balance > 0 ? (
+                            <span className="text-rose-700 font-extrabold">
+                              ₹{m.balance.toLocaleString('en-IN')}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">₹0</span>
+                          )}
                         </td>
 
-                        {/* Recovery Rate % */}
+                        {/* Collection Efficiency (%) */}
                         <td className="px-3.5 py-3 text-center whitespace-nowrap">
-                          {hasData ? (
+                          {m.totalBilled > 0 ? (
                             <span
                               className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                                 m.recoveryRate >= 80
@@ -1802,6 +1822,13 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                         <span className="text-slate-400">पिता का नाम:</span>{' '}
                         <span className="font-semibold text-slate-800">
                           {selectedStudent.Father_Name || '—'}
+                        </span>
+                      </div>
+                      <span className="text-slate-300">•</span>
+                      <div className="flex items-center gap-1">
+                        <span className="text-slate-400">सत्र प्रारंभ माह:</span>{' '}
+                        <span className="font-bold text-blue-900 bg-blue-50 px-2 py-0.5 rounded border border-blue-200 text-[11px]">
+                          {selectedStudent.Session_Start_Month || 'April'}
                         </span>
                       </div>
                     </div>

@@ -1084,6 +1084,18 @@ export const getSingleInitialSession = (): InitialSessionData => {
       savedTab = 'home';
     }
 
+    // Check URL parameters for explicit portal requested (e.g. ?portal=parent or ?role=parent or ?tab=parent)
+    try {
+      if (typeof window !== 'undefined' && window.location?.search) {
+        const params = new URLSearchParams(window.location.search);
+        const queryRole = (params.get('portal') || params.get('role') || params.get('tab') || '').toLowerCase();
+        if (['home', 'parent', 'teacher', 'manager', 'driver'].includes(queryRole)) {
+          savedTab = queryRole as TabType;
+          localStorage.setItem('evs_active_tab', savedTab);
+        }
+      }
+    } catch {}
+
     const hasParent = localStorage.getItem('evs_parent_logged_in') === 'true';
     let parentStudent: Student | null = null;
     let parentChildrenList: Student[] = [];
@@ -1115,62 +1127,13 @@ export const getSingleInitialSession = (): InitialSessionData => {
       try { driver = JSON.parse(dStr); } catch {}
     }
 
-    // Determine how many distinct sessions are stored
-    const activeRoles: ('parent' | 'manager' | 'teacher' | 'driver')[] = [];
-    if (hasParent && parentStudent) activeRoles.push('parent');
-    if (manager) activeRoles.push('manager');
-    if (teacher) activeRoles.push('teacher');
-    if (driver) activeRoles.push('driver');
-
-    // If more than 1 session was stored in localStorage from before, enforce SINGLE session rule immediately
-    if (activeRoles.length > 1) {
-      // Pick the single winning role
-      let winningRole: 'parent' | 'manager' | 'teacher' | 'driver' = activeRoles[0];
-      if (activeRoles.includes(savedTab as any)) {
-        winningRole = savedTab as any;
-      } else {
-        // Priority order: manager > teacher > parent > driver
-        if (activeRoles.includes('manager')) winningRole = 'manager';
-        else if (activeRoles.includes('teacher')) winningRole = 'teacher';
-        else if (activeRoles.includes('parent')) winningRole = 'parent';
-        else winningRole = 'driver';
-      }
-
-      // Purge every other session from localStorage
-      if (winningRole !== 'parent') {
-        localStorage.removeItem('evs_parent_logged_in');
-        localStorage.removeItem('evs_parent_selected_student');
-        localStorage.removeItem('evs_parent_children');
-        localStorage.removeItem('evs_parent_mobile');
-        localStorage.removeItem('evs_parent_mobile_input');
-        parentStudent = null;
-        parentChildrenList = [];
-        parentMobile = '';
-      }
-      if (winningRole !== 'manager') {
-        localStorage.removeItem('evs_manager_user');
-        manager = null;
-      }
-      if (winningRole !== 'teacher') {
-        localStorage.removeItem('evs_teacher_user');
-        teacher = null;
-      }
-      if (winningRole !== 'driver') {
-        localStorage.removeItem('evs_logged_driver');
-        driver = null;
-      }
-
-      savedTab = winningRole;
-      localStorage.setItem('evs_active_tab', savedTab);
-    }
-
-    const finalParent = activeRoles.length > 1 ? (activeRoles.includes(savedTab as any) && savedTab === 'parent') : (hasParent && !!parentStudent);
+    const finalParent = hasParent && !!parentStudent;
 
     return {
       parentLoggedIn: finalParent,
       selectedStudent: finalParent ? parentStudent : null,
       parentChildren: finalParent ? parentChildrenList : [],
-      parentMobileInput: finalParent ? parentMobile : '',
+      parentMobileInput: finalParent ? parentMobile : (localStorage.getItem('evs_parent_mobile_input') || ''),
       managerUser: manager,
       teacherUser: teacher,
       driverUser: driver,
@@ -1492,14 +1455,7 @@ export default function App() {
     }
   };
 
-  // Strict role isolation: if a user is logged in, their session locks this device to their portal
-  useEffect(() => {
-    if (activeSession) {
-      if (activeTab !== activeSession.role) {
-        setActiveTab(activeSession.role);
-      }
-    }
-  }, [activeSession, activeTab]);
+  // Allow seamless role navigation: users can freely switch between portals (Parent, Teacher, Manager, Driver, Home)
   const [teacherLoginInput, setTeacherLoginInput] = useState<string>('');
   const [teacherPasswordInput, setTeacherPasswordInput] = useState<string>('');
   const [teacherLoginError, setTeacherLoginError] = useState<string | null>(null);
@@ -1544,8 +1500,9 @@ export default function App() {
   const [addFeeInitialStudentId, setAddFeeInitialStudentId] = useState<string | undefined>(undefined);
   const [feeNotificationSuccess, setFeeNotificationSuccess] = useState<string | null>(null);
 
-  // Add Student Modal State (Manager Portal: नया छात्र जोड़ें)
+  // Add Student Modal State (Manager Portal: नया छात्र जोड़ें / संपादित करें)
   const [addStudentModalOpen, setAddStudentModalOpen] = useState<boolean>(false);
+  const [studentToEdit, setStudentToEdit] = useState<Student | null>(null);
   const [studentNotificationSuccess, setStudentNotificationSuccess] = useState<string | null>(null);
 
   // Google Sheet Sync Modal State (Web App Script URL & Live Status)
@@ -1742,6 +1699,14 @@ export default function App() {
             if (!existingQr && sId) {
               s['QR code'] = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(sId)}&size=250x250`;
             }
+            // Ensure Session_Start_Month is read or defaults to April
+            s.Session_Start_Month =
+              s.Session_Start_Month ||
+              s.session_start_month ||
+              s['Session_Start_Month'] ||
+              s['Fee_Start_Month'] ||
+              s['Start_Month'] ||
+              'April';
             return s;
           });
 
@@ -2341,6 +2306,7 @@ export default function App() {
       village_route: studentToSync['Village/rRoute'] || studentToSync.Village || '',
       student_photo: studentToSync.Student_Photo || '',
       balance_amount: studentToSync.Balance_Amount || 0,
+      session_start_month: studentToSync.Session_Start_Month || 'April',
     };
 
     let syncSuccess = false;
@@ -4389,6 +4355,29 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     )}
                   </div>
 
+                  {/* Quick button to view Parent Portal or return to Manager */}
+                  {activeTab === 'parent' ? (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('manager')}
+                      className="px-2.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 transition-all text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs shrink-0"
+                      title="प्रबंधक पोर्टल पर वापस जाएं"
+                    >
+                      <i className="fa-solid fa-user-tie text-xs"></i>
+                      <span>प्रबंधक पोर्टल</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('parent')}
+                      className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-amber-400 hover:text-slate-950 text-amber-200 transition-all text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs shrink-0"
+                      title="अभिभावक पोर्टल देखें (View Parent Portal)"
+                    >
+                      <i className="fa-solid fa-user-group text-xs text-amber-300"></i>
+                      <span className="hidden md:inline">अभिभावक पोर्टल</span>
+                    </button>
+                  )}
+
                   <button
                     onClick={handleManagerLogout}
                     className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
@@ -4410,6 +4399,30 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       अध्यापक
                     </span>
                   </div>
+
+                  {/* Quick button to view Parent Portal or return to Teacher */}
+                  {activeTab === 'parent' ? (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('teacher')}
+                      className="px-2.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 transition-all text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs shrink-0"
+                      title="शिक्षक पोर्टल पर वापस जाएं"
+                    >
+                      <i className="fa-solid fa-chalkboard-user text-xs"></i>
+                      <span>शिक्षक पोर्टल</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('parent')}
+                      className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-amber-400 hover:text-slate-950 text-amber-200 transition-all text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs shrink-0"
+                      title="अभिभावक पोर्टल देखें (View Parent Portal)"
+                    >
+                      <i className="fa-solid fa-user-group text-xs text-amber-300"></i>
+                      <span className="hidden sm:inline">अभिभावक पोर्टल</span>
+                    </button>
+                  )}
+
                   <button
                     onClick={handleTeacherLogout}
                     className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
@@ -4808,15 +4821,38 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
             {/* Login Form if not logged in */}
             {!parentLoggedIn ? (
               <div className="max-w-md mx-auto my-8 animate-fadeIn">
-                {/* Back button to return to Role Selection */}
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('home')}
-                  className="inline-flex items-center gap-2 text-xs sm:text-sm font-bold text-slate-700 hover:text-blue-900 bg-white hover:bg-slate-100 border border-slate-200 px-3.5 py-2 rounded-xl transition-all cursor-pointer shadow-xs mb-4"
-                >
-                  <i className="fa-solid fa-arrow-left"></i>
-                  <span>← वापस जाएं (Back to Role Selection)</span>
-                </button>
+                {/* Back button to return to Role Selection / Manager */}
+                <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('home')}
+                    className="inline-flex items-center gap-2 text-xs sm:text-sm font-bold text-slate-700 hover:text-blue-900 bg-white hover:bg-slate-100 border border-slate-200 px-3.5 py-2 rounded-xl transition-all cursor-pointer shadow-xs"
+                  >
+                    <i className="fa-solid fa-arrow-left"></i>
+                    <span>← वापस जाएं (Back to Roles)</span>
+                  </button>
+
+                  {managerUser && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('manager')}
+                      className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-bold text-slate-900 bg-amber-400 hover:bg-amber-500 border border-amber-500 px-3.5 py-2 rounded-xl transition-all cursor-pointer shadow-xs"
+                    >
+                      <i className="fa-solid fa-user-tie"></i>
+                      <span>प्रबंधक पोर्टल (Manager) →</span>
+                    </button>
+                  )}
+                  {teacherUser && !managerUser && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('teacher')}
+                      className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-bold text-slate-900 bg-amber-400 hover:bg-amber-500 border border-amber-500 px-3.5 py-2 rounded-xl transition-all cursor-pointer shadow-xs"
+                    >
+                      <i className="fa-solid fa-chalkboard-user"></i>
+                      <span>शिक्षक पोर्टल (Teacher) →</span>
+                    </button>
+                  )}
+                </div>
 
                 <div className="bg-white rounded-3xl shadow-xl border border-slate-200/80 p-6 sm:p-8">
                   <div className="w-14 h-14 rounded-2xl bg-amber-500/10 text-amber-600 flex items-center justify-center text-2xl mb-4 mx-auto shadow-xs">
@@ -7208,6 +7244,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       initialMode="calendar"
                       schoolName="E.V.S. PUBLIC SCHOOL"
                       onSelectStudent={(st) => setSelectedStudent(st)}
+                      isParentView={true}
                     />
 
                     <div className="pt-2 border-t border-slate-200 flex justify-center">
@@ -8848,6 +8885,17 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                   </button>
                                   <button
                                     onClick={() => {
+                                      setStudentToEdit(s);
+                                      setAddStudentModalOpen(true);
+                                    }}
+                                    className="px-2 py-1 bg-amber-50 hover:bg-amber-400 hover:text-slate-950 text-amber-900 border border-amber-300 rounded text-[11px] font-bold transition-colors cursor-pointer flex items-center gap-1"
+                                    title="छात्र विवरण व सत्र प्रारंभ माह संपादित करें"
+                                  >
+                                    <i className="fa-solid fa-pen-to-square text-[10px]"></i>
+                                    <span>Edit</span>
+                                  </button>
+                                  <button
+                                    onClick={() => {
                                       setAddFeeInitialStudentId(s.Student_ID);
                                       setAddFeeModalOpen(true);
                                     }}
@@ -9898,6 +9946,31 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   {selectedStudentDetail['Village/rRoute'] || selectedStudentDetail.Village || '—'}
                 </span>
               </div>
+              <div className="bg-blue-50/70 p-3 rounded-lg border border-blue-200">
+                <span className="text-blue-700 block text-[10px] font-bold">Session Start Month (शुल्क प्रारंभ)</span>
+                <span className="font-extrabold text-blue-950">{selectedStudentDetail.Session_Start_Month || 'April'}</span>
+              </div>
+              <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 flex items-center justify-between">
+                <div>
+                  <span className="text-slate-400 block text-[10px]">Opening Due</span>
+                  <span className="font-bold text-slate-800">₹{selectedStudentDetail.Balance_Amount || 0}</span>
+                </div>
+                {Boolean(managerUser || activeTab === 'manager') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStudentToEdit(selectedStudentDetail);
+                      setAddStudentModalOpen(true);
+                      setSelectedStudentDetail(null);
+                    }}
+                    className="px-2.5 py-1 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold rounded-lg text-[11px] shadow-2xs cursor-pointer flex items-center gap-1 transition-all"
+                    title="छात्र विवरण व सत्र प्रारंभ माह संपादित करें"
+                  >
+                    <i className="fa-solid fa-pen-to-square text-[10px]"></i>
+                    <span>एडिट करें</span>
+                  </button>
+                )}
+              </div>
               {hideModalFeeStatus ? (
                 <div className="col-span-2 p-2.5 rounded-lg bg-slate-50 border border-dashed border-slate-200 flex justify-between items-center text-xs text-slate-500">
                   <span className="flex items-center gap-1.5">
@@ -10154,9 +10227,13 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       {/* ========================================================================= */}
       <AddStudentModal
         isOpen={addStudentModalOpen}
-        onClose={() => setAddStudentModalOpen(false)}
+        onClose={() => {
+          setAddStudentModalOpen(false);
+          setStudentToEdit(null);
+        }}
         onStudentAdded={handleStudentAdded}
         existingStudents={students}
+        studentToEdit={studentToEdit}
         classMap={classMap}
         getClassName={getClassName}
         onOpenSyncSettings={() => setSheetSyncModalOpen(true)}
@@ -10607,11 +10684,12 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         isOpen={isAttendanceCalendarOpen}
         onClose={() => setIsAttendanceCalendarOpen(false)}
         selectedStudent={selectedStudent || previewQRStudent || students[0]}
-        allStudents={students}
+        allStudents={activeTab === 'parent' || parentLoggedIn ? (parentChildren.length > 0 ? parentChildren : (selectedStudent ? [selectedStudent] : [])) : students}
         behaviorRecords={behaviorList}
-        initialMode={attendanceCalendarMode}
+        initialMode={activeTab === 'parent' || parentLoggedIn ? 'calendar' : attendanceCalendarMode}
         schoolName="E.V.S. PUBLIC SCHOOL"
         onSelectStudent={(st) => setSelectedStudent(st)}
+        isParentView={activeTab === 'parent' || parentLoggedIn}
       />
 
       {/* FOOTER */}

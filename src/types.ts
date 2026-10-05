@@ -17,6 +17,7 @@ export interface Student {
   'Village/rRoute'?: string;
   Village?: string;
   Balance_Amount?: number | string;
+  Session_Start_Month?: string;
   'QR code'?: string;
   'QR_code'?: string;
   QRCode?: string;

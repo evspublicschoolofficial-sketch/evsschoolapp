@@ -11,6 +11,7 @@ interface AttendanceCalendarModalProps {
   schoolName?: string;
   onSelectStudent?: (student: Student) => void;
   embedded?: boolean;
+  isParentView?: boolean;
 }
 
 // Helper to normalize any date string to YYYY-MM-DD
@@ -45,8 +46,9 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
   schoolName = 'E.V.S. PUBLIC SCHOOL',
   onSelectStudent,
   embedded = false,
+  isParentView = false,
 }) => {
-  const [activeMode, setActiveMode] = useState<'calendar' | 'absent_list'>(initialMode);
+  const [activeMode, setActiveMode] = useState<'calendar' | 'absent_list'>(isParentView ? 'calendar' : initialMode);
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
   const [calendarClassFilter, setCalendarClassFilter] = useState<string>('All');
   const [selectedDayDetail, setSelectedDayDetail] = useState<{
@@ -57,10 +59,12 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
 
   // Sync mode if initialMode changes
   React.useEffect(() => {
-    if (initialMode) {
+    if (isParentView) {
+      setActiveMode('calendar');
+    } else if (initialMode) {
       setActiveMode(initialMode);
     }
-  }, [initialMode, isOpen]);
+  }, [initialMode, isOpen, isParentView]);
 
   // Filter for Absent List tab
   const [absentDateStr, setAbsentDateStr] = useState<string>(() => {
@@ -288,42 +292,48 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
           </span>
           <div>
             <h3 className="font-black text-base sm:text-lg text-amber-300">
-              उपस्थिति प्रबंधन (Attendance Calendar & Absent Alert)
+              {isParentView
+                ? 'छात्र उपस्थिति कैलेंडर (Student Attendance Calendar)'
+                : 'उपस्थिति प्रबंधन (Attendance Calendar & Absent Alert)'}
             </h3>
             <p className="text-xs text-blue-200">
-              मासिक हाजिरी कैलेंडर व अनुपस्थित बच्चों के लिए 1-क्लिक WhatsApp अलर्ट
+              {isParentView
+                ? 'मासिक हाजिरी रिपोर्ट एवं उपस्थिति स्थिति'
+                : 'मासिक हाजिरी कैलेंडर व अनुपस्थित बच्चों के लिए 1-क्लिक WhatsApp अलर्ट'}
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Tab switch buttons */}
-          <div className="bg-white/10 p-1 rounded-xl flex items-center gap-1 text-xs">
-            <button
-              type="button"
-              onClick={() => setActiveMode('calendar')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                activeMode === 'calendar'
-                  ? 'bg-amber-400 text-slate-950 shadow-sm'
-                  : 'text-white hover:bg-white/10'
-              }`}
-            >
-              <i className="fa-solid fa-calendar-days mr-1.5"></i>
-              <span>मासिक कैलेंडर</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveMode('absent_list')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                activeMode === 'absent_list'
-                  ? 'bg-rose-500 text-white shadow-sm'
-                  : 'text-white hover:bg-white/10'
-              }`}
-            >
-              <i className="fa-solid fa-user-xmark mr-1.5"></i>
-              <span>अनुपस्थित अलर्ट</span>
-            </button>
-          </div>
+          {/* Tab switch buttons (Only for Teachers / Managers, hidden for Parents) */}
+          {!isParentView && (
+            <div className="bg-white/10 p-1 rounded-xl flex items-center gap-1 text-xs">
+              <button
+                type="button"
+                onClick={() => setActiveMode('calendar')}
+                className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+                  activeMode === 'calendar'
+                    ? 'bg-amber-400 text-slate-950 shadow-sm'
+                    : 'text-white hover:bg-white/10'
+                }`}
+              >
+                <i className="fa-solid fa-calendar-days mr-1.5"></i>
+                <span>मासिक कैलेंडर</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveMode('absent_list')}
+                className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+                  activeMode === 'absent_list'
+                    ? 'bg-rose-500 text-white shadow-sm'
+                    : 'text-white hover:bg-white/10'
+                }`}
+              >
+                <i className="fa-solid fa-user-xmark mr-1.5"></i>
+                <span>अनुपस्थित अलर्ट</span>
+              </button>
+            </div>
+          )}
 
           {onClose && (
             <button
@@ -347,11 +357,11 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
                 <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3 flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
                     <i className="fa-solid fa-user-graduate text-blue-900"></i>
-                    <span>छात्र चुनें (Select Student):</span>
+                    <span>{isParentView ? 'बच्चा चुनें (Select Child):' : 'छात्र चुनें (Select Student):'}</span>
                   </div>
                   
                   <div className="flex flex-wrap items-center gap-2">
-                    {uniqueClasses.length > 1 && (
+                    {!isParentView && uniqueClasses.length > 1 && (
                       <div className="flex items-center gap-1">
                         <span className="text-[10px] font-bold text-slate-500">कक्षा:</span>
                         <select
@@ -387,7 +397,7 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
                       className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-900 focus:ring-2 focus:ring-blue-900 focus:outline-hidden cursor-pointer max-w-xs truncate"
                     >
                       {allStudents
-                        .filter((s) => calendarClassFilter === 'All' || String(s.Class).trim() === calendarClassFilter)
+                        .filter((s) => isParentView || calendarClassFilter === 'All' || String(s.Class).trim() === calendarClassFilter)
                         .map((s) => (
                           <option key={s.Student_ID} value={s.Student_ID}>
                             {s.Student_Name} ({s.Class} • Roll: {s.Roll_Number || '1'} • ID: {s.Student_ID})
@@ -713,7 +723,9 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
 
         {/* Footer */}
         <div className="bg-slate-50 px-6 py-3.5 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500 shrink-0">
-          <span>{schoolName} • आधिकारिक उपस्थिति व व्यवहार ट्रैकर</span>
+          <span>
+            {schoolName} • {isParentView ? 'छात्र उपस्थिति कैलेंडर' : 'आधिकारिक उपस्थिति व व्यवहार ट्रैकर'}
+          </span>
           {onClose && (
             <button
               type="button"

@@ -22,16 +22,69 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
   const [customUrl, setCustomUrl] = useState<string>(getAppsScriptUrl());
   const [urlSaved, setUrlSaved] = useState<boolean>(false);
   const [testResult, setTestResult] = useState<SheetSyncDiagnostic | null>(null);
+  const [triggerActionLoading, setTriggerActionLoading] = useState<string | null>(null);
+  const [triggerActionResult, setTriggerActionResult] = useState<{ action: string; message: string; success: boolean } | null>(null);
 
   useEffect(() => {
     if (isOpen) {
       setCustomUrl(getAppsScriptUrl());
       setTestResult(null);
+      setTriggerActionResult(null);
       setUrlSaved(false);
     }
   }, [isOpen]);
 
   if (!isOpen) return null;
+
+  const handleRunTriggerAction = async (actionName: 'generatePastDues' | 'generateMonthlyDues') => {
+    setTriggerActionLoading(actionName);
+    setTriggerActionResult(null);
+    try {
+      const activeUrl = customUrl.trim() || getAppsScriptUrl();
+      const payload = { appsScriptUrl: activeUrl, action: actionName };
+
+      let resData: any = null;
+      try {
+        const proxyRes = await fetch('/api/forward-apps-script', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (proxyRes.ok) {
+          resData = await proxyRes.json();
+        }
+      } catch {}
+
+      if (!resData) {
+        const directRes = await fetch(`${activeUrl}${activeUrl.includes('?') ? '&' : '?'}action=${actionName}`);
+        if (directRes.ok) {
+          resData = await directRes.json();
+        }
+      }
+
+      if (resData && (resData.status === 'success' || resData.success)) {
+        setTriggerActionResult({
+          action: actionName,
+          message: resData.message || (actionName === 'generatePastDues' ? 'पूर्व महीनों का बकाया शुल्क सफलतापूर्वक बैकफिल हो गया!' : 'इस माह का मासिक शुल्क सफलतापूर्वक सृजित हो गया!'),
+          success: true,
+        });
+      } else {
+        setTriggerActionResult({
+          action: actionName,
+          message: resData?.message || 'Apps Script निष्पादन पूरा हुआ।',
+          success: resData?.status !== 'error',
+        });
+      }
+    } catch (e: any) {
+      setTriggerActionResult({
+        action: actionName,
+        message: e.message || 'त्रुटि हुई। कृपया Apps Script Web App URL और परमिशन की जाँच करें।',
+        success: false,
+      });
+    } finally {
+      setTriggerActionLoading(null);
+    }
+  };
 
   const handleCopyCode = async () => {
     try {
@@ -205,6 +258,73 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
                 )}
               </div>
             )}
+
+            {/* Trigger Result Banner */}
+            {triggerActionResult && (
+              <div
+                className={`p-3 rounded-xl text-xs space-y-1 ${
+                  triggerActionResult.success
+                    ? 'bg-emerald-50 text-emerald-900 border border-emerald-300'
+                    : 'bg-rose-50 text-rose-900 border border-rose-300'
+                }`}
+              >
+                <div className="font-bold flex items-center gap-2">
+                  <i
+                    className={`fa-solid ${
+                      triggerActionResult.success
+                        ? 'fa-circle-check text-emerald-600'
+                        : 'fa-circle-xmark text-rose-600'
+                    }`}
+                  ></i>
+                  <span>{triggerActionResult.message}</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Quick Actions: Automated Billing & Dues Backfill */}
+          <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-blue-50/80 via-indigo-50/60 to-purple-50/80 border border-blue-200/90 space-y-3">
+            <div>
+              <h4 className="font-black text-slate-900 text-xs sm:text-sm flex items-center gap-2">
+                <i className="fa-solid fa-wand-magic-sparkles text-blue-700"></i>
+                <span>ऑटोमैटिक फीस जेनरेशन टूल्स (Automated Billing & Dues Backfill)</span>
+              </h4>
+              <p className="text-[11px] text-slate-600 mt-0.5">
+                Google Apps Script के नए फंक्शंस को ऐप से सीधे एक क्लिक में चलाएँ:
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                onClick={() => handleRunTriggerAction('generatePastDues')}
+                disabled={Boolean(triggerActionLoading)}
+                className="p-3 bg-white hover:bg-blue-50 border border-blue-300 rounded-xl text-left cursor-pointer transition-all shadow-2xs group disabled:opacity-50"
+              >
+                <div className="flex items-center gap-2 font-bold text-blue-950 text-xs">
+                  <i className={`fa-solid ${triggerActionLoading === 'generatePastDues' ? 'fa-spinner fa-spin' : 'fa-clock-rotate-left'} text-blue-700`}></i>
+                  <span>पूर्व माह बकाया बैकफिल (Past Dues)</span>
+                </div>
+                <div className="text-[10px] text-slate-500 mt-1 leading-normal">
+                  छात्र के <strong>Session_Start_Month</strong> से चालू माह तक के बिल स्वतः जोड़ेगा।
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleRunTriggerAction('generateMonthlyDues')}
+                disabled={Boolean(triggerActionLoading)}
+                className="p-3 bg-white hover:bg-emerald-50 border border-emerald-300 rounded-xl text-left cursor-pointer transition-all shadow-2xs group disabled:opacity-50"
+              >
+                <div className="flex items-center gap-2 font-bold text-emerald-950 text-xs">
+                  <i className={`fa-solid ${triggerActionLoading === 'generateMonthlyDues' ? 'fa-spinner fa-spin' : 'fa-bolt-lightning'} text-emerald-600`}></i>
+                  <span>चालू माह शुल्क सृजित करें (Monthly Dues)</span>
+                </div>
+                <div className="text-[10px] text-slate-500 mt-1 leading-normal">
+                  1 तारीख वाले ऑटो-ट्रिगर को अभी तुरंत चलाकर नए बिल जोड़ेगा।
+                </div>
+              </button>
+            </div>
           </div>
 
           {/* Quick 4 Steps Guide */}

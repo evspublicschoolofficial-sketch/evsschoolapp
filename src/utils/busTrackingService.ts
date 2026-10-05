@@ -385,6 +385,13 @@ function doGet(e) {
       .setMimeType(ContentService.MimeType.JSON);
   }
 
+  // 6B. PAST MONTHS DUES BACKFILL VIA GET
+  if (action === "generatePastDues" || action === "backfillDues") {
+    var pastResult = generatePastDues();
+    return ContentService.createTextOutput(JSON.stringify(pastResult))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
   // 7. GET FEE MASTER (Option B: Auto-Creates Fee_Master sheet if not present)
   if (action === "getFeeMaster") {
     return handleGetFeeMaster(ss);
@@ -555,6 +562,13 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
+    // 3C. RUN PAST DUES BACKFILL (From student Session_Start_Month up to Current Month)
+    if (action === "generatePastDues" || action === "backfillDues") {
+      var backfillRes = generatePastDues();
+      return ContentService.createTextOutput(JSON.stringify(backfillRes))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
     // 3D. RUN MONTHLY DUES TRIGGER (Manual trigger invoke)
     if (action === "generateMonthlyDues" || action === "autoBill") {
       var genRes = generateMonthlyDues();
@@ -617,7 +631,7 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    // 6. ADD NEW STUDENT (Students sheet)
+    // 6. ADD / UPDATE STUDENT (Students sheet with Session_Start_Month)
     if (action === "addStudent") {
       var sheet = ss.getSheetByName("Students");
       if (!sheet) sheet = ss.insertSheet("Students");
@@ -626,13 +640,28 @@ function doPost(e) {
         sheet.appendRow([
           "Student_ID", "Admission_Number", "Roll_Number", "Student_Name", "Class",
           "Father_Name", "Mother_Name", "Parent_Mobile", "Student_Photo", "Village/rRoute",
-          "Adhar_Card", "Adhar_Photo", "Balance_Amount", "QR code"
+          "Adhar_Card", "Adhar_Photo", "Balance_Amount", "Session_Start_Month", "QR code"
         ]);
         lastRow = 1;
       }
       
       var lastCol = sheet.getLastColumn() || 15;
       var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+
+      // Auto-add Session_Start_Month column header if not present in existing sheet
+      var hasStartMonthCol = false;
+      for (var hi = 0; hi < headers.length; hi++) {
+        var hStr = String(headers[hi] || "").trim().toLowerCase();
+        if (hStr.indexOf("start_month") !== -1 || hStr.indexOf("session_start") !== -1 || hStr.indexOf("start month") !== -1) {
+          hasStartMonthCol = true;
+          break;
+        }
+      }
+      if (!hasStartMonthCol) {
+        sheet.getRange(1, headers.length + 1).setValue("Session_Start_Month");
+        headers.push("Session_Start_Month");
+      }
+
       var studentId = data.student_id || ("S-" + Date.now());
       var qrFormula = '=IMAGE(CONCATENATE("https://api.qrserver.com/v1/create-qr-code/?data=", "' + studentId + '", "&size=250x250"))';
       
@@ -661,22 +690,34 @@ function doPost(e) {
           row.push(data.village_route || data.village || "");
         } else if (h.indexOf("balance") !== -1) {
           row.push(data.balance_amount !== undefined ? Number(data.balance_amount) : 0);
+        } else if (h.indexOf("start_month") !== -1 || h.indexOf("session_start") !== -1 || h.indexOf("start month") !== -1 || h.indexOf("fee_start") !== -1) {
+          row.push(data.session_start_month || data.Session_Start_Month || "April");
         } else if (h.indexOf("qr") !== -1) {
           row.push(qrFormula);
         } else {
           row.push("");
         }
       }
-      // Find the first empty row based on Student_ID (column 1)
-      // to avoid jumping past empty rows with residual formatting or dragged formulas
+
+      // Check if studentId already exists to update row, or find target row
       var targetRow = -1;
       var currentLastRow = sheet.getLastRow();
       if (currentLastRow > 1) {
         var idValues = sheet.getRange(1, 1, currentLastRow, 1).getValues();
-        for (var r = 1; r < idValues.length; r++) { // skip header at index 0
+        for (var r = 1; r < idValues.length; r++) {
+          var idVal = String(idValues[r][0] || "").trim().toLowerCase();
+          if (idVal && idVal === String(studentId).toLowerCase().trim()) {
+            targetRow = r + 1; // Update existing student row
+            break;
+          }
+        }
+      }
+      if (targetRow === -1 && currentLastRow > 1) {
+        var idValues = sheet.getRange(1, 1, currentLastRow, 1).getValues();
+        for (var r = 1; r < idValues.length; r++) {
           var idVal = String(idValues[r][0] || "").trim();
           if (!idVal) {
-            targetRow = r + 1; // 1-based index
+            targetRow = r + 1;
             break;
           }
         }
@@ -684,10 +725,11 @@ function doPost(e) {
       if (targetRow === -1) {
         targetRow = currentLastRow === 0 ? 2 : currentLastRow + 1;
       }
+
       sheet.getRange(targetRow, 1, 1, row.length).setValues([row]);
       return ContentService.createTextOutput(JSON.stringify({
         status: "success",
-        message: "Student added successfully to Students sheet!",
+        message: "Student saved successfully to Students sheet!",
         student_id: studentId,
         row_number: targetRow
       })).setMimeType(ContentService.MimeType.JSON);
@@ -793,12 +835,219 @@ function handleUpdateBusTracking(ss, data) {
   })).setMimeType(ContentService.MimeType.JSON);
 }
 
+// Academic Session Months order (April = 1 ... March = 12)
+var ACADEMIC_MONTHS = [
+  "April", "May", "June", "July", "August", "September",
+  "October", "November", "December", "January", "February", "March"
+];
+
+function getAcademicMonthIndex(monthStr) {
+  if (!monthStr) return 1; // Default to April (1)
+  var clean = String(monthStr).trim().toLowerCase();
+  for (var i = 0; i < ACADEMIC_MONTHS.length; i++) {
+    if (clean.indexOf(ACADEMIC_MONTHS[i].toLowerCase()) !== -1 || ACADEMIC_MONTHS[i].toLowerCase().indexOf(clean) !== -1) {
+      return i + 1;
+    }
+  }
+  return 1;
+}
+
+function getCurrentAcademicMonthIndex(date) {
+  var d = date || new Date();
+  var calMonth = d.getMonth(); // 0 = Jan ... 11 = Dec
+  // April (3) -> 1 ... Dec (11) -> 9, Jan (0) -> 10 ... Mar (2) -> 12
+  return calMonth >= 3 ? (calMonth - 2) : (calMonth + 10);
+}
+
+/**
+ * BACKEND FUNCTION: PAST MONTHS BACKFILL FUNCTION
+ * generatePastDues() backfills billing rows for all active students from their
+ * respective Session_Start_Month up to the current running month.
+ * LOGIC:
+ * 1. Loop through all active students in the Database.
+ * 2. Read each student's Session_Start_Month and monthly tuition fee.
+ * 3. Compare the academic month index (April = 1 ... March = 12) with current month index.
+ * 4. Append fee due records ONLY for months >= student's Session_Start_Month and <= Current_Month.
+ * 5. Ignore/skip all months prior to the student's Session_Start_Month.
+ */
+function generatePastDues() {
+  var ss = getSpreadsheet();
+  if (!ss) return { status: "error", message: "Spreadsheet not accessible" };
+
+  var studentsSheet = ss.getSheetByName("Students");
+  if (!studentsSheet) return { status: "error", message: "Students sheet not found" };
+
+  var feeSheet = ss.getSheetByName("Fee_Collection");
+  if (!feeSheet) {
+    feeSheet = ss.insertSheet("Fee_Collection");
+    feeSheet.appendRow([
+      "Receipt_Number", "Student_ID", "Date", "Fee_Type", "Month",
+      "Total_Amount", "Discount_Amount", "Net_Payable", "Amount_Paid",
+      "Balance_Amount", "Payment_Mode", "Received_By"
+    ]);
+  }
+
+  var today = new Date();
+  var curAcadIdx = getCurrentAcademicMonthIndex(today);
+  var curYear = today.getFullYear();
+  var dateStr = Utilities.formatDate(today, "Asia/Kolkata", "yyyy-MM-dd");
+
+  var feeMaster = {
+    'play': 500, 'nursery': 600, 'lkg': 600, 'ukg': 600,
+    '1st': 650, '2nd': 650, '3rd': 650, '4th': 700, '5th': 700,
+    '6th': 800, '7th': 800, '8th': 850
+  };
+
+  var studentsData = studentsSheet.getDataRange().getValues();
+  if (studentsData.length <= 1) return { status: "empty", count: 0, message: "No students in database" };
+
+  var headers = studentsData[0].map(function(h) { return String(h || "").trim().toLowerCase(); });
+  var idIdx = headers.indexOf("student_id");
+  if (idIdx === -1) idIdx = headers.indexOf("id");
+  var classIdx = headers.indexOf("class");
+  var monthlyFeeIdx = headers.indexOf("monthly_fee");
+  var startMonthIdx = -1;
+  for (var h = 0; h < headers.length; h++) {
+    if (headers[h].indexOf("start_month") !== -1 || headers[h].indexOf("session_start") !== -1 || headers[h].indexOf("start month") !== -1) {
+      startMonthIdx = h;
+      break;
+    }
+  }
+  var waiverIdx = headers.indexOf("fee_waiver");
+  if (waiverIdx === -1) waiverIdx = headers.indexOf("is_free_student");
+  var categoryIdx = headers.indexOf("category");
+  var remarkIdx = headers.indexOf("remark");
+
+  // Load existing fee collection records into a map to prevent duplicate billing
+  var feeData = feeSheet.getDataRange().getValues();
+  var existingBilledMap = {};
+  for (var f = 1; f < feeData.length; f++) {
+    var fSid = String(feeData[f][1] || "").trim().toLowerCase();
+    var fMonth = String(feeData[f][4] || "").trim().toLowerCase();
+    var fType = String(feeData[f][3] || "").trim().toLowerCase();
+    for (var m = 0; m < ACADEMIC_MONTHS.length; m++) {
+      if (fMonth.indexOf(ACADEMIC_MONTHS[m].toLowerCase()) !== -1 && (fType.indexOf("monthly") !== -1 || fType.indexOf("मासिक") !== -1 || fType.indexOf("tuition") !== -1 || fType.indexOf("due") !== -1)) {
+        existingBilledMap[fSid + "::" + (m + 1)] = true;
+      }
+    }
+  }
+
+  var rowsToAppend = [];
+  var totalBilledRows = 0;
+  var skippedStudentsCount = 0;
+
+  for (var i = 1; i < studentsData.length; i++) {
+    var row = studentsData[i];
+    var sId = idIdx !== -1 ? String(row[idIdx] || "").trim() : "";
+    if (!sId) continue;
+
+    // Check 100% Fee Waiver / Free Student
+    var isFree = false;
+    if (waiverIdx !== -1) {
+      var wVal = String(row[waiverIdx] || "").toLowerCase();
+      if (wVal === "true" || wVal === "yes" || wVal.indexOf("100") !== -1 || wVal.indexOf("free") !== -1 || wVal.indexOf("माफ") !== -1) {
+        isFree = true;
+      }
+    }
+    if (categoryIdx !== -1) {
+      var catVal = String(row[categoryIdx] || "").toLowerCase();
+      if (catVal.indexOf("rte") !== -1 || catVal.indexOf("free") !== -1 || catVal.indexOf("माफ") !== -1) {
+        isFree = true;
+      }
+    }
+    if (remarkIdx !== -1) {
+      var remVal = String(row[remarkIdx] || "").toLowerCase();
+      if (remVal.indexOf("फीस माफ") !== -1 || remVal.indexOf("100% waiver") !== -1) {
+        isFree = true;
+      }
+    }
+
+    if (isFree) {
+      skippedStudentsCount++;
+      continue;
+    }
+
+    // Determine student's Session_Start_Month
+    var studentStartMonthStr = startMonthIdx !== -1 ? String(row[startMonthIdx] || "").trim() : "April";
+    var studentStartMonthIdx = getAcademicMonthIndex(studentStartMonthStr);
+
+    // Determine monthly tuition fee
+    var sClass = classIdx !== -1 ? String(row[classIdx] || "").toLowerCase().trim() : "nursery";
+    var customFee = monthlyFeeIdx !== -1 ? Number(row[monthlyFeeIdx]) : 0;
+    var monthlyAmount = 600;
+
+    if (!isNaN(customFee) && customFee > 0) {
+      monthlyAmount = customFee;
+    } else {
+      for (var k in feeMaster) {
+        if (sClass.indexOf(k) !== -1) {
+          monthlyAmount = feeMaster[k];
+          break;
+        }
+      }
+    }
+
+    // Loop through academic months from student's Session_Start_Month up to Current_Month
+    for (var mIdx = studentStartMonthIdx; mIdx <= curAcadIdx; mIdx++) {
+      var mapKey = sId.toLowerCase() + "::" + mIdx;
+      if (existingBilledMap[mapKey]) {
+        continue;
+      }
+
+      var monthName = ACADEMIC_MONTHS[mIdx - 1];
+      var monthYear = curYear;
+      if (today.getMonth() >= 3 && mIdx >= 10) {
+        monthYear = curYear + 1;
+      } else if (today.getMonth() < 3 && mIdx < 10) {
+        monthYear = curYear - 1;
+      }
+
+      var receiptNo = "BILL-" + monthYear + "-M" + mIdx + "-" + sId;
+      rowsToAppend.push([
+        receiptNo,
+        sId,
+        dateStr,
+        "Monthly Tuition Fee",
+        monthName,
+        monthlyAmount,
+        0, // Discount_Amount
+        monthlyAmount, // Net_Payable
+        0, // Amount_Paid
+        monthlyAmount, // Balance_Amount
+        "System Backfill",
+        "generatePastDues"
+      ]);
+
+      existingBilledMap[mapKey] = true;
+      totalBilledRows++;
+    }
+  }
+
+  if (rowsToAppend.length > 0) {
+    var startRow = feeSheet.getLastRow() + 1;
+    feeSheet.getRange(startRow, 1, rowsToAppend.length, 12).setValues(rowsToAppend);
+  }
+
+  var resultMsg = "generatePastDues completed: Appended " + totalBilledRows + " billing rows for months up to " + ACADEMIC_MONTHS[curAcadIdx - 1] + ". Skipped " + skippedStudentsCount + " free students.";
+  Logger.log(resultMsg);
+
+  return {
+    status: "success",
+    message: resultMsg,
+    billedRowsCount: totalBilledRows,
+    currentAcademicMonth: ACADEMIC_MONTHS[curAcadIdx - 1],
+    currentAcademicMonthIndex: curAcadIdx
+  };
+}
+
 /**
  * AUTOMATIC MONTHLY FEE GENERATION (APPS SCRIPT TRIGGER)
  * Trigger: Runs automatically on the 1st of every month.
  * Iterates through active students in 'Students' sheet.
- * Skips 100% Fee Waived (Free) students.
- * Appends monthly tuition dues for active non-free students to 'Fee_Collection'.
+ * Checks:
+ * 1. Current_Running_Month >= Student's Session_Start_Month
+ * 2. Student is NOT marked as 100% Fee Waived/Free.
+ * If true, add the current month's due row; otherwise, skip.
  */
 function generateMonthlyDues() {
   var ss = getSpreadsheet();
@@ -824,11 +1073,8 @@ function generateMonthlyDues() {
   }
 
   var today = new Date();
-  var monthNames = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December"
-  ];
-  var curMonthName = monthNames[today.getMonth()];
+  var curAcadIdx = getCurrentAcademicMonthIndex(today);
+  var curMonthName = ACADEMIC_MONTHS[curAcadIdx - 1];
   var curYear = today.getFullYear();
   var dateStr = Utilities.formatDate(today, "Asia/Kolkata", "yyyy-MM-dd");
 
@@ -844,9 +1090,15 @@ function generateMonthlyDues() {
   var headers = studentsData[0].map(function(h) { return String(h || "").trim().toLowerCase(); });
   var idIdx = headers.indexOf("student_id");
   if (idIdx === -1) idIdx = headers.indexOf("id");
-  var nameIdx = headers.indexOf("student_name");
   var classIdx = headers.indexOf("class");
   var monthlyFeeIdx = headers.indexOf("monthly_fee");
+  var startMonthIdx = -1;
+  for (var h = 0; h < headers.length; h++) {
+    if (headers[h].indexOf("start_month") !== -1 || headers[h].indexOf("session_start") !== -1 || headers[h].indexOf("start month") !== -1) {
+      startMonthIdx = h;
+      break;
+    }
+  }
   var waiverIdx = headers.indexOf("fee_waiver");
   if (waiverIdx === -1) waiverIdx = headers.indexOf("is_free_student");
   var categoryIdx = headers.indexOf("category");
@@ -859,21 +1111,23 @@ function generateMonthlyDues() {
     var fStudentId = String(feeData[f][1] || "").trim().toLowerCase();
     var fMonth = String(feeData[f][4] || "").trim().toLowerCase();
     var fType = String(feeData[f][3] || "").trim().toLowerCase();
-    if (fMonth.indexOf(curMonthName.toLowerCase()) !== -1 && (fType.indexOf("monthly") !== -1 || fType.indexOf("मासिक") !== -1)) {
+    if (fMonth.indexOf(curMonthName.toLowerCase()) !== -1 && (fType.indexOf("monthly") !== -1 || fType.indexOf("मासिक") !== -1 || fType.indexOf("tuition") !== -1 || fType.indexOf("due") !== -1)) {
       billedThisMonth[fStudentId] = true;
     }
   }
 
   var generatedCount = 0;
   var skippedFreeCount = 0;
+  var skippedNotStartedCount = 0;
   var alreadyBilledCount = 0;
+  var rowsToAppend = [];
 
   for (var i = 1; i < studentsData.length; i++) {
     var row = studentsData[i];
     var sId = idIdx !== -1 ? String(row[idIdx] || "").trim() : "";
     if (!sId) continue;
 
-    // Check if student has 100% Fee Waiver (Free Student)
+    // 1. Check if student has 100% Fee Waiver (Free Student)
     var isFree = false;
     if (waiverIdx !== -1) {
       var wVal = String(row[waiverIdx] || "").toLowerCase();
@@ -899,13 +1153,22 @@ function generateMonthlyDues() {
       continue;
     }
 
-    // Skip if already billed for this month
+    // 2. Check: Current_Running_Month >= Student's Session_Start_Month
+    var studentStartMonthStr = startMonthIdx !== -1 ? String(row[startMonthIdx] || "").trim() : "April";
+    var studentStartMonthIdx = getAcademicMonthIndex(studentStartMonthStr);
+
+    if (curAcadIdx < studentStartMonthIdx) {
+      skippedNotStartedCount++;
+      continue;
+    }
+
+    // 3. Skip if already billed for this month
     if (billedThisMonth[sId.toLowerCase()]) {
       alreadyBilledCount++;
       continue;
     }
 
-    // Determine Monthly Tuition amount
+    // 4. Determine Monthly Tuition amount
     var sClass = classIdx !== -1 ? String(row[classIdx] || "").toLowerCase().trim() : "nursery";
     var customFee = monthlyFeeIdx !== -1 ? Number(row[monthlyFeeIdx]) : 0;
     var monthlyAmount = 600;
@@ -921,8 +1184,8 @@ function generateMonthlyDues() {
       }
     }
 
-    var receiptNo = "BILL-" + curYear + "-" + (today.getMonth() + 1) + "-" + sId;
-    feeSheet.appendRow([
+    var receiptNo = "BILL-" + curYear + "-M" + curAcadIdx + "-" + sId;
+    rowsToAppend.push([
       receiptNo,
       sId,
       dateStr,
@@ -941,9 +1204,15 @@ function generateMonthlyDues() {
     generatedCount++;
   }
 
+  if (rowsToAppend.length > 0) {
+    var startRow = feeSheet.getLastRow() + 1;
+    feeSheet.getRange(startRow, 1, rowsToAppend.length, 12).setValues(rowsToAppend);
+  }
+
   var msg = "generateMonthlyDues complete for " + curMonthName + " " + curYear +
             ": Billed: " + generatedCount +
             ", Skipped Free: " + skippedFreeCount +
+            ", Skipped Not-Started: " + skippedNotStartedCount +
             ", Already Billed: " + alreadyBilledCount;
   Logger.log(msg);
 
@@ -953,6 +1222,7 @@ function generateMonthlyDues() {
     month: curMonthName + " " + curYear,
     generatedCount: generatedCount,
     skippedFreeCount: skippedFreeCount,
+    skippedNotStartedCount: skippedNotStartedCount,
     alreadyBilledCount: alreadyBilledCount
   };
 }

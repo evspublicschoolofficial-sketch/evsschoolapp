@@ -153,8 +153,15 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
       }
     }
 
-    // Academic session months
-    ACADEMIC_SESSION_MONTHS.forEach((m) => {
+    // Academic session months (Only for months >= student's Session_Start_Month)
+    const startMonth = (selectedStudent as any).Session_Start_Month || 'April';
+    const startIdx = ACADEMIC_SESSION_MONTHS.findIndex(
+      (m) => m.toLowerCase() === String(startMonth).trim().toLowerCase()
+    );
+    const validStartIdx = startIdx >= 0 ? startIdx : 0;
+    const applicableMonths = ACADEMIC_SESSION_MONTHS.slice(validStartIdx);
+
+    applicableMonths.forEach((m) => {
       const alreadyPaid = paidPerMonth[m] || 0;
       const remaining = Math.max(0, monthlyRate - alreadyPaid);
       if (remaining > 0) {

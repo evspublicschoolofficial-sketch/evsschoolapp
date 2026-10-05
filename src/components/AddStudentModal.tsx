@@ -13,14 +13,31 @@ export interface NewStudentData {
   Parent_Mobile: string;
   'Village/rRoute'?: string;
   Balance_Amount?: number | string;
+  Session_Start_Month?: string;
   Student_Photo?: string;
 }
+
+export const ACADEMIC_MONTH_OPTIONS = [
+  { value: 'April', label: 'April (अप्रैल - सत्र प्रारंभ)' },
+  { value: 'May', label: 'May (मई)' },
+  { value: 'June', label: 'June (जून)' },
+  { value: 'July', label: 'July (जुलाई - नया प्रवेश)' },
+  { value: 'August', label: 'August (अगस्त)' },
+  { value: 'September', label: 'September (सितंबर)' },
+  { value: 'October', label: 'October (अक्टूबर)' },
+  { value: 'November', label: 'November (नवंबर)' },
+  { value: 'December', label: 'December (दिसंबर)' },
+  { value: 'January', label: 'January (जनवरी)' },
+  { value: 'February', label: 'February (फरवरी)' },
+  { value: 'March', label: 'March (मार्च)' },
+];
 
 interface AddStudentModalProps {
   isOpen: boolean;
   onClose: () => void;
   onStudentAdded: (student: Student, sendWhatsApp: boolean) => Promise<any> | void;
   existingStudents: Student[];
+  studentToEdit?: Student | null;
   classMap?: Record<string, string>;
   getClassName?: (c: string | undefined | null) => string;
   onOpenSyncSettings?: () => void;
@@ -31,6 +48,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
   onClose,
   onStudentAdded,
   existingStudents,
+  studentToEdit,
   classMap = {},
   getClassName = (c) => c || 'N/A',
   onOpenSyncSettings,
@@ -46,6 +64,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
   const [parentMobile, setParentMobile] = useState<string>('');
   const [villageRoute, setVillageRoute] = useState<string>('');
   const [openingBalance, setOpeningBalance] = useState<string>('0');
+  const [sessionStartMonth, setSessionStartMonth] = useState<string>('April');
   const [studentPhotoUrl, setStudentPhotoUrl] = useState<string>('');
   const [sendWelcomeWhatsApp, setSendWelcomeWhatsApp] = useState<boolean>(true);
 
@@ -71,8 +90,8 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
       villageRoute.trim(),
       '', // Adhar_Card
       '', // Adhar_Photo
-      '', // Col 13
       openingBalance ? String(openingBalance) : '0',
+      sessionStartMonth || 'April',
       qrFormula,
     ];
     const tsv = rowValues.join('\t');
@@ -98,57 +117,74 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
     ? Object.keys(classMap)
     : ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C10', 'C11', 'C12'];
 
-  // Initialize and auto-generate unique Student ID & Roll Number when modal opens
+  // Initialize and auto-generate unique Student ID & Roll Number or populate edit values
   useEffect(() => {
     if (isOpen) {
       setErrorMsg(null);
       setSyncStatus(null);
       setIsSubmitting(false);
 
-      // Auto-generate unique Student ID (e.g. S-1082)
-      let maxNum = 1000;
-      let maxAdm = 100;
-      let maxRollInClass = 0;
+      if (studentToEdit) {
+        setStudentId(String(studentToEdit.Student_ID || ''));
+        setAdmissionNumber(String(studentToEdit.Admission_Number || ''));
+        setRollNumber(String(studentToEdit.Roll_Number || ''));
+        setStudentName(studentToEdit.Student_Name || '');
+        setSelectedClass(studentToEdit.Class || 'C5');
+        setFatherName(studentToEdit.Father_Name || '');
+        setMotherName(studentToEdit.Mother_Name || '');
+        setParentMobile(String(studentToEdit.Parent_Mobile || ''));
+        setVillageRoute(studentToEdit['Village/rRoute'] || studentToEdit.Village || '');
+        setOpeningBalance(studentToEdit.Balance_Amount !== undefined ? String(studentToEdit.Balance_Amount) : '0');
+        setSessionStartMonth(studentToEdit.Session_Start_Month || 'April');
+        setStudentPhotoUrl(studentToEdit.Student_Photo || '');
+        setSendWelcomeWhatsApp(false);
+      } else {
+        // Auto-generate unique Student ID (e.g. S-1082)
+        let maxNum = 1000;
+        let maxAdm = 100;
+        let maxRollInClass = 0;
 
-      existingStudents.forEach((s) => {
-        // Parse ID
-        const sidStr = String(s.Student_ID || '').replace(/\D/g, '');
-        if (sidStr) {
-          const num = parseInt(sidStr, 10);
-          if (!isNaN(num) && num > maxNum) maxNum = num;
-        }
+        existingStudents.forEach((s) => {
+          // Parse ID
+          const sidStr = String(s.Student_ID || '').replace(/\D/g, '');
+          if (sidStr) {
+            const num = parseInt(sidStr, 10);
+            if (!isNaN(num) && num > maxNum) maxNum = num;
+          }
 
-        // Parse Admission Number
-        const admStr = String(s.Admission_Number || '').replace(/\D/g, '');
-        if (admStr) {
-          const admNum = parseInt(admStr, 10);
-          if (!isNaN(admNum) && admNum > maxAdm) maxAdm = admNum;
-        }
+          // Parse Admission Number
+          const admStr = String(s.Admission_Number || '').replace(/\D/g, '');
+          if (admStr) {
+            const admNum = parseInt(admStr, 10);
+            if (!isNaN(admNum) && admNum > maxAdm) maxAdm = admNum;
+          }
 
-        // Parse Roll in same class
-        if (s.Class === selectedClass) {
-          const rNum = parseInt(String(s.Roll_Number || '0'), 10);
-          if (!isNaN(rNum) && rNum > maxRollInClass) maxRollInClass = rNum;
-        }
-      });
+          // Parse Roll in same class
+          if (s.Class === selectedClass) {
+            const rNum = parseInt(String(s.Roll_Number || '0'), 10);
+            if (!isNaN(rNum) && rNum > maxRollInClass) maxRollInClass = rNum;
+          }
+        });
 
-      const nextId = `S-${maxNum + 1}`;
-      const nextAdm = String(maxAdm + 1);
-      const nextRoll = String(maxRollInClass + 1);
+        const nextId = `S-${maxNum + 1}`;
+        const nextAdm = String(maxAdm + 1);
+        const nextRoll = String(maxRollInClass + 1);
 
-      setStudentId(nextId);
-      setAdmissionNumber(nextAdm);
-      setRollNumber(nextRoll);
-      setStudentName('');
-      setFatherName('');
-      setMotherName('');
-      setParentMobile('');
-      setVillageRoute('');
-      setOpeningBalance('0');
-      setStudentPhotoUrl('');
-      setSendWelcomeWhatsApp(true);
+        setStudentId(nextId);
+        setAdmissionNumber(nextAdm);
+        setRollNumber(nextRoll);
+        setStudentName('');
+        setFatherName('');
+        setMotherName('');
+        setParentMobile('');
+        setVillageRoute('');
+        setOpeningBalance('0');
+        setSessionStartMonth('April');
+        setStudentPhotoUrl('');
+        setSendWelcomeWhatsApp(true);
+      }
     }
-  }, [isOpen]);
+  }, [isOpen, studentToEdit]);
 
   // Recalculate suggested roll number when class changes
   const handleClassChange = (newCls: string) => {
@@ -240,6 +276,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
         'Village/rRoute': villageRoute.trim(),
         Village: villageRoute.trim(),
         Balance_Amount: openingBalance ? parseFloat(openingBalance) || 0 : 0,
+        Session_Start_Month: sessionStartMonth || 'April',
         Student_Photo: studentPhotoUrl.trim(),
         'QR code': generatedQrUrl,
         'QR_code': generatedQrUrl,
@@ -278,17 +315,17 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
         <div className="bg-gradient-to-r from-[#0c2340] via-[#10316b] to-[#0c2340] text-white p-5 px-6 flex items-center justify-between shrink-0 border-b-2 border-amber-400">
           <div className="flex items-center gap-3">
             <div className="w-11 h-11 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center text-xl font-black shadow-md border-2 border-amber-200">
-              <i className="fa-solid fa-user-plus"></i>
+              <i className={`fa-solid ${studentToEdit ? 'fa-user-pen' : 'fa-user-plus'}`}></i>
             </div>
             <div>
               <div className="flex items-center gap-2">
                 <span className="text-[10px] uppercase tracking-wider font-extrabold bg-amber-400 text-slate-950 px-2 py-0.5 rounded-full">
                   स्कूल प्रबंधक (Manager Portal)
                 </span>
-                <span className="text-xs text-amber-200 font-medium">New Admission</span>
+                <span className="text-xs text-amber-200 font-medium">{studentToEdit ? 'Edit Profile' : 'New Admission'}</span>
               </div>
               <h3 className="text-lg font-extrabold text-white mt-0.5">
-                नया छात्र जोड़ें (Add New Student)
+                {studentToEdit ? 'छात्र विवरण संपादित करें (Edit Student)' : 'नया छात्र जोड़ें (Add New Student)'}
               </h3>
             </div>
           </div>
@@ -556,11 +593,11 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
             </div>
           </div>
 
-          {/* Opening Balance & Photo URL */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* Opening Balance, Fee Start Month & Photo URL */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">
-                प्रारंभिक बकाया फीस (Opening Fee Due) ₹
+                प्रारंभिक बकाया फीस (Opening Due) ₹
               </label>
               <div className="relative">
                 <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-500 text-xs font-bold pointer-events-none">
@@ -579,6 +616,28 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
             </div>
 
             <div>
+              <label className="block text-xs font-bold text-blue-900 mb-1">
+                सत्र शुल्क प्रारंभ माह (Fee Start Month) <span className="text-rose-500">*</span>
+              </label>
+              <div className="relative">
+                <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-blue-600 text-xs pointer-events-none">
+                  <i className="fa-solid fa-calendar-check"></i>
+                </span>
+                <select
+                  value={sessionStartMonth}
+                  onChange={(e) => setSessionStartMonth(e.target.value)}
+                  className="w-full pl-8 pr-3 py-2.5 rounded-xl border border-blue-300 focus:border-blue-900 text-xs font-bold bg-blue-50/50 text-blue-950 outline-none"
+                >
+                  {ACADEMIC_MONTH_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">
                 छात्र फोटो लिंक (Student Photo URL)
               </label>
@@ -586,7 +645,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
                 type="url"
                 value={studentPhotoUrl}
                 onChange={(e) => setStudentPhotoUrl(e.target.value)}
-                placeholder="https://... या Google Drive फोटो लिंक"
+                placeholder="https://... या फोटो लिंक"
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:border-blue-900 text-xs"
               />
             </div>
@@ -646,12 +705,12 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
                 {isSubmitting ? (
                   <>
                     <i className="fa-solid fa-spinner fa-spin"></i>
-                    <span>जोड़ा जा रहा है...</span>
+                    <span>{studentToEdit ? 'अपडेट किया जा रहा है...' : 'जोड़ा जा रहा है...'}</span>
                   </>
                 ) : (
                   <>
-                    <i className="fa-solid fa-user-check"></i>
-                    <span>छात्र सुरक्षित करें (Save Student)</span>
+                    <i className={`fa-solid ${studentToEdit ? 'fa-floppy-disk' : 'fa-user-check'}`}></i>
+                    <span>{studentToEdit ? 'अपडेट सुरक्षित करें (Update Student)' : 'छात्र सुरक्षित करें (Save Student)'}</span>
                   </>
                 )}
               </button>
