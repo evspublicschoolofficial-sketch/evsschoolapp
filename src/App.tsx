@@ -25,10 +25,12 @@ import { GoogleSheetSyncModal } from './components/GoogleSheetSyncModal';
 import { OfficialFeeReceiptModal } from './components/OfficialFeeReceiptModal';
 import { AttendanceCalendarModal } from './components/AttendanceCalendarModal';
 import { SchoolNoticeBoard, DEFAULT_SEED_NOTICES } from './components/SchoolNoticeBoard';
+import { VillageRouteAutoManager } from './components/VillageRouteAutoManager';
 import { EmergencyAlertBanner } from './components/EmergencyAlertBanner';
 import { playSirenPreview } from './utils/sirenAudio';
 import { SchoolNotice } from './types';
-import { computeStudentFeeMetrics, computeSchoolFeeTotals, normalizeStudentId } from './utils/feeCalculation';
+import { fetchFeeMasterDirectGViz } from './utils/feeMaster';
+import { computeStudentFeeMetrics, computeSchoolFeeTotals, normalizeStudentId, reconcileFeeRecords } from './utils/feeCalculation';
 import { realtimeSync } from './utils/realtimeSync';
 import studentFarahPhoto from './assets/images/student_farah_1789483069291.jpg';
 import studentNamraPhoto from './assets/images/student_namra_1789483091505.jpg';
@@ -75,10 +77,14 @@ export interface FeeCollectionRecord {
   Fee_Type?: string;
   Month?: string;
   Total_Amount?: number | null;
+  Discount_Amount?: number | null;
+  Net_Payable?: number | null;
   Amount_Paid?: number | null;
   Balance_Amount?: number | null;
   Payment_Mode?: string;
   Received_By?: string;
+  Allocations_Summary?: string;
+  Notes?: string;
 }
 
 export interface Homework {
@@ -1543,10 +1549,10 @@ export default function App() {
   const [managerSelectedFeeStudent, setManagerSelectedFeeStudent] = useState<Student | null>(null);
 
   // Manager Dashboard State
-  const [managerTab, setManagerTab] = useState<'students' | 'homework' | 'behavior' | 'fees' | 'users' | 'vanTracking' | 'attendance' | 'notices'>(() => {
+  const [managerTab, setManagerTab] = useState<'students' | 'homework' | 'behavior' | 'fees' | 'users' | 'vanTracking' | 'attendance' | 'notices' | 'autoTransport'>(() => {
     try {
       const saved = localStorage.getItem('evs_manager_tab');
-      if (saved && ['students', 'homework', 'behavior', 'fees', 'users', 'vanTracking', 'attendance', 'notices'].includes(saved)) {
+      if (saved && ['students', 'homework', 'behavior', 'fees', 'users', 'vanTracking', 'attendance', 'notices', 'autoTransport'].includes(saved)) {
         return saved as any;
       }
     } catch {}
@@ -1734,15 +1740,14 @@ export default function App() {
           console.warn('Could not cache students in localStorage:', e);
         }
         setApiError(null);
-
-        // If parent is already logged in, update their selected student and children from freshly fetched sheet
+        // If parent is already logged in, update their selected student from freshly fetched sheet
         try {
           const savedLoggedIn = localStorage.getItem('evs_parent_logged_in') === 'true';
           const savedStudentStr = localStorage.getItem('evs_parent_selected_student');
           if (savedLoggedIn && savedStudentStr) {
             const parsedStudent = JSON.parse(savedStudentStr);
             const sid = String(parsedStudent.Student_ID || '').trim().toLowerCase();
-            const freshMatch = valid.find(
+            const freshMatch = mergedStudents.find(
               (s) => String(s.Student_ID || '').trim().toLowerCase() === sid
             );
             if (freshMatch) {
@@ -1750,6 +1755,8 @@ export default function App() {
             }
           }
         } catch {}
+
+        return mergedStudents;
       } else {
         setStudents((prev) => {
           if (prev.length === 0) {
@@ -1757,6 +1764,7 @@ export default function App() {
           }
           return prev;
         });
+        return [];
       }
     } catch (err: any) {
       console.error('Error fetching students:', err);
@@ -1766,6 +1774,7 @@ export default function App() {
         }
         return prev;
       });
+      return [];
     } finally {
       setLoadingStudents(false);
     }
@@ -1884,8 +1893,8 @@ export default function App() {
     }
   };
 
-  // Fetch Fee Collection records and balance amounts by Student ID
-  const fetchFeeCollection = async () => {
+  // Fetch Fee Collection records and balance amounts by Student ID directly from Google Sheets
+  const fetchFeeCollection = async (studentsList?: Student[]) => {
     if (feeRecords.length === 0) {
       setLoadingFees(true);
     }
@@ -1899,23 +1908,63 @@ export default function App() {
       if (start === -1 || end === -1) return;
       const data = JSON.parse(text.slice(start, end + 1));
       const rows = data.table?.rows || [];
+      const cols = (data.table?.cols || []).map((c: any) =>
+        String(c?.label || c?.id || '').trim().toLowerCase()
+      );
+
+      const findIdx = (...names: string[]): number => {
+        for (const n of names) {
+          const i = cols.findIndex((l: string) => l === n || l.includes(n));
+          if (i !== -1) return i;
+        }
+        return -1;
+      };
+
+      const receiptNoIdx = findIdx('receipt_number', 'receipt', 'rec_no');
+      const studentIdIdx = findIdx('student_id', 'student id', 'studentid');
+      const dateIdx = findIdx('date', 'tarikh');
+      const feeTypeIdx = findIdx('fee_type', 'fee type', 'type');
+      const monthIdx = findIdx('month', 'maheena');
+      const totalAmtIdx = findIdx('total_amount', 'total');
+      const discountIdx = findIdx('discount', 'chhoot');
+      const amtPaidIdx = findIdx('amount_paid', 'paid');
+      const balAmtIdx = findIdx('balance_amount', 'balance', 'due');
+      const payModeIdx = findIdx('payment_mode', 'mode');
+      const receivedByIdx = findIdx('received_by', 'receiver');
+
       const balances: Record<string, number> = {};
       const records: FeeCollectionRecord[] = [];
 
       for (const r of rows) {
         const cells = (r.c || []).map((c: any) => c?.v);
-        const receiptNo = cells[0] ? String(cells[0]).trim() : '';
-        const studentId = cells[1] ? String(cells[1]).trim() : '';
-        const dateVal = cells[2];
-        const feeType = cells[3] ? String(cells[3]).trim() : '';
-        const month = cells[4] ? String(cells[4]).trim() : '';
-        const totalAmt = cells[5] !== undefined && cells[5] !== null && cells[5] !== '' ? Number(cells[5]) : null;
-        const amtPaid = cells[6] !== undefined && cells[6] !== null && cells[6] !== '' ? Number(cells[6]) : null;
-        const balAmt = cells[7] !== undefined && cells[7] !== null && cells[7] !== '' ? Number(cells[7]) : null;
-        const payMode = cells[8] ? String(cells[8]).trim() : '';
-        const receivedBy = cells[9] ? String(cells[9]).trim() : '';
+        const receiptNo = String(cells[receiptNoIdx !== -1 ? receiptNoIdx : 0] || '').trim();
+        const studentId = String(cells[studentIdIdx !== -1 ? studentIdIdx : 1] || '').trim();
+        let dateVal = cells[dateIdx !== -1 ? dateIdx : 2];
+        if (dateVal && typeof dateVal === 'string' && dateVal.includes('Date(')) {
+          const m = dateVal.match(/Date\((\d+),(\d+),(\d+)/);
+          if (m) dateVal = `${m[1]}-${String(Number(m[2]) + 1).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`;
+        }
+        const feeType = String(cells[feeTypeIdx !== -1 ? feeTypeIdx : 3] || '').trim();
+        const month = String(cells[monthIdx !== -1 ? monthIdx : 4] || '').trim();
 
-        if (studentId && studentId !== 'Student_ID') {
+        const rawTotal = cells[totalAmtIdx !== -1 ? totalAmtIdx : 5];
+        const totalAmt = rawTotal !== undefined && rawTotal !== null && rawTotal !== '' ? Number(rawTotal) : 0;
+
+        const rawDiscount = discountIdx !== -1 ? cells[discountIdx] : null;
+        const discountAmt = rawDiscount !== undefined && rawDiscount !== null && rawDiscount !== '' ? Number(rawDiscount) : 0;
+
+        // Correct column for Amount_Paid (Index 7)
+        const rawPaid = cells[amtPaidIdx !== -1 ? amtPaidIdx : 7];
+        const amtPaid = rawPaid !== undefined && rawPaid !== null && rawPaid !== '' ? Number(rawPaid) : 0;
+
+        // Correct column for Balance_Amount (Index 8)
+        const rawBal = cells[balAmtIdx !== -1 ? balAmtIdx : 8];
+        const balAmt = rawBal !== undefined && rawBal !== null && rawBal !== '' ? Number(rawBal) : (totalAmt - amtPaid);
+
+        const payMode = String(cells[payModeIdx !== -1 ? payModeIdx : 9] || 'Cash').trim();
+        const receivedBy = String(cells[receivedByIdx !== -1 ? receivedByIdx : 10] || '').trim();
+
+        if (studentId && studentId.toLowerCase() !== 'student_id') {
           records.push({
             Receipt_Number: receiptNo,
             Student_ID: studentId,
@@ -1923,50 +1972,134 @@ export default function App() {
             Fee_Type: feeType,
             Month: month,
             Total_Amount: totalAmt,
+            Discount_Amount: discountAmt,
             Amount_Paid: amtPaid,
             Balance_Amount: balAmt,
             Payment_Mode: payMode,
             Received_By: receivedBy,
           });
-
-          // If row has a numeric Balance_Amount, update student's balance
-          if (balAmt !== null && !isNaN(balAmt)) {
-            balances[studentId.toLowerCase()] = balAmt;
-          }
         }
       }
 
-      // Merge custom added fee records saved locally by Manager / Principal
+      // Reconcile records to merge duplicate uncollected billing entries with real payment receipts
+      const reconciledRecords = reconcileFeeRecords(records);
+
+      // Compute student fee balances using real Google Sheet records
+      const effectiveStudents = studentsList && studentsList.length > 0 ? studentsList : students;
+      effectiveStudents.forEach((st) => {
+        const metrics = computeStudentFeeMetrics(st, reconciledRecords);
+        balances[normalizeStudentId(st.Student_ID)] = metrics.dueBalance;
+      });
+
+      // Clear any outdated local demo fee records
       try {
-        const savedCustom = localStorage.getItem('evs_custom_fee_records');
-        if (savedCustom) {
-          const customList: FeeCollectionRecord[] = JSON.parse(savedCustom);
-          for (const cRec of customList) {
-            const exists = records.some(
-              (r) => r.Receipt_Number && cRec.Receipt_Number && r.Receipt_Number.toLowerCase() === cRec.Receipt_Number.toLowerCase()
-            );
-            if (!exists) {
-              records.unshift(cRec);
-              if (cRec.Student_ID && cRec.Balance_Amount !== null && cRec.Balance_Amount !== undefined) {
-                balances[cRec.Student_ID.toLowerCase()] = cRec.Balance_Amount;
-              }
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('Error reading cached custom fees:', e);
-      }
+        localStorage.removeItem('evs_custom_fee_records');
+      } catch {}
 
       setFeeBalances(balances);
-      setFeeRecords(records);
+      setFeeRecords(reconciledRecords);
       try {
         localStorage.setItem(CACHE_KEY_FEES_BALANCES, JSON.stringify(balances));
-        localStorage.setItem(CACHE_KEY_FEES_RECORDS, JSON.stringify(records));
+        localStorage.setItem(CACHE_KEY_FEES_RECORDS, JSON.stringify(reconciledRecords));
       } catch {}
     } catch (err) {
       console.warn('Could not fetch fee collection sheet:', err);
     } finally {
       setLoadingFees(false);
+    }
+  };
+
+  // Fetch real School Notices directly from Google Sheets (School_Notices sheet)
+  const fetchSchoolNotices = async () => {
+    try {
+      const encoded = encodeURIComponent('School_Notices');
+      const res = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}`);
+      if (!res.ok) return;
+      const text = await res.text();
+      const start = text.indexOf('{');
+      const end = text.lastIndexOf('}');
+      if (start === -1 || end === -1) return;
+      const data = JSON.parse(text.slice(start, end + 1));
+      const cols = (data.table?.cols || []).map((c: any) => String(c?.label || c?.id || '').trim().toLowerCase());
+
+      const hasNoticeCol = cols.some((c: string) => c.includes('notice') || c.includes('title') || c.includes('desc'));
+      if (!hasNoticeCol) return;
+
+      const rows = data.table?.rows || [];
+      const findIdx = (...names: string[]): number => {
+        for (const n of names) {
+          const i = cols.findIndex((l: string) => l === n || l.includes(n));
+          if (i !== -1) return i;
+        }
+        return -1;
+      };
+
+      const idIdx = findIdx('notice_id', 'id');
+      const dateIdx = findIdx('date', 'tarikh');
+      const catIdx = findIdx('category');
+      const titleIdx = findIdx('title');
+      const descIdx = findIdx('description', 'desc', 'detail');
+      const targetIdx = findIdx('target_class', 'class', 'target');
+      const issuedIdx = findIdx('issued_by', 'issued');
+      const pinnedIdx = findIdx('is_pinned', 'pinned');
+      const emergIdx = findIdx('is_emergency', 'emergency');
+
+      const parsed: SchoolNotice[] = [];
+      for (const r of rows) {
+        const cells = (r.c || []).map((c: any) => c?.v);
+        const title = String(cells[titleIdx !== -1 ? titleIdx : 3] || '').trim();
+        if (!title || title.toLowerCase() === 'title') continue;
+
+        const id = String(cells[idIdx !== -1 ? idIdx : 0] || `not-${Date.now()}`);
+        let dateVal = cells[dateIdx !== -1 ? dateIdx : 1];
+        if (dateVal && typeof dateVal === 'string' && dateVal.includes('Date(')) {
+          const m = dateVal.match(/Date\((\d+),(\d+),(\d+)/);
+          if (m) dateVal = `${m[1]}-${String(Number(m[2]) + 1).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`;
+        } else if (dateVal && typeof dateVal === 'string') {
+          const d = new Date(dateVal);
+          if (!isNaN(d.getTime())) dateVal = d.toISOString().split('T')[0];
+        }
+
+        const desc = String(cells[descIdx !== -1 ? descIdx : 4] || '').trim();
+        const cat = String(cells[catIdx !== -1 ? catIdx : 2] || 'general').toLowerCase();
+        const target = String(cells[targetIdx !== -1 ? targetIdx : 5] || 'All');
+        const issued = String(cells[issuedIdx !== -1 ? issuedIdx : 6] || 'स्कूल प्रबंधन');
+        const pinned = String(cells[pinnedIdx !== -1 ? pinnedIdx : 7] || '').toLowerCase() === 'true';
+        const emerg = String(cells[emergIdx !== -1 ? emergIdx : 8] || '').toLowerCase() === 'true';
+
+        parsed.push({
+          id,
+          title,
+          description: desc,
+          date: typeof dateVal === 'string' ? dateVal : new Date().toISOString().split('T')[0],
+          category: (cat as any) || 'general',
+          targetClass: target,
+          issuedBy: issued,
+          isPinned: pinned,
+          isEmergency: emerg,
+        });
+      }
+
+      if (parsed.length > 0) {
+        setSchoolNotices(parsed);
+        try {
+          localStorage.setItem('evs_school_notices', JSON.stringify(parsed));
+        } catch {}
+      }
+    } catch (err) {
+      console.warn('Error fetching School_Notices sheet:', err);
+    }
+  };
+
+  // Fetch real Fee Master directly from Google Sheets (Fee_Maseter or Fee_Master sheet)
+  const fetchFeeMaster = async () => {
+    try {
+      const config = await fetchFeeMasterDirectGViz(SPREADSHEET_ID);
+      if (config) {
+        console.log('Fee Master loaded directly from Google Sheet:', config);
+      }
+    } catch (err) {
+      console.warn('Error fetching Fee Master sheet:', err);
     }
   };
 
@@ -2249,11 +2382,16 @@ export default function App() {
       setSyncToastMessage('डेटा सिंक किया जा रहा है... (Syncing fresh records)');
     }
     try {
+      // 1. Fetch Students and Classes first so student records are parsed
+      const studentsRes = await fetchStudents(true);
+      await fetchClasses();
+
+      // 2. Fetch Fee Collection (with students), School Notices, Fee Master, Homework, Behavior, Users
       await Promise.allSettled([
-        fetchStudents(true),
+        fetchFeeCollection(studentsRes || undefined),
+        fetchSchoolNotices(),
+        fetchFeeMaster(),
         fetchHomework(true),
-        fetchClasses(),
-        fetchFeeCollection(),
         fetchHomeworkTracker(),
         fetchStudentBehavior(),
         fetchUsers(),
@@ -4804,6 +4942,24 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         {/* ========================================================================= */}
         {activeTab === 'parent' && (
           <div className="space-y-6 animate-fadeIn">
+            {/* Quick banner for Manager exploring Parent Portal */}
+            {managerUser && (
+              <div className="bg-[#0c2340] text-amber-300 p-3 sm:p-4 rounded-2xl shadow-sm border border-amber-400/30 flex items-center justify-between gap-3 text-xs sm:text-sm font-bold animate-fadeIn">
+                <div className="flex items-center gap-2.5">
+                  <i className="fa-solid fa-user-shield text-amber-400 text-base shrink-0"></i>
+                  <span>आप ({managerUser.Name}) अभी अभिभावक पोर्टल (Parent View) देख रहे हैं।</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('manager')}
+                  className="px-3.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 rounded-xl font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs shrink-0"
+                >
+                  <i className="fa-solid fa-arrow-left"></i>
+                  <span>प्रबंधक पोर्टल पर लौटें</span>
+                </button>
+              </div>
+            )}
+
             {/* Header / Sub-banner for logged-out view */}
             {!parentLoggedIn && (
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-3">
@@ -8552,6 +8708,31 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               </div>
             </div>
 
+            {/* Quick Switch Card: Manager -> Parent Portal (Prevents confusion on mobile) */}
+            <div className="bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 text-slate-950 p-3.5 sm:p-4 rounded-3xl shadow-sm border border-amber-300 flex flex-col sm:flex-row items-center justify-between gap-3 font-bold text-xs sm:text-sm animate-fadeIn">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-slate-950 text-amber-300 flex items-center justify-center text-lg shrink-0 shadow-xs">
+                  <i className="fa-solid fa-user-group"></i>
+                </div>
+                <div>
+                  <div className="font-black text-slate-950 text-sm sm:text-base">
+                    अभिभावक पोर्टल (Parent Portal) खोलना चाहते हैं?
+                  </div>
+                  <div className="text-slate-800 text-xs font-semibold">
+                    आप अभी प्रबंधक मोड में हैं। अभिभावकों को अपना वार्ड व होमवर्क कैसा दिखता है, देखने हेतु यहाँ दबाएं:
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveTab('parent')}
+                className="px-5 py-2.5 bg-slate-950 hover:bg-slate-900 text-amber-300 rounded-2xl font-black text-xs sm:text-sm flex items-center gap-2 cursor-pointer shadow-md transition-all shrink-0 active:scale-95"
+              >
+                <i className="fa-solid fa-mobile-screen"></i>
+                <span>अभिभावक पोर्टल खोलें (Parent View) →</span>
+              </button>
+            </div>
+
             {/* 4 Dynamic Summary Cards & Interactive Modals (Manager Dashboard Header Overview) */}
             <ManagerOverviewModals
               students={students}
@@ -8676,6 +8857,19 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               >
                 <i className="fa-solid fa-bullhorn text-amber-500"></i>
                 <span>सूचना पट्ट व अवकाश (Notices)</span>
+              </button>
+
+              <button
+                id="manager-tab-auto-transport"
+                onClick={() => setManagerTab('autoTransport')}
+                className={`pb-3 px-3 text-xs sm:text-sm font-bold flex items-center gap-2 border-b-2 cursor-pointer transition-colors ${
+                  managerTab === 'autoTransport'
+                    ? 'border-blue-900 text-blue-900'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <i className="fa-solid fa-route text-amber-600"></i>
+                <span>ऑटो व रूट फीस (Auto & Route Transport)</span>
               </button>
 
               {/* Universal Student Finder & QR Scanner button */}
@@ -9872,6 +10066,14 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 />
               </div>
             )}
+
+            {/* VIEW 9: VILLAGE ROUTE AUTO & TRANSPORT MANAGER */}
+            {managerTab === 'autoTransport' && (
+              <VillageRouteAutoManager
+                students={students}
+                getClassName={getClassName}
+              />
+            )}
           </div>
         )}
 
@@ -10718,6 +10920,61 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
           </div>
         </div>
       </footer>
+
+      {/* MOBILE PERSISTENT ROLE NAVIGATION DOCK (Always visible on mobile screens) */}
+      <div className="fixed bottom-2.5 left-3 right-3 z-40 md:hidden bg-[#0c2340]/95 backdrop-blur-md text-white border border-amber-400/40 rounded-2xl p-1 shadow-2xl flex items-center justify-around text-[10px] font-bold">
+        <button
+          type="button"
+          onClick={() => setActiveTab('parent')}
+          className={`flex-1 py-1.5 px-1 rounded-xl flex flex-col items-center gap-0.5 transition-all cursor-pointer ${
+            activeTab === 'parent'
+              ? 'bg-amber-400 text-slate-950 font-black shadow-xs'
+              : 'text-slate-300 hover:text-white'
+          }`}
+        >
+          <i className="fa-solid fa-user-group text-xs"></i>
+          <span>अभिभावक</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('manager')}
+          className={`flex-1 py-1.5 px-1 rounded-xl flex flex-col items-center gap-0.5 transition-all cursor-pointer ${
+            activeTab === 'manager'
+              ? 'bg-amber-400 text-slate-950 font-black shadow-xs'
+              : 'text-slate-300 hover:text-white'
+          }`}
+        >
+          <i className="fa-solid fa-user-tie text-xs"></i>
+          <span>प्रबंधक</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('teacher')}
+          className={`flex-1 py-1.5 px-1 rounded-xl flex flex-col items-center gap-0.5 transition-all cursor-pointer ${
+            activeTab === 'teacher'
+              ? 'bg-amber-400 text-slate-950 font-black shadow-xs'
+              : 'text-slate-300 hover:text-white'
+          }`}
+        >
+          <i className="fa-solid fa-chalkboard-user text-xs"></i>
+          <span>शिक्षक</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('home')}
+          className={`flex-1 py-1.5 px-1 rounded-xl flex flex-col items-center gap-0.5 transition-all cursor-pointer ${
+            activeTab === 'home'
+              ? 'bg-amber-400 text-slate-950 font-black shadow-xs'
+              : 'text-slate-300 hover:text-white'
+          }`}
+        >
+          <i className="fa-solid fa-house text-xs"></i>
+          <span>होम (Roles)</span>
+        </button>
+      </div>
     </div>
   );
 }

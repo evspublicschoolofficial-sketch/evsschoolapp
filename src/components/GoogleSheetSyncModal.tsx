@@ -37,6 +37,11 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
   if (!isOpen) return null;
 
   const handleRunTriggerAction = async (actionName: 'generatePastDues' | 'generateMonthlyDues') => {
+    const confirmPrompt = actionName === 'generatePastDues'
+      ? 'क्या आप Google Sheet में पूर्व महीनों के बिलिंग रिकॉर्ड जोड़ना चाहते हैं? (यदि आप रसीदें सीधे भरते हैं, तो इसकी जरूरत नहीं है)'
+      : 'क्या आप चालू माह का नया बिल Google Sheet में जोड़ना चाहते हैं?';
+    if (!window.confirm(confirmPrompt)) return;
+
     setTriggerActionLoading(actionName);
     setTriggerActionResult(null);
     try {

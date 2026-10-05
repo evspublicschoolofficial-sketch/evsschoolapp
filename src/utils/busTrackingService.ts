@@ -325,6 +325,151 @@ function getSpreadsheet() {
   return null;
 }
 
+/**
+ * 0. AUTO-INITIALIZE ON SPREADSHEET OPEN
+ * Triggered automatically every time any user opens the Google Sheet in browser.
+ * Adds custom automation menu & creates missing tabs (Fee_Master, School_Notices, etc.)
+ */
+function onOpen(e) {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.createMenu("🏫 EVS स्कूल ऑटोमेशन")
+      .addItem("⚡ सभी आवश्यक टैब स्वतः बनाएं (Auto-Create All Tabs)", "setupAllRequiredSheets")
+      .addItem("📋 फीस मास्टर टैब बनाएं (Create Fee_Master)", "menuCreateFeeMaster")
+      .addItem("📢 स्कूल नोटिस टैब बनाएं (Create School_Notices)", "menuCreateNotices")
+      .addSeparator()
+      .addItem("🔄 1 तारीख ऑटो-बिलिंग ट्रिगर इंस्टॉल करें (Install Trigger)", "setupMonthlyTrigger")
+      .addItem("⏮️ पिछले महीनों का बकाया बैकफिल करें (Backfill Past Dues)", "generatePastDues")
+      .addItem("📅 इस माह का मासिक शुल्क सृजित करें (Generate Dues)", "generateMonthlyDues")
+      .addToUi();
+  } catch(uiErr) {}
+
+  // Automatically check and create Fee_Master and School_Notices tabs on opening the sheet
+  try {
+    setupAllRequiredSheetsSilently();
+  } catch(silentErr) {}
+}
+
+function menuCreateFeeMaster() {
+  var ss = getSpreadsheet();
+  handleGetFeeMaster(ss);
+  try {
+    SpreadsheetApp.getUi().alert("✅ 'Fee_Master' टैब Google Sheet में सफलतापूर्वक बन गया है!");
+  } catch(e) {}
+}
+
+function menuCreateNotices() {
+  var ss = getSpreadsheet();
+  handleGetNotices(ss);
+  try {
+    SpreadsheetApp.getUi().alert("✅ 'School_Notices' टैब Google Sheet में सफलतापूर्वक बन गया है!");
+  } catch(e) {}
+}
+
+function setupAllRequiredSheetsSilently() {
+  var ss = getSpreadsheet();
+  if (!ss) return;
+  var feeSheet = ss.getSheetByName("Fee_Master") || ss.getSheetByName("FeeMaster") || ss.getSheetByName("Fee Master");
+  if (!feeSheet) handleGetFeeMaster(ss);
+  var notSheet = ss.getSheetByName("School_Notices") || ss.getSheetByName("Notices") || ss.getSheetByName("Notice");
+  if (!notSheet) handleGetNotices(ss);
+  var busSheet = ss.getSheetByName("Bus_Tracking");
+  if (!busSheet) {
+    busSheet = ss.insertSheet("Bus_Tracking");
+    busSheet.appendRow(["Bus_ID", "Driver_Name", "Current_Location", "Last_Updated"]);
+    busSheet.appendRow(["ecad7ddc", "Amjad", "30.056038, 77.419096", Utilities.formatDate(new Date(), "Asia/Kolkata", "dd/MM/yyyy HH:mm:ss")]);
+  }
+}
+
+/**
+ * Standalone runner: Run directly from Apps Script editor by selecting "setupAllRequiredSheets" and clicking Run!
+ */
+function setupAllRequiredSheets() {
+  var ss = getSpreadsheet();
+  if (!ss) {
+    return { status: "error", message: "Spreadsheet access failed. Check sheet permissions." };
+  }
+
+  var created = [];
+
+  // 1. Fee_Master
+  var feeMasterSheet = ss.getSheetByName("Fee_Master") || ss.getSheetByName("FeeMaster") || ss.getSheetByName("Fee Master");
+  if (!feeMasterSheet) {
+    handleGetFeeMaster(ss);
+    created.push("Fee_Master");
+  }
+
+  // 2. School_Notices
+  var noticesSheet = ss.getSheetByName("School_Notices") || ss.getSheetByName("Notices") || ss.getSheetByName("Notice");
+  if (!noticesSheet) {
+    handleGetNotices(ss);
+    created.push("School_Notices");
+  }
+
+  // 3. Bus_Tracking
+  var busSheet = ss.getSheetByName("Bus_Tracking");
+  if (!busSheet) {
+    busSheet = ss.insertSheet("Bus_Tracking");
+    busSheet.appendRow(["Bus_ID", "Driver_Name", "Current_Location", "Last_Updated"]);
+    busSheet.appendRow(["ecad7ddc", "Amjad", "30.056038, 77.419096", Utilities.formatDate(new Date(), "Asia/Kolkata", "dd/MM/yyyy HH:mm:ss")]);
+    created.push("Bus_Tracking");
+  }
+
+  // 4. Students
+  var studentsSheet = ss.getSheetByName("Students");
+  if (!studentsSheet) {
+    studentsSheet = ss.insertSheet("Students");
+    studentsSheet.appendRow([
+      "Student_ID", "Student_Name", "Father_Name", "Mother_Name", "Mobile_Number", "Parent_Mobile",
+      "Class", "Section", "Roll_Number", "Date_Of_Birth", "Address", "Transport_Required",
+      "Bus_Stop", "Route", "Fee_Category", "Monthly_Fee", "Admission_Date", "Session_Start_Month", "Status"
+    ]);
+    created.push("Students");
+  }
+
+  // 5. Fees
+  var feesSheet = ss.getSheetByName("Fees") || ss.getSheetByName("Fee_Collection");
+  if (!feesSheet) {
+    feesSheet = ss.insertSheet("Fees");
+    feesSheet.appendRow([
+      "Receipt_No", "Date", "Student_ID", "Student_Name", "Class", "Month",
+      "Total_Amount", "Amount_Paid", "Balance_Amount", "Payment_Mode", "Collected_By", "Remarks"
+    ]);
+    created.push("Fees");
+  }
+
+  // 6. Homework
+  var hwSheet = ss.getSheetByName("Homework");
+  if (!hwSheet) {
+    hwSheet = ss.insertSheet("Homework");
+    hwSheet.appendRow(["Date", "Class", "Subject", "Title", "Description", "Assigned_By", "Status"]);
+    created.push("Homework");
+  }
+
+  // 7. Behavior
+  var behSheet = ss.getSheetByName("Behavior") || ss.getSheetByName("Attendance");
+  if (!behSheet) {
+    behSheet = ss.insertSheet("Behavior");
+    behSheet.appendRow(["Date", "Student_ID", "Student_Name", "Class", "Roll_Number", "Is_Present", "Remark", "Teacher_Name"]);
+    created.push("Behavior");
+  }
+
+  var msg = created.length > 0
+    ? "✅ सफलतापूर्वक " + created.length + " नए टैब बनाए गए: " + created.join(", ")
+    : "✅ सभी आवश्यक टैब (Fee_Master, School_Notices, Students आदि) पहले से मौजूद हैं!";
+
+  try {
+    SpreadsheetApp.getUi().alert("🏫 EVS स्कूल ऑटोमेशन", msg, SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch(e) {}
+
+  return {
+    status: "success",
+    message: msg,
+    created: created,
+    totalRequiredChecked: 7
+  };
+}
+
 function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : "";
   var ss = getSpreadsheet();
@@ -400,6 +545,13 @@ function doGet(e) {
   // 8. GET NOTICES (Option B: Auto-Creates School_Notices sheet if not present)
   if (action === "getNotices") {
     return handleGetNotices(ss);
+  }
+
+  // 9. SETUP ALL REQUIRED SHEETS / AUTO-CREATE TABS
+  if (action === "setupAllSheets" || action === "setupDatabase" || action === "createAllSheets" || action === "initTabs") {
+    var setupRes = setupAllRequiredSheets();
+    return ContentService.createTextOutput(JSON.stringify(setupRes))
+      .setMimeType(ContentService.MimeType.JSON);
   }
 
   return ContentService.createTextOutput(JSON.stringify({
@@ -584,6 +736,13 @@ function doPost(e) {
     // 3F. SYNC SCHOOL NOTICES (Option B: Auto-Creates or Updates School_Notices sheet)
     if (action === "syncNotices" || action === "saveNotice") {
       return handleSyncNotices(ss, data);
+    }
+
+    // 3G. SETUP ALL REQUIRED SHEETS / AUTO-CREATE TABS
+    if (action === "setupAllSheets" || action === "setupDatabase" || action === "createAllSheets" || action === "initTabs") {
+      var setupRes = setupAllRequiredSheets();
+      return ContentService.createTextOutput(JSON.stringify(setupRes))
+        .setMimeType(ContentService.MimeType.JSON);
     }
 
     // 4. ADD BEHAVIOR

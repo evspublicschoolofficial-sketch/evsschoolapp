@@ -1,142 +1,91 @@
 import { Student, FeeCollectionRecord } from '../types';
 
 /**
- * Standard Fee Structure per Class
+ * Standard Fee Structure per Class (Strictly 4 Fees per School Brief:
+ * 1. Admission Fee, 2. Monthly Tuition Fee, 3. Exam Fee, 4. Books Fee)
  */
 export interface ClassFeeConfig {
-  monthlyTuition: number;
   admissionFee: number;
+  monthlyTuition: number;
   examFee: number;
-  annualFee: number;
-  transportFee: number;
   booksFee: number;
-  uniformFee: number;
-  lateFine: number;
 }
 
 export const FEE_MASTER_CONFIG: Record<string, ClassFeeConfig> = {
   // Pre-Primary
   'play': {
-    monthlyTuition: 500,
     admissionFee: 1500,
+    monthlyTuition: 500,
     examFee: 300,
-    annualFee: 1000,
-    transportFee: 500,
     booksFee: 800,
-    uniformFee: 800,
-    lateFine: 50,
   },
   'nursery': {
-    monthlyTuition: 600,
     admissionFee: 1500,
+    monthlyTuition: 600,
     examFee: 300,
-    annualFee: 1000,
-    transportFee: 500,
     booksFee: 1000,
-    uniformFee: 800,
-    lateFine: 50,
   },
   'lkg': {
-    monthlyTuition: 600,
     admissionFee: 1500,
+    monthlyTuition: 600,
     examFee: 300,
-    annualFee: 1000,
-    transportFee: 500,
     booksFee: 1000,
-    uniformFee: 800,
-    lateFine: 50,
   },
   'ukg': {
-    monthlyTuition: 600,
     admissionFee: 1500,
+    monthlyTuition: 600,
     examFee: 300,
-    annualFee: 1000,
-    transportFee: 500,
     booksFee: 1000,
-    uniformFee: 800,
-    lateFine: 50,
   },
   // Primary Classes
   '1st': {
-    monthlyTuition: 650,
     admissionFee: 2000,
+    monthlyTuition: 650,
     examFee: 400,
-    annualFee: 1200,
-    transportFee: 600,
     booksFee: 1200,
-    uniformFee: 900,
-    lateFine: 50,
   },
   '2nd': {
-    monthlyTuition: 650,
     admissionFee: 2000,
+    monthlyTuition: 650,
     examFee: 400,
-    annualFee: 1200,
-    transportFee: 600,
     booksFee: 1200,
-    uniformFee: 900,
-    lateFine: 50,
   },
   '3rd': {
-    monthlyTuition: 650,
     admissionFee: 2000,
+    monthlyTuition: 650,
     examFee: 400,
-    annualFee: 1200,
-    transportFee: 600,
     booksFee: 1200,
-    uniformFee: 900,
-    lateFine: 50,
   },
   '4th': {
-    monthlyTuition: 700,
     admissionFee: 2000,
+    monthlyTuition: 700,
     examFee: 400,
-    annualFee: 1200,
-    transportFee: 600,
     booksFee: 1400,
-    uniformFee: 900,
-    lateFine: 50,
   },
   '5th': {
-    monthlyTuition: 700,
     admissionFee: 2000,
+    monthlyTuition: 700,
     examFee: 400,
-    annualFee: 1200,
-    transportFee: 600,
     booksFee: 1400,
-    uniformFee: 900,
-    lateFine: 50,
   },
   // Upper Primary / Middle Classes
   '6th': {
-    monthlyTuition: 800,
     admissionFee: 2500,
+    monthlyTuition: 800,
     examFee: 500,
-    annualFee: 1500,
-    transportFee: 700,
     booksFee: 1600,
-    uniformFee: 1000,
-    lateFine: 100,
   },
   '7th': {
-    monthlyTuition: 800,
     admissionFee: 2500,
+    monthlyTuition: 800,
     examFee: 500,
-    annualFee: 1500,
-    transportFee: 700,
     booksFee: 1600,
-    uniformFee: 1000,
-    lateFine: 100,
   },
   '8th': {
-    monthlyTuition: 850,
     admissionFee: 2500,
+    monthlyTuition: 850,
     examFee: 500,
-    annualFee: 1500,
-    transportFee: 700,
     booksFee: 1800,
-    uniformFee: 1000,
-    lateFine: 100,
   },
 };
 
@@ -163,14 +112,10 @@ export const CLASS_META_LIST: ClassMeta[] = [
 ];
 
 export const DEFAULT_FEE_CONFIG: ClassFeeConfig = {
-  monthlyTuition: 600,
   admissionFee: 2000,
+  monthlyTuition: 600,
   examFee: 400,
-  annualFee: 1200,
-  transportFee: 600,
   booksFee: 1200,
-  uniformFee: 900,
-  lateFine: 50,
 };
 
 /**
@@ -275,7 +220,68 @@ export const fetchFeeMasterFromGoogleSheet = async (
       return merged;
     }
   } catch (e) {
-    console.warn('Could not fetch Fee Master from Google Sheet:', e);
+    console.warn('Could not fetch Fee Master from Google Sheet via Apps Script:', e);
+  }
+  return null;
+};
+
+/**
+ * Fetch Fee Master directly from Google Sheets via GViz (Supports 'Fee_Maseter', 'Fee_Master', etc.)
+ */
+export const fetchFeeMasterDirectGViz = async (
+  spreadsheetId: string = '1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU'
+): Promise<Record<string, ClassFeeConfig> | null> => {
+  const tabCandidates = ['Fee_Maseter', 'Fee_Master', 'FeeMaster', 'Fee Master'];
+  for (const sheetName of tabCandidates) {
+    try {
+      const encoded = encodeURIComponent(sheetName);
+      const res = await fetch(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json&sheet=${encoded}`);
+      if (!res.ok) continue;
+      const text = await res.text();
+      const start = text.indexOf('{');
+      const end = text.lastIndexOf('}');
+      if (start === -1 || end === -1) continue;
+      const data = JSON.parse(text.slice(start, end + 1));
+      const cols = (data.table?.cols || []).map((c: any) => String(c?.label || c?.id || '').trim().toLowerCase());
+
+      const hasFeeCol = cols.some((c: string) => c.includes('class') || c.includes('admission') || c.includes('tution') || c.includes('tuition') || c.includes('fee'));
+      if (!hasFeeCol) continue;
+
+      const rows = data.table?.rows || [];
+      const classIdx = cols.findIndex((c: string) => c.includes('class'));
+      const admIdx = cols.findIndex((c: string) => c.includes('admission'));
+      const tutionIdx = cols.findIndex((c: string) => c.includes('tution') || c.includes('tuition'));
+      const examIdx = cols.findIndex((c: string) => c.includes('exam'));
+      const booksIdx = cols.findIndex((c: string) => c.includes('book'));
+
+      const result: Record<string, ClassFeeConfig> = {};
+      for (const r of rows) {
+        const cells = (r.c || []).map((c: any) => c?.v);
+        const rawClass = String(cells[classIdx !== -1 ? classIdx : 0] || '').trim();
+        if (!rawClass || rawClass.toLowerCase() === 'class') continue;
+
+        const classKey = normalizeClassKey(rawClass);
+        const rawAdm = Number(cells[admIdx !== -1 ? admIdx : 1]);
+        const rawTut = Number(cells[tutionIdx !== -1 ? tutionIdx : 2]);
+        const rawExam = Number(cells[examIdx !== -1 ? examIdx : 3]);
+        const rawBooks = Number(cells[booksIdx !== -1 ? booksIdx : 4]);
+
+        const defaultClassCfg = FEE_MASTER_CONFIG[classKey] || DEFAULT_FEE_CONFIG;
+        result[classKey] = {
+          admissionFee: !isNaN(rawAdm) && rawAdm > 0 ? rawAdm : defaultClassCfg.admissionFee,
+          monthlyTuition: !isNaN(rawTut) && rawTut > 0 ? rawTut : defaultClassCfg.monthlyTuition,
+          examFee: !isNaN(rawExam) && rawExam > 0 ? rawExam : defaultClassCfg.examFee,
+          booksFee: !isNaN(rawBooks) && rawBooks > 0 ? rawBooks : defaultClassCfg.booksFee,
+        };
+      }
+
+      if (Object.keys(result).length > 0) {
+        saveActiveFeeMasterConfig(result);
+        return result;
+      }
+    } catch (e) {
+      console.warn(`Error reading Fee Master sheet ${sheetName}:`, e);
+    }
   }
   return null;
 };
@@ -423,20 +429,8 @@ export const getStandardFeeAmount = (
   if (normType.includes('exam') || normType.includes('परीक्षा')) {
     return config.examFee;
   }
-  if (normType.includes('annual') || normType.includes('वार्षिक')) {
-    return config.annualFee;
-  }
-  if (normType.includes('transport') || normType.includes('bus') || normType.includes('वाहन')) {
-    return config.transportFee;
-  }
   if (normType.includes('book') || normType.includes('पुस्तक') || normType.includes('stationary')) {
     return config.booksFee;
-  }
-  if (normType.includes('uniform') || normType.includes('यूनिफॉर्म')) {
-    return config.uniformFee;
-  }
-  if (normType.includes('late') || normType.includes('fine') || normType.includes('विलंब')) {
-    return config.lateFine;
   }
 
   // Default to monthly tuition
