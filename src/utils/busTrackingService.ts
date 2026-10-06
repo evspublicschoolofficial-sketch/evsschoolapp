@@ -1127,7 +1127,10 @@ function generatePastDues() {
     }
 
     // Determine student's Session_Start_Month
-    var studentStartMonthStr = startMonthIdx !== -1 ? String(row[startMonthIdx] || "").trim() : "April";
+    var studentStartMonthStr = startMonthIdx !== -1 ? String(row[startMonthIdx] || "").trim() : "";
+    if (!studentStartMonthStr) {
+      studentStartMonthStr = "April"; // Default to April if missing or blank
+    }
     var studentStartMonthIdx = getAcademicMonthIndex(studentStartMonthStr);
 
     // Determine monthly tuition fee
@@ -1196,6 +1199,66 @@ function generatePastDues() {
     billedRowsCount: totalBilledRows,
     currentAcademicMonth: ACADEMIC_MONTHS[curAcadIdx - 1],
     currentAcademicMonthIndex: curAcadIdx
+  };
+}
+
+/**
+ * AUTO-RECALCULATE DUES ON LOAD / getStudentDues
+ * When fetching student summary data, if no fee record exists for a student in the Fees sheet,
+ * automatically calls generatePastDues() to append missing monthly billing entries before returning response.
+ */
+function getStudentDues(studentId) {
+  var ss = getSpreadsheet();
+  if (!ss) return { status: "error", message: "Spreadsheet not accessible" };
+
+  var feeSheet = ss.getSheetByName("Fee_Collection");
+  if (!feeSheet) {
+    generatePastDues();
+    feeSheet = ss.getSheetByName("Fee_Collection");
+  }
+
+  var feeData = feeSheet.getDataRange().getValues();
+  var studentRecords = [];
+  var hasRecords = false;
+
+  for (var i = 1; i < feeData.length; i++) {
+    var rSid = String(feeData[i][1] || "").trim().toLowerCase();
+    if (rSid === String(studentId || "").trim().toLowerCase()) {
+      studentRecords.push(feeData[i]);
+      hasRecords = true;
+    }
+  }
+
+  if (!hasRecords) {
+    generatePastDues();
+    feeData = feeSheet.getDataRange().getValues();
+    for (var i = 1; i < feeData.length; i++) {
+      var rSid = String(feeData[i][1] || "").trim().toLowerCase();
+      if (rSid === String(studentId || "").trim().toLowerCase()) {
+        studentRecords.push(feeData[i]);
+      }
+    }
+  }
+
+  var totalPaid = 0;
+  var totalBilled = 0;
+  studentRecords.forEach(function(row) {
+    var paid = Number(row[7]) || 0;
+    var total = Number(row[5]) || 0;
+    totalPaid += paid;
+    totalBilled += total;
+  });
+
+  var pendingAmount = Math.max(0, totalBilled - totalPaid);
+
+  return {
+    status: "success",
+    studentId: studentId,
+    recordsCount: studentRecords.length,
+    totalBilled: totalBilled,
+    totalPaid: totalPaid,
+    pendingAmount: pendingAmount,
+    records: studentRecords
   };
 }
 

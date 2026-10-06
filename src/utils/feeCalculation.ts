@@ -156,12 +156,33 @@ export const computeStudentFeeMetrics = (
 
   if (studentRecords.length > 0) {
     const uniqueBilledMap = new Map<string, number>();
+    const ACADEMIC_MONTHS_ARR = ["april", "may", "june", "july", "august", "september", "october", "november", "december", "january", "february", "march"];
+    const now = new Date();
+    const calMonth = now.getMonth();
+    const currentAcadIdx = calMonth >= 3 ? (calMonth - 2) : (calMonth + 10);
 
     studentRecords.forEach((r, idx) => {
       const monthKey = String(r.Month || '').trim().toLowerCase();
       const typeKey = String(r.Fee_Type || '').trim().toLowerCase();
       const isAdvanceType = /(advance|अग्रिम)/i.test(typeKey);
       const isOneTimeHead = /(admission|प्रवेश|वार्षिक|annual|uniform|यूनिफॉर्म|books|पुस्तक|stationary|exam|परीक्षा|misc|अन्य|fine|विलंब)/i.test(typeKey);
+
+      let isFutureMonth = false;
+      if (monthKey && !isOneTimeHead) {
+        for (let m = 0; m < ACADEMIC_MONTHS_ARR.length; m++) {
+          if (monthKey.includes(ACADEMIC_MONTHS_ARR[m])) {
+            const mIdx = m + 1;
+            if (mIdx > currentAcadIdx) {
+              isFutureMonth = true;
+            }
+            break;
+          }
+        }
+      }
+
+      if (isFutureMonth) {
+        return;
+      }
 
       let billedKey = '';
       if (monthKey) {
@@ -316,5 +337,171 @@ export const computeSchoolFeeTotals = (
     totalAdvance,
     totalBilled,
   };
+};
+
+/**
+ * DYNAMIC CURRENT-MONTH DUES CALCULATION (PREVENT OVER-BILLING)
+ * Calculates Total Billed Dues ONLY for months elapsed from "Session_Start_Month" up to "Current_Month".
+ * Does NOT include future months in "Total Session Fee" or "Pending Dues" until those months arrive.
+ */
+export const calculateStudentSummary = (
+  studentId: string,
+  allReceipts: FeeCollectionRecord[],
+  studentProfile?: Student | null
+) => {
+  const ACADEMIC_MONTHS = [
+    "April", "May", "June", "July", "August", "September",
+    "October", "November", "December", "January", "February", "March"
+  ];
+
+  const now = new Date();
+  const calMonth = now.getMonth(); // 0-11
+  const currentAcadIdx = calMonth >= 3 ? (calMonth - 2) : (calMonth + 10); // April=1 ... March=12
+
+  const startMonthStr = studentProfile?.Session_Start_Month || studentProfile?.Start_Month || "April";
+  let startMonthIdx = 1;
+  const cleanStart = String(startMonthStr).trim().toLowerCase();
+  for (let i = 0; i < ACADEMIC_MONTHS.length; i++) {
+    if (cleanStart.includes(ACADEMIC_MONTHS[i].toLowerCase())) {
+      startMonthIdx = i + 1;
+      break;
+    }
+  }
+
+  const elapsedMonths = Math.max(0, Math.min(12, currentAcadIdx - startMonthIdx + 1));
+
+  let monthlyTuition = 600;
+  if (studentProfile?.Monthly_Fee && Number(studentProfile.Monthly_Fee) > 0) {
+    monthlyTuition = Number(studentProfile.Monthly_Fee);
+  } else if (studentProfile?.Class) {
+    const cls = String(studentProfile.Class).toLowerCase();
+    if (cls.includes('play')) monthlyTuition = 500;
+    else if (cls.includes('1st') || cls.includes('2nd') || cls.includes('3rd')) monthlyTuition = 650;
+    else if (cls.includes('4th') || cls.includes('5th')) monthlyTuition = 700;
+    else if (cls.includes('6th') || cls.includes('7th')) monthlyTuition = 800;
+    else if (cls.includes('8th')) monthlyTuition = 850;
+  }
+
+  const admissionFee = (studentProfile?.Admission_Fee !== undefined && studentProfile?.Admission_Fee !== null) ? Number(studentProfile.Admission_Fee) : 0;
+  const totalBilledSessionFee = (monthlyTuition * elapsedMonths) + admissionFee;
+
+  const rawStudentReceipts = allReceipts.filter(
+    (r) => normalizeStudentId(r.Student_ID) === normalizeStudentId(studentId)
+  );
+  const reconciled = reconcileFeeRecords(rawStudentReceipts);
+  const totalPaid = reconciled.reduce((sum, r) => sum + (Number(r.Amount_Paid) || 0), 0);
+  const currentDues = Math.max(0, totalBilledSessionFee - totalPaid);
+
+  return {
+    startMonth: ACADEMIC_MONTHS[startMonthIdx - 1],
+    elapsedMonths,
+    monthlyTuition,
+    admissionFee,
+    totalBilledSessionFee,
+    totalPaid,
+    currentDues,
+    recordsCount: reconciled.length,
+    records: reconciled
+  };
+};
+
+/**
+ * LEDGER TABLE RENDERING (12-COLUMN ARRAY MAPPING)
+ * strictly reads Google Sheets data rows using 0-based array indices without column shifting:
+ * Index 0: Receipt_Number
+ * Index 1: Student_ID
+ * Index 2: Date
+ * Index 3: Fee_Type
+ * Index 4: Month
+ * Index 5: Total_Amount (TOTAL FEE)
+ * Index 6: Discount (DISCOUNT)
+ * Index 7: Amount_Paid (PAID)
+ * Index 8: Balance_Amount (BALANCE)
+ * Index 9: Payment_Mode (MODE)
+ * Index 10: Received_By (RECEIVED BY)
+ * Index 11: Remarks / Notes
+ */
+export const renderLedgerTable = (rowsData: any[]) => {
+  if (!rowsData || rowsData.length === 0) {
+    return `<div class="text-center py-10 text-slate-400">कोई फीस रिकॉर्ड नहीं मिला</div>`;
+  }
+
+  let html = `
+    <div class="overflow-x-auto rounded-2xl border border-slate-200">
+      <table class="w-full text-left text-xs text-slate-700">
+        <thead class="bg-[#0c2340] text-amber-300 uppercase tracking-wider text-[10px]">
+          <tr>
+            <th class="px-3.5 py-3">RECEIPT NO</th>
+            <th class="px-3.5 py-3">DATE</th>
+            <th class="px-3.5 py-3">FEE TYPE</th>
+            <th class="px-3.5 py-3">MONTH / DURATION</th>
+            <th class="px-3.5 py-3 text-right">TOTAL FEE</th>
+            <th class="px-3.5 py-3 text-right">DISCOUNT</th>
+            <th class="px-3.5 py-3 text-right">PAID</th>
+            <th class="px-3.5 py-3 text-right">BALANCE</th>
+            <th class="px-3.5 py-3">PAYMENT MODE</th>
+            <th class="px-3.5 py-3">RECEIVED BY</th>
+            <th class="px-3.5 py-3">REMARKS</th>
+            <th class="px-3.5 py-3 text-center">ACTIONS</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-200 bg-white">
+  `;
+
+  rowsData.forEach((row, idx) => {
+    const receiptNo = Array.isArray(row) ? (row[0] || `REC-${idx + 1}`) : (row.Receipt_Number || `REC-${idx + 1}`);
+    const studentId = Array.isArray(row) ? (row[1] || '') : (row.Student_ID || '');
+    const dateVal = Array.isArray(row) ? (row[2] || '') : (row.Date || '');
+    const feeType = Array.isArray(row) ? (row[3] || 'Monthly Tuition Fee') : (row.Fee_Type || 'Monthly Tuition Fee');
+    const monthVal = Array.isArray(row) ? (row[4] || '—') : (row.Month || '—');
+    const totalFee = Array.isArray(row) ? (Number(row[5]) || 0) : (Number(row.Total_Amount) || 0);
+    const discount = Array.isArray(row) ? (Number(row[6]) || 0) : (Number((row as any).Discount_Amount || (row as any).Discount) || 0);
+    const amountPaid = Array.isArray(row) ? (Number(row[7]) || 0) : (Number(row.Amount_Paid) || 0);
+    const balance = Array.isArray(row) ? (Number(row[8]) || 0) : (Number(row.Balance_Amount) || (totalFee - amountPaid));
+    let paymentMode = Array.isArray(row) ? (row[9] || 'Cash') : (row.Payment_Mode || 'Cash');
+    if (!paymentMode || !isNaN(Number(paymentMode)) || String(paymentMode).startsWith('-') || /^\d+$/.test(String(paymentMode))) {
+      paymentMode = 'Cash';
+    }
+    const receivedBy = Array.isArray(row) ? (row[10] || 'School Office') : (row.Received_By || 'School Office');
+    const remarks = Array.isArray(row) ? (row[11] || '') : ((row as any).Remarks || (row as any).Notes || '');
+
+    let balanceBadge = `<span class="px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-100 text-emerald-800">₹0</span>`;
+    if (balance > 0) {
+      balanceBadge = `<span class="px-2 py-0.5 rounded text-[11px] font-bold bg-rose-100 text-rose-800">₹${balance.toLocaleString('en-IN')}</span>`;
+    } else if (balance < 0) {
+      balanceBadge = `<span class="px-2 py-0.5 rounded text-[11px] font-black bg-purple-100 text-purple-900 border border-purple-200 inline-flex items-center gap-1"><span>-₹${Math.abs(balance).toLocaleString('en-IN')}</span><span class="text-[9px] uppercase font-bold text-purple-700 bg-purple-200/80 px-1 py-0.2 rounded">ADV</span></span>`;
+    }
+
+    let remarksHtml = remarks ? `<span class="text-xs text-slate-600">${remarks}</span>` : `<span class="text-xs text-slate-400">—</span>`;
+    if (remarks && (remarks.includes("Paid") || remarks.includes("Bal") || remarks.includes("₹"))) {
+      remarksHtml = `<span class="inline-block px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-800 border border-indigo-200">${remarks}</span>`;
+    }
+
+    html += `
+      <tr class="hover:bg-slate-50 transition-colors">
+        <td class="px-3.5 py-2.5 font-mono font-bold text-blue-950 whitespace-nowrap">${receiptNo}</td>
+        <td class="px-3.5 py-2.5 text-slate-500 whitespace-nowrap">${dateVal}</td>
+        <td class="px-3.5 py-2.5 font-medium text-slate-800 whitespace-nowrap">${feeType}</td>
+        <td class="px-3.5 py-2.5 text-slate-600 whitespace-nowrap">${monthVal}</td>
+        <td class="px-3.5 py-2.5 text-right font-medium text-slate-700 whitespace-nowrap">₹${totalFee.toLocaleString('en-IN')}</td>
+        <td class="px-3.5 py-2.5 text-right text-amber-700 font-medium whitespace-nowrap">${discount > 0 ? `-₹${discount.toLocaleString('en-IN')}` : '—'}</td>
+        <td class="px-3.5 py-2.5 text-right font-bold text-emerald-700 whitespace-nowrap">₹${amountPaid.toLocaleString('en-IN')}</td>
+        <td class="px-3.5 py-2.5 text-right whitespace-nowrap">${balanceBadge}</td>
+        <td class="px-3.5 py-2.5 text-slate-600 whitespace-nowrap"><span class="inline-block px-2 py-0.5 rounded bg-slate-100 text-[10px] font-semibold text-slate-700">${paymentMode}</span></td>
+        <td class="px-3.5 py-2.5 text-slate-600 whitespace-nowrap">${receivedBy}</td>
+        <td class="px-3.5 py-2.5">${remarksHtml}</td>
+        <td class="px-3.5 py-2.5 text-center whitespace-nowrap">
+          <button type="button" class="px-2.5 py-1 rounded-lg bg-blue-900 text-amber-300 font-bold text-[11px] hover:bg-blue-800 cursor-pointer">प्रिंट</button>
+        </td>
+      </tr>
+    `;
+  });
+
+  html += `
+        </tbody>
+      </table>
+    </div>
+  `;
+  return html;
 };
 

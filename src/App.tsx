@@ -30,7 +30,7 @@ import { EmergencyAlertBanner } from './components/EmergencyAlertBanner';
 import { playSirenPreview } from './utils/sirenAudio';
 import { SchoolNotice } from './types';
 import { fetchFeeMasterDirectGViz } from './utils/feeMaster';
-import { computeStudentFeeMetrics, computeSchoolFeeTotals, normalizeStudentId, reconcileFeeRecords } from './utils/feeCalculation';
+import { computeStudentFeeMetrics, computeSchoolFeeTotals, normalizeStudentId, reconcileFeeRecords, calculateStudentSummary } from './utils/feeCalculation';
 import { realtimeSync } from './utils/realtimeSync';
 import studentFarahPhoto from './assets/images/student_farah_1789483069291.jpg';
 import studentNamraPhoto from './assets/images/student_namra_1789483091505.jpg';
@@ -1961,7 +1961,10 @@ export default function App() {
         const rawBal = cells[balAmtIdx !== -1 ? balAmtIdx : 8];
         const balAmt = rawBal !== undefined && rawBal !== null && rawBal !== '' ? Number(rawBal) : (totalAmt - amtPaid);
 
-        const payMode = String(cells[payModeIdx !== -1 ? payModeIdx : 9] || 'Cash').trim();
+        let payMode = String(cells[payModeIdx !== -1 ? payModeIdx : 9] || 'Cash').trim();
+        if (!payMode || !isNaN(Number(payMode)) || payMode.startsWith('-') || /^\d+$/.test(payMode)) {
+          payMode = 'Cash';
+        }
         const receivedBy = String(cells[receivedByIdx !== -1 ? receivedByIdx : 10] || '').trim();
 
         if (studentId && studentId.toLowerCase() !== 'student_id') {
@@ -3250,16 +3253,16 @@ export default function App() {
         receiptsCount: 0,
       };
     }
-    const metrics = computeStudentFeeMetrics(selectedStudent, feeRecords);
+    const summary = calculateStudentSummary(selectedStudent.Student_ID, feeRecords, selectedStudent);
     return {
-      balance: metrics.dueBalance,
-      rawBalance: metrics.dueBalance,
-      totalPaid: metrics.totalPaid,
-      totalFee: metrics.totalSessionFee,
-      hasDues: metrics.hasDues,
-      isAdvance: metrics.isAdvance,
-      advanceAmount: metrics.advanceAmount,
-      receiptsCount: metrics.receiptsCount,
+      balance: summary.currentDues,
+      rawBalance: summary.currentDues,
+      totalPaid: summary.totalPaid,
+      totalFee: summary.totalBilledSessionFee,
+      hasDues: summary.currentDues > 0,
+      isAdvance: summary.currentDues < 0,
+      advanceAmount: summary.currentDues < 0 ? Math.abs(summary.currentDues) : 0,
+      receiptsCount: summary.recordsCount,
     };
   }, [selectedStudent, feeRecords]);
 
@@ -4163,9 +4166,17 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
   // Delete Fee Record Handler (Manager)
   const handleDeleteFee = async (receiptNo: string, studentId: string) => {
-    const updatedRecords = feeRecords.filter(
-      (r) => !(r.Receipt_Number && r.Receipt_Number.toLowerCase() === receiptNo.toLowerCase())
-    );
+    const cleanTargetReceipt = String(receiptNo || '').replace(/^#/, '').trim().toLowerCase();
+    const cleanTargetStudent = String(studentId || '').trim().toLowerCase();
+
+    const updatedRecords = feeRecords.filter((r) => {
+      const rNo = String(r.Receipt_Number || '').replace(/^#/, '').trim().toLowerCase();
+      const rSid = String(r.Student_ID || '').trim().toLowerCase();
+      if (cleanTargetReceipt && rNo === cleanTargetReceipt) {
+        return false; // Exclude matched receipt
+      }
+      return true;
+    });
     setFeeRecords(updatedRecords);
 
     // Sync student balance
@@ -4184,9 +4195,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       const existing = localStorage.getItem('evs_custom_fee_records');
       if (existing) {
         const list: FeeCollectionRecord[] = JSON.parse(existing);
-        const filtered = list.filter(
-          (r) => !(r.Receipt_Number && r.Receipt_Number.toLowerCase() === receiptNo.toLowerCase())
-        );
+        const filtered = list.filter((r) => {
+          const rNo = String(r.Receipt_Number || '').replace(/^#/, '').trim().toLowerCase();
+          return !(cleanTargetReceipt && rNo === cleanTargetReceipt);
+        });
         localStorage.setItem('evs_custom_fee_records', JSON.stringify(filtered));
       }
       localStorage.setItem(CACHE_KEY_FEES_RECORDS, JSON.stringify(updatedRecords));

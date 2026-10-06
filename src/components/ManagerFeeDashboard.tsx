@@ -19,6 +19,7 @@ import {
   computeStudentFeeMetrics,
   computeSchoolFeeTotals,
   computeReceiptBalance,
+  calculateStudentSummary,
 } from '../utils/feeCalculation';
 import { APPS_SCRIPT_FEE_CODE } from '../utils/feeMaster';
 
@@ -382,7 +383,13 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
     return String(dateStr);
   };
 
-  // Click handler to directly navigate/redirect and auto-scroll to the School Ledger section
+  const getSafePaymentMode = (mode?: string) => {
+    const m = String(mode || 'Cash').trim();
+    if (!m || !isNaN(Number(m)) || m.startsWith('-') || /^\d+$/.test(m)) {
+      return 'Cash';
+    }
+    return m;
+  };
   const handleNavigateToLedger = () => {
     setActiveViewMode('allLedger');
     setTimeout(() => {
@@ -558,15 +565,15 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
         count: 0,
       };
     }
-    const metrics = computeStudentFeeMetrics(selectedStudent, feeRecords);
+    const summary = calculateStudentSummary(selectedStudent.Student_ID, feeRecords, selectedStudent);
     return {
-      totalFee: metrics.totalSessionFee,
-      totalPaid: metrics.totalPaid,
-      balance: metrics.dueBalance,
-      isDue: metrics.hasDues,
-      isAdvance: metrics.isAdvance,
-      advanceAmount: metrics.advanceAmount,
-      count: metrics.receiptsCount,
+      totalFee: summary.totalBilledSessionFee,
+      totalPaid: summary.totalPaid,
+      balance: summary.currentDues,
+      isDue: summary.currentDues > 0,
+      isAdvance: summary.currentDues < 0,
+      advanceAmount: summary.currentDues < 0 ? Math.abs(summary.currentDues) : 0,
+      count: summary.recordsCount,
     };
   }, [selectedStudent, feeRecords]);
 
@@ -2084,7 +2091,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                               </td>
                               <td className="px-3.5 py-3 text-slate-600 whitespace-nowrap">
                                 <span className="inline-block px-2 py-0.5 rounded bg-slate-100 text-[10px] font-semibold text-slate-700">
-                                  {fee.Payment_Mode || 'Cash'}
+                                  {getSafePaymentMode(fee.Payment_Mode)}
                                 </span>
                               </td>
                               <td className="px-3.5 py-3 text-slate-600 whitespace-nowrap">
@@ -2246,17 +2253,19 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                   <th className="px-3.5 py-3">Fee Type</th>
                   <th className="px-3.5 py-3">Month</th>
                   <th className="px-3.5 py-3 text-right">Total Fee</th>
+                  <th className="px-3.5 py-3 text-right">Discount</th>
                   <th className="px-3.5 py-3 text-right">Paid</th>
                   <th className="px-3.5 py-3 text-right">Balance</th>
                   <th className="px-3.5 py-3">Mode</th>
                   <th className="px-3.5 py-3">Received By</th>
+                  <th className="px-3.5 py-3">Remarks</th>
                   <th className="px-3.5 py-3 text-center">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 bg-white">
                 {filteredAllLedger.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="text-center py-10 text-slate-400">
+                    <td colSpan={13} className="text-center py-10 text-slate-400">
                       कोई फीस रिकॉर्ड नहीं मिला
                     </td>
                   </tr>
@@ -2313,11 +2322,9 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                         </td>
                         <td className="px-3.5 py-2.5 text-right font-medium text-slate-700 whitespace-nowrap">
                           <div>₹{(fee.Total_Amount || 0).toLocaleString('en-IN')}</div>
-                          {(fee as any).Discount_Amount > 0 && (
-                            <div className="text-[10px] font-bold text-amber-700">
-                              -₹{Number((fee as any).Discount_Amount).toLocaleString('en-IN')} छूट
-                            </div>
-                          )}
+                        </td>
+                        <td className="px-3.5 py-2.5 text-right font-medium text-amber-700 whitespace-nowrap">
+                          {Number((fee as any).Discount_Amount || (fee as any).Discount || 0) > 0 ? `₹${Number((fee as any).Discount_Amount || (fee as any).Discount).toLocaleString('en-IN')}` : '—'}
                         </td>
                         <td className="px-3.5 py-2.5 text-right font-bold text-emerald-700 whitespace-nowrap">
                           ₹{(fee.Amount_Paid || 0).toLocaleString('en-IN')}
@@ -2342,11 +2349,20 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                         </td>
                         <td className="px-3.5 py-2.5 text-slate-600 whitespace-nowrap">
                           <span className="inline-block px-2 py-0.5 rounded bg-slate-100 text-[10px] font-semibold text-slate-700">
-                            {fee.Payment_Mode || 'Cash'}
+                            {getSafePaymentMode(fee.Payment_Mode)}
                           </span>
                         </td>
                         <td className="px-3.5 py-2.5 text-slate-600 whitespace-nowrap">
                           {fee.Received_By || managerName}
+                        </td>
+                        <td className="px-3.5 py-2.5 text-slate-600">
+                          {fee.Remarks || fee.Notes ? (
+                            <span className="inline-block px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-800 border border-indigo-200">
+                              {fee.Remarks || fee.Notes}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">—</span>
+                          )}
                         </td>
                         <td className="px-3.5 py-2.5 text-center whitespace-nowrap">
                           <div className="flex items-center justify-center gap-1.5">
