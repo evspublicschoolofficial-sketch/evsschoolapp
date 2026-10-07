@@ -2027,11 +2027,13 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                           <th className="px-3.5 py-3">Fee Type</th>
                           <th className="px-3.5 py-3">Month / Duration</th>
                           <th className="px-3.5 py-3 text-right">Total Fee</th>
+                          <th className="px-3.5 py-3 text-right">Discount</th>
                           <th className="px-3.5 py-3 text-right">Paid (₹)</th>
                           <th className="px-3.5 py-3 text-right">Balance</th>
                           <th className="px-3.5 py-3">Payment Mode</th>
                           <th className="px-3.5 py-3">Received By</th>
-                          <th className="px-3.5 py-3 text-center">Receipt Share</th>
+                          <th className="px-3.5 py-3">Remarks</th>
+                          <th className="px-3.5 py-3 text-center">Actions</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-200 bg-white">
@@ -2062,11 +2064,9 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                               </td>
                               <td className="px-3.5 py-3 text-right font-medium text-slate-700 whitespace-nowrap">
                                 <div>₹{(fee.Total_Amount || 0).toLocaleString('en-IN')}</div>
-                                {(fee as any).Discount_Amount > 0 && (
-                                  <div className="text-[10px] font-bold text-amber-700">
-                                    -₹{Number((fee as any).Discount_Amount).toLocaleString('en-IN')} छूट
-                                  </div>
-                                )}
+                              </td>
+                              <td className="px-3.5 py-3 text-right font-medium text-amber-700 whitespace-nowrap">
+                                {Number((fee as any).Discount_Amount || (fee as any).Discount || 0) > 0 ? `₹${Number((fee as any).Discount_Amount || (fee as any).Discount).toLocaleString('en-IN')}` : '—'}
                               </td>
                               <td className="px-3.5 py-3 text-right font-bold text-emerald-700 whitespace-nowrap">
                                 ₹{(fee.Amount_Paid || 0).toLocaleString('en-IN')}
@@ -2096,6 +2096,15 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                               </td>
                               <td className="px-3.5 py-3 text-slate-600 whitespace-nowrap">
                                 {fee.Received_By || managerName}
+                              </td>
+                              <td className="px-3.5 py-3 text-slate-600">
+                                {fee.Remarks || fee.Notes ? (
+                                  <span className="inline-block px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-800 border border-indigo-200">
+                                    {fee.Remarks || fee.Notes}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400">—</span>
+                                )}
                               </td>
                               <td className="px-3.5 py-3 text-center whitespace-nowrap">
                                 <div className="flex items-center justify-center gap-1.5">
