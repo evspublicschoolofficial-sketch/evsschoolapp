@@ -383,7 +383,10 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
     return String(dateStr);
   };
 
-  const getSafePaymentMode = (mode?: string) => {
+  const getSafePaymentMode = (mode?: string, fee?: FeeCollectionRecord) => {
+    if (fee?.Receipt_Number?.startsWith('BILL-') || fee?.Received_By?.toLowerCase().includes('auto-bill')) {
+      return 'Due';
+    }
     const m = String(mode || 'Cash').trim();
     if (!m || !isNaN(Number(m)) || m.startsWith('-') || /^\d+$/.test(m)) {
       return 'Cash';
@@ -559,21 +562,31 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
         totalFee: 0,
         totalPaid: 0,
         balance: 0,
+        netBalance: 0,
         isDue: false,
         isAdvance: false,
         advanceAmount: 0,
         count: 0,
+        elapsedMonths: 0,
+        startMonth: 'April',
+        currentMonth: 'October',
       };
     }
     const summary = calculateStudentSummary(selectedStudent.Student_ID, feeRecords, selectedStudent);
     return {
       totalFee: summary.totalBilledSessionFee,
+      fullYearFee: summary.fullYearFee,
+      monthlyTuition: summary.monthlyTuition,
       totalPaid: summary.totalPaid,
       balance: summary.currentDues,
-      isDue: summary.currentDues > 0,
-      isAdvance: summary.currentDues < 0,
-      advanceAmount: summary.currentDues < 0 ? Math.abs(summary.currentDues) : 0,
+      netBalance: summary.netBalance,
+      isDue: summary.isDue,
+      isAdvance: summary.isAdvance,
+      advanceAmount: summary.advanceAmount,
       count: summary.recordsCount,
+      elapsedMonths: summary.elapsedMonths,
+      startMonth: summary.startMonth,
+      currentMonth: summary.currentMonth,
     };
   }, [selectedStudent, feeRecords]);
 
@@ -1892,26 +1905,43 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
 
               {/* Financial Metrics Cards for this student */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <div className="p-4 rounded-2xl bg-white border border-slate-200/90 shadow-2xs">
-                  <span className="text-[11px] text-slate-500 font-medium block">
-                    सत्र कुल देय (Total Session Fee)
-                  </span>
-                  <span className="text-xl sm:text-2xl font-black text-slate-800 mt-1 block">
-                    ₹{studentFeeSummary.totalFee.toLocaleString('en-IN')}
+                <div className="p-4 rounded-2xl bg-white border border-slate-200/90 shadow-2xs flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] text-slate-500 font-bold block">
+                        सत्र देय ({studentFeeSummary.currentMonth} तक)
+                      </span>
+                      {studentFeeSummary.monthlyTuition > 0 && (
+                        <span className="text-[10px] font-bold text-blue-900 bg-blue-50 px-1.5 py-0.2 rounded border border-blue-200">
+                          ₹{studentFeeSummary.monthlyTuition}/माह
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-xl sm:text-2xl font-black text-slate-800 mt-1 block">
+                      ₹{studentFeeSummary.totalFee.toLocaleString('en-IN')}
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-slate-400 mt-1 pt-1 border-t border-slate-100 block">
+                    पूर्ण 12 माह सत्र: ₹{(studentFeeSummary.fullYearFee || studentFeeSummary.monthlyTuition * 12).toLocaleString('en-IN')}
                   </span>
                 </div>
 
-                <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 shadow-2xs">
-                  <span className="text-[11px] text-emerald-700 font-medium block">
-                    कुल जमा राशि (Total Fees Paid)
-                  </span>
-                  <span className="text-xl sm:text-2xl font-black text-emerald-900 mt-1 block">
-                    ₹{studentFeeSummary.totalPaid.toLocaleString('en-IN')}
+                <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 shadow-2xs flex flex-col justify-between">
+                  <div>
+                    <span className="text-[11px] text-emerald-700 font-bold block">
+                      कुल जमा राशि (Total Paid)
+                    </span>
+                    <span className="text-xl sm:text-2xl font-black text-emerald-900 mt-1 block">
+                      ₹{studentFeeSummary.totalPaid.toLocaleString('en-IN')}
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-emerald-700 mt-1 pt-1 border-t border-emerald-200/50 block">
+                    कुल {studentFeeSummary.count} रसीदें जारी
                   </span>
                 </div>
 
                 <div
-                  className={`p-4 rounded-2xl border shadow-2xs ${
+                  className={`p-4 rounded-2xl border shadow-2xs flex flex-col justify-between ${
                     studentFeeSummary.isAdvance
                       ? 'bg-purple-50 border-purple-300 text-purple-950'
                       : studentFeeSummary.isDue
@@ -1919,46 +1949,55 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                       : 'bg-emerald-50 border-emerald-200 text-emerald-950'
                   }`}
                 >
-                  <div className="flex items-center justify-between">
-                    <span
-                      className={`text-[11px] font-bold uppercase tracking-wide ${
-                        studentFeeSummary.isAdvance
-                          ? 'text-purple-700'
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <span
+                        className={`text-[11px] font-bold uppercase tracking-wide ${
+                          studentFeeSummary.isAdvance
+                            ? 'text-purple-700'
+                            : studentFeeSummary.isDue
+                            ? 'text-rose-700'
+                            : 'text-emerald-700'
+                        }`}
+                      >
+                        {studentFeeSummary.isAdvance
+                          ? 'अग्रिम जमा (ADVANCE)'
                           : studentFeeSummary.isDue
-                          ? 'text-rose-700'
-                          : 'text-emerald-700'
+                          ? `वर्तमान बकाया (${studentFeeSummary.currentMonth} तक)`
+                          : 'बकाया स्थिति (STATUS)'}
+                      </span>
+                      <span
+                        className={`text-[9px] px-1.5 py-0.2 rounded font-extrabold uppercase ${
+                          studentFeeSummary.isAdvance
+                            ? 'bg-purple-200 text-purple-900'
+                            : studentFeeSummary.isDue
+                            ? 'bg-rose-200 text-rose-900'
+                            : 'bg-emerald-200 text-emerald-900'
+                        }`}
+                      >
+                        {studentFeeSummary.isAdvance ? 'ADVANCE' : studentFeeSummary.isDue ? 'PENDING' : 'CLEARED'}
+                      </span>
+                    </div>
+                    <span
+                      className={`text-xl sm:text-2xl font-black mt-1 block ${
+                        studentFeeSummary.isAdvance
+                          ? 'text-purple-900'
+                          : studentFeeSummary.isDue
+                          ? 'text-rose-900'
+                          : 'text-emerald-900'
                       }`}
                     >
                       {studentFeeSummary.isAdvance
-                        ? 'अग्रिम जमा (ADVANCE)'
-                        : studentFeeSummary.isDue
-                        ? 'वर्तमान बकाया (DUE)'
-                        : 'बकाया स्थिति (STATUS)'}
-                    </span>
-                    <span
-                      className={`text-[9px] px-1.5 py-0.2 rounded font-extrabold uppercase ${
-                        studentFeeSummary.isAdvance
-                          ? 'bg-purple-200 text-purple-900'
-                          : studentFeeSummary.isDue
-                          ? 'bg-rose-200 text-rose-900'
-                          : 'bg-emerald-200 text-emerald-900'
-                      }`}
-                    >
-                      {studentFeeSummary.isAdvance ? 'ADVANCE' : studentFeeSummary.isDue ? 'PENDING' : 'CLEARED'}
+                        ? `-₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')}`
+                        : `₹${studentFeeSummary.balance.toLocaleString('en-IN')}`}
                     </span>
                   </div>
-                  <span
-                    className={`text-xl sm:text-2xl font-black mt-1 block ${
-                      studentFeeSummary.isAdvance
-                        ? 'text-purple-900'
-                        : studentFeeSummary.isDue
-                        ? 'text-rose-900'
-                        : 'text-emerald-900'
-                    }`}
-                  >
-                    {studentFeeSummary.isAdvance
-                      ? `-₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')}`
-                      : `₹${studentFeeSummary.balance.toLocaleString('en-IN')}`}
+                  <span className="text-[10px] opacity-80 mt-1 pt-1 border-t border-slate-200/50 block">
+                    {studentFeeSummary.isDue
+                      ? `देय ₹${studentFeeSummary.totalFee.toLocaleString('en-IN')} - जमा ₹${studentFeeSummary.totalPaid.toLocaleString('en-IN')}`
+                      : studentFeeSummary.isAdvance
+                      ? 'भविष्य के शुल्क में समायोजित'
+                      : 'सभी देय शुल्क पूर्ण चुकता'}
                   </span>
                 </div>
 
@@ -2091,7 +2130,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                               </td>
                               <td className="px-3.5 py-3 text-slate-600 whitespace-nowrap">
                                 <span className="inline-block px-2 py-0.5 rounded bg-slate-100 text-[10px] font-semibold text-slate-700">
-                                  {getSafePaymentMode(fee.Payment_Mode)}
+                                  {getSafePaymentMode(fee.Payment_Mode, fee)}
                                 </span>
                               </td>
                               <td className="px-3.5 py-3 text-slate-600 whitespace-nowrap">
@@ -2358,7 +2397,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                         </td>
                         <td className="px-3.5 py-2.5 text-slate-600 whitespace-nowrap">
                           <span className="inline-block px-2 py-0.5 rounded bg-slate-100 text-[10px] font-semibold text-slate-700">
-                            {getSafePaymentMode(fee.Payment_Mode)}
+                            {getSafePaymentMode(fee.Payment_Mode, fee)}
                           </span>
                         </td>
                         <td className="px-3.5 py-2.5 text-slate-600 whitespace-nowrap">

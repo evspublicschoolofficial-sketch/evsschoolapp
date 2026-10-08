@@ -348,11 +348,6 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
       setErrorMsg('कृपया वैध जमा राशि दर्ज करें।');
       return;
     }
-    // If not 100% free student, paid amount should be > 0
-    if (!freeStudentInfo.isFree && numPaidAmount <= 0) {
-      setErrorMsg('कृपया वैध जमा राशि दर्ज करें (जमा राशि 0 से अधिक होनी चाहिए)।');
-      return;
-    }
 
     setIsSubmitting(true);
     try {
@@ -363,6 +358,8 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
       const receiptMonth = isMultiMonthMode && multiMonthResult
         ? (multiMonthResult.fullyPaidMonths.join(', ') || month)
         : month;
+
+      const finalPaymentMode = numPaidAmount === 0 ? 'Due' : (paymentMode === 'Due' ? 'Cash' : paymentMode);
 
       const newRec: FeeCollectionRecord = {
         Receipt_Number: receiptNumber.trim(),
@@ -375,10 +372,10 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
         Net_Payable: netPayable,
         Amount_Paid: numPaidAmount,
         Balance_Amount: calculatedBalance,
-        Payment_Mode: paymentMode,
+        Payment_Mode: finalPaymentMode,
         Received_By: receivedBy.trim(),
         Allocations_Summary: multiMonthResult ? multiMonthResult.coveredMonthsSummary : undefined,
-        Notes: multiMonthResult?.partialMonthNote || remarks || (freeStudentInfo.isFree ? '100% Fee Waived' : undefined),
+        Notes: multiMonthResult?.partialMonthNote || remarks || (numPaidAmount === 0 ? 'Monthly Fee Bill (Due)' : (freeStudentInfo.isFree ? '100% Fee Waived' : undefined)),
       };
 
       await onFeeAdded(newRec, sendWhatsAppImmediate);
@@ -1005,11 +1002,23 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
                   type="button"
                   onClick={() => {
                     setAmountPaid(String(netPayable));
+                    setPaymentMode((prev) => prev === 'Due' ? 'Cash' : prev);
                     setUserManuallyEditedPaid(true);
                   }}
-                  className="px-2 py-0.5 rounded bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold cursor-pointer transition-colors"
+                  className="px-2 py-0.5 rounded bg-emerald-100 hover:bg-emerald-200 text-emerald-950 font-bold cursor-pointer transition-colors"
                 >
-                  पूर्ण देय (₹{netPayable})
+                  ✓ पूर्ण देय (₹{netPayable} जमा)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAmountPaid('0');
+                    setPaymentMode('Due');
+                    setUserManuallyEditedPaid(true);
+                  }}
+                  className="px-2 py-0.5 rounded bg-rose-100 hover:bg-rose-200 text-rose-950 font-bold cursor-pointer transition-colors"
+                >
+                  ⚠️ सिर्फ बकाया दर्ज करें (₹0 जमा, शेष ₹{netPayable} Due)
                 </button>
                 {detectedStandardFee > 0 && (
                   <>
@@ -1084,6 +1093,7 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
                 <option value="UPI / Online">UPI / PhonePe / Paytm / GPay</option>
                 <option value="Bank Transfer">Bank Transfer / NEFT / IMPS</option>
                 <option value="Cheque">Cheque / Demand Draft</option>
+                <option value="Due">Due / Pending (बकाया - भुगतान लंबित)</option>
               </select>
             </div>
 

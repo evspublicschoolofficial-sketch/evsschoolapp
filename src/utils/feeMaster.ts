@@ -585,18 +585,18 @@ var SPREADSHEET_ID = "1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU";
  * Standard Fee Structure per Class
  */
 var FEE_MASTER = {
-  'play': 500,
-  'nursery': 600,
-  'lkg': 600,
-  'ukg': 600,
-  '1st': 650,
-  '2nd': 650,
-  '3rd': 650,
-  '4th': 700,
-  '5th': 700,
-  '6th': 800,
-  '7th': 800,
-  '8th': 850
+  'c1': 500, 'play': 500,
+  'c2': 600, 'nursery': 600, 'm1': 600,
+  'c3': 600, 'lkg': 600, 'm2': 600,
+  'c4': 600, 'ukg': 600, 'm3': 600,
+  'c5': 650, '1st': 650, '1': 650,
+  'c6': 650, '2nd': 650, '2': 650,
+  'c7': 650, '3rd': 650, '3': 650,
+  'c8': 700, '4th': 700, '4': 700,
+  'c9': 700, '5th': 700, '5': 700,
+  'c10': 800, '6th': 800, '6': 800,
+  'c11': 800, '7th': 800, '7': 800,
+  'c12': 850, '8th': 850, '8': 850
 };
 
 function getSpreadsheet() {
@@ -739,6 +739,8 @@ function generatePastDues() {
 
     if (!isNaN(customFee) && customFee > 0) {
       monthlyAmount = customFee;
+    } else if (FEE_MASTER[sClass] !== undefined) {
+      monthlyAmount = FEE_MASTER[sClass];
     } else {
       for (var k in FEE_MASTER) {
         if (sClass.indexOf(k) !== -1) {
@@ -764,18 +766,19 @@ function generatePastDues() {
 
       var receiptNo = "BILL-" + monthYear + "-M" + mIdx + "-" + sId;
       rowsToAppend.push([
-        receiptNo,
-        sId,
-        dateStr,
-        "Monthly Tuition Fee",
-        monthName,
-        monthlyAmount,
-        0,
-        monthlyAmount,
-        0,
-        monthlyAmount,
-        "System Backfill",
-        "generatePastDues"
+        receiptNo,                  // 0: Col A Receipt_Number
+        sId,                        // 1: Col B Student_ID
+        dateStr,                    // 2: Col C Date
+        "Monthly Tuition Fee",      // 3: Col D Fee_Type
+        monthName,                  // 4: Col E Month
+        monthlyAmount,              // 5: Col F Total_Amount
+        0,                          // 6: Col G Discount
+        monthlyAmount,              // 7: Col H Net_Payable / extra
+        0,                          // 8: Col I Amount_Paid (Must be 0 for due!)
+        monthlyAmount,              // 9: Col J Balance_Amount (Must be monthlyAmount!)
+        "Due",                      // 10: Col K Payment_Mode ("Due")
+        "System Backfill",          // 11: Col L Received_By
+        "generatePastDues"          // 12: Col M Remarks
       ]);
 
       existingBilledMap[mapKey] = true;
@@ -785,7 +788,7 @@ function generatePastDues() {
 
   if (rowsToAppend.length > 0) {
     var startRow = feeSheet.getLastRow() + 1;
-    feeSheet.getRange(startRow, 1, rowsToAppend.length, 12).setValues(rowsToAppend);
+    feeSheet.getRange(startRow, 1, rowsToAppend.length, 13).setValues(rowsToAppend);
   }
 
   return {
@@ -977,6 +980,8 @@ function generateMonthlyDues() {
 
     if (!isNaN(customFee) && customFee > 0) {
       monthlyAmount = customFee;
+    } else if (FEE_MASTER[sClass] !== undefined) {
+      monthlyAmount = FEE_MASTER[sClass];
     } else {
       for (var k in FEE_MASTER) {
         if (sClass.indexOf(k) !== -1) {
@@ -988,18 +993,19 @@ function generateMonthlyDues() {
 
     var receiptNo = "BILL-" + curYear + "-M" + curAcadIdx + "-" + sId;
     rowsToAppend.push([
-      receiptNo,
-      sId,
-      dateStr,
-      "Monthly Tuition Fee",
-      curMonthName,
-      monthlyAmount,
-      0,
-      monthlyAmount,
-      0,
-      monthlyAmount,
-      "System Auto-Bill",
-      "Automated Trigger (1st of Month)"
+      receiptNo,                     // 0: Col A Receipt_Number
+      sId,                           // 1: Col B Student_ID
+      dateStr,                       // 2: Col C Date
+      "Monthly Tuition Fee",         // 3: Col D Fee_Type
+      curMonthName,                  // 4: Col E Month
+      monthlyAmount,                 // 5: Col F Total_Amount
+      0,                             // 6: Col G Discount
+      monthlyAmount,                 // 7: Col H Net_Payable / extra
+      0,                             // 8: Col I Amount_Paid (Must be 0 for due!)
+      monthlyAmount,                 // 9: Col J Balance_Amount (Must be monthlyAmount!)
+      "Due",                         // 10: Col K Payment_Mode ("Due")
+      "System Auto-Bill",            // 11: Col L Received_By
+      "Automated Monthly Bill (Due)" // 12: Col M Remarks
     ]);
 
     billedMap[sId.toLowerCase()] = true;
@@ -1008,7 +1014,7 @@ function generateMonthlyDues() {
 
   if (rowsToAppend.length > 0) {
     var startRow = feeSheet.getLastRow() + 1;
-    feeSheet.getRange(startRow, 1, rowsToAppend.length, 12).setValues(rowsToAppend);
+    feeSheet.getRange(startRow, 1, rowsToAppend.length, 13).setValues(rowsToAppend);
   }
 
   var msg = "generateMonthlyDues complete for " + curMonthName + " " + curYear +

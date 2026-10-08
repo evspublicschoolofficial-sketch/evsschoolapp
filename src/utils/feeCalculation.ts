@@ -1,7 +1,9 @@
 import { Student, FeeCollectionRecord } from '../types';
 
 export interface StudentFeeMetrics {
-  totalSessionFee: number; // Unique billed total fee
+  totalSessionFee: number; // Unique billed total fee (till current month)
+  fullYearFee?: number;    // Full 12-month session fee
+  monthlyTuition?: number; // Detected monthly tuition
   totalPaid: number;       // SUM of Amount_Paid
   dueBalance: number;      // totalSessionFee - totalPaid (negative if advance, e.g. 600 - 700 = -100)
   hasDues: boolean;        // dueBalance > 0
@@ -66,19 +68,8 @@ export const reconcileFeeRecords = (records: FeeCollectionRecord[]): FeeCollecti
 
     periodMap.forEach((groupRecs) => {
       if (groupRecs.length === 1) {
-        const single = groupRecs[0];
-        // If a payment receipt had Total_Amount: 0 but Amount_Paid > 0, set Total_Amount to Amount_Paid if not specified
-        const total = Number(single.Total_Amount) || 0;
-        const paid = Number(single.Amount_Paid) || 0;
-        if (total === 0 && paid > 0 && !/(advance|अग्रिम)/i.test(String(single.Fee_Type || ''))) {
-          reconciledList.push({
-            ...single,
-            Total_Amount: paid,
-            Balance_Amount: 0,
-          });
-        } else {
-          reconciledList.push(single);
-        }
+        // Keep Total_Amount exactly as present in Google Sheet (do NOT overwrite with Amount_Paid for multi-month receipts)
+        reconciledList.push(groupRecs[0]);
         return;
       }
 
@@ -88,7 +79,7 @@ export const reconcileFeeRecords = (records: FeeCollectionRecord[]): FeeCollecti
 
       if (payments.length > 0 && billings.length > 0) {
         // We have billing entry (Total > 0, Paid = 0) and payment receipt(s) (Paid > 0)
-        // Consolidate into the payment receipt(s) so that the payment is visibly reflected!
+        // Consolidate into the payment receipt(s) so that the payment is visibly reflected
         const totalBilled = Math.max(...billings.map((b) => Number(b.Total_Amount) || 0));
         const totalPaidInGroup = payments.reduce((sum, p) => sum + (Number(p.Amount_Paid) || 0), 0);
 
@@ -97,7 +88,7 @@ export const reconcileFeeRecords = (records: FeeCollectionRecord[]): FeeCollecti
           const bal = Math.max(0, authTotal - totalPaidInGroup);
           reconciledList.push({
             ...p,
-            Total_Amount: authTotal,
+            Total_Amount: p.Total_Amount !== undefined ? p.Total_Amount : authTotal,
             Balance_Amount: idx === payments.length - 1 ? bal : 0,
           });
         });
@@ -113,10 +104,214 @@ export const reconcileFeeRecords = (records: FeeCollectionRecord[]): FeeCollecti
 };
 
 /**
- * Calculate individual student fee metrics strictly per specifications:
- * 1. Total Paid Amount: Fee receipts table me se sirf Amount_Paid column ka SUM nikalein.
- * 2. Total Session Fee: Receipts ka SUM mat karein. Isko har student ki unique billed rows (Total_Amount) se calculate karein.
- * 3. Due Balance: Simply Total Session Fee - Total Paid Amount karein (e.g. 600 - 700 = -100).
+ * Standard School Academic Session Months Array in Chronological Order
+ */
+export const ACADEMIC_MONTHS = [
+  "April", "May", "June", "July", "August", "September",
+  "October", "November", "December", "January", "February", "March"
+];
+
+/**
+ * Standard Class Tuition Fee Map (Matching C1-C12 and Class Names)
+ */
+export const CLASS_TUITION_FEES: Record<string, number> = {
+  c1: 500, play: 500,
+  c2: 600, nursery: 600, m1: 600,
+  c3: 600, lkg: 600, m2: 600,
+  c4: 600, ukg: 600, m3: 600,
+  c5: 650, '1st': 650, '1': 650,
+  c6: 650, '2nd': 650, '2': 650,
+  c7: 650, '3rd': 650, '3': 650,
+  c8: 700, '4th': 700, '4': 700,
+  c9: 700, '5th': 700, '5': 700,
+  c10: 800, '6th': 800, '6': 800,
+  c11: 800, '7th': 800, '7': 800,
+  c12: 850, '8th': 850, '8': 850,
+};
+
+/**
+ * Lookup Monthly Tuition Fee from Student profile or Class ID/name, or existing receipts
+ */
+export const getStudentMonthlyTuition = (student?: any, studentReceipts?: FeeCollectionRecord[]): number => {
+  if (!student) return 600;
+  const custom = Number(student.Monthly_Fee || student.monthly_fee);
+  if (!isNaN(custom) && custom > 0) return custom;
+
+  // If student has existing receipts in Fee_Collection with an established monthly rate
+  if (studentReceipts && studentReceipts.length > 0) {
+    const tuitionRec = studentReceipts.find(
+      (r) => /(tuition|मासिक|monthly)/i.test(String(r.Fee_Type || '')) &&
+        ((Number(r.Total_Amount) || 0) > 0 || (Number(r.Amount_Paid) || 0) > 0)
+    );
+    if (tuitionRec) {
+      const amt = (Number(tuitionRec.Total_Amount) || 0) > 0 ? Number(tuitionRec.Total_Amount) : Number(tuitionRec.Amount_Paid);
+      if (amt > 0) return amt;
+    }
+  }
+
+  const rawClass = String(student.Class || student.class || '').trim().toLowerCase();
+  if (CLASS_TUITION_FEES[rawClass] !== undefined) {
+    return CLASS_TUITION_FEES[rawClass];
+  }
+  for (const key of Object.keys(CLASS_TUITION_FEES)) {
+    if (rawClass.includes(key)) {
+      return CLASS_TUITION_FEES[key];
+    }
+  }
+  return 600;
+};
+
+/**
+ * Check if student has 100% Fee Waiver (Free Student)
+ */
+export const isStudentFeeExempt = (student?: any): boolean => {
+  if (!student) return false;
+  const waiver = String(student.fee_waiver || student.Fee_Waiver || student.is_free_student || '').toLowerCase();
+  if (waiver === 'true' || waiver === 'yes' || waiver.includes('100') || waiver.includes('free') || waiver.includes('माफ')) return true;
+  const cat = String(student.Category || student.category || '').toLowerCase();
+  if (cat.includes('rte') || cat.includes('free') || cat.includes('माफ')) return true;
+  const rem = String(student.Remark || student.Remarks || student.remark || '').toLowerCase();
+  if (rem.includes('फीस माफ') || rem.includes('100% waiver') || rem.includes('free student')) return true;
+  return false;
+};
+
+/**
+ * Dynamic Month Filter:
+ * Identifies the Current Running Month (e.g., "October").
+ * Calculates Elapsed Months count strictly from "Session_Start_Month" up to "Current_Month".
+ * DOES NOT include future months (November to March) until those months arrive!
+ */
+export const getElapsedMonthsCount = (startMonthStr?: string): {
+  elapsedMonths: number;
+  currentAcadIdx: number;
+  currentMonthName: string;
+  startMonthIdx: number;
+  startMonthName: string;
+} => {
+  const now = new Date();
+  const calMonth = now.getMonth(); // 0 = Jan ... 9 = Oct
+  // Academic index (1-indexed: April = 1 ... March = 12)
+  const currentAcadIdx = calMonth >= 3 ? (calMonth - 2) : (calMonth + 10);
+  const currentMonthName = ACADEMIC_MONTHS[currentAcadIdx - 1] || "October";
+
+  const cleanStart = String(startMonthStr || 'April').trim().toLowerCase();
+  let startMonthIdx = 1; // Default to April
+  for (let i = 0; i < ACADEMIC_MONTHS.length; i++) {
+    const mName = ACADEMIC_MONTHS[i].toLowerCase();
+    if (cleanStart.includes(mName) || mName.includes(cleanStart)) {
+      startMonthIdx = i + 1;
+      break;
+    }
+  }
+
+  // Count of months elapsed from Session Start Month up to Current Month
+  // (e.g., April to October = 7 months)
+  const elapsedMonths = Math.max(0, Math.min(12, currentAcadIdx - startMonthIdx + 1));
+  const startMonthName = ACADEMIC_MONTHS[startMonthIdx - 1] || "April";
+
+  return {
+    elapsedMonths,
+    currentAcadIdx,
+    currentMonthName,
+    startMonthIdx,
+    startMonthName,
+  };
+};
+
+export interface StudentSummaryResult {
+  studentId: string;
+  startMonth: string;
+  currentMonth: string;
+  elapsedMonths: number;
+  monthlyTuition: number;
+  admissionFee: number;
+  totalBilledSessionFee: number; // Fees strictly till current running month
+  fullYearFee: number;           // Total full 12 months session fee
+  totalPaid: number;
+  currentDues: number;      // Math.max(0, Total Billed Session Fee - Total Fees Paid)
+  netBalance: number;       // Total Billed Session Fee - Total Fees Paid (negative = advance)
+  isDue: boolean;
+  isAdvance: boolean;
+  advanceAmount: number;
+  recordsCount: number;
+  records: FeeCollectionRecord[];
+}
+
+/**
+ * 2. DYNAMIC CURRENT-MONTH DUES CALCULATION (PREVENT OVER-BILLING)
+ * Formula:
+ * 1. Elapsed Months Count = Count of months from Session Start Month up to Current Month (e.g., April to October = 7 months).
+ * 2. Total Billed Session Fee = (Monthly Tuition Fee * Elapsed Months) + Admission Fee (if applicable).
+ * 3. Total Fees Paid = Sum of Amount_Paid (Col H / row[7]) across all valid payment receipts.
+ * 4. Current Dues (DUE) = Math.max(0, Total Billed Session Fee - Total Fees Paid).
+ */
+export const calculateStudentSummary = (
+  studentId: string,
+  allReceipts: FeeCollectionRecord[],
+  studentProfile?: any
+): StudentSummaryResult => {
+  const normId = normalizeStudentId(studentId);
+
+  // 1. Elapsed Months Count up to Current Running Month
+  const { elapsedMonths, currentMonthName, startMonthName } = getElapsedMonthsCount(
+    studentProfile?.Session_Start_Month || studentProfile?.Start_Month
+  );
+
+  // 2. Fee Waiver check
+  const isExempt = isStudentFeeExempt(studentProfile);
+
+  // Filter student receipts first
+  const rawStudentReceipts = allReceipts.filter(
+    (r) => normalizeStudentId(r.Student_ID) === normId
+  );
+  const reconciled = reconcileFeeRecords(rawStudentReceipts);
+
+  // 3. Monthly tuition fee (from profile, existing receipts, or class master)
+  const monthlyTuition = isExempt ? 0 : getStudentMonthlyTuition(studentProfile, reconciled);
+
+  // 4. Admission Fee (if applicable)
+  const admissionFee = (!isExempt && studentProfile?.Admission_Fee !== undefined && studentProfile?.Admission_Fee !== null && studentProfile?.Admission_Fee !== '')
+    ? Number(studentProfile.Admission_Fee) || 0
+    : 0;
+
+  // 5. Total Billed Session Fee = (Monthly Tuition Fee * Elapsed Months) + Admission Fee (if applicable)
+  // Strictly capped at current running month (prevents over-billing for future unarrived months!)
+  const totalBilledSessionFee = (monthlyTuition * elapsedMonths) + admissionFee;
+  // Full 12-month annual fee
+  const fullYearFee = (monthlyTuition * 12) + admissionFee;
+
+  // 6. Total Fees Paid = Sum of Amount_Paid across all valid payment receipts
+  const totalPaid = reconciled.reduce((sum, r) => sum + (Number(r.Amount_Paid) || 0), 0);
+
+  // 7. Current Dues (DUE) = Math.max(0, Total Billed Session Fee - Total Fees Paid)
+  const netBalance = totalBilledSessionFee - totalPaid;
+  const currentDues = Math.max(0, netBalance);
+  const isAdvance = netBalance < 0;
+  const advanceAmount = isAdvance ? Math.abs(netBalance) : 0;
+
+  return {
+    studentId: normId,
+    startMonth: startMonthName,
+    currentMonth: currentMonthName,
+    elapsedMonths,
+    monthlyTuition,
+    admissionFee,
+    totalBilledSessionFee,
+    fullYearFee,
+    totalPaid,
+    currentDues,
+    netBalance,
+    isDue: currentDues > 0,
+    isAdvance,
+    advanceAmount,
+    recordsCount: reconciled.length,
+    records: reconciled,
+  };
+};
+
+/**
+ * Calculate individual student fee metrics:
+ * Consistently uses calculateStudentSummary to enforce the current-month dynamic dues formula.
  */
 export const computeStudentFeeMetrics = (
   student: Student | null | undefined,
@@ -135,114 +330,24 @@ export const computeStudentFeeMetrics = (
   }
 
   const sId = normalizeStudentId(student.Student_ID);
-
-  // Find all receipts matching this student
-  const rawStudentRecords = allFeeRecords.filter((r) => {
-    const rSid = normalizeStudentId(r.Student_ID);
-    return Boolean(rSid && (rSid === sId || sId.includes(rSid) || rSid.includes(sId)));
-  });
-
-  // Reconcile student records
-  const studentRecords = reconcileFeeRecords(rawStudentRecords);
-
-  // 1. Total Paid Amount: Fee receipts table me se sirf Amount_Paid column ka SUM nikalein
-  const totalPaid = studentRecords.reduce(
-    (sum, r) => sum + (Number(r.Amount_Paid) || 0),
-    0
-  );
-
-  // 2. Total Session Fee: Unique billed rows (Total_Amount) se calculate karein
-  let totalSessionFee = 0;
-
-  if (studentRecords.length > 0) {
-    const uniqueBilledMap = new Map<string, number>();
-    const ACADEMIC_MONTHS_ARR = ["april", "may", "june", "july", "august", "september", "october", "november", "december", "january", "february", "march"];
-    const now = new Date();
-    const calMonth = now.getMonth();
-    const currentAcadIdx = calMonth >= 3 ? (calMonth - 2) : (calMonth + 10);
-
-    studentRecords.forEach((r, idx) => {
-      const monthKey = String(r.Month || '').trim().toLowerCase();
-      const typeKey = String(r.Fee_Type || '').trim().toLowerCase();
-      const isAdvanceType = /(advance|अग्रिम)/i.test(typeKey);
-      const isOneTimeHead = /(admission|प्रवेश|वार्षिक|annual|uniform|यूनिफॉर्म|books|पुस्तक|stationary|exam|परीक्षा|misc|अन्य|fine|विलंब)/i.test(typeKey);
-
-      let isFutureMonth = false;
-      if (monthKey && !isOneTimeHead) {
-        for (let m = 0; m < ACADEMIC_MONTHS_ARR.length; m++) {
-          if (monthKey.includes(ACADEMIC_MONTHS_ARR[m])) {
-            const mIdx = m + 1;
-            if (mIdx > currentAcadIdx) {
-              isFutureMonth = true;
-            }
-            break;
-          }
-        }
-      }
-
-      if (isFutureMonth) {
-        return;
-      }
-
-      let billedKey = '';
-      if (monthKey) {
-        billedKey = `${monthKey}::${typeKey || 'tuition'}`;
-      } else if (isOneTimeHead) {
-        billedKey = `head::${typeKey}`;
-      } else {
-        billedKey = `receipt::${r.Receipt_Number || idx}::${typeKey || 'fee'}`;
-      }
-
-      if (!isAdvanceType) {
-        const billedAmt = Number(r.Total_Amount) || 0;
-        if (billedAmt > 0) {
-          const existing = uniqueBilledMap.get(billedKey) || 0;
-          if (billedAmt > existing) {
-            uniqueBilledMap.set(billedKey, billedAmt);
-          }
-        }
-      }
-    });
-
-    uniqueBilledMap.forEach((amt) => {
-      totalSessionFee += amt;
-    });
-
-    // If receipts had Total_Amount 0 but had actual payments, ensure totalSessionFee accounts for paid
-    if (totalSessionFee === 0 && totalPaid > 0) {
-      totalSessionFee = totalPaid;
-    }
-
-    // Fallback if receipts lacked Total_Amount: derive from student's registered session fees or initial balance
-    if (totalSessionFee === 0 && student.Balance_Amount !== undefined && student.Balance_Amount !== null && student.Balance_Amount !== '') {
-      const rawBal = Number(student.Balance_Amount) || 0;
-      totalSessionFee = Math.max(0, rawBal);
-    }
-  } else if (student.Balance_Amount !== undefined && student.Balance_Amount !== null && student.Balance_Amount !== '') {
-    totalSessionFee = Math.max(0, Number(student.Balance_Amount) || 0);
-  }
-
-  // 3. Due Balance: Simply Total Session Fee - Total Paid Amount
-  // If paid > total, dueBalance is negative (advance, e.g. 600 - 700 = -100)
-  const dueBalance = totalSessionFee - totalPaid;
-  const hasDues = dueBalance > 0;
-  const isAdvance = dueBalance < 0;
-  const advanceAmount = isAdvance ? Math.abs(dueBalance) : 0;
+  const summary = calculateStudentSummary(sId, allFeeRecords, student);
 
   return {
-    totalSessionFee,
-    totalPaid,
-    dueBalance,
-    hasDues,
-    isAdvance,
-    advanceAmount,
-    receiptsCount: studentRecords.length,
+    totalSessionFee: summary.totalBilledSessionFee,
+    fullYearFee: summary.fullYearFee,
+    monthlyTuition: summary.monthlyTuition,
+    totalPaid: summary.totalPaid,
+    dueBalance: summary.netBalance,
+    hasDues: summary.currentDues > 0,
+    isAdvance: summary.isAdvance,
+    advanceAmount: summary.advanceAmount,
+    receiptsCount: summary.recordsCount,
   };
 };
 
 /**
- * Calculate single receipt balance:
- * Total_Amount - Amount_Paid (e.g. 600 - 700 = -100)
+ * Calculate single receipt balance strictly reading Index 8 (Balance_Amount):
+ * Total_Amount - Amount_Paid fallback if Balance_Amount is not provided.
  */
 export const computeReceiptBalance = (fee: FeeCollectionRecord): {
   balance: number;
@@ -255,11 +360,6 @@ export const computeReceiptBalance = (fee: FeeCollectionRecord): {
   const rawBal = Number(fee.Balance_Amount);
 
   let balance = !isNaN(rawBal) ? rawBal : (total - paid);
-  // If payment receipt where Total was omitted or 0 but Amount_Paid > 0 and rawBal is 0:
-  if (total === 0 && paid > 0 && (isNaN(rawBal) || rawBal === 0)) {
-    balance = 0;
-  }
-
   const isAdvance = /(advance|अग्रिम)/i.test(String(fee.Fee_Type || '')) || balance < 0;
 
   return {
@@ -273,7 +373,7 @@ export const computeReceiptBalance = (fee: FeeCollectionRecord): {
 /**
  * 4. Overall School Summary Total:
  * Individual student totals ke basis par Overall Total Collection aur Overall Due Balance calculate karein
- * taaki duplicate entries ki wajah se total double/triple na ho.
+ * taaki duplicate entries ki वजह se total double/triple na ho.
  */
 export const computeSchoolFeeTotals = (
   students: Student[],
@@ -336,72 +436,6 @@ export const computeSchoolFeeTotals = (
     totalPendingDues,
     totalAdvance,
     totalBilled,
-  };
-};
-
-/**
- * DYNAMIC CURRENT-MONTH DUES CALCULATION (PREVENT OVER-BILLING)
- * Calculates Total Billed Dues ONLY for months elapsed from "Session_Start_Month" up to "Current_Month".
- * Does NOT include future months in "Total Session Fee" or "Pending Dues" until those months arrive.
- */
-export const calculateStudentSummary = (
-  studentId: string,
-  allReceipts: FeeCollectionRecord[],
-  studentProfile?: Student | null
-) => {
-  const ACADEMIC_MONTHS = [
-    "April", "May", "June", "July", "August", "September",
-    "October", "November", "December", "January", "February", "March"
-  ];
-
-  const now = new Date();
-  const calMonth = now.getMonth(); // 0-11
-  const currentAcadIdx = calMonth >= 3 ? (calMonth - 2) : (calMonth + 10); // April=1 ... March=12
-
-  const startMonthStr = studentProfile?.Session_Start_Month || studentProfile?.Start_Month || "April";
-  let startMonthIdx = 1;
-  const cleanStart = String(startMonthStr).trim().toLowerCase();
-  for (let i = 0; i < ACADEMIC_MONTHS.length; i++) {
-    if (cleanStart.includes(ACADEMIC_MONTHS[i].toLowerCase())) {
-      startMonthIdx = i + 1;
-      break;
-    }
-  }
-
-  const elapsedMonths = Math.max(0, Math.min(12, currentAcadIdx - startMonthIdx + 1));
-
-  let monthlyTuition = 600;
-  if (studentProfile?.Monthly_Fee && Number(studentProfile.Monthly_Fee) > 0) {
-    monthlyTuition = Number(studentProfile.Monthly_Fee);
-  } else if (studentProfile?.Class) {
-    const cls = String(studentProfile.Class).toLowerCase();
-    if (cls.includes('play')) monthlyTuition = 500;
-    else if (cls.includes('1st') || cls.includes('2nd') || cls.includes('3rd')) monthlyTuition = 650;
-    else if (cls.includes('4th') || cls.includes('5th')) monthlyTuition = 700;
-    else if (cls.includes('6th') || cls.includes('7th')) monthlyTuition = 800;
-    else if (cls.includes('8th')) monthlyTuition = 850;
-  }
-
-  const admissionFee = (studentProfile?.Admission_Fee !== undefined && studentProfile?.Admission_Fee !== null) ? Number(studentProfile.Admission_Fee) : 0;
-  const totalBilledSessionFee = (monthlyTuition * elapsedMonths) + admissionFee;
-
-  const rawStudentReceipts = allReceipts.filter(
-    (r) => normalizeStudentId(r.Student_ID) === normalizeStudentId(studentId)
-  );
-  const reconciled = reconcileFeeRecords(rawStudentReceipts);
-  const totalPaid = reconciled.reduce((sum, r) => sum + (Number(r.Amount_Paid) || 0), 0);
-  const currentDues = Math.max(0, totalBilledSessionFee - totalPaid);
-
-  return {
-    startMonth: ACADEMIC_MONTHS[startMonthIdx - 1],
-    elapsedMonths,
-    monthlyTuition,
-    admissionFee,
-    totalBilledSessionFee,
-    totalPaid,
-    currentDues,
-    recordsCount: reconciled.length,
-    records: reconciled
   };
 };
 

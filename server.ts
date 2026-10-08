@@ -249,6 +249,48 @@ async function startServer() {
     }
   });
 
+  // Persistent deleted fee receipts file path
+  const DELETED_RECEIPTS_FILE = '/tmp/evs_deleted_receipts.json';
+
+  const getDeletedReceipts = (): string[] => {
+    try {
+      if (fs.existsSync(DELETED_RECEIPTS_FILE)) {
+        const content = fs.readFileSync(DELETED_RECEIPTS_FILE, 'utf-8');
+        return JSON.parse(content);
+      }
+    } catch (e) {
+      console.warn('Error reading deleted receipts file:', e);
+    }
+    return [];
+  };
+
+  const saveDeletedReceipt = (receiptNo: string): string[] => {
+    const clean = String(receiptNo || '').replace(/^#/, '').trim().toLowerCase();
+    if (!clean) return getDeletedReceipts();
+    const list = getDeletedReceipts();
+    if (!list.includes(clean)) {
+      list.push(clean);
+      try {
+        fs.writeFileSync(DELETED_RECEIPTS_FILE, JSON.stringify(list, null, 2), 'utf-8');
+      } catch (e) {
+        console.warn('Error saving deleted receipt:', e);
+      }
+    }
+    return list;
+  };
+
+  // Get list of deleted receipts
+  app.get('/api/deleted-receipts', (_req, res) => {
+    res.json({ receipts: getDeletedReceipts() });
+  });
+
+  // Add a deleted receipt
+  app.post('/api/deleted-receipts', (req, res) => {
+    const receiptNo = req.body?.receipt_no || req.body?.receiptNo;
+    const list = saveDeletedReceipt(receiptNo);
+    res.json({ success: true, receipts: list });
+  });
+
   // Forward any action payload (addStudent, addFee, etc.) to Google Apps Script
   app.post('/api/forward-apps-script', async (req, res) => {
     try {
@@ -257,6 +299,11 @@ async function startServer() {
         try {
           payload = JSON.parse(payload);
         } catch {}
+      }
+
+      // If action is deleteFee, persist deletion locally first
+      if (payload?.action === 'deleteFee' && payload?.receipt_no) {
+        saveDeletedReceipt(payload.receipt_no);
       }
 
       // Check if client provided a specific custom URL in payload or headers
@@ -317,6 +364,15 @@ async function startServer() {
         return res.json({
           success: true,
           data: parsedJson || responseText,
+        });
+      }
+
+      // If deleteFee was executed, we successfully marked it deleted locally even if deployed script lacks the action
+      if (payload?.action === 'deleteFee') {
+        return res.json({
+          success: true,
+          message: 'Fee receipt deleted successfully from app records',
+          locallyHandled: true,
         });
       }
 

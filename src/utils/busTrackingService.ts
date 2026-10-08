@@ -663,7 +663,7 @@ function doPost(e) {
         }
       }
       if (foundRow !== -1) {
-        sheet.getRange(foundRow, 1, 1, 12).setValues([[
+        sheet.getRange(foundRow, 1, 1, 13).setValues([[
           data.receipt_no || rows[foundRow - 1][0],
           data.student_id || rows[foundRow - 1][1],
           data.date || rows[foundRow - 1][2],
@@ -672,10 +672,11 @@ function doPost(e) {
           data.total_amount !== undefined ? Number(data.total_amount) : rows[foundRow - 1][5],
           data.discount_amount !== undefined ? Number(data.discount_amount) : 0,
           data.net_payable !== undefined ? Number(data.net_payable) : (Number(data.total_amount || 0) - Number(data.discount_amount || 0)),
-          data.amount_paid !== undefined ? Number(data.amount_paid) : rows[foundRow - 1][6],
-          data.balance_amount !== undefined ? Number(data.balance_amount) : rows[foundRow - 1][7],
-          data.payment_mode || rows[foundRow - 1][8],
-          data.received_by || rows[foundRow - 1][9]
+          data.amount_paid !== undefined ? Number(data.amount_paid) : rows[foundRow - 1][8],
+          data.balance_amount !== undefined ? Number(data.balance_amount) : rows[foundRow - 1][9],
+          data.payment_mode || rows[foundRow - 1][10],
+          data.received_by || rows[foundRow - 1][11],
+          data.allocations_summary || data.notes || rows[foundRow - 1][12] || ""
         ]]);
         return ContentService.createTextOutput(JSON.stringify({
           status: "success",
@@ -1041,8 +1042,8 @@ function generatePastDues() {
     feeSheet = ss.insertSheet("Fee_Collection");
     feeSheet.appendRow([
       "Receipt_Number", "Student_ID", "Date", "Fee_Type", "Month",
-      "Total_Amount", "Discount_Amount", "Net_Payable", "Amount_Paid",
-      "Balance_Amount", "Payment_Mode", "Received_By"
+      "Total_Amount", "Discount", "Amount_Paid", "Balance_Amount",
+      "Payment_Mode", "Received_By", "Remarks"
     ]);
   }
 
@@ -1052,9 +1053,18 @@ function generatePastDues() {
   var dateStr = Utilities.formatDate(today, "Asia/Kolkata", "yyyy-MM-dd");
 
   var feeMaster = {
-    'play': 500, 'nursery': 600, 'lkg': 600, 'ukg': 600,
-    '1st': 650, '2nd': 650, '3rd': 650, '4th': 700, '5th': 700,
-    '6th': 800, '7th': 800, '8th': 850
+    'c1': 500, 'play': 500,
+    'c2': 600, 'nursery': 600, 'm1': 600,
+    'c3': 600, 'lkg': 600, 'm2': 600,
+    'c4': 600, 'ukg': 600, 'm3': 600,
+    'c5': 650, '1st': 650, '1': 650,
+    'c6': 650, '2nd': 650, '2': 650,
+    'c7': 650, '3rd': 650, '3': 650,
+    'c8': 700, '4th': 700, '4': 700,
+    'c9': 700, '5th': 700, '5': 700,
+    'c10': 800, '6th': 800, '6': 800,
+    'c11': 800, '7th': 800, '7': 800,
+    'c12': 850, '8th': 850, '8': 850
   };
 
   var studentsData = studentsSheet.getDataRange().getValues();
@@ -1140,6 +1150,8 @@ function generatePastDues() {
 
     if (!isNaN(customFee) && customFee > 0) {
       monthlyAmount = customFee;
+    } else if (feeMaster[sClass] !== undefined) {
+      monthlyAmount = feeMaster[sClass];
     } else {
       for (var k in feeMaster) {
         if (sClass.indexOf(k) !== -1) {
@@ -1166,18 +1178,19 @@ function generatePastDues() {
 
       var receiptNo = "BILL-" + monthYear + "-M" + mIdx + "-" + sId;
       rowsToAppend.push([
-        receiptNo,
-        sId,
-        dateStr,
-        "Monthly Tuition Fee",
-        monthName,
-        monthlyAmount,
-        0, // Discount_Amount
-        monthlyAmount, // Net_Payable
-        0, // Amount_Paid
-        monthlyAmount, // Balance_Amount
-        "System Backfill",
-        "generatePastDues"
+        receiptNo,                  // 0: Receipt_Number
+        sId,                        // 1: Student_ID
+        dateStr,                    // 2: Date
+        "Monthly Tuition Fee",      // 3: Fee_Type
+        monthName,                  // 4: Month
+        monthlyAmount,              // 5: Total_Amount (TOTAL FEE)
+        0,                          // 6: Discount
+        monthlyAmount,              // 7: Net_Payable / Extra
+        0,                          // 8: Amount_Paid (PAID: 0 for Due!)
+        monthlyAmount,              // 9: Balance_Amount (BALANCE: monthlyAmount!)
+        "Due",                      // 10: Payment_Mode (MODE: "Due")
+        "System Backfill",          // 11: Received_By
+        "generatePastDues"          // 12: Remarks
       ]);
 
       existingBilledMap[mapKey] = true;
@@ -1187,7 +1200,7 @@ function generatePastDues() {
 
   if (rowsToAppend.length > 0) {
     var startRow = feeSheet.getLastRow() + 1;
-    feeSheet.getRange(startRow, 1, rowsToAppend.length, 12).setValues(rowsToAppend);
+    feeSheet.getRange(startRow, 1, rowsToAppend.length, 13).setValues(rowsToAppend);
   }
 
   var resultMsg = "generatePastDues completed: Appended " + totalBilledRows + " billing rows for months up to " + ACADEMIC_MONTHS[curAcadIdx - 1] + ". Skipped " + skippedStudentsCount + " free students.";
@@ -1301,9 +1314,18 @@ function generateMonthlyDues() {
   var dateStr = Utilities.formatDate(today, "Asia/Kolkata", "yyyy-MM-dd");
 
   var feeMaster = {
-    'play': 500, 'nursery': 600, 'lkg': 600, 'ukg': 600,
-    '1st': 650, '2nd': 650, '3rd': 650, '4th': 700, '5th': 700,
-    '6th': 800, '7th': 800, '8th': 850
+    'c1': 500, 'play': 500,
+    'c2': 600, 'nursery': 600, 'm1': 600,
+    'c3': 600, 'lkg': 600, 'm2': 600,
+    'c4': 600, 'ukg': 600, 'm3': 600,
+    'c5': 650, '1st': 650, '1': 650,
+    'c6': 650, '2nd': 650, '2': 650,
+    'c7': 650, '3rd': 650, '3': 650,
+    'c8': 700, '4th': 700, '4': 700,
+    'c9': 700, '5th': 700, '5': 700,
+    'c10': 800, '6th': 800, '6': 800,
+    'c11': 800, '7th': 800, '7': 800,
+    'c12': 850, '8th': 850, '8': 850
   };
 
   var studentsData = studentsSheet.getDataRange().getValues();
@@ -1397,6 +1419,8 @@ function generateMonthlyDues() {
 
     if (!isNaN(customFee) && customFee > 0) {
       monthlyAmount = customFee;
+    } else if (feeMaster[sClass] !== undefined) {
+      monthlyAmount = feeMaster[sClass];
     } else {
       for (var k in feeMaster) {
         if (sClass.indexOf(k) !== -1) {
@@ -1408,18 +1432,19 @@ function generateMonthlyDues() {
 
     var receiptNo = "BILL-" + curYear + "-M" + curAcadIdx + "-" + sId;
     rowsToAppend.push([
-      receiptNo,
-      sId,
-      dateStr,
-      "Monthly Tuition Fee",
-      curMonthName,
-      monthlyAmount,
-      0, // Discount
-      monthlyAmount, // Net Payable
-      0, // Amount Paid (Initial Due)
-      monthlyAmount, // Balance Amount
-      "System Auto-Bill",
-      "Automated Trigger (1st of Month)"
+      receiptNo,                     // 0: Receipt_Number
+      sId,                           // 1: Student_ID
+      dateStr,                       // 2: Date
+      "Monthly Tuition Fee",         // 3: Fee_Type
+      curMonthName,                  // 4: Month
+      monthlyAmount,                 // 5: Total_Amount (TOTAL FEE)
+      0,                             // 6: Discount
+      monthlyAmount,                 // 7: Net_Payable / Extra
+      0,                             // 8: Amount_Paid (PAID: 0 for Due!)
+      monthlyAmount,                 // 9: Balance_Amount (BALANCE: monthlyAmount!)
+      "Due",                         // 10: Payment_Mode (MODE: "Due")
+      "System Auto-Bill",            // 11: Received_By
+      "Automated Monthly Bill (Due)" // 12: Remarks
     ]);
 
     billedThisMonth[sId.toLowerCase()] = true;
@@ -1428,7 +1453,7 @@ function generateMonthlyDues() {
 
   if (rowsToAppend.length > 0) {
     var startRow = feeSheet.getLastRow() + 1;
-    feeSheet.getRange(startRow, 1, rowsToAppend.length, 12).setValues(rowsToAppend);
+    feeSheet.getRange(startRow, 1, rowsToAppend.length, 13).setValues(rowsToAppend);
   }
 
   var msg = "generateMonthlyDues complete for " + curMonthName + " " + curYear +

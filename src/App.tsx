@@ -1935,10 +1935,33 @@ export default function App() {
       const balances: Record<string, number> = {};
       const records: FeeCollectionRecord[] = [];
 
+      // Persistent set of deleted receipts from localStorage and server
+      let deletedReceiptsSet = new Set<string>();
+      try {
+        const stored = JSON.parse(localStorage.getItem('evs_deleted_receipts') || '[]') as string[];
+        deletedReceiptsSet = new Set(stored.map((s) => String(s).replace(/^#/, '').trim().toLowerCase()));
+      } catch {}
+
+      try {
+        const serverDelResp = await fetch('/api/deleted-receipts');
+        if (serverDelResp.ok) {
+          const serverData = await serverDelResp.json();
+          const serverList = (serverData?.receipts || []) as string[];
+          serverList.forEach((s) => deletedReceiptsSet.add(String(s).replace(/^#/, '').trim().toLowerCase()));
+        }
+      } catch {}
+
       for (const r of rows) {
         const cells = (r.c || []).map((c: any) => c?.v);
         const receiptNo = String(cells[receiptNoIdx !== -1 ? receiptNoIdx : 0] || '').trim();
         const studentId = String(cells[studentIdIdx !== -1 ? studentIdIdx : 1] || '').trim();
+
+        // Strictly omit deleted receipts
+        const cleanRec = receiptNo.replace(/^#/, '').trim().toLowerCase();
+        if (cleanRec && deletedReceiptsSet.has(cleanRec)) {
+          continue;
+        }
+
         let dateVal = cells[dateIdx !== -1 ? dateIdx : 2];
         if (dateVal && typeof dateVal === 'string' && dateVal.includes('Date(')) {
           const m = dateVal.match(/Date\((\d+),(\d+),(\d+)/);
@@ -1953,19 +1976,38 @@ export default function App() {
         const rawDiscount = discountIdx !== -1 ? cells[discountIdx] : null;
         const discountAmt = rawDiscount !== undefined && rawDiscount !== null && rawDiscount !== '' ? Number(rawDiscount) : 0;
 
-        // Correct column for Amount_Paid (Index 7)
-        const rawPaid = cells[amtPaidIdx !== -1 ? amtPaidIdx : 7];
-        const amtPaid = rawPaid !== undefined && rawPaid !== null && rawPaid !== '' ? Number(rawPaid) : 0;
+        // Correct column for Amount_Paid (Index 8 in 12/13-col sheet)
+        const rawPaid = cells[amtPaidIdx !== -1 ? amtPaidIdx : 8];
+        let amtPaid = rawPaid !== undefined && rawPaid !== null && rawPaid !== '' ? Number(rawPaid) : 0;
 
-        // Correct column for Balance_Amount (Index 8)
-        const rawBal = cells[balAmtIdx !== -1 ? balAmtIdx : 8];
-        const balAmt = rawBal !== undefined && rawBal !== null && rawBal !== '' ? Number(rawBal) : (totalAmt - amtPaid);
+        // Correct column for Balance_Amount (Index 9 in 12/13-col sheet)
+        const rawBal = cells[balAmtIdx !== -1 ? balAmtIdx : 9];
+        let balAmt = rawBal !== undefined && rawBal !== null && rawBal !== '' ? Number(rawBal) : (totalAmt - amtPaid);
 
-        let payMode = String(cells[payModeIdx !== -1 ? payModeIdx : 9] || 'Cash').trim();
-        if (!payMode || !isNaN(Number(payMode)) || payMode.startsWith('-') || /^\d+$/.test(payMode)) {
-          payMode = 'Cash';
+        let payMode = String(cells[payModeIdx !== -1 ? payModeIdx : 10] || 'Cash').trim();
+        const receivedBy = String(cells[receivedByIdx !== -1 ? receivedByIdx : 11] || '').trim();
+
+        // Sanitize automated billing entries that may have been generated with shifted or inverted paid/due columns
+        const isAutoBill = receiptNo.startsWith('BILL-') ||
+          receivedBy.toLowerCase().includes('auto-bill') ||
+          receivedBy.toLowerCase().includes('system') ||
+          feeType.toLowerCase().includes('auto-bill') ||
+          payMode.toLowerCase() === 'due';
+
+        if (isAutoBill) {
+          // If an auto-bill mistakenly stored total amount in Amount_Paid and 0 in Balance:
+          if (amtPaid > 0 && balAmt === 0) {
+            amtPaid = 0;
+            balAmt = totalAmt > 0 ? totalAmt : amtPaid;
+          }
+          if (!payMode || payMode === 'Cash' || !isNaN(Number(payMode)) || payMode.startsWith('-')) {
+            payMode = 'Due';
+          }
+        } else {
+          if (!payMode || !isNaN(Number(payMode)) || payMode.startsWith('-') || /^\d+$/.test(payMode)) {
+            payMode = 'Cash';
+          }
         }
-        const receivedBy = String(cells[receivedByIdx !== -1 ? receivedByIdx : 10] || '').trim();
 
         if (studentId && studentId.toLowerCase() !== 'student_id') {
           records.push({
@@ -3256,12 +3298,15 @@ export default function App() {
     const summary = calculateStudentSummary(selectedStudent.Student_ID, feeRecords, selectedStudent);
     return {
       balance: summary.currentDues,
-      rawBalance: summary.currentDues,
+      rawBalance: summary.netBalance,
       totalPaid: summary.totalPaid,
       totalFee: summary.totalBilledSessionFee,
-      hasDues: summary.currentDues > 0,
-      isAdvance: summary.currentDues < 0,
-      advanceAmount: summary.currentDues < 0 ? Math.abs(summary.currentDues) : 0,
+      fullYearFee: summary.fullYearFee,
+      monthlyTuition: summary.monthlyTuition,
+      currentMonth: summary.currentMonth,
+      hasDues: summary.isDue,
+      isAdvance: summary.isAdvance,
+      advanceAmount: summary.advanceAmount,
       receiptsCount: summary.recordsCount,
     };
   }, [selectedStudent, feeRecords]);
@@ -4190,7 +4235,18 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       }));
     }
 
-    // Save to localStorage
+    // Save to evs_deleted_receipts persistent cache so it never reappears on fetch
+    try {
+      const stored = JSON.parse(localStorage.getItem('evs_deleted_receipts') || '[]') as string[];
+      if (cleanTargetReceipt && !stored.includes(cleanTargetReceipt)) {
+        stored.push(cleanTargetReceipt);
+        localStorage.setItem('evs_deleted_receipts', JSON.stringify(stored));
+      }
+    } catch (e) {
+      console.warn('Could not update evs_deleted_receipts:', e);
+    }
+
+    // Save to localStorage caches
     try {
       const existing = localStorage.getItem('evs_custom_fee_records');
       if (existing) {
@@ -4212,16 +4268,30 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     setFeeNotificationSuccess(`रसीद #${receiptNo} सफलतापूर्वक हटा दी गई!`);
     setTimeout(() => setFeeNotificationSuccess(null), 4000);
 
-    // Send to Google Apps Script
+    // Send delete request to Google Apps Script via proxy and fallback
+    const deletePayload = {
+      action: 'deleteFee',
+      receipt_no: receiptNo,
+      student_id: studentId,
+    };
+
     try {
+      fetch('/api/deleted-receipts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ receipt_no: receiptNo }),
+      }).catch(() => null);
+
+      fetch('/api/forward-apps-script', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(deletePayload),
+      }).catch(() => null);
+
       fetch(API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({
-          action: 'deleteFee',
-          receipt_no: receiptNo,
-          student_id: studentId,
-        }),
+        body: JSON.stringify(deletePayload),
       }).catch((e) => console.warn('Background fee delete note:', e));
     } catch {}
   };
@@ -7148,14 +7218,14 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       {/* Total Fee */}
                       <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
                         <div className="flex items-center justify-between text-xs text-slate-500 font-semibold mb-1">
-                          <span>कुल शैक्षणिक फीस (Total Fee)</span>
+                          <span>सत्र फीस ({studentFeeSummary.currentMonth || 'चालू माह'} तक)</span>
                           <i className="fa-solid fa-scale-balanced text-slate-400"></i>
                         </div>
                         <div className="text-2xl font-black text-slate-900">
                           ₹{studentFeeSummary.totalFee.toLocaleString('en-IN')}
                         </div>
                         <div className="text-[11px] text-slate-500 mt-1">
-                          छात्र (रोल नं: {selectedStudent.Roll_Number || '1'}) वार्षिक फीस विवरण
+                          दर: ₹{studentFeeSummary.monthlyTuition || 600}/माह • वार्षिक (12 माह): ₹{(studentFeeSummary.fullYearFee || (studentFeeSummary.monthlyTuition || 600) * 12).toLocaleString('en-IN')}
                         </div>
                       </div>
 
