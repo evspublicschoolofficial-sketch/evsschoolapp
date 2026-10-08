@@ -3303,6 +3303,8 @@ export default function App() {
       totalFee: summary.totalBilledSessionFee,
       fullYearFee: summary.fullYearFee,
       monthlyTuition: summary.monthlyTuition,
+      admissionFee: summary.admissionFee,
+      elapsedMonths: summary.elapsedMonths,
       currentMonth: summary.currentMonth,
       hasDues: summary.isDue,
       isAdvance: summary.isAdvance,

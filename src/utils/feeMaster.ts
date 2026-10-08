@@ -12,80 +12,80 @@ export interface ClassFeeConfig {
 }
 
 export const FEE_MASTER_CONFIG: Record<string, ClassFeeConfig> = {
-  // Pre-Primary
+  // Pre-Primary (Tuition: 350, Admission: 1000)
   'play': {
-    admissionFee: 1500,
-    monthlyTuition: 500,
-    examFee: 300,
-    booksFee: 800,
+    admissionFee: 1000,
+    monthlyTuition: 350,
+    examFee: 150,
+    booksFee: 1140,
   },
   'nursery': {
-    admissionFee: 1500,
-    monthlyTuition: 600,
-    examFee: 300,
-    booksFee: 1000,
+    admissionFee: 1000,
+    monthlyTuition: 350,
+    examFee: 150,
+    booksFee: 1195,
   },
   'lkg': {
-    admissionFee: 1500,
-    monthlyTuition: 600,
-    examFee: 300,
-    booksFee: 1000,
+    admissionFee: 1000,
+    monthlyTuition: 350,
+    examFee: 150,
+    booksFee: 1245,
   },
   'ukg': {
-    admissionFee: 1500,
-    monthlyTuition: 600,
-    examFee: 300,
-    booksFee: 1000,
+    admissionFee: 1000,
+    monthlyTuition: 350,
+    examFee: 150,
+    booksFee: 1345,
   },
-  // Primary Classes
+  // Primary Classes (1st-3rd: Tuition 400, Admission 1000; 4th-5th: Tuition 450, Admission 1000)
   '1st': {
-    admissionFee: 2000,
-    monthlyTuition: 650,
-    examFee: 400,
-    booksFee: 1200,
+    admissionFee: 1000,
+    monthlyTuition: 400,
+    examFee: 200,
+    booksFee: 2345,
   },
   '2nd': {
-    admissionFee: 2000,
-    monthlyTuition: 650,
-    examFee: 400,
-    booksFee: 1200,
+    admissionFee: 1000,
+    monthlyTuition: 400,
+    examFee: 200,
+    booksFee: 2530,
   },
   '3rd': {
-    admissionFee: 2000,
-    monthlyTuition: 650,
-    examFee: 400,
-    booksFee: 1200,
+    admissionFee: 1000,
+    monthlyTuition: 400,
+    examFee: 200,
+    booksFee: 2705,
   },
   '4th': {
-    admissionFee: 2000,
-    monthlyTuition: 700,
-    examFee: 400,
-    booksFee: 1400,
+    admissionFee: 1000,
+    monthlyTuition: 450,
+    examFee: 200,
+    booksFee: 2880,
   },
   '5th': {
-    admissionFee: 2000,
-    monthlyTuition: 700,
-    examFee: 400,
-    booksFee: 1400,
+    admissionFee: 1000,
+    monthlyTuition: 450,
+    examFee: 200,
+    booksFee: 3050,
   },
-  // Upper Primary / Middle Classes
+  // Upper Primary / Middle Classes (6th-8th: Tuition 500, Admission 1000)
   '6th': {
-    admissionFee: 2500,
-    monthlyTuition: 800,
-    examFee: 500,
-    booksFee: 1600,
+    admissionFee: 1000,
+    monthlyTuition: 500,
+    examFee: 250,
+    booksFee: 3000,
   },
   '7th': {
-    admissionFee: 2500,
-    monthlyTuition: 800,
-    examFee: 500,
-    booksFee: 1600,
+    admissionFee: 1000,
+    monthlyTuition: 500,
+    examFee: 250,
+    booksFee: 3100,
   },
   '8th': {
-    admissionFee: 2500,
-    monthlyTuition: 850,
-    examFee: 500,
-    booksFee: 1800,
+    admissionFee: 1000,
+    monthlyTuition: 500,
+    examFee: 250,
+    booksFee: 3230,
   },
 };
 
@@ -112,10 +112,10 @@ export const CLASS_META_LIST: ClassMeta[] = [
 ];
 
 export const DEFAULT_FEE_CONFIG: ClassFeeConfig = {
-  admissionFee: 2000,
-  monthlyTuition: 600,
-  examFee: 400,
-  booksFee: 1200,
+  admissionFee: 1000,
+  monthlyTuition: 450,
+  examFee: 200,
+  booksFee: 2500,
 };
 
 /**
@@ -123,11 +123,13 @@ export const DEFAULT_FEE_CONFIG: ClassFeeConfig = {
  */
 export const getActiveFeeMasterConfig = (): Record<string, ClassFeeConfig> => {
   try {
-    const saved = localStorage.getItem('evs_fee_master_config');
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (parsed && typeof parsed === 'object') {
-        return { ...FEE_MASTER_CONFIG, ...parsed };
+    if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+      const saved = localStorage.getItem('evs_fee_master_config');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          return { ...FEE_MASTER_CONFIG, ...parsed };
+        }
       }
     }
   } catch (e) {
@@ -141,7 +143,9 @@ export const getActiveFeeMasterConfig = (): Record<string, ClassFeeConfig> => {
  */
 export const saveActiveFeeMasterConfig = (newConfig: Record<string, ClassFeeConfig>): void => {
   try {
-    localStorage.setItem('evs_fee_master_config', JSON.stringify(newConfig));
+    if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+      localStorage.setItem('evs_fee_master_config', JSON.stringify(newConfig));
+    }
   } catch (e) {
     console.warn('Could not save fee master config:', e);
   }
@@ -311,18 +315,18 @@ export const normalizeClassKey = (classStr?: string | null): string => {
   if (!classStr) return 'nursery';
   const s = String(classStr).toLowerCase().trim();
 
-  if (s.includes('play')) return 'play';
+  if (s.includes('play') || s === 'c1') return 'play';
   if (s.includes('nursery') || s.includes('m1') || s === 'c2') return 'nursery';
   if (s.includes('lkg') || s.includes('m2') || s === 'c3') return 'lkg';
   if (s.includes('ukg') || s.includes('m3') || s === 'c4') return 'ukg';
-  if (s.includes('1st') || s.includes('1') || s === 'c5') return '1st';
-  if (s.includes('2nd') || s.includes('2') || s === 'c6') return '2nd';
-  if (s.includes('3rd') || s.includes('3') || s === 'c7') return '3rd';
-  if (s.includes('4th') || s.includes('4') || s === 'c8') return '4th';
-  if (s.includes('5th') || s.includes('5') || s === 'c9') return '5th';
-  if (s.includes('6th') || s.includes('6') || s === 'c10') return '6th';
-  if (s.includes('7th') || s.includes('7') || s === 'c11') return '7th';
-  if (s.includes('8th') || s.includes('8') || s === 'c12') return '8th';
+  if (s.includes('1st') || s === '1' || s.includes('कक्षा 1') || s === 'c5') return '1st';
+  if (s.includes('2nd') || s === '2' || s.includes('कक्षा 2') || s === 'c6') return '2nd';
+  if (s.includes('3rd') || s === '3' || s.includes('कक्षा 3') || s === 'c7') return '3rd';
+  if (s.includes('4th') || s === '4' || s.includes('कक्षा 4') || s === 'c8') return '4th';
+  if (s.includes('5th') || s === '5' || s.includes('कक्षा 5') || s === 'c9') return '5th';
+  if (s.includes('6th') || s === '6' || s.includes('कक्षा 6') || s === 'c10') return '6th';
+  if (s.includes('7th') || s === '7' || s.includes('कक्षा 7') || s === 'c11') return '7th';
+  if (s.includes('8th') || s === '8' || s.includes('कक्षा 8') || s === 'c12') return '8th';
 
   return 'nursery';
 };

@@ -1,9 +1,11 @@
 import { Student, FeeCollectionRecord } from '../types';
+import { getActiveFeeMasterConfig, normalizeClassKey } from './feeMaster';
 
 export interface StudentFeeMetrics {
   totalSessionFee: number; // Unique billed total fee (till current month)
   fullYearFee?: number;    // Full 12-month session fee
   monthlyTuition?: number; // Detected monthly tuition
+  admissionFee?: number;   // Standard or custom admission fee
   totalPaid: number;       // SUM of Amount_Paid
   dueBalance: number;      // totalSessionFee - totalPaid (negative if advance, e.g. 600 - 700 = -100)
   hasDues: boolean;        // dueBalance > 0
@@ -115,40 +117,38 @@ export const ACADEMIC_MONTHS = [
  * Standard Class Tuition Fee Map (Matching C1-C12 and Class Names)
  */
 export const CLASS_TUITION_FEES: Record<string, number> = {
-  c1: 500, play: 500,
-  c2: 600, nursery: 600, m1: 600,
-  c3: 600, lkg: 600, m2: 600,
-  c4: 600, ukg: 600, m3: 600,
-  c5: 650, '1st': 650, '1': 650,
-  c6: 650, '2nd': 650, '2': 650,
-  c7: 650, '3rd': 650, '3': 650,
-  c8: 700, '4th': 700, '4': 700,
-  c9: 700, '5th': 700, '5': 700,
-  c10: 800, '6th': 800, '6': 800,
-  c11: 800, '7th': 800, '7': 800,
-  c12: 850, '8th': 850, '8': 850,
+  c1: 350, play: 350,
+  c2: 350, nursery: 350, m1: 350,
+  c3: 350, lkg: 350, m2: 350,
+  c4: 350, ukg: 350, m3: 350,
+  c5: 400, '1st': 400, '1': 400,
+  c6: 400, '2nd': 400, '2': 400,
+  c7: 400, '3rd': 400, '3': 400,
+  c8: 450, '4th': 450, '4': 450,
+  c9: 450, '5th': 450, '5': 450,
+  c10: 500, '6th': 500, '6': 500,
+  c11: 500, '7th': 500, '7': 500,
+  c12: 500, '8th': 500, '8': 500,
 };
 
 /**
- * Lookup Monthly Tuition Fee from Student profile or Class ID/name, or existing receipts
+ * Lookup Monthly Tuition Fee from Student profile or Class ID/name, or live Fee Master
  */
 export const getStudentMonthlyTuition = (student?: any, studentReceipts?: FeeCollectionRecord[]): number => {
-  if (!student) return 600;
+  if (!student) return 450;
   const custom = Number(student.Monthly_Fee || student.monthly_fee);
   if (!isNaN(custom) && custom > 0) return custom;
 
-  // If student has existing receipts in Fee_Collection with an established monthly rate
-  if (studentReceipts && studentReceipts.length > 0) {
-    const tuitionRec = studentReceipts.find(
-      (r) => /(tuition|मासिक|monthly)/i.test(String(r.Fee_Type || '')) &&
-        ((Number(r.Total_Amount) || 0) > 0 || (Number(r.Amount_Paid) || 0) > 0)
-    );
-    if (tuitionRec) {
-      const amt = (Number(tuitionRec.Total_Amount) || 0) > 0 ? Number(tuitionRec.Total_Amount) : Number(tuitionRec.Amount_Paid);
-      if (amt > 0) return amt;
+  // 1. Check live Fee Master configuration (synced directly from Fee_Maseter Google Sheet)
+  try {
+    const feeConfig = getActiveFeeMasterConfig();
+    const classKey = normalizeClassKey(student.Class || student.class);
+    if (feeConfig && feeConfig[classKey] && feeConfig[classKey].monthlyTuition > 0) {
+      return feeConfig[classKey].monthlyTuition;
     }
-  }
+  } catch {}
 
+  // 2. Direct mapping from class identifier (C1-C12 or text)
   const rawClass = String(student.Class || student.class || '').trim().toLowerCase();
   if (CLASS_TUITION_FEES[rawClass] !== undefined) {
     return CLASS_TUITION_FEES[rawClass];
@@ -158,7 +158,7 @@ export const getStudentMonthlyTuition = (student?: any, studentReceipts?: FeeCol
       return CLASS_TUITION_FEES[key];
     }
   }
-  return 600;
+  return 450;
 };
 
 /**
@@ -270,8 +270,20 @@ export const calculateStudentSummary = (
   const monthlyTuition = isExempt ? 0 : getStudentMonthlyTuition(studentProfile, reconciled);
 
   // 4. Admission Fee (if applicable)
-  const admissionFee = (!isExempt && studentProfile?.Admission_Fee !== undefined && studentProfile?.Admission_Fee !== null && studentProfile?.Admission_Fee !== '')
-    ? Number(studentProfile.Admission_Fee) || 0
+  // Check student custom profile first; if not explicitly specified, retrieve from Fee Master for this class (standard ₹1,000)
+  let defaultAdmissionFee = 1000;
+  try {
+    const feeConfig = getActiveFeeMasterConfig();
+    const classKey = normalizeClassKey(studentProfile?.Class || studentProfile?.class);
+    if (feeConfig && feeConfig[classKey] && feeConfig[classKey].admissionFee !== undefined) {
+      defaultAdmissionFee = feeConfig[classKey].admissionFee;
+    }
+  } catch {}
+
+  const admissionFee = (!isExempt)
+    ? (studentProfile?.Admission_Fee !== undefined && studentProfile?.Admission_Fee !== null && studentProfile?.Admission_Fee !== ''
+        ? (Number(studentProfile.Admission_Fee) || 0)
+        : defaultAdmissionFee)
     : 0;
 
   // 5. Total Billed Session Fee = (Monthly Tuition Fee * Elapsed Months) + Admission Fee (if applicable)
@@ -336,6 +348,7 @@ export const computeStudentFeeMetrics = (
     totalSessionFee: summary.totalBilledSessionFee,
     fullYearFee: summary.fullYearFee,
     monthlyTuition: summary.monthlyTuition,
+    admissionFee: summary.admissionFee,
     totalPaid: summary.totalPaid,
     dueBalance: summary.netBalance,
     hasDues: summary.currentDues > 0,
