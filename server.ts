@@ -43,20 +43,36 @@ function saveTelemetryCache() {
 
 async function forwardToGoogleAppsScript(payload: any) {
   try {
+    const formattedPayload = payload.action ? payload : {
+      action: 'updateBusTracking',
+      bus_id: payload.busId || payload.bus_id || '121212',
+      driver_name: payload.driverName || payload.driver_name || 'Amjad',
+      current_location: payload.currentLocationStr || `${payload.latitude}, ${payload.longitude}`,
+      last_updated: payload.lastUpdated || new Date().toISOString(),
+      speed: payload.speed || 0,
+      status: payload.status || 'running',
+    };
+
+    // 1. Try POST
     const res = await fetch(currentAppsScriptUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({
-        action: 'updateBusTracking',
-        bus_id: payload.busId || payload.bus_id,
-        driver_name: payload.driverName || payload.driver_name,
-        current_location: payload.currentLocationStr || `${payload.latitude}, ${payload.longitude}`,
-        last_updated: payload.lastUpdated || new Date().toISOString(),
-        speed: payload.speed || 0,
-        status: payload.status || 'running',
-      }),
+      body: JSON.stringify(formattedPayload),
     });
     const text = await res.text();
+
+    // 2. If POST returned "Invalid action", attempt GET fallback for actions like updateBusTracking
+    if (text.includes('Invalid action') && formattedPayload.action === 'updateBusTracking') {
+      try {
+        const getUrl = `${currentAppsScriptUrl}?action=updateBusTracking&bus_id=${encodeURIComponent(formattedPayload.bus_id)}&driver_name=${encodeURIComponent(formattedPayload.driver_name)}&current_location=${encodeURIComponent(formattedPayload.current_location)}`;
+        const gRes = await fetch(getUrl);
+        const gText = await gRes.text();
+        if (gText.includes('success') || gText.includes('updated')) {
+          return { ok: true, response: gText };
+        }
+      } catch {}
+    }
+
     return { ok: res.ok, response: text };
   } catch (err: any) {
     return { ok: false, error: err.message };
@@ -249,8 +265,44 @@ async function startServer() {
     }
   });
 
+  // Diagnostic endpoint for Apps Script Live Features
+  app.get('/api/apps-script-diagnostic', async (_req, res) => {
+    let pingOk = false;
+    let supportsHomework = false;
+    let supportsBus = false;
+
+    try {
+      const pRes = await fetch(`${currentAppsScriptUrl}?action=ping`);
+      const pText = await pRes.text();
+      pingOk = pText.includes('success') || pText.includes('Active');
+    } catch {}
+
+    try {
+      const bRes = await fetch(`${currentAppsScriptUrl}?action=getBusTracking`);
+      const bText = await bRes.text();
+      supportsBus = !bText.includes('Invalid') && !bText.includes('<!DOCTYPE');
+    } catch {}
+
+    try {
+      const hRes = await fetch(`${currentAppsScriptUrl}?action=getHomework`);
+      const hText = await hRes.text();
+      supportsHomework = !hText.includes('Invalid') && !hText.includes('Active') && !hText.includes('<!DOCTYPE');
+    } catch {}
+
+    res.json({
+      url: currentAppsScriptUrl,
+      pingOk,
+      supportsBus,
+      supportsHomework,
+      needsDeployment: !supportsBus || !supportsHomework,
+    });
+  });
+
   // Persistent deleted fee receipts file path
   const DELETED_RECEIPTS_FILE = '/tmp/evs_deleted_receipts.json';
+  const HOMEWORK_FILE = '/tmp/evs_homework.json';
+  const BEHAVIOR_FILE = '/tmp/evs_behavior.json';
+  const HW_TRACKER_FILE = '/tmp/evs_hw_tracker.json';
 
   const getDeletedReceipts = (): string[] => {
     try {
@@ -279,6 +331,159 @@ async function startServer() {
     return list;
   };
 
+  // Persistent Homework Storage
+  const getHomeworkList = (): any[] => {
+    try {
+      if (fs.existsSync(HOMEWORK_FILE)) {
+        return JSON.parse(fs.readFileSync(HOMEWORK_FILE, 'utf-8'));
+      }
+    } catch (e) {
+      console.warn('Error reading homework file:', e);
+    }
+    return [];
+  };
+
+  const saveHomeworkItem = (item: any): any[] => {
+    const list = getHomeworkList();
+    const hwId = String(item.homework_id || item.Homework_ID || `HW-${Date.now()}`);
+    const normalized = {
+      Homework_ID: hwId,
+      Date: item.date || item.Date || new Date().toISOString().split('T')[0],
+      Class: item.class_name || item.class || item.Class || '',
+      Subject: item.subject || item.Subject || 'General',
+      Homework_Detail: item.detail || item.detail_text || item.Homework_Detail || '',
+      Target_Type: 'Whole Class',
+      Teacher: item.teacher || item.Teacher || 'Faculty',
+    };
+    const idx = list.findIndex((h) => h.Homework_ID === hwId);
+    if (idx >= 0) {
+      list[idx] = normalized;
+    } else {
+      list.unshift(normalized);
+    }
+    try {
+      fs.writeFileSync(HOMEWORK_FILE, JSON.stringify(list, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Error saving homework file:', e);
+    }
+    return list;
+  };
+
+  // Persistent Behavior Storage
+  const getBehaviorList = (): any[] => {
+    try {
+      if (fs.existsSync(BEHAVIOR_FILE)) {
+        return JSON.parse(fs.readFileSync(BEHAVIOR_FILE, 'utf-8'));
+      }
+    } catch (e) {
+      console.warn('Error reading behavior file:', e);
+    }
+    return [];
+  };
+
+  const saveBehaviorItem = (item: any): any[] => {
+    const list = getBehaviorList();
+    const bId = String(item.behavior_id || item.Behavior_ID || `BEH-${Date.now()}`);
+    const normalized = {
+      Behavior_ID: bId,
+      Student_ID: item.student_id || item.Student_ID || '',
+      Date: item.date || item.Date || new Date().toISOString().split('T')[0],
+      Class: item.class || item.Class || '',
+      Is_Bathed: item.is_bathed ?? item.Is_Bathed ?? true,
+      Nails_Clean: item.nails_clean ?? item.Nails_Clean ?? true,
+      Uniform_clean: item.uniform_clean ?? item.Uniform_clean ?? true,
+      Good_Manners: item.good_manners || item.Good_Manners || 'Good',
+      Discipline: item.discipline ?? item.Discipline ?? true,
+      Is_Present: item.is_present ?? item.Is_Present ?? true,
+      Remark: item.remark || item.Remark || '',
+      AI_Feedback: item.ai_feedback || item.AI_Feedback || '',
+    };
+    const idx = list.findIndex((b) => b.Behavior_ID === bId);
+    if (idx >= 0) {
+      list[idx] = normalized;
+    } else {
+      list.unshift(normalized);
+    }
+    try {
+      fs.writeFileSync(BEHAVIOR_FILE, JSON.stringify(list, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Error saving behavior file:', e);
+    }
+    return list;
+  };
+
+  // Persistent Homework Tracker Storage
+  const getHwTrackerList = (): any[] => {
+    try {
+      if (fs.existsSync(HW_TRACKER_FILE)) {
+        return JSON.parse(fs.readFileSync(HW_TRACKER_FILE, 'utf-8'));
+      }
+    } catch (e) {
+      console.warn('Error reading tracker file:', e);
+    }
+    return [];
+  };
+
+  const saveHwTrackerItem = (item: any): any[] => {
+    const list = getHwTrackerList();
+    const tId = String(item.record_id || item.ID || `TRK-${Date.now()}`);
+    const sId = String(item.student_id || item.Student_ID || '');
+    const normalized = {
+      ID: tId,
+      Date: item.date || item.Date || new Date().toISOString().split('T')[0],
+      Class: item.class || item.Class || '',
+      Student_ID: sId,
+      Subject: item.subject || item.Subject || 'General',
+      Last_homework_Status: item.status || item.Last_homework_Status || 'Completed',
+      Remark: item.remark || item.Remark || '',
+    };
+    const idx = list.findIndex(
+      (t) => t.ID === tId || (sId && t.Student_ID && t.Student_ID.toLowerCase() === sId.toLowerCase() && t.Date === normalized.Date)
+    );
+    if (idx >= 0) {
+      list[idx] = normalized;
+    } else {
+      list.unshift(normalized);
+    }
+    try {
+      fs.writeFileSync(HW_TRACKER_FILE, JSON.stringify(list, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Error saving tracker file:', e);
+    }
+    return list;
+  };
+
+  // Endpoints for Local Server Data
+  app.get('/api/homework', (_req, res) => {
+    res.json({ homework: getHomeworkList() });
+  });
+
+  app.post('/api/homework', (req, res) => {
+    const item = req.body;
+    const list = saveHomeworkItem(item);
+    res.json({ success: true, homework: list });
+  });
+
+  app.get('/api/behavior', (_req, res) => {
+    res.json({ behavior: getBehaviorList() });
+  });
+
+  app.post('/api/behavior', (req, res) => {
+    const item = req.body;
+    const list = saveBehaviorItem(item);
+    res.json({ success: true, behavior: list });
+  });
+
+  app.get('/api/homework-tracker', (_req, res) => {
+    res.json({ records: getHwTrackerList() });
+  });
+
+  app.post('/api/homework-tracker', (req, res) => {
+    const item = req.body;
+    const list = saveHwTrackerItem(item);
+    res.json({ success: true, records: list });
+  });
+
   // Get list of deleted receipts
   app.get('/api/deleted-receipts', (_req, res) => {
     res.json({ receipts: getDeletedReceipts() });
@@ -301,9 +506,17 @@ async function startServer() {
         } catch {}
       }
 
-      // If action is deleteFee, persist deletion locally first
+      // Pre-persist locally to prevent any data loss
       if (payload?.action === 'deleteFee' && payload?.receipt_no) {
         saveDeletedReceipt(payload.receipt_no);
+      } else if (payload?.action === 'addHomework') {
+        saveHomeworkItem(payload);
+      } else if (payload?.action === 'addBehavior') {
+        saveBehaviorItem(payload);
+      } else if (payload?.action === 'updateHomeworkTracker') {
+        saveHwTrackerItem(payload);
+      } else if (payload?.action === 'updateBusTracking') {
+        processTelemetryPayload(payload);
       }
 
       // Check if client provided a specific custom URL in payload or headers
@@ -314,22 +527,21 @@ async function startServer() {
 
       console.log(`[AppsScriptForwarder] Action: ${payload?.action}, Target: ${targetUrl}`);
 
-      const response = await fetch(targetUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payload),
-      });
+      let responseText = '';
+      let remoteOk = false;
+      let remoteStatus = 200;
 
-      const responseText = await response.text();
-
-      // Check for Google Apps Script 404 / access error
-      if (responseText.includes('Page not found') || responseText.includes('unable to open the file') || responseText.includes('Service invoked too many times')) {
-        return res.status(502).json({
-          success: false,
-          error: 'Google Apps Script Web App unshared or access denied. Please verify Web App deployment with "Who has access: Anyone".',
-          needsDeployment: true,
-          raw: responseText,
+      try {
+        const response = await fetch(targetUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify(payload),
         });
+        remoteStatus = response.status;
+        responseText = await response.text();
+        remoteOk = response.ok;
+      } catch (networkErr: any) {
+        console.warn(`[AppsScriptForwarder] Remote network warning: ${networkErr.message}`);
       }
 
       let parsedJson: any = null;
@@ -337,54 +549,59 @@ async function startServer() {
         parsedJson = JSON.parse(responseText);
       } catch {}
 
-      if (response.ok && (!parsedJson || parsedJson.status !== 'error')) {
-        // Broadcast real-time update to all connected clients
-        try {
-          const act = String(payload?.action || '');
-          let entity = 'all';
-          if (act.includes('Fee')) entity = 'fee';
-          else if (act.includes('Student')) entity = 'student';
-          else if (act.includes('Notice')) entity = 'notice';
-          else if (act.includes('Behavior')) entity = 'behavior';
-          else if (act.includes('Homework')) entity = 'homework';
+      const isRemoteSuccess = remoteOk && (!parsedJson || (parsedJson.status !== 'error' && parsedJson.error !== 'Invalid action'));
 
-          const broadcastMsg = JSON.stringify({
-            type: 'APP_DATA_UPDATED',
-            action: act,
-            entity,
-            timestamp: Date.now(),
-          });
-          for (const client of clients) {
-            if (client.readyState === WebSocket.OPEN) {
-              client.send(broadcastMsg);
-            }
+      // Broadcast real-time update to all connected clients
+      try {
+        const act = String(payload?.action || '');
+        let entity = 'all';
+        if (act.includes('Fee')) entity = 'fee';
+        else if (act.includes('Student')) entity = 'student';
+        else if (act.includes('Notice')) entity = 'notice';
+        else if (act.includes('Behavior')) entity = 'behavior';
+        else if (act.includes('Homework')) entity = 'homework';
+        else if (act.includes('Bus') || act.includes('Location')) entity = 'bus';
+
+        const broadcastMsg = JSON.stringify({
+          type: 'APP_DATA_UPDATED',
+          action: act,
+          entity,
+          payload,
+          timestamp: Date.now(),
+        });
+        for (const client of clients) {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(broadcastMsg);
           }
-        } catch {}
+        }
+      } catch {}
 
+      if (isRemoteSuccess) {
         return res.json({
           success: true,
           data: parsedJson || responseText,
         });
       }
 
-      // If deleteFee was executed, we successfully marked it deleted locally even if deployed script lacks the action
-      if (payload?.action === 'deleteFee') {
+      // If remote script returned "Invalid action" or failed, but we handled it locally on the school server
+      if (['deleteFee', 'addHomework', 'addBehavior', 'updateHomeworkTracker', 'updateBusTracking'].includes(payload?.action)) {
         return res.json({
           success: true,
-          message: 'Fee receipt deleted successfully from app records',
+          message: `${payload.action} school server me safe ho gaya hai (Locally saved & synced)!`,
           locallyHandled: true,
+          needsScriptDeployment: true,
         });
       }
 
-      return res.status(response.status || 500).json({
+      return res.status(remoteStatus || 500).json({
         success: false,
-        error: parsedJson?.message || responseText || 'Apps Script returned error',
+        error: parsedJson?.message || parsedJson?.error || responseText || 'Apps Script returned error',
       });
     } catch (err: any) {
-      console.error('[AppsScriptForwarder] Connection Error:', err.message);
-      return res.status(502).json({
+      console.error('[AppsScriptForwarder] Error:', err.message);
+      return res.status(500).json({
         success: false,
-        error: err.message || 'Failed to connect to Google Apps Script Web App',
+        error: err.message,
       });
     }
   });

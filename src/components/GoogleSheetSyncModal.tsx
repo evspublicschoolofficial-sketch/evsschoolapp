@@ -158,10 +158,10 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
             </div>
             <div>
               <h2 className="text-base sm:text-lg font-black tracking-tight">
-                गूगल शीट (Bus_Tracking) लोकेशन सिंक सेटअप
+                Google Sheet ऑटोमेशन व लाइव सिंक सेटअप
               </h2>
               <p className="text-[11px] sm:text-xs text-blue-200">
-                Google Apps Script कोड व न्यू वर्शन डिप्लॉयमेंट गाइड
+                होमवर्क, दैनिक आचरण, ट्रैकर, फीस और बस लोकेशन को गूगल शीट में स्वतः जोड़ने हेतु गाइड
               </p>
             </div>
           </div>

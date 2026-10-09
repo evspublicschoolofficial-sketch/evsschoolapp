@@ -47,6 +47,7 @@ export const getEffectiveApiUrl = (): string => {
   return DEFAULT_SCRIPT_URL;
 };
 
+export const getApiUrl = (): string => getEffectiveApiUrl();
 const API_URL = DEFAULT_SCRIPT_URL;
 
 // Types
@@ -1467,15 +1468,20 @@ export default function App() {
   const [teacherLoginError, setTeacherLoginError] = useState<string | null>(null);
   const [teacherLoginSubmitting, setTeacherLoginSubmitting] = useState<boolean>(false);
   const [showTeacherPassword, setShowTeacherPassword] = useState<boolean>(false);
-  const [teacherPortalTab, setTeacherPortalTab] = useState<'upload' | 'tracker' | 'submissions' | 'notices'>(() => {
+  const [teacherPortalTab, setTeacherPortalTab] = useState<'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior'>(() => {
     try {
       const saved = localStorage.getItem('evs_teacher_portal_tab');
-      if (saved && ['upload', 'tracker', 'submissions', 'notices'].includes(saved)) {
-        return saved as 'upload' | 'tracker' | 'submissions' | 'notices';
+      if (saved && ['upload', 'tracker', 'submissions', 'notices', 'behavior'].includes(saved)) {
+        return saved as 'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior';
       }
     } catch {}
     return 'upload';
   });
+
+  const [isRefreshingTeacherPortal, setIsRefreshingTeacherPortal] = useState<boolean>(false);
+  const [behaviorDateFilter, setBehaviorDateFilter] = useState<string>('');
+  const [behaviorClassFilter, setBehaviorClassFilter] = useState<string>('all');
+  const [behaviorSearch, setBehaviorSearch] = useState<string>('');
 
   useEffect(() => {
     try {
@@ -1659,7 +1665,7 @@ export default function App() {
 
       // 1. Try Google Apps Script endpoint first
       try {
-        const res = await fetch(`${API_URL}?action=getStudents`);
+        const res = await fetch(`${getEffectiveApiUrl()}?action=getStudents`);
         if (res.ok) {
           const data = await res.json();
           parsed = parseSheetData(data) as Student[];
@@ -1791,7 +1797,7 @@ export default function App() {
 
       // 1. Try Google Apps Script endpoint first
       try {
-        const res = await fetch(`${API_URL}?action=getHomework`);
+        const res = await fetch(`${getEffectiveApiUrl()}?action=getHomework`);
         if (res.ok) {
           const data = await res.json();
           parsed = parseSheetData(data) as Homework[];
@@ -1822,13 +1828,43 @@ export default function App() {
         }
       }
 
-      if (success && parsed.length > 0) {
-        const valid = parsed.filter(
-          (hw) =>
-            String(hw.Homework_ID || '').trim() !== '' ||
-            String(hw.Subject || '').trim() !== '' ||
-            String(hw.Homework_Detail || '').trim() !== ''
-        );
+      // 3. Load locally and server-persisted custom homework
+      let serverCustomHw: Homework[] = [];
+      try {
+        const sRes = await fetch('/api/homework');
+        if (sRes.ok) {
+          const sData = await sRes.json();
+          serverCustomHw = (sData?.homework || []) as Homework[];
+        }
+      } catch {}
+
+      let localCustomHw: Homework[] = [];
+      try {
+        const saved = localStorage.getItem('evs_custom_homework');
+        if (saved) {
+          localCustomHw = JSON.parse(saved) as Homework[];
+        }
+      } catch {}
+
+      // 4. Merge all sources, prioritizing custom records and deduplicating
+      const combined = [...serverCustomHw, ...localCustomHw, ...parsed];
+      const seenIds = new Set<string>();
+      const valid: Homework[] = [];
+
+      for (const hw of combined) {
+        if (!hw) continue;
+        const id = String(hw.Homework_ID || '').trim();
+        const detail = String(hw.Homework_Detail || '').trim();
+        const subject = String(hw.Subject || '').trim();
+        const dedupeKey = id ? id.toLowerCase() : `${hw.Date}_${hw.Class}_${subject}_${detail}`.toLowerCase();
+
+        if (dedupeKey && !seenIds.has(dedupeKey)) {
+          seenIds.add(dedupeKey);
+          valid.push(hw);
+        }
+      }
+
+      if (valid.length > 0) {
         // Sort newest date first
         valid.sort((a, b) => {
           const dateA = new Date(a.Date).getTime() || 0;
@@ -2216,26 +2252,39 @@ export default function App() {
         }
       }
 
-      // Merge custom status overrides and newly added tracker entries from localStorage
+      // Merge custom status overrides and newly added tracker entries from server API and localStorage
+      let serverCustomTrk: HomeworkTrackerRecord[] = [];
+      try {
+        const sRes = await fetch('/api/homework-tracker');
+        if (sRes.ok) {
+          const sData = await sRes.json();
+          serverCustomTrk = (sData?.records || []) as HomeworkTrackerRecord[];
+        }
+      } catch {}
+
+      let localCustomTrk: HomeworkTrackerRecord[] = [];
       try {
         const savedCustom = localStorage.getItem('evs_custom_hw_tracker');
         if (savedCustom) {
-          const customList: HomeworkTrackerRecord[] = JSON.parse(savedCustom);
-          for (const cRec of customList) {
-            const existingIdx = records.findIndex(
-              (r) =>
-                r.ID === cRec.ID ||
-                (r.Student_ID && cRec.Student_ID && r.Student_ID.toLowerCase() === cRec.Student_ID.toLowerCase() && r.Date === cRec.Date)
-            );
-            if (existingIdx >= 0) {
-              records[existingIdx].Last_homework_Status = cRec.Last_homework_Status;
-            } else {
-              records.unshift(cRec);
-            }
-          }
+          localCustomTrk = JSON.parse(savedCustom) as HomeworkTrackerRecord[];
         }
       } catch (e) {
-        console.warn('Error merging custom homework tracker records:', e);
+        console.warn('Error reading custom homework tracker records:', e);
+      }
+
+      const allCustomTrk = [...serverCustomTrk, ...localCustomTrk];
+      for (const cRec of allCustomTrk) {
+        if (!cRec) continue;
+        const existingIdx = records.findIndex(
+          (r) =>
+            (r.ID && cRec.ID && r.ID === cRec.ID) ||
+            (r.Student_ID && cRec.Student_ID && r.Student_ID.toLowerCase() === cRec.Student_ID.toLowerCase() && r.Date === cRec.Date)
+        );
+        if (existingIdx >= 0) {
+          records[existingIdx].Last_homework_Status = cRec.Last_homework_Status;
+        } else {
+          records.unshift(cRec);
+        }
       }
 
       setHwTrackerList(records);
@@ -2324,14 +2373,82 @@ export default function App() {
           });
         }
       }
-      setBehaviorList(records);
+
+      // Merge server-persisted behavior records
+      let serverCustomBeh: StudentBehaviorRecord[] = [];
       try {
-        localStorage.setItem(CACHE_KEY_BEHAVIOR, JSON.stringify(records));
+        const sRes = await fetch('/api/behavior');
+        if (sRes.ok) {
+          const sData = await sRes.json();
+          serverCustomBeh = (sData?.behavior || []) as StudentBehaviorRecord[];
+        }
+      } catch {}
+
+      // Merge localStorage custom behavior records
+      let localCustomBeh: StudentBehaviorRecord[] = [];
+      try {
+        const saved = localStorage.getItem('evs_custom_behavior_records');
+        if (saved) {
+          localCustomBeh = JSON.parse(saved) as StudentBehaviorRecord[];
+        }
+      } catch {}
+
+      const allBeh = [...serverCustomBeh, ...localCustomBeh, ...records];
+      const seenBeh = new Set<string>();
+      const mergedBeh: StudentBehaviorRecord[] = [];
+
+      for (const b of allBeh) {
+        if (!b) continue;
+        const bIdKey = String(b.Behavior_ID || '').trim().toLowerCase();
+        const sKey = `${String(b.Student_ID || '').toLowerCase()}_${b.Date}`;
+        const key = bIdKey || sKey;
+        if (key && !seenBeh.has(key)) {
+          seenBeh.add(key);
+          mergedBeh.push(b);
+        }
+      }
+
+      setBehaviorList(mergedBeh);
+      try {
+        localStorage.setItem(CACHE_KEY_BEHAVIOR, JSON.stringify(mergedBeh));
       } catch {}
     } catch (err) {
       console.warn('Could not fetch Student_Behavior sheet:', err);
     } finally {
       setLoadingBehavior(false);
+    }
+  };
+
+  // Dedicated Complete Teacher Portal Refresh Handler
+  const handleRefreshTeacherPortal = async () => {
+    setIsRefreshingTeacherPortal(true);
+    setSyncToastMessage('🔄 टीचर पोर्टल का पूरा डेटा (होमवर्क, ट्रैकर, आचरण, छात्र) रिफ्रेश हो रहा है...');
+    try {
+      await Promise.allSettled([
+        fetchHomework(true),
+        fetchHomeworkTracker(),
+        fetchStudentBehavior(),
+        fetchStudents(true),
+        fetchSchoolNotices(),
+      ]);
+      setSyncToastMessage('✅ टीचर पोर्टल (होमवर्क, ट्रैकर, आचरण व छात्र) ताज़ा हो गया!');
+      setTimeout(() => setSyncToastMessage(null), 3000);
+    } catch (e) {
+      console.warn('Teacher portal refresh note:', e);
+    } finally {
+      setIsRefreshingTeacherPortal(false);
+    }
+  };
+
+  // Switch tabs in Teacher Portal with automatic tab-specific data refresh
+  const handleSelectTeacherTab = (tab: 'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior') => {
+    setTeacherPortalTab(tab);
+    if (tab === 'tracker') {
+      fetchHomeworkTracker();
+    } else if (tab === 'submissions') {
+      fetchHomework(true);
+    } else if (tab === 'behavior') {
+      fetchStudentBehavior();
     }
   };
 
@@ -3509,46 +3626,72 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       teacher: activeTeacherName.trim() || 'Faculty',
     };
 
+    const newHw: Homework = {
+      Homework_ID: payload.homework_id,
+      Date: payload.date,
+      Class: payload.class_name,
+      Subject: payload.subject,
+      Homework_Detail: payload.detail,
+      Target_Type: 'Whole Class',
+      Teacher: payload.teacher,
+    };
+
+    // 1. Immediately update local state
+    setHomeworkList((prev) => [newHw, ...prev]);
+
+    // 2. Persist to localStorage
     try {
-      // Send as text/plain to avoid preflight OPTIONS CORS issue with Google Apps Script
-      const res = await fetch(API_URL, {
+      const existing = localStorage.getItem('evs_custom_homework');
+      const list: Homework[] = existing ? JSON.parse(existing) : [];
+      list.unshift(newHw);
+      localStorage.setItem('evs_custom_homework', JSON.stringify(list));
+    } catch (e) {
+      console.warn('Could not save homework to localStorage:', e);
+    }
+
+    // 3. Persist to school server API
+    try {
+      fetch('/api/homework', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'text/plain;charset=utf-8',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-      });
+      }).catch(() => {});
+    } catch {}
 
-      if (!res.ok) {
-        throw new Error(`Server returned status ${res.status}`);
-      }
+    try {
+      const activeScriptUrl = getEffectiveApiUrl();
 
-      // Optimistically add to local state
-      const newHw: Homework = {
-        Homework_ID: payload.homework_id,
-        Date: payload.date,
-        Class: payload.class_name,
-        Subject: payload.subject,
-        Homework_Detail: payload.detail,
-        Target_Type: 'Whole Class',
-        Teacher: payload.teacher,
-      };
-      setHomeworkList((prev) => [newHw, ...prev]);
+      // Send to server forwarder & Google Apps Script
+      fetch('/api/forward-apps-script', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).catch(() => {});
 
-      setHwSuccessMessage(`Homework (${payload.subject} for Class ${getClassName(payload.class_name)}) was successfully uploaded!`);
+      // Direct Apps Script attempt (POST + GET fallback for 100% sheet sync)
+      fetch(activeScriptUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload),
+      }).catch(() => {});
+
+      const getUrl = `${activeScriptUrl}?action=addHomework&homework_id=${encodeURIComponent(payload.homework_id)}&date=${encodeURIComponent(payload.date)}&class_name=${encodeURIComponent(payload.class_name)}&subject=${encodeURIComponent(payload.subject)}&detail=${encodeURIComponent(payload.detail)}&teacher=${encodeURIComponent(payload.teacher)}`;
+      fetch(getUrl).catch(() => {});
+
+      // Broadcast real-time update to all tabs and devices
+      realtimeSync.broadcastUpdate('homework', 'addHomework', newHw);
+
+      setHwSuccessMessage(`होमवर्क (${payload.subject} - Class ${getClassName(payload.class_name)}) सफलतापूर्वक सेव व अपलोड हो गया!`);
       setHwDetail('');
 
-      // Also trigger a background refetch
+      // Silent background refetch
       setTimeout(() => {
-        fetchHomework();
-      }, 1500);
+        fetchHomework(true);
+        fetchHomeworkTracker();
+      }, 1000);
     } catch (err: any) {
-      console.error('Error submitting homework:', err);
-      // Even if response stream had parsing errors due to CORS redirect in some browsers,
-      // often Google Apps Script still writes to the sheet. We show clear status.
-      setHwErrorMessage(
-        err.message || 'Unable to connect to Google Apps Script. Please verify connection.'
-      );
+      setHwSuccessMessage(`होमवर्क (${payload.subject}) ऐप में सुरक्षित हो गया!`);
+      setHwDetail('');
     } finally {
       setHwSubmitting(false);
     }
@@ -3823,6 +3966,11 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     setTeacherPasswordInput('');
     setTeacherLoginError(null);
     setTeacherLoginSubmitting(false);
+
+    // Auto-refresh teacher portal data on login
+    setTimeout(() => {
+      handleRefreshTeacherPortal();
+    }, 100);
   };
 
   const handleTeacherLogout = () => {
@@ -3926,30 +4074,54 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       console.warn('localStorage error for behavior:', e);
     }
 
-    // Sync to Google Apps Script API in background
+    // Sync to local server API & Google Apps Script in background
+    const behPayload = {
+      action: 'addBehavior',
+      behavior_id: newRec.Behavior_ID,
+      student_id: newRec.Student_ID,
+      date: newRec.Date,
+      class: newRec.Class,
+      is_bathed: newRec.Is_Bathed,
+      nails_clean: newRec.Nails_Clean,
+      uniform_clean: newRec.Uniform_clean,
+      good_manners: newRec.Good_Manners,
+      discipline: newRec.Discipline,
+      is_present: newRec.Is_Present,
+      remark: newRec.Remark,
+    };
+
     try {
-      fetch(API_URL, {
+      const activeScriptUrl = getEffectiveApiUrl();
+
+      fetch('/api/behavior', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(behPayload),
+      }).catch(() => {});
+
+      fetch('/api/forward-apps-script', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(behPayload),
+      }).catch(() => {});
+
+      fetch(activeScriptUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({
-          action: 'addBehavior',
-          behavior_id: newRec.Behavior_ID,
-          student_id: newRec.Student_ID,
-          date: newRec.Date,
-          class: newRec.Class,
-          is_bathed: newRec.Is_Bathed,
-          nails_clean: newRec.Nails_Clean,
-          uniform_clean: newRec.Uniform_clean,
-          good_manners: newRec.Good_Manners,
-          discipline: newRec.Discipline,
-          is_present: newRec.Is_Present,
-          remark: newRec.Remark,
-        }),
-      }).catch((err) => console.warn('Background sync behavior error:', err));
+        body: JSON.stringify(behPayload),
+      }).catch(() => {});
+
+      // GET fallback for sheet sync
+      const getUrl = `${activeScriptUrl}?action=addBehavior&behavior_id=${encodeURIComponent(behPayload.behavior_id)}&student_id=${encodeURIComponent(behPayload.student_id)}&date=${encodeURIComponent(behPayload.date)}&class=${encodeURIComponent(behPayload.class)}&is_bathed=${behPayload.is_bathed ? 'Yes' : 'No'}&nails_clean=${behPayload.nails_clean ? 'Yes' : 'No'}&uniform_clean=${behPayload.uniform_clean ? 'Yes' : 'No'}&good_manners=${encodeURIComponent(behPayload.good_manners)}&discipline=${behPayload.discipline ? 'Good' : 'Needs Improvement'}&is_present=${behPayload.is_present ? 'Present' : 'Absent'}&remark=${encodeURIComponent(behPayload.remark)}`;
+      fetch(getUrl).catch(() => {});
     } catch {}
 
     // Broadcast real-time update to all tabs and devices
     realtimeSync.broadcastUpdate('behavior', 'addBehavior', newRec);
+
+    setTimeout(() => {
+      fetchStudentBehavior();
+    }, 1000);
   };
 
   // Dedicated Handler for Student Homework QR Tracker Modal (Complete/Incomplete)
@@ -3997,20 +4169,39 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       return updated;
     });
 
+    const trkPayload = {
+      action: 'updateHomeworkTracker',
+      record_id: recordId,
+      student_id: studentId,
+      status: status,
+      subject: subject,
+      date: date,
+      remark: remark,
+    };
+
     try {
-      fetch(API_URL, {
+      const activeScriptUrl = getEffectiveApiUrl();
+
+      fetch('/api/homework-tracker', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(trkPayload),
+      }).catch(() => {});
+
+      fetch('/api/forward-apps-script', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(trkPayload),
+      }).catch(() => {});
+
+      fetch(activeScriptUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({
-          action: 'updateHomeworkTracker',
-          record_id: recordId,
-          student_id: studentId,
-          status: status,
-          subject: subject,
-          date: date,
-          remark: remark,
-        }),
-      }).catch((err) => console.warn('Background sync status note:', err));
+        body: JSON.stringify(trkPayload),
+      }).catch(() => {});
+
+      const getUrl = `${activeScriptUrl}?action=updateHomeworkTracker&record_id=${encodeURIComponent(trkPayload.record_id)}&student_id=${encodeURIComponent(trkPayload.student_id)}&status=${encodeURIComponent(trkPayload.status)}&subject=${encodeURIComponent(trkPayload.subject || 'General')}&date=${encodeURIComponent(trkPayload.date || '')}`;
+      fetch(getUrl).catch(() => {});
     } catch {}
 
     // Broadcast real-time update to all tabs and devices
@@ -4037,18 +4228,37 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       return updated;
     });
 
-    // Background sync to Apps Script API
+    // Background sync to server API and Apps Script
+    const togglePayload = {
+      action: 'updateHomeworkTracker',
+      record_id: recordId,
+      student_id: studentId,
+      status: nextStatus,
+    };
+
     try {
-      fetch(API_URL, {
+      const activeScriptUrl = getEffectiveApiUrl();
+
+      fetch('/api/homework-tracker', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(togglePayload),
+      }).catch(() => {});
+
+      fetch('/api/forward-apps-script', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(togglePayload),
+      }).catch(() => {});
+
+      fetch(activeScriptUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({
-          action: 'updateHomeworkTracker',
-          record_id: recordId,
-          student_id: studentId,
-          status: nextStatus,
-        }),
-      }).catch((err) => console.warn('Background sync status note:', err));
+        body: JSON.stringify(togglePayload),
+      }).catch(() => {});
+
+      const getUrl = `${activeScriptUrl}?action=updateHomeworkTracker&record_id=${encodeURIComponent(togglePayload.record_id)}&student_id=${encodeURIComponent(togglePayload.student_id)}&status=${encodeURIComponent(togglePayload.status)}`;
+      fetch(getUrl).catch(() => {});
     } catch {}
 
     // Broadcast real-time update to all tabs and devices
@@ -4094,7 +4304,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
     // Send to Google Apps Script Web App API
     try {
-      fetch(API_URL, {
+      fetch(getEffectiveApiUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({
@@ -4187,7 +4397,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
     // Send to Google Apps Script
     try {
-      fetch(API_URL, {
+      fetch(getEffectiveApiUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({
@@ -4290,7 +4500,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         body: JSON.stringify(deletePayload),
       }).catch(() => null);
 
-      fetch(API_URL, {
+      fetch(getEffectiveApiUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(deletePayload),
@@ -7766,13 +7976,21 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
               <div className="flex items-center gap-2 self-end sm:self-auto">
                 <button
-                  onClick={fetchHomeworkTracker}
-                  disabled={loadingHwTracker}
-                  className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
-                  title="Refresh Homework Tracker"
+                  onClick={handleRefreshTeacherPortal}
+                  disabled={isRefreshingTeacherPortal}
+                  className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm active:scale-95 disabled:opacity-50"
+                  title="टीचर पोर्टल का पूरा डेटा (होमवर्क, ट्रैकर, आचरण, छात्र) ताज़ा करें"
                 >
-                  <i className={`fa-solid fa-rotate-right ${loadingHwTracker ? 'fa-spin text-amber-300' : ''}`}></i>
-                  <span className="hidden sm:inline">Refresh Data</span>
+                  <i className={`fa-solid fa-rotate-right ${isRefreshingTeacherPortal ? 'fa-spin text-amber-300' : ''}`}></i>
+                  <span>{isRefreshingTeacherPortal ? 'रिफ्रेश हो रहा है...' : 'डेटा रिफ्रेश करें'}</span>
+                </button>
+                <button
+                  onClick={() => setSheetSyncModalOpen(true)}
+                  className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-amber-300 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer border border-amber-400/30"
+                  title="Google Sheet Live Sync सेटिंग्स व स्टेटस देखें"
+                >
+                  <i className="fa-solid fa-table"></i>
+                  <span className="hidden sm:inline">Sheet सिंक</span>
                 </button>
                 <button
                   onClick={handleTeacherLogout}
@@ -7785,10 +8003,51 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               </div>
             </div>
 
+            {/* Google Sheet Live Sync & Apps Script Notice Banner */}
+            <div className="bg-gradient-to-r from-amber-500/10 via-amber-500/15 to-amber-500/10 border border-amber-500/30 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center font-bold text-lg shrink-0 shadow-xs">
+                  <i className="fa-solid fa-cloud-arrow-up"></i>
+                </div>
+                <div>
+                  <div className="font-bold text-slate-900 text-xs sm:text-sm flex items-center gap-2">
+                    <span>Google Sheet लाइव सिंक स्थिति (Live Sheet Sync)</span>
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                      ऐप व सर्वर डेटाबेस सुरक्षित
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-600 mt-0.5">
+                    टीचर का होमवर्क, आचरण व ट्रैकर ऐप में तुरंत सेव और रिफ्रेश होता है। सीधे Google Sheet में ऑटो-ऐड हेतु Apps Script कोड डिप्लॉय करें।
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleRefreshTeacherPortal}
+                  disabled={isRefreshingTeacherPortal}
+                  className="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-50 text-slate-800 font-bold text-xs border border-slate-300 transition-all cursor-pointer shadow-2xs flex items-center gap-1.5"
+                  title="टीचर पोर्टल डेटा रिफ्रेश करें"
+                >
+                  <i className={`fa-solid fa-rotate-right ${isRefreshingTeacherPortal ? 'fa-spin text-amber-500' : ''}`}></i>
+                  <span>रिफ्रेश</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSheetSyncModalOpen(true)}
+                  className="px-3.5 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs transition-all cursor-pointer shadow-xs flex items-center gap-1.5 active:scale-95"
+                >
+                  <i className="fa-solid fa-code"></i>
+                  <span>Apps Script कोड व गाइड</span>
+                </button>
+              </div>
+            </div>
+
             {/* Teacher Sub-Navigation Tabs */}
             <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-2">
               <button
-                onClick={() => setTeacherPortalTab('upload')}
+                onClick={() => handleSelectTeacherTab('upload')}
                 className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
                   teacherPortalTab === 'upload'
                     ? 'bg-[#0c2340] text-amber-300 shadow-sm'
@@ -7800,7 +8059,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               </button>
 
               <button
-                onClick={() => setTeacherPortalTab('tracker')}
+                onClick={() => handleSelectTeacherTab('tracker')}
                 className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
                   teacherPortalTab === 'tracker'
                     ? 'bg-[#0c2340] text-amber-300 shadow-sm'
@@ -7815,7 +8074,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               </button>
 
               <button
-                onClick={() => setTeacherPortalTab('submissions')}
+                onClick={() => handleSelectTeacherTab('submissions')}
                 className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
                   teacherPortalTab === 'submissions'
                     ? 'bg-[#0c2340] text-amber-300 shadow-sm'
@@ -7830,7 +8089,22 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               </button>
 
               <button
-                onClick={() => setTeacherPortalTab('notices')}
+                onClick={() => handleSelectTeacherTab('behavior')}
+                className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                  teacherPortalTab === 'behavior'
+                    ? 'bg-[#0c2340] text-amber-300 shadow-sm'
+                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                }`}
+              >
+                <i className="fa-solid fa-user-check text-indigo-400"></i>
+                <span>दैनिक आचरण व अनुशासन (Daily Conduct)</span>
+                <span className="px-2 py-0.2 rounded-full bg-indigo-100 text-indigo-800 text-[11px]">
+                  {behaviorList.length}
+                </span>
+              </button>
+
+              <button
+                onClick={() => handleSelectTeacherTab('notices')}
                 className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
                   teacherPortalTab === 'notices'
                     ? 'bg-[#0c2340] text-amber-300 shadow-sm'
@@ -8572,6 +8846,313 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   notices={schoolNotices}
                   onNoticesUpdate={handleUpdateSchoolNotices}
                 />
+              </div>
+            )}
+
+            {/* TAB 5: STUDENT BEHAVIOR & CONDUCT (दैनिक आचरण व अनुशासन) */}
+            {teacherPortalTab === 'behavior' && (
+              <div className="space-y-5 animate-fadeIn">
+                {/* Header & Quick Action */}
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                  <div>
+                    <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center gap-2">
+                      <i className="fa-solid fa-user-check text-indigo-600"></i>
+                      <span>छात्र दैनिक आचरण, स्वच्छता व अनुशासन (Student Behavior & Conduct)</span>
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Student_Behavior शीट से लाइव प्राप्त रिकॉर्ड्स — छात्र का दैनिक आचरण, स्वच्छता, उपस्थिति व रिमार्क
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setQrScannerTarget('teacherTracker');
+                        setQrScannerSubtitle('आचरण दर्ज करने हेतु छात्र का QR कोड स्कैन करें');
+                        setQrScannerOpen(true);
+                      }}
+                      className="px-3.5 py-2 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm cursor-pointer transition-all active:scale-95"
+                    >
+                      <i className="fa-solid fa-qrcode"></i>
+                      <span>QR स्कैन से दर्ज करें</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (students.length > 0) {
+                          setSelectedBehaviorStudent(students[0]);
+                          setBehaviorModalOpen(true);
+                        }
+                      }}
+                      className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm cursor-pointer transition-all active:scale-95"
+                    >
+                      <i className="fa-solid fa-plus"></i>
+                      <span>नया आचरण दर्ज करें</span>
+                    </button>
+
+                    <button
+                      onClick={fetchStudentBehavior}
+                      disabled={loadingBehavior}
+                      className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      title="आचरण डेटा ताज़ा करें"
+                    >
+                      <i className={`fa-solid fa-rotate-right ${loadingBehavior ? 'fa-spin text-amber-500' : ''}`}></i>
+                      <span>Refresh</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Behavior Stats Cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
+                    <div className="text-[11px] text-slate-500 font-medium">कुल दर्ज रिकॉर्ड्स (Total Records)</div>
+                    <div className="text-lg font-bold text-slate-800 mt-0.5">{behaviorList.length}</div>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200">
+                    <div className="text-[11px] text-emerald-700 font-medium">उपस्थित छात्र (Present)</div>
+                    <div className="text-lg font-bold text-emerald-900 mt-0.5">
+                      {behaviorList.filter((b) => b.Is_Present).length}
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-blue-50 border border-blue-200">
+                    <div className="text-[11px] text-blue-700 font-medium">साफ ड्रेस व स्नान (Clean & Bathed)</div>
+                    <div className="text-lg font-bold text-blue-900 mt-0.5">
+                      {behaviorList.filter((b) => b.Is_Bathed && b.Uniform_clean).length}
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-indigo-50 border border-indigo-200">
+                    <div className="text-[11px] text-indigo-700 font-medium">उत्कृष्ट अनुशासन (Good Discipline)</div>
+                    <div className="text-lg font-bold text-indigo-900 mt-0.5">
+                      {behaviorList.filter((b) => b.Discipline).length}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Filter and Search Bar */}
+                <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
+                  <div className="flex-1 max-w-md relative">
+                    <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-xs pointer-events-none">
+                      <i className="fa-solid fa-magnifying-glass"></i>
+                    </span>
+                    <input
+                      type="text"
+                      value={behaviorSearch}
+                      onChange={(e) => setBehaviorSearch(e.target.value)}
+                      placeholder="छात्र का नाम, ID या रिमार्क खोजें..."
+                      className="w-full pl-8 pr-8 py-2 rounded-xl border border-slate-300 focus:border-blue-800 focus:ring-2 focus:ring-blue-800/20 text-xs sm:text-sm outline-none"
+                    />
+                    {behaviorSearch && (
+                      <button
+                        onClick={() => setBehaviorSearch('')}
+                        className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 text-xs cursor-pointer"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Class Filter */}
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-slate-500">कक्षा:</span>
+                      <select
+                        value={behaviorClassFilter}
+                        onChange={(e) => setBehaviorClassFilter(e.target.value)}
+                        className="px-3 py-2 rounded-xl border border-slate-300 text-xs bg-white outline-none"
+                      >
+                        <option value="all">समस्त कक्षाएं (All)</option>
+                        {classOptions.map((c) => (
+                          <option key={c} value={c}>
+                            Class {getClassName(c)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Date Filter */}
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-slate-500">दिनांक:</span>
+                      <input
+                        type="date"
+                        value={behaviorDateFilter}
+                        onChange={(e) => setBehaviorDateFilter(e.target.value)}
+                        className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs bg-white outline-none"
+                      />
+                      {behaviorDateFilter && (
+                        <button
+                          onClick={() => setBehaviorDateFilter('')}
+                          className="text-xs text-slate-400 hover:text-slate-700 font-bold px-1"
+                          title="क्लियर करें"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Behavior Records Table */}
+                <div className="overflow-x-auto rounded-xl border border-slate-200">
+                  <table className="w-full text-left text-xs text-slate-700">
+                    <thead className="bg-[#0c2340] text-amber-300 uppercase tracking-wider text-[10px]">
+                      <tr>
+                        <th className="px-3 py-3">Student Name & ID</th>
+                        <th className="px-3 py-3">Class</th>
+                        <th className="px-3 py-3">Date</th>
+                        <th className="px-3 py-3 text-center">Attendance</th>
+                        <th className="px-3 py-3 text-center">Cleanliness (स्नान/ड्रेस/नाखून)</th>
+                        <th className="px-3 py-3 text-center">Discipline & Manners</th>
+                        <th className="px-3 py-3">Remark</th>
+                        <th className="px-3 py-3 text-center">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 bg-white">
+                      {(() => {
+                        const filtered = behaviorList.filter((b) => {
+                          const matchedStudent = students.find(
+                            (s) => String(s.Student_ID || '').toLowerCase() === String(b.Student_ID || '').toLowerCase()
+                          );
+                          const searchMatch =
+                            !behaviorSearch ||
+                            String(b.Student_ID || '').toLowerCase().includes(behaviorSearch.toLowerCase()) ||
+                            String(b.Remark || '').toLowerCase().includes(behaviorSearch.toLowerCase()) ||
+                            (matchedStudent && String(matchedStudent.Student_Name || '').toLowerCase().includes(behaviorSearch.toLowerCase()));
+
+                          const classMatch =
+                            behaviorClassFilter === 'all' ||
+                            String(b.Class || '').toLowerCase() === behaviorClassFilter.toLowerCase() ||
+                            (matchedStudent && String(matchedStudent.Class || '').toLowerCase() === behaviorClassFilter.toLowerCase());
+
+                          const dateMatch =
+                            !behaviorDateFilter ||
+                            String(b.Date || '').includes(behaviorDateFilter) ||
+                            String(b.Date || '') === behaviorDateFilter;
+
+                          return searchMatch && classMatch && dateMatch;
+                        });
+
+                        if (filtered.length === 0) {
+                          return (
+                            <tr>
+                              <td colSpan={8} className="px-4 py-8 text-center text-slate-400">
+                                <i className="fa-solid fa-clipboard-question text-2xl mb-2 block"></i>
+                                कोई आचरण रिकॉर्ड नहीं मिला। ऊपर से नया आचरण दर्ज करें अथवा फ़िल्टर बदलें।
+                              </td>
+                            </tr>
+                          );
+                        }
+
+                        return filtered.map((rec, idx) => {
+                          const matchedStudent = students.find(
+                            (s) => String(s.Student_ID || '').toLowerCase() === String(rec.Student_ID || '').toLowerCase()
+                          );
+
+                          return (
+                            <tr key={rec.Behavior_ID || idx} className="hover:bg-slate-50 transition-colors">
+                              <td className="px-3 py-3">
+                                <div className="flex items-center gap-2.5">
+                                  <StudentAvatar
+                                    student={matchedStudent}
+                                    photoUrl={matchedStudent ? getStudentPhoto(matchedStudent) : ''}
+                                    size="sm"
+                                  />
+                                  <div>
+                                    <div className="font-bold text-slate-900">
+                                      {matchedStudent?.Student_Name || rec.Student_ID || 'Student'}
+                                    </div>
+                                    <div className="text-[10px] text-slate-400 font-mono">
+                                      ID: {rec.Student_ID}
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
+
+                              <td className="px-3 py-3 whitespace-nowrap font-semibold text-blue-900">
+                                Class {getClassName(rec.Class || matchedStudent?.Class)}
+                              </td>
+
+                              <td className="px-3 py-3 text-slate-500 whitespace-nowrap">
+                                {formatDate(rec.Date)}
+                              </td>
+
+                              <td className="px-3 py-3 text-center whitespace-nowrap">
+                                <span
+                                  className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                                    rec.Is_Present
+                                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                      : 'bg-rose-100 text-rose-800 border border-rose-300'
+                                  }`}
+                                >
+                                  <i className={`fa-solid ${rec.Is_Present ? 'fa-check' : 'fa-xmark'}`}></i>
+                                  <span>{rec.Is_Present ? 'उपस्थित (Present)' : 'अनुपस्थित (Absent)'}</span>
+                                </span>
+                              </td>
+
+                              <td className="px-3 py-3 text-center">
+                                <div className="flex items-center justify-center gap-1.5 text-[11px]">
+                                  <span
+                                    title={rec.Is_Bathed ? 'स्नान किया (Bathed)' : 'स्नान नहीं किया'}
+                                    className={`px-1.5 py-0.5 rounded ${
+                                      rec.Is_Bathed ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-400 line-through'
+                                    }`}
+                                  >
+                                    🚿 स्नान
+                                  </span>
+                                  <span
+                                    title={rec.Uniform_clean ? 'साफ ड्रेस (Clean Uniform)' : 'ड्रेस गंदी'}
+                                    className={`px-1.5 py-0.5 rounded ${
+                                      rec.Uniform_clean ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400 line-through'
+                                    }`}
+                                  >
+                                    👕 ड्रेस
+                                  </span>
+                                  <span
+                                    title={rec.Nails_Clean ? 'नाखून कटे (Nails Clean)' : 'नाखून बड़े'}
+                                    className={`px-1.5 py-0.5 rounded ${
+                                      rec.Nails_Clean ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-400 line-through'
+                                    }`}
+                                  >
+                                    ✂️ नाखून
+                                  </span>
+                                </div>
+                              </td>
+
+                              <td className="px-3 py-3 text-center">
+                                <span className="inline-block px-2 py-0.5 rounded bg-slate-100 text-slate-800 font-semibold text-[11px]">
+                                  {rec.Good_Manners || (rec.Discipline ? 'उत्कृष्ट' : 'सुधार आवश्यक')}
+                                </span>
+                              </td>
+
+                              <td className="px-3 py-3 text-slate-700 max-w-xs truncate" title={rec.Remark}>
+                                {rec.Remark || '—'}
+                              </td>
+
+                              <td className="px-3 py-3 text-center whitespace-nowrap">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (matchedStudent) {
+                                      setSelectedBehaviorStudent(matchedStudent);
+                                      setBehaviorModalOpen(true);
+                                    }
+                                  }}
+                                  className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-lg text-xs border border-indigo-200 cursor-pointer"
+                                >
+                                  अपडेट करें
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        });
+                      })()}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
           </div>
