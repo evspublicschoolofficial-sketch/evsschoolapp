@@ -1879,21 +1879,11 @@ export default function App() {
         }
         setApiError(null);
       } else {
-        setHomeworkList((prev) => {
-          if (prev.length === 0) {
-            setApiError('Unable to load homework from Google Sheets.');
-          }
-          return prev;
-        });
+        setHomeworkList([]);
+        setApiError(null);
       }
     } catch (err: any) {
       console.error('Error fetching homework:', err);
-      setHomeworkList((prev) => {
-        if (prev.length === 0) {
-          setApiError(err.message || 'Unable to load homework from Google Sheets.');
-        }
-        return prev;
-      });
     } finally {
       setLoadingHomework(false);
     }
@@ -2190,69 +2180,74 @@ export default function App() {
       setLoadingHwTracker(true);
     }
     try {
-      const encoded = encodeURIComponent('Homework_Tracker');
-      const res = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}`);
-      if (!res.ok) return;
-      const text = await res.text();
-      const start = text.indexOf('{');
-      const end = text.lastIndexOf('}');
-      if (start === -1 || end === -1) return;
-      const data = JSON.parse(text.slice(start, end + 1));
-      const rows = data.table?.rows || [];
       const records: HomeworkTrackerRecord[] = [];
 
-      for (let i = 0; i < rows.length; i++) {
-        const r = rows[i];
-        const cells = r.c || [];
-        const rawCol0 = cells[0]?.v ? String(cells[0].v).trim() : '';
-        const dateVal = cells[1]?.f || cells[1]?.v || '';
-        let formattedDate = String(dateVal || '');
-        if (typeof dateVal === 'string' && dateVal.includes('Date(')) {
-          const m = dateVal.match(/Date\((\d+),(\d+),(\d+)/);
-          if (m) {
-            const y = m[1];
-            const mo = String(Number(m[2]) + 1).padStart(2, '0');
-            const d = String(m[3]).padStart(2, '0');
-            formattedDate = `${d}/${mo}/${y}`;
+      // 1. Fetch from Google Sheets GViz (in isolated try-catch so network/sheet errors do not block local/server sync)
+      try {
+        const encoded = encodeURIComponent('Homework_Tracker');
+        const res = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}`);
+        if (res.ok) {
+          const text = await res.text();
+          const start = text.indexOf('{');
+          const end = text.lastIndexOf('}');
+          if (start !== -1 && end !== -1) {
+            const data = JSON.parse(text.slice(start, end + 1));
+            const rows = data.table?.rows || [];
+
+            for (let i = 0; i < rows.length; i++) {
+              const r = rows[i];
+              const cells = r.c || [];
+              const rawCol0 = cells[0]?.v ? String(cells[0].v).trim() : '';
+              const dateVal = cells[1]?.f || cells[1]?.v || '';
+              let formattedDate = String(dateVal || '');
+              if (typeof dateVal === 'string' && dateVal.includes('Date(')) {
+                const m = dateVal.match(/Date\((\d+),(\d+),(\d+)/);
+                if (m) {
+                  const y = m[1];
+                  const mo = String(Number(m[2]) + 1).padStart(2, '0');
+                  const d = String(m[3]).padStart(2, '0');
+                  formattedDate = `${d}/${mo}/${y}`;
+                }
+              }
+              const rawCol2 = cells[2]?.v ? String(cells[2].v).trim() : '';
+              const rawCol3 = cells[3]?.v ? String(cells[3].v).trim() : '';
+              const rawCol4 = cells[4]?.v ? String(cells[4].v).trim() : '';
+              const rawCol5 = cells[5]?.v ? String(cells[5].v).trim() : '';
+
+              let sId = rawCol3;
+              let recId = rawCol0;
+
+              if (!sId && rawCol0) {
+                sId = rawCol0;
+              }
+
+              let normStatus: 'Completed' | 'Incompleted' = 'Completed';
+              if (/incom|pend|adhura|not/i.test(rawCol5)) {
+                normStatus = 'Incompleted';
+              } else if (/comp|done|poora|yes/i.test(rawCol5)) {
+                normStatus = 'Completed';
+              } else if (rawCol5) {
+                normStatus = rawCol5 as any;
+              }
+
+              if (rawCol0 || sId || rawCol5) {
+                records.push({
+                  ID: recId || `HWT-${i + 1}`,
+                  Date: formattedDate,
+                  Class: rawCol2,
+                  Student_ID: sId,
+                  Subject: rawCol4 || 'General / All Subjects',
+                  Last_homework_Status: normStatus,
+                });
+              }
+            }
           }
         }
-        const rawCol2 = cells[2]?.v ? String(cells[2].v).trim() : '';
-        const rawCol3 = cells[3]?.v ? String(cells[3].v).trim() : '';
-        const rawCol4 = cells[4]?.v ? String(cells[4].v).trim() : '';
-        const rawCol5 = cells[5]?.v ? String(cells[5].v).trim() : '';
-
-        // Robust resolution: In sheet rows, rawCol0 is often Student_ID (e.g. 57dd106d for Farah),
-        // or a Record_ID. rawCol3 can also be Student_ID.
-        let sId = rawCol3;
-        let recId = rawCol0;
-
-        if (!sId && rawCol0) {
-          sId = rawCol0;
-        }
-
-        // Normalize status
-        let normStatus: 'Completed' | 'Incompleted' = 'Completed';
-        if (/incom|pend|adhura|not/i.test(rawCol5)) {
-          normStatus = 'Incompleted';
-        } else if (/comp|done|poora|yes/i.test(rawCol5)) {
-          normStatus = 'Completed';
-        } else if (rawCol5) {
-          normStatus = rawCol5 as any;
-        }
-
-        if (rawCol0 || sId || rawCol5) {
-          records.push({
-            ID: recId || `HWT-${i + 1}`,
-            Date: formattedDate,
-            Class: rawCol2,
-            Student_ID: sId,
-            Subject: rawCol4 || 'General / All Subjects',
-            Last_homework_Status: normStatus,
-          });
-        }
+      } catch (sheetErr) {
+        console.warn('Google Sheets fetchHomeworkTracker note:', sheetErr);
       }
 
-      // Merge custom status overrides and newly added tracker entries from server API and localStorage
+      // 2. Merge custom status overrides and newly added tracker entries from server API and localStorage
       let serverCustomTrk: HomeworkTrackerRecord[] = [];
       try {
         const sRes = await fetch('/api/homework-tracker');
@@ -2287,6 +2282,22 @@ export default function App() {
         }
       }
 
+      // 3. If tracker records are still empty, synthesize student tracker entries from student list so teachers can immediately track
+      if (records.length === 0 && students.length > 0) {
+        const todayStr = new Date().toISOString().split('T')[0];
+        for (const st of students) {
+          if (!st.Student_ID) continue;
+          records.push({
+            ID: `TRK-${st.Student_ID}-${todayStr}`,
+            Date: todayStr,
+            Class: st.Class || '',
+            Student_ID: st.Student_ID,
+            Subject: 'General / All Subjects',
+            Last_homework_Status: 'Incompleted',
+          });
+        }
+      }
+
       setHwTrackerList(records);
       try {
         localStorage.setItem(CACHE_KEY_HW_TRACKER, JSON.stringify(records));
@@ -2304,77 +2315,85 @@ export default function App() {
       setLoadingBehavior(true);
     }
     try {
-      const encoded = encodeURIComponent('Student_Behavior');
-      const res = await fetch(
-        `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}`
-      );
-      if (!res.ok) return;
-      const text = await res.text();
-      const start = text.indexOf('{');
-      const end = text.lastIndexOf('}');
-      if (start === -1 || end === -1) return;
-      const data = JSON.parse(text.slice(start, end + 1));
-      const rows = data.table?.rows || [];
       const records: StudentBehaviorRecord[] = [];
 
-      const parseBool = (cell: any): boolean => {
-        if (!cell) return false;
-        if (cell.v === true || cell.v === 1) return true;
-        if (typeof cell.v === 'string') {
-          const s = cell.v.trim().toLowerCase();
-          return s === 'true' || s === 'yes' || s === 'y' || s === 'haan';
-        }
-        if (typeof cell.f === 'string') {
-          const s = cell.f.trim().toLowerCase();
-          return s === 'true' || s === 'yes';
-        }
-        return false;
-      };
+      // 1. Fetch from Google Sheets GViz (in isolated try-catch)
+      try {
+        const encoded = encodeURIComponent('Student_Behavior');
+        const res = await fetch(
+          `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}`
+        );
+        if (res.ok) {
+          const text = await res.text();
+          const start = text.indexOf('{');
+          const end = text.lastIndexOf('}');
+          if (start !== -1 && end !== -1) {
+            const data = JSON.parse(text.slice(start, end + 1));
+            const rows = data.table?.rows || [];
 
-      for (const r of rows) {
-        const cells = r.c || [];
-        const bId = cells[0]?.v ? String(cells[0].v).trim() : '';
-        const sId = cells[1]?.v ? String(cells[1].v).trim() : '';
-        const dateVal = cells[2]?.f || cells[2]?.v || '';
-        let formattedDate = String(dateVal || '');
-        if (typeof dateVal === 'string' && dateVal.includes('Date(')) {
-          const m = dateVal.match(/Date\((\d+),(\d+),(\d+)/);
-          if (m) {
-            const y = m[1];
-            const mo = String(Number(m[2]) + 1).padStart(2, '0');
-            const d = String(m[3]).padStart(2, '0');
-            formattedDate = `${d}/${mo}/${y}`;
+            const parseBool = (cell: any): boolean => {
+              if (!cell) return false;
+              if (cell.v === true || cell.v === 1) return true;
+              if (typeof cell.v === 'string') {
+                const s = cell.v.trim().toLowerCase();
+                return s === 'true' || s === 'yes' || s === 'y' || s === 'haan';
+              }
+              if (typeof cell.f === 'string') {
+                const s = cell.f.trim().toLowerCase();
+                return s === 'true' || s === 'yes';
+              }
+              return false;
+            };
+
+            for (const r of rows) {
+              const cells = r.c || [];
+              const bId = cells[0]?.v ? String(cells[0].v).trim() : '';
+              const sId = cells[1]?.v ? String(cells[1].v).trim() : '';
+              const dateVal = cells[2]?.f || cells[2]?.v || '';
+              let formattedDate = String(dateVal || '');
+              if (typeof dateVal === 'string' && dateVal.includes('Date(')) {
+                const m = dateVal.match(/Date\((\d+),(\d+),(\d+)/);
+                if (m) {
+                  const y = m[1];
+                  const mo = String(Number(m[2]) + 1).padStart(2, '0');
+                  const d = String(m[3]).padStart(2, '0');
+                  formattedDate = `${d}/${mo}/${y}`;
+                }
+              }
+              const cls = cells[3]?.v ? String(cells[3].v).trim() : '';
+              const isBathed = parseBool(cells[4]);
+              const nailsClean = parseBool(cells[5]);
+              const uniformClean = parseBool(cells[6]);
+              const goodManners = cells[7]?.v ? String(cells[7].v).trim() : 'Good';
+              const discipline = parseBool(cells[8]);
+              const isPresent = parseBool(cells[9]);
+              const remark = cells[10]?.v ? String(cells[10].v).trim() : 'OK';
+              const aiFeedback = cells[11]?.v ? String(cells[11].v).trim() : '';
+
+              if (bId || sId) {
+                records.push({
+                  Behavior_ID: bId,
+                  Student_ID: sId,
+                  Date: formattedDate,
+                  Class: cls,
+                  Is_Bathed: isBathed,
+                  Nails_Clean: nailsClean,
+                  Uniform_clean: uniformClean,
+                  Good_Manners: goodManners,
+                  Discipline: discipline,
+                  Is_Present: isPresent,
+                  Remark: remark,
+                  AI_Feedback: aiFeedback,
+                });
+              }
+            }
           }
         }
-        const cls = cells[3]?.v ? String(cells[3].v).trim() : '';
-        const isBathed = parseBool(cells[4]);
-        const nailsClean = parseBool(cells[5]);
-        const uniformClean = parseBool(cells[6]);
-        const goodManners = cells[7]?.v ? String(cells[7].v).trim() : 'Good';
-        const discipline = parseBool(cells[8]);
-        const isPresent = parseBool(cells[9]);
-        const remark = cells[10]?.v ? String(cells[10].v).trim() : 'OK';
-        const aiFeedback = cells[11]?.v ? String(cells[11].v).trim() : '';
-
-        if (bId || sId) {
-          records.push({
-            Behavior_ID: bId,
-            Student_ID: sId,
-            Date: formattedDate,
-            Class: cls,
-            Is_Bathed: isBathed,
-            Nails_Clean: nailsClean,
-            Uniform_clean: uniformClean,
-            Good_Manners: goodManners,
-            Discipline: discipline,
-            Is_Present: isPresent,
-            Remark: remark,
-            AI_Feedback: aiFeedback,
-          });
-        }
+      } catch (sheetErr) {
+        console.warn('Google Sheets fetchStudentBehavior note:', sheetErr);
       }
 
-      // Merge server-persisted behavior records
+      // 2. Merge server-persisted behavior records
       let serverCustomBeh: StudentBehaviorRecord[] = [];
       try {
         const sRes = await fetch('/api/behavior');
@@ -2384,7 +2403,7 @@ export default function App() {
         }
       } catch {}
 
-      // Merge localStorage custom behavior records
+      // 3. Merge localStorage custom behavior records
       let localCustomBeh: StudentBehaviorRecord[] = [];
       try {
         const saved = localStorage.getItem('evs_custom_behavior_records');
@@ -4119,6 +4138,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     // Broadcast real-time update to all tabs and devices
     realtimeSync.broadcastUpdate('behavior', 'addBehavior', newRec);
 
+    setSyncToastMessage('✅ छात्र का आचरण व अनुशासन रिकॉर्ड सुरक्षित हो गया!');
+    setTimeout(() => setSyncToastMessage(null), 3000);
+
     setTimeout(() => {
       fetchStudentBehavior();
     }, 1000);
@@ -4263,6 +4285,13 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
     // Broadcast real-time update to all tabs and devices
     realtimeSync.broadcastUpdate('homework', 'toggleHomeworkStatus', { recordId, studentId, nextStatus });
+
+    setSyncToastMessage(
+      nextStatus === 'Completed'
+        ? '✅ छात्र का होमवर्क पूर्ण (Completed) मार्क हो गया!'
+        : '⚠️ छात्र का होमवर्क अपूर्ण (Incompleted) मार्क हो गया!'
+    );
+    setTimeout(() => setSyncToastMessage(null), 2500);
   };
 
   // Add Fee Handler (Manager & Principal)
@@ -7436,8 +7465,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         <div className="text-2xl font-black text-slate-900">
                           ₹{studentFeeSummary.totalFee.toLocaleString('en-IN')}
                         </div>
-                        <div className="text-[11px] text-slate-500 mt-1">
-                          दर: ₹{studentFeeSummary.monthlyTuition || 600}/माह • वार्षिक (12 माह): ₹{(studentFeeSummary.fullYearFee || (studentFeeSummary.monthlyTuition || 600) * 12).toLocaleString('en-IN')}
+                        <div className="text-[11px] text-slate-600 mt-1.5 pt-1.5 border-t border-slate-200/80 leading-relaxed">
+                          <span className="font-semibold text-slate-700">सत्र गणना:</span> प्रवेश ₹{(studentFeeSummary.admissionFee || 1000).toLocaleString('en-IN')} + {studentFeeSummary.elapsedMonths} माह ({selectedStudent.Session_Start_Month || 'April'} से {studentFeeSummary.currentMonth || 'October'}) × ₹{(studentFeeSummary.monthlyTuition || 450).toLocaleString('en-IN')} = ₹{studentFeeSummary.totalFee.toLocaleString('en-IN')}
                         </div>
                       </div>
 
@@ -8652,9 +8681,38 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     <tbody className="divide-y divide-slate-200 bg-white">
                       {teacherFilteredTracker.length === 0 ? (
                         <tr>
-                          <td colSpan={8} className="px-4 py-8 text-center text-slate-400">
-                            <i className="fa-solid fa-clipboard-question text-2xl mb-2 block"></i>
-                            कोई होमवर्क ट्रैकर रिकॉर्ड नहीं मिला। क्यूआर स्कैन करें या सर्च फ़िल्टर बदलें।
+                          <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
+                            <i className="fa-solid fa-clipboard-question text-3xl mb-2 block text-slate-300"></i>
+                            <div className="font-bold text-slate-700 text-sm mb-1">
+                              इस फ़िल्टर में अभी कोई होमवर्क ट्रैकर रिकॉर्ड नहीं है
+                            </div>
+                            <p className="text-xs text-slate-500 mb-3 max-w-md mx-auto">
+                              आप छात्र का क्यूआर कोड स्कैन करके अथवा नीचे दिए गए बटन से छात्रों की सूची लोड करके होमवर्क चेक कर सकते हैं।
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const todayStr = new Date().toISOString().split('T')[0];
+                                const targetStudents = teacherUser?.Assigned_Class
+                                  ? students.filter((s) => String(s.Class || '').toLowerCase() === String(teacherUser.Assigned_Class).toLowerCase())
+                                  : students;
+                                const newRecs: HomeworkTrackerRecord[] = (targetStudents.length > 0 ? targetStudents : students).map((s, i) => ({
+                                  ID: `TRK-${s.Student_ID}-${Date.now()}-${i}`,
+                                  Date: todayStr,
+                                  Class: s.Class || '',
+                                  Student_ID: s.Student_ID,
+                                  Subject: 'General / All Subjects',
+                                  Last_homework_Status: 'Incompleted',
+                                }));
+                                setHwTrackerList((prev) => [...newRecs, ...prev]);
+                                setSyncToastMessage('✅ छात्रों की सूची होमवर्क ट्रैकर में लोड हो गई!');
+                                setTimeout(() => setSyncToastMessage(null), 3000);
+                              }}
+                              className="px-4 py-2 bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-bold rounded-xl text-xs inline-flex items-center gap-1.5 shadow-sm cursor-pointer transition-all active:scale-95"
+                            >
+                              <i className="fa-solid fa-users-viewfinder"></i>
+                              <span>कक्षा के सभी छात्रों को ट्रैकर में लोड करें</span>
+                            </button>
                           </td>
                         </tr>
                       ) : (
@@ -10931,6 +10989,22 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         </div>
                       </div>
                     </div>
+
+                    {/* Detailed Fee Breakdown Line */}
+                    {(() => {
+                      const metrics = computeStudentFeeMetrics(selectedStudentDetail, feeRecords);
+                      return (
+                        <div className="p-2.5 rounded-lg bg-white/85 border border-slate-200 text-[11px] text-slate-700 space-y-1">
+                          <div className="font-bold flex items-center justify-between text-slate-800">
+                            <span>सत्र शुल्क गणना:</span>
+                            <span className="text-blue-950 font-black">कुल सत्र शुल्क: ₹{metrics.totalSessionFee.toLocaleString('en-IN')}</span>
+                          </div>
+                          <div className="text-slate-600 leading-normal">
+                            प्रवेश शुल्क: <strong>₹{(metrics.admissionFee || 1000).toLocaleString('en-IN')}</strong> + {metrics.totalSessionFee - (metrics.admissionFee || 1000)} ({selectedStudentDetail.Session_Start_Month || 'April'} से {new Date().toLocaleString('en-US', { month: 'long' })}) • दर: ₹{(metrics.monthlyTuition || 450).toLocaleString('en-IN')}/माह • कुल जमा: <strong>₹{metrics.totalPaid.toLocaleString('en-IN')}</strong> • {isDue ? `बकाया: ₹${bal}` : bal < 0 ? `अग्रिम: ₹${Math.abs(bal)}` : 'पूर्ण चुकता'}
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     {/* Action buttons for Fee Due: Clear Due or Hide */}
                     <div className="pt-2 border-t border-slate-200/70 flex flex-wrap items-center justify-between gap-2 text-xs">
