@@ -4677,9 +4677,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
   const staffRoleOptions = useMemo(() => {
     const roles = new Set<string>();
     usersList.forEach((u) => {
-      if (u.Designation) roles.add(u.Designation.trim());
+      if (u.Designation) roles.add(String(u.Designation).trim());
     });
-    return Array.from(roles).sort();
+    return Array.from(roles).filter(Boolean).sort();
   }, [usersList]);
 
   // Fee totals for Manager (Overall School Summary Total based on individual student totals)
@@ -4700,13 +4700,13 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
   const classOptions = useMemo(() => {
     const set = new Set<string>();
     Object.keys(classMap).forEach((c) => set.add(c));
-    students.forEach((s) => s.Class && set.add(s.Class.trim()));
-    homeworkList.forEach((h) => h.Class && set.add(h.Class.trim()));
-    return Array.from(set).sort((a, b) => {
-      const numA = parseInt(a.replace(/\D/g, ''), 10);
-      const numB = parseInt(b.replace(/\D/g, ''), 10);
+    students.forEach((s) => s.Class && set.add(String(s.Class).trim()));
+    homeworkList.forEach((h) => h.Class && set.add(String(h.Class).trim()));
+    return Array.from(set).filter(Boolean).sort((a, b) => {
+      const numA = parseInt(String(a).replace(/\D/g, ''), 10);
+      const numB = parseInt(String(b).replace(/\D/g, ''), 10);
       if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
-      return a.localeCompare(b, undefined, { numeric: true });
+      return String(a).localeCompare(String(b), undefined, { numeric: true });
     });
   }, [students, homeworkList, classMap]);
 

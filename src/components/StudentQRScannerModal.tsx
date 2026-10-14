@@ -180,9 +180,9 @@ export const StudentQRScannerModal: React.FC<StudentQRScannerModalProps> = ({
   const availableClasses = useMemo(() => {
     const set = new Set<string>();
     students.forEach((s) => {
-      if (s.Class) set.add(s.Class.trim());
+      if (s.Class) set.add(String(s.Class).trim());
     });
-    return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    return Array.from(set).filter(Boolean).sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
   }, [students]);
 
   // Filtered Students list based on Search and Class

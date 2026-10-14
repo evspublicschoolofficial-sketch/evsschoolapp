@@ -91,12 +91,12 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
   const classOptions = useMemo(() => {
     const set = new Set<string>();
     Object.keys(classMap).forEach((c) => set.add(c));
-    students.forEach((s) => s.Class && set.add(s.Class.trim()));
-    return Array.from(set).sort((a, b) => {
-      const numA = parseInt(a.replace(/\D/g, ''), 10);
-      const numB = parseInt(b.replace(/\D/g, ''), 10);
+    students.forEach((s) => s.Class && set.add(String(s.Class).trim()));
+    return Array.from(set).filter(Boolean).sort((a, b) => {
+      const numA = parseInt(String(a).replace(/\D/g, ''), 10);
+      const numB = parseInt(String(b).replace(/\D/g, ''), 10);
       if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
-      return a.localeCompare(b, undefined, { numeric: true });
+      return String(a).localeCompare(String(b), undefined, { numeric: true });
     });
   }, [students, classMap]);
 
@@ -131,7 +131,7 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
   const totalStudentsCount = students.length;
   const activeClassCount = useMemo(() => {
     const set = new Set<string>();
-    students.forEach((s) => s.Class && set.add(s.Class.trim()));
+    students.forEach((s) => s.Class && set.add(String(s.Class).trim()));
     return set.size;
   }, [students]);
 

@@ -19,7 +19,7 @@ interface FeeMasterModalProps {
 export const FeeMasterModal: React.FC<FeeMasterModalProps> = ({
   isOpen,
   onClose,
-  apiUrl = 'https://script.google.com/macros/s/AKfycbz_W4kC9zLgWl_KjRz10e1w/exec',
+  apiUrl = 'https://script.google.com/macros/s/AKfycbwVy51K14qu6IXipAZXP4NspFcAUHpLcYv8-zjhkYnBlUI17TzGi_KaJU9TRmNT8D5vvQ/exec',
   onFeeMasterUpdated,
 }) => {
   const [configMap, setConfigMap] = useState<Record<string, ClassFeeConfig>>(() => getActiveFeeMasterConfig());

@@ -191,7 +191,7 @@ export const StudentBehaviorModal: React.FC<StudentBehaviorModalProps> = ({
         {/* Student Info Bar */}
         <div className="bg-amber-50/70 border-b border-amber-200/80 px-4 py-2.5 flex items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
-            {Boolean(getStudentPhoto && getStudentPhoto(student)?.trim()) ? (
+            {Boolean(getStudentPhoto && String(getStudentPhoto(student) || '').trim()) ? (
               <img
                 src={getStudentPhoto(student) || undefined}
                 alt={student.Student_Name}
