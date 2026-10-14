@@ -298,11 +298,41 @@ async function startServer() {
     });
   });
 
-  // Persistent deleted fee receipts file path
+  // Persistent deleted fee receipts, homework, and students file paths
   const DELETED_RECEIPTS_FILE = '/tmp/evs_deleted_receipts.json';
+  const DELETED_HOMEWORK_FILE = '/tmp/evs_deleted_homework.json';
+  const DELETED_STUDENTS_FILE = '/tmp/evs_deleted_students.json';
   const HOMEWORK_FILE = '/tmp/evs_homework.json';
   const BEHAVIOR_FILE = '/tmp/evs_behavior.json';
   const HW_TRACKER_FILE = '/tmp/evs_hw_tracker.json';
+
+  // Persistent deleted students
+  const getDeletedStudents = (): string[] => {
+    try {
+      if (fs.existsSync(DELETED_STUDENTS_FILE)) {
+        const content = fs.readFileSync(DELETED_STUDENTS_FILE, 'utf-8');
+        return JSON.parse(content);
+      }
+    } catch (e) {
+      console.warn('Error reading deleted students file:', e);
+    }
+    return [];
+  };
+
+  const saveDeletedStudent = (studentId: string): string[] => {
+    const clean = String(studentId || '').trim().toLowerCase();
+    if (!clean) return getDeletedStudents();
+    const list = getDeletedStudents();
+    if (!list.includes(clean)) {
+      list.push(clean);
+      try {
+        fs.writeFileSync(DELETED_STUDENTS_FILE, JSON.stringify(list, null, 2), 'utf-8');
+      } catch (e) {
+        console.warn('Error saving deleted student:', e);
+      }
+    }
+    return list;
+  };
 
   const getDeletedReceipts = (): string[] => {
     try {
@@ -331,16 +361,70 @@ async function startServer() {
     return list;
   };
 
+  // Persistent deleted homework
+  const getDeletedHomework = (): string[] => {
+    try {
+      if (fs.existsSync(DELETED_HOMEWORK_FILE)) {
+        const content = fs.readFileSync(DELETED_HOMEWORK_FILE, 'utf-8');
+        return JSON.parse(content);
+      }
+    } catch (e) {
+      console.warn('Error reading deleted homework file:', e);
+    }
+    return [];
+  };
+
+  const saveDeletedHomework = (idOrKey: string): string[] => {
+    const clean = String(idOrKey || '').trim().toLowerCase();
+    if (!clean) return getDeletedHomework();
+    const list = getDeletedHomework();
+    if (!list.includes(clean)) {
+      list.push(clean);
+      try {
+        fs.writeFileSync(DELETED_HOMEWORK_FILE, JSON.stringify(list, null, 2), 'utf-8');
+      } catch (e) {
+        console.warn('Error saving deleted homework:', e);
+      }
+    }
+    return list;
+  };
+
   // Persistent Homework Storage
   const getHomeworkList = (): any[] => {
     try {
       if (fs.existsSync(HOMEWORK_FILE)) {
-        return JSON.parse(fs.readFileSync(HOMEWORK_FILE, 'utf-8'));
+        const raw = JSON.parse(fs.readFileSync(HOMEWORK_FILE, 'utf-8'));
+        const deleted = getDeletedHomework();
+        if (deleted.length > 0) {
+          return raw.filter((h: any) => {
+            const hwId = String(h.Homework_ID || '').trim().toLowerCase();
+            const composite = `${h.Date}_${h.Class}_${h.Subject}_${h.Homework_Detail}`.trim().toLowerCase();
+            return !deleted.includes(hwId) && !deleted.includes(composite);
+          });
+        }
+        return raw;
       }
     } catch (e) {
       console.warn('Error reading homework file:', e);
     }
     return [];
+  };
+
+  const deleteHomeworkItem = (idOrKey: string): any[] => {
+    const clean = String(idOrKey || '').trim().toLowerCase();
+    if (clean) saveDeletedHomework(clean);
+    const list = getHomeworkList();
+    const filtered = list.filter((h) => {
+      const hwId = String(h.Homework_ID || '').trim().toLowerCase();
+      const composite = `${h.Date}_${h.Class}_${h.Subject}_${h.Homework_Detail}`.trim().toLowerCase();
+      return hwId !== clean && composite !== clean;
+    });
+    try {
+      fs.writeFileSync(HOMEWORK_FILE, JSON.stringify(filtered, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Error saving homework file after delete:', e);
+    }
+    return filtered;
   };
 
   const saveHomeworkItem = (item: any): any[] => {
@@ -496,6 +580,58 @@ async function startServer() {
     res.json({ success: true, receipts: list });
   });
 
+  // Get list of deleted homework IDs & keys
+  app.get('/api/deleted-homework', (_req, res) => {
+    res.json({ deleted: getDeletedHomework() });
+  });
+
+  // Add a deleted homework ID / key
+  app.post('/api/deleted-homework', (req, res) => {
+    const id = req.body?.id || req.body?.homework_id || req.body?.key;
+    const list = saveDeletedHomework(id);
+    if (req.body?.composite_key) {
+      saveDeletedHomework(req.body.composite_key);
+    }
+    if (id) {
+      deleteHomeworkItem(id);
+    }
+    res.json({ success: true, deleted: list });
+  });
+
+  // Delete homework endpoint
+  app.delete('/api/homework/:id', (req, res) => {
+    const { id } = req.params;
+    const list = deleteHomeworkItem(id);
+    res.json({ success: true, homework: list });
+  });
+
+  app.post('/api/homework/delete', (req, res) => {
+    const id = req.body?.id || req.body?.homework_id;
+    const compositeKey = req.body?.composite_key;
+    if (id) deleteHomeworkItem(id);
+    if (compositeKey) deleteHomeworkItem(compositeKey);
+    res.json({ success: true });
+  });
+
+  // Get list of deleted students
+  app.get('/api/deleted-students', (_req, res) => {
+    res.json({ students: getDeletedStudents() });
+  });
+
+  // Add a deleted student ID
+  app.post('/api/deleted-students', (req, res) => {
+    const sId = req.body?.student_id || req.body?.studentId || req.body?.id;
+    const list = saveDeletedStudent(sId);
+    res.json({ success: true, students: list });
+  });
+
+  // Delete student endpoint
+  app.delete('/api/students/:id', (req, res) => {
+    const { id } = req.params;
+    const list = saveDeletedStudent(id);
+    res.json({ success: true, students: list });
+  });
+
   // Forward any action payload (addStudent, addFee, etc.) to Google Apps Script
   app.post('/api/forward-apps-script', async (req, res) => {
     try {
@@ -509,6 +645,12 @@ async function startServer() {
       // Pre-persist locally to prevent any data loss
       if (payload?.action === 'deleteFee' && payload?.receipt_no) {
         saveDeletedReceipt(payload.receipt_no);
+      } else if (payload?.action === 'deleteStudent') {
+        const sid = payload?.student_id || payload?.studentId;
+        if (sid) saveDeletedStudent(sid);
+      } else if (payload?.action === 'deleteHomework') {
+        if (payload?.homework_id) deleteHomeworkItem(payload.homework_id);
+        if (payload?.composite_key) deleteHomeworkItem(payload.composite_key);
       } else if (payload?.action === 'addHomework') {
         saveHomeworkItem(payload);
       } else if (payload?.action === 'addBehavior') {
@@ -584,7 +726,7 @@ async function startServer() {
       }
 
       // If remote script returned "Invalid action" or failed, but we handled it locally on the school server
-      if (['deleteFee', 'addHomework', 'addBehavior', 'updateHomeworkTracker', 'updateBusTracking'].includes(payload?.action)) {
+      if (['deleteFee', 'deleteStudent', 'deleteHomework', 'addHomework', 'addBehavior', 'updateHomeworkTracker', 'updateBusTracking'].includes(payload?.action)) {
         return res.json({
           success: true,
           message: `${payload.action} school server me safe ho gaya hai (Locally saved & synced)!`,

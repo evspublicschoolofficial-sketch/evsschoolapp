@@ -579,6 +579,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
       monthlyTuition: summary.monthlyTuition,
       admissionFee: summary.admissionFee,
       totalPaid: summary.totalPaid,
+      totalDiscount: summary.totalDiscount || 0,
       balance: summary.currentDues,
       netBalance: summary.netBalance,
       isDue: summary.isDue,
@@ -2000,7 +2001,9 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                   </div>
                   <span className="text-[10px] opacity-80 mt-1 pt-1 border-t border-slate-200/50 block">
                     {studentFeeSummary.isDue
-                      ? `देय ₹${studentFeeSummary.totalFee.toLocaleString('en-IN')} - जमा ₹${studentFeeSummary.totalPaid.toLocaleString('en-IN')}`
+                      ? studentFeeSummary.totalDiscount > 0
+                        ? `देय ₹${studentFeeSummary.totalFee.toLocaleString('en-IN')} - छूट ₹${studentFeeSummary.totalDiscount.toLocaleString('en-IN')} - जमा ₹${studentFeeSummary.totalPaid.toLocaleString('en-IN')}`
+                        : `देय ₹${studentFeeSummary.totalFee.toLocaleString('en-IN')} - जमा ₹${studentFeeSummary.totalPaid.toLocaleString('en-IN')}`
                       : studentFeeSummary.isAdvance
                       ? 'भविष्य के शुल्क में समायोजित'
                       : 'सभी देय शुल्क पूर्ण चुकता'}
@@ -2010,11 +2013,16 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                 <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 shadow-2xs flex flex-col justify-between">
                   <div>
                     <span className="text-[11px] text-slate-500 font-medium block">
-                      कुल रसीदें (Receipts)
+                      कुल रसीदें / विशेष छूट
                     </span>
                     <span className="text-xl sm:text-2xl font-black text-slate-800 mt-1 block">
                       {studentFeeSummary.count} रसीदें
                     </span>
+                    {studentFeeSummary.totalDiscount > 0 && (
+                      <div className="mt-1 text-[11px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 inline-block">
+                        छूट / रियायत: -₹{studentFeeSummary.totalDiscount.toLocaleString('en-IN')}
+                      </div>
+                    )}
                   </div>
 
                   {studentFeeSummary.isDue && onClearBalance && (

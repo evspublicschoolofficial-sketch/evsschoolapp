@@ -7,7 +7,8 @@ export interface StudentFeeMetrics {
   monthlyTuition?: number; // Detected monthly tuition
   admissionFee?: number;   // Standard or custom admission fee
   totalPaid: number;       // SUM of Amount_Paid
-  dueBalance: number;      // totalSessionFee - totalPaid (negative if advance, e.g. 600 - 700 = -100)
+  totalDiscount: number;   // SUM of discounts / concessions applied
+  dueBalance: number;      // totalSessionFee - totalPaid - totalDiscount (negative if advance, e.g. 600 - 700 = -100)
   hasDues: boolean;        // dueBalance > 0
   isAdvance: boolean;      // dueBalance < 0
   advanceAmount: number;   // Math.abs(dueBalance) if isAdvance else 0
@@ -18,6 +19,7 @@ export interface SchoolFeeTotals {
   totalReceipts: number;
   totalCollected: number;
   totalPendingDues: number;
+  totalDiscounts: number;
   totalAdvance: number;
   totalBilled: number;
 }
@@ -228,8 +230,9 @@ export interface StudentSummaryResult {
   totalBilledSessionFee: number; // Fees strictly till current running month
   fullYearFee: number;           // Total full 12 months session fee
   totalPaid: number;
-  currentDues: number;      // Math.max(0, Total Billed Session Fee - Total Fees Paid)
-  netBalance: number;       // Total Billed Session Fee - Total Fees Paid (negative = advance)
+  totalDiscount: number;         // Total discount / concession given
+  currentDues: number;      // Math.max(0, Total Billed Session Fee - Total Fees Paid - Total Discount)
+  netBalance: number;       // Total Billed Session Fee - Total Fees Paid - Total Discount (negative = advance)
   isDue: boolean;
   isAdvance: boolean;
   advanceAmount: number;
@@ -238,12 +241,13 @@ export interface StudentSummaryResult {
 }
 
 /**
- * 2. DYNAMIC CURRENT-MONTH DUES CALCULATION (PREVENT OVER-BILLING)
+ * 2. DYNAMIC CURRENT-MONTH DUES CALCULATION (PREVENT OVER-BILLING & ACCOUNT FOR DISCOUNTS)
  * Formula:
  * 1. Elapsed Months Count = Count of months from Session Start Month up to Current Month (e.g., April to October = 7 months).
  * 2. Total Billed Session Fee = (Monthly Tuition Fee * Elapsed Months) + Admission Fee (if applicable).
  * 3. Total Fees Paid = Sum of Amount_Paid (Col H / row[7]) across all valid payment receipts.
- * 4. Current Dues (DUE) = Math.max(0, Total Billed Session Fee - Total Fees Paid).
+ * 4. Total Discount = Sum of Discount_Amount / Discount across fee receipts + any profile-level concession.
+ * 5. Current Dues (DUE) = Math.max(0, Total Billed Session Fee - Total Fees Paid - Total Discount).
  */
 export const calculateStudentSummary = (
   studentId: string,
@@ -295,8 +299,24 @@ export const calculateStudentSummary = (
   // 6. Total Fees Paid = Sum of Amount_Paid across all valid payment receipts
   const totalPaid = reconciled.reduce((sum, r) => sum + (Number(r.Amount_Paid) || 0), 0);
 
-  // 7. Current Dues (DUE) = Math.max(0, Total Billed Session Fee - Total Fees Paid)
-  const netBalance = totalBilledSessionFee - totalPaid;
+  // 7. Total Discounts Given (Receipt-level discounts + profile-level concessions)
+  const totalReceiptDiscount = reconciled.reduce(
+    (sum, r) => sum + (Number((r as any).Discount_Amount || (r as any).Discount || 0) || 0),
+    0
+  );
+
+  const profileMonthlyDiscount = Number(
+    studentProfile?.Monthly_Discount || studentProfile?.Discount_Per_Month || 0
+  ) || 0;
+  const profileFlatDiscount = Number(
+    studentProfile?.Discount || studentProfile?.Fee_Discount || studentProfile?.Concession || 0
+  ) || 0;
+  const totalProfileDiscount = (profileMonthlyDiscount * elapsedMonths) + profileFlatDiscount;
+
+  const totalDiscount = Math.max(totalReceiptDiscount, totalProfileDiscount);
+
+  // 8. Current Dues (DUE) = Math.max(0, Total Billed Session Fee - Total Fees Paid - Total Discount)
+  const netBalance = isExempt ? 0 : (totalBilledSessionFee - totalPaid - totalDiscount);
   const currentDues = Math.max(0, netBalance);
   const isAdvance = netBalance < 0;
   const advanceAmount = isAdvance ? Math.abs(netBalance) : 0;
@@ -311,6 +331,7 @@ export const calculateStudentSummary = (
     totalBilledSessionFee,
     fullYearFee,
     totalPaid,
+    totalDiscount,
     currentDues,
     netBalance,
     isDue: currentDues > 0,
@@ -333,6 +354,7 @@ export const computeStudentFeeMetrics = (
     return {
       totalSessionFee: 0,
       totalPaid: 0,
+      totalDiscount: 0,
       dueBalance: 0,
       hasDues: false,
       isAdvance: false,
@@ -350,6 +372,7 @@ export const computeStudentFeeMetrics = (
     monthlyTuition: summary.monthlyTuition,
     admissionFee: summary.admissionFee,
     totalPaid: summary.totalPaid,
+    totalDiscount: summary.totalDiscount,
     dueBalance: summary.netBalance,
     hasDues: summary.currentDues > 0,
     isAdvance: summary.isAdvance,
@@ -360,7 +383,7 @@ export const computeStudentFeeMetrics = (
 
 /**
  * Calculate single receipt balance strictly reading Index 8 (Balance_Amount):
- * Total_Amount - Amount_Paid fallback if Balance_Amount is not provided.
+ * Total_Amount - Discount - Amount_Paid fallback if Balance_Amount is not provided.
  */
 export const computeReceiptBalance = (fee: FeeCollectionRecord): {
   balance: number;
@@ -369,10 +392,12 @@ export const computeReceiptBalance = (fee: FeeCollectionRecord): {
   isCleared: boolean;
 } => {
   const total = Number(fee.Total_Amount) || 0;
+  const discount = Number((fee as any).Discount_Amount || (fee as any).Discount || 0) || 0;
   const paid = Number(fee.Amount_Paid) || 0;
   const rawBal = Number(fee.Balance_Amount);
 
-  let balance = !isNaN(rawBal) ? rawBal : (total - paid);
+  const netPayable = Math.max(0, total - discount);
+  let balance = !isNaN(rawBal) ? rawBal : Math.max(0, netPayable - paid);
   const isAdvance = /(advance|अग्रिम)/i.test(String(fee.Fee_Type || '')) || balance < 0;
 
   return {
@@ -419,11 +444,13 @@ export const computeSchoolFeeTotals = (
 
   let totalBilled = 0;
   let totalPendingDues = 0;
+  let totalDiscounts = 0;
   let studentExcessAdvance = 0;
 
   studentMap.forEach((student) => {
     const metrics = computeStudentFeeMetrics(student, allFeeRecords);
     totalBilled += metrics.totalSessionFee;
+    totalDiscounts += (metrics.totalDiscount || 0);
     if (metrics.dueBalance > 0) {
       totalPendingDues += metrics.dueBalance;
     } else if (metrics.dueBalance < 0) {
@@ -447,6 +474,7 @@ export const computeSchoolFeeTotals = (
     totalReceipts,
     totalCollected,
     totalPendingDues,
+    totalDiscounts,
     totalAdvance,
     totalBilled,
   };

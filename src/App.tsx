@@ -1583,6 +1583,10 @@ export default function App() {
   const [hideModalPass, setHideModalPass] = useState<boolean>(false);
   const [hideModalFeeStatus, setHideModalFeeStatus] = useState<boolean>(false);
   const [selectedHomeworkDetail, setSelectedHomeworkDetail] = useState<Homework | null>(null);
+  const [homeworkToDelete, setHomeworkToDelete] = useState<Homework | null>(null);
+  const [isDeletingHomework, setIsDeletingHomework] = useState<boolean>(false);
+  const [studentToDelete, setStudentToDelete] = useState<Student | null>(null);
+  const [isDeletingStudent, setIsDeletingStudent] = useState<boolean>(false);
   const [previewQRStudent, setPreviewQRStudent] = useState<Student | null>(null);
 
   // Helper to parse Google Sheets 2D array output into objects
@@ -1720,14 +1724,35 @@ export default function App() {
       }
 
       if (success && parsed.length > 0) {
-        // Keep entries with at least a Student_Name or Student_ID, skipping header row if present
+        // Load persistent deleted students set from localStorage and server
+        let deletedStudentsSet = new Set<string>();
+        try {
+          const storedDel = JSON.parse(localStorage.getItem('evs_deleted_students') || '[]');
+          if (Array.isArray(storedDel)) {
+            storedDel.forEach((id: string) => deletedStudentsSet.add(String(id || '').trim().toLowerCase()));
+          }
+        } catch {}
+
+        try {
+          const srvDel = await fetch('/api/deleted-students');
+          if (srvDel.ok) {
+            const srvData = await srvDel.json();
+            if (Array.isArray(srvData?.students)) {
+              srvData.students.forEach((id: string) => deletedStudentsSet.add(String(id || '').trim().toLowerCase()));
+            }
+          }
+        } catch {}
+
+        // Keep entries with at least a Student_Name or Student_ID, skipping header row and deleted students
         const valid = parsed
           .filter(
             (s) => {
               const name = String(s.Student_Name || '').trim();
-              const sid = String(s.Student_ID || '').trim();
-              if (sid.toLowerCase() === 'student_id' || name.toLowerCase() === 'student_name') return false;
-              return name !== '' || sid !== '';
+              const sid = String(s.Student_ID || '').trim().toLowerCase();
+              if (sid === 'student_id' || name.toLowerCase() === 'student_name') return false;
+              if (name === '' && sid === '') return false;
+              if (sid && deletedStudentsSet.has(sid)) return false;
+              return true;
             }
           )
           .map((s) => {
@@ -1754,6 +1779,10 @@ export default function App() {
             customStudents = JSON.parse(customStr);
           }
         } catch {}
+
+        customStudents = customStudents.filter(
+          (s) => !deletedStudentsSet.has(String(s.Student_ID || '').trim().toLowerCase())
+        );
 
         const parsedIdSet = new Set(
           valid.map((s) => String(s.Student_ID || '').toLowerCase().trim())
@@ -1856,6 +1885,22 @@ export default function App() {
         }
       } catch {}
 
+      // Load deleted homework IDs & composite keys from localStorage and server
+      let deletedHomeworkSet = new Set<string>();
+      try {
+        const stored = JSON.parse(localStorage.getItem('evs_deleted_homework') || '[]') as string[];
+        deletedHomeworkSet = new Set(stored.map((s) => String(s).trim().toLowerCase()));
+      } catch {}
+
+      try {
+        const dRes = await fetch(`/api/deleted-homework?${cacheBust}`);
+        if (dRes.ok) {
+          const dData = await dRes.json();
+          const serverList: string[] = dData?.deleted || [];
+          serverList.forEach((s) => deletedHomeworkSet.add(String(s).trim().toLowerCase()));
+        }
+      } catch {}
+
       // 4. Merge all sources, prioritizing custom records and deduplicating
       const combined = [...serverCustomHw, ...localCustomHw, ...parsed];
       const seenIds = new Set<string>();
@@ -1877,6 +1922,15 @@ export default function App() {
         }
 
         const dedupeKey = id ? id.toLowerCase() : `${hw.Date}_${hw.Class}_${subject}_${detail}`.toLowerCase();
+        const compositeKey = `${hw.Date}_${hw.Class}_${subject}_${detail}`.toLowerCase();
+
+        // Skip if marked as deleted
+        if (id && deletedHomeworkSet.has(id.toLowerCase())) {
+          continue;
+        }
+        if (deletedHomeworkSet.has(compositeKey)) {
+          continue;
+        }
 
         if (dedupeKey && !seenIds.has(dedupeKey)) {
           seenIds.add(dedupeKey);
@@ -2864,8 +2918,19 @@ export default function App() {
   const handleDeleteStudent = async (studentId: string, studentName: string): Promise<boolean> => {
     const sId = String(studentId || '').trim();
     if (!sId) return false;
+    setIsDeletingStudent(true);
 
-    // 1. Remove from local students state
+    // 1. Persist to localStorage evs_deleted_students
+    try {
+      const stored = JSON.parse(localStorage.getItem('evs_deleted_students') || '[]');
+      const list = Array.isArray(stored) ? stored : [];
+      if (!list.map((x: string) => String(x).toLowerCase()).includes(sId.toLowerCase())) {
+        list.push(sId);
+        localStorage.setItem('evs_deleted_students', JSON.stringify(list));
+      }
+    } catch {}
+
+    // 2. Remove from local students state immediately
     setStudents((prev) => {
       const updated = prev.filter((s) => String(s.Student_ID || '').trim().toLowerCase() !== sId.toLowerCase());
       try {
@@ -2874,7 +2939,7 @@ export default function App() {
       return updated;
     });
 
-    // 2. Remove from evs_custom_students in localStorage
+    // 3. Remove from evs_custom_students in localStorage
     try {
       const saved = localStorage.getItem('evs_custom_students');
       if (saved) {
@@ -2884,7 +2949,7 @@ export default function App() {
       }
     } catch {}
 
-    // 3. Clear selected student modal if open
+    // 4. Clear selected student modal if open
     setSelectedStudentDetail((prev) => {
       if (prev && String(prev.Student_ID || '').trim().toLowerCase() === sId.toLowerCase()) {
         return null;
@@ -2892,7 +2957,16 @@ export default function App() {
       return prev;
     });
 
-    // 4. Forward delete request to Google Apps Script
+    // 5. Persist to backend server deleted students endpoint
+    try {
+      await fetch('/api/deleted-students', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ student_id: sId }),
+      });
+    } catch {}
+
+    // 6. Forward delete request to Google Apps Script
     try {
       await fetch('/api/forward-apps-script', {
         method: 'POST',
@@ -2907,10 +2981,12 @@ export default function App() {
       console.warn('Could not forward delete request to Google Apps Script:', err);
     }
 
-    // Broadcast real-time update to all tabs and devices
+    // 7. Broadcast real-time update to all tabs and devices
     realtimeSync.broadcastUpdate('student', 'deleteStudent', { studentId: sId });
 
-    setStudentNotificationSuccess(`छात्र "${studentName || sId}" को पोर्टल से हटा दिया गया!`);
+    setStudentToDelete(null);
+    setIsDeletingStudent(false);
+    setStudentNotificationSuccess(`छात्र "${studentName || sId}" को पोर्टल से सफलतापूर्वक हटा दिया गया!`);
     setTimeout(() => setStudentNotificationSuccess(null), 4000);
     return true;
   };
@@ -2926,6 +3002,18 @@ export default function App() {
       if (event.entity === 'fee') {
         fetchFeeCollection();
       } else if (event.entity === 'student') {
+        if (event.action === 'deleteStudent' && event.data?.studentId) {
+          const delId = String(event.data.studentId).trim().toLowerCase();
+          setStudents((prev) => prev.filter((s) => String(s.Student_ID || '').trim().toLowerCase() !== delId));
+          try {
+            const stored = JSON.parse(localStorage.getItem('evs_deleted_students') || '[]');
+            const list = Array.isArray(stored) ? stored : [];
+            if (!list.map((x: string) => String(x).toLowerCase()).includes(delId)) {
+              list.push(delId);
+              localStorage.setItem('evs_deleted_students', JSON.stringify(list));
+            }
+          } catch {}
+        }
         fetchStudents(true);
         fetchFeeCollection();
       } else if (event.entity === 'homework') {
@@ -4593,6 +4681,125 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         body: JSON.stringify(deletePayload),
       }).catch((e) => console.warn('Background fee delete note:', e));
     } catch {}
+  };
+
+  // Delete Homework Handler (Teacher & Manager)
+  const handleDeleteHomework = async (hw: Homework) => {
+    if (!hw) return;
+    setIsDeletingHomework(true);
+
+    const hwId = String(hw.Homework_ID || '').trim();
+    const cleanId = hwId.toLowerCase();
+    const cleanSubject = String(hw.Subject || '').trim();
+    const cleanDetail = String(hw.Homework_Detail || '').trim();
+    const compositeKey = `${hw.Date}_${hw.Class}_${cleanSubject}_${cleanDetail}`.toLowerCase();
+
+    // 1. Immediately remove from current React state
+    setHomeworkList((prev) =>
+      prev.filter((item) => {
+        const itemId = String(item.Homework_ID || '').trim().toLowerCase();
+        const itemComposite = `${item.Date}_${item.Class}_${String(item.Subject || '').trim()}_${String(item.Homework_Detail || '').trim()}`.toLowerCase();
+        if (cleanId && itemId === cleanId) return false;
+        if (itemComposite === compositeKey) return false;
+        return true;
+      })
+    );
+
+    // 2. Add to localStorage deleted homework cache
+    try {
+      const stored = JSON.parse(localStorage.getItem('evs_deleted_homework') || '[]') as string[];
+      if (cleanId && !stored.includes(cleanId)) stored.push(cleanId);
+      if (compositeKey && !stored.includes(compositeKey)) stored.push(compositeKey);
+      localStorage.setItem('evs_deleted_homework', JSON.stringify(stored));
+    } catch (e) {
+      console.warn('Could not update evs_deleted_homework:', e);
+    }
+
+    // 3. Update localStorage custom homework
+    try {
+      const existing = localStorage.getItem('evs_custom_homework');
+      if (existing) {
+        const list: Homework[] = JSON.parse(existing);
+        const filtered = list.filter((item) => {
+          const itemId = String(item.Homework_ID || '').trim().toLowerCase();
+          const itemComposite = `${item.Date}_${item.Class}_${String(item.Subject || '').trim()}_${String(item.Homework_Detail || '').trim()}`.toLowerCase();
+          if (cleanId && itemId === cleanId) return false;
+          if (itemComposite === compositeKey) return false;
+          return true;
+        });
+        localStorage.setItem('evs_custom_homework', JSON.stringify(filtered));
+      }
+    } catch {}
+
+    // 4. Update CACHE_KEY_HOMEWORK
+    try {
+      const cached = localStorage.getItem(CACHE_KEY_HOMEWORK);
+      if (cached) {
+        const list: Homework[] = JSON.parse(cached);
+        const filtered = list.filter((item) => {
+          const itemId = String(item.Homework_ID || '').trim().toLowerCase();
+          const itemComposite = `${item.Date}_${item.Class}_${String(item.Subject || '').trim()}_${String(item.Homework_Detail || '').trim()}`.toLowerCase();
+          if (cleanId && itemId === cleanId) return false;
+          if (itemComposite === compositeKey) return false;
+          return true;
+        });
+        localStorage.setItem(CACHE_KEY_HOMEWORK, JSON.stringify(filtered));
+      }
+    } catch {}
+
+    // 5. Broadcast real-time update to all tabs and devices
+    realtimeSync.broadcastUpdate('homework', 'deleteHomework', {
+      homeworkId: hwId,
+      compositeKey,
+      class: hw.Class,
+      date: hw.Date,
+    });
+
+    // 6. Notify backend server and Google Apps Script
+    const payload = {
+      action: 'deleteHomework',
+      homework_id: hwId,
+      composite_key: compositeKey,
+      class_name: hw.Class,
+      subject: hw.Subject,
+      date: hw.Date,
+      detail: hw.Homework_Detail,
+    };
+
+    try {
+      fetch('/api/deleted-homework', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: hwId, composite_key: compositeKey }),
+      }).catch(() => null);
+
+      if (hwId) {
+        fetch(`/api/homework/${encodeURIComponent(hwId)}`, {
+          method: 'DELETE',
+        }).catch(() => null);
+      }
+
+      fetch('/api/forward-apps-script', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).catch(() => null);
+
+      fetch(getEffectiveApiUrl(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload),
+      }).catch(() => null);
+    } catch {}
+
+    setIsDeletingHomework(false);
+    setHomeworkToDelete(null);
+    if (selectedHomeworkDetail) {
+      setSelectedHomeworkDetail(null);
+    }
+
+    setSyncToastMessage(`🗑️ Class ${getClassName(hw.Class)} का ${hw.Subject || 'गृहकार्य'} सफलतापूर्वक हटा दिया गया!`);
+    setTimeout(() => setSyncToastMessage(null), 3500);
   };
 
   // Filtered Homework Tracker records for Teacher Dashboard
@@ -8507,13 +8714,23 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       {homeworkList.slice(0, 5).map((hw, idx) => (
                         <div
                           key={hw.Homework_ID || idx}
-                          className="p-3 bg-slate-50 rounded-lg border border-slate-200/60 text-xs"
+                          className="p-3 bg-slate-50 rounded-lg border border-slate-200/60 text-xs hover:border-slate-300 transition-all"
                         >
                           <div className="flex items-center justify-between mb-1">
                             <span className="font-bold text-blue-950">
                               {hw.Subject} • Class {getClassName(hw.Class)}
                             </span>
-                            <span className="text-[10px] text-slate-400">{formatDate(hw.Date)}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] text-slate-400">{formatDate(hw.Date)}</span>
+                              <button
+                                type="button"
+                                onClick={() => setHomeworkToDelete(hw)}
+                                className="text-slate-400 hover:text-rose-600 p-0.5 rounded transition-colors cursor-pointer"
+                                title="यह होमवर्क हटाएं (Delete Homework)"
+                              >
+                                <i className="fa-solid fa-trash-can text-[11px]"></i>
+                              </button>
+                            </div>
                           </div>
                           <p className="text-slate-600 line-clamp-2 text-[11px]">
                             {hw.Homework_Detail}
@@ -8948,28 +9165,64 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {homeworkList.map((hw, idx) => (
-                    <div
-                      key={hw.Homework_ID || idx}
-                      className="p-4 bg-slate-50 rounded-xl border border-slate-200/80 hover:border-blue-300 transition-all space-y-2"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-blue-950 text-sm">
-                          {hw.Subject} • Class {getClassName(hw.Class)}
-                        </span>
-                        <span className="text-[11px] text-slate-500 font-medium">{formatDate(hw.Date)}</span>
+                {homeworkList.length === 0 ? (
+                  <div className="p-8 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200 text-slate-500 text-xs">
+                    <i className="fa-solid fa-book-open text-2xl text-slate-300 mb-2 block"></i>
+                    अभी कोई होमवर्क रिकॉर्ड दर्ज नहीं है। आप टैब 1 (Upload Homework) से नया होमवर्क अपलोड कर सकते हैं।
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {homeworkList.map((hw, idx) => (
+                      <div
+                        key={hw.Homework_ID || idx}
+                        className="p-4 bg-slate-50 rounded-xl border border-slate-200/80 hover:border-blue-300 transition-all space-y-2 relative"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-blue-950 text-sm">
+                            {hw.Subject} • Class {getClassName(hw.Class)}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] text-slate-500 font-medium">{formatDate(hw.Date)}</span>
+                            <button
+                              type="button"
+                              onClick={() => setHomeworkToDelete(hw)}
+                              className="text-slate-400 hover:text-rose-600 p-1 rounded-md hover:bg-rose-50 transition-colors cursor-pointer"
+                              title="यह होमवर्क हटाएं (Delete Homework)"
+                            >
+                              <i className="fa-solid fa-trash-can text-xs"></i>
+                            </button>
+                          </div>
+                        </div>
+                        <p className="text-xs text-slate-700 whitespace-pre-wrap">{hw.Homework_Detail}</p>
+                        <div className="flex items-center justify-between pt-2 border-t border-slate-200 text-[11px] text-slate-500">
+                          <span>अध्यापक: <strong className="text-slate-700">{hw.Teacher || 'Faculty'}</strong></span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-800 font-semibold text-[10px]">
+                              {hw.Target_Type || 'Poori Class'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedHomeworkDetail(hw)}
+                              className="px-2 py-0.5 rounded bg-slate-100 hover:bg-[#0c2340] hover:text-amber-300 text-slate-700 font-semibold transition-all cursor-pointer text-[10px]"
+                              title="विवरण देखें"
+                            >
+                              विवरण
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setHomeworkToDelete(hw)}
+                              className="px-2 py-0.5 rounded bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white font-semibold transition-all flex items-center gap-1 cursor-pointer text-[10px]"
+                              title="यह होमवर्क हटाएं"
+                            >
+                              <i className="fa-solid fa-trash-can text-[9px]"></i>
+                              <span>हटाएं</span>
+                            </button>
+                          </div>
+                        </div>
                       </div>
-                      <p className="text-xs text-slate-700 whitespace-pre-wrap">{hw.Homework_Detail}</p>
-                      <div className="flex items-center justify-between pt-2 border-t border-slate-200 text-[11px] text-slate-500">
-                        <span>अध्यापक: <strong className="text-slate-700">{hw.Teacher || 'Faculty'}</strong></span>
-                        <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-800 font-semibold">
-                          {hw.Target_Type || 'Poori Class'}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
@@ -9553,6 +9806,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               onSyncAllPending={syncAllPendingStudentsToSheet}
               onOpenSyncSettings={() => setSheetSyncModalOpen(true)}
               onDeleteStudent={handleDeleteStudent}
+              onRequestDeleteStudent={(st) => setStudentToDelete(st)}
               onOpenAttendanceCalendar={(st) => {
                 if (st) setSelectedStudent(st);
                 setAttendanceCalendarMode('calendar');
@@ -9923,18 +10177,12 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                     <span className="hidden sm:inline text-[10px]">QR</span>
                                   </button>
                                   <button
-                                    onClick={async () => {
-                                      const confirmDelete = window.confirm(
-                                        `क्या आप वाकई छात्र "${s.Student_Name || 'Unknown'}" (ID: ${s.Student_ID}) को पोर्टल व Sheet से हटाना चाहते हैं?`
-                                      );
-                                      if (confirmDelete) {
-                                        await handleDeleteStudent(s.Student_ID, s.Student_Name || '');
-                                      }
-                                    }}
+                                    onClick={() => setStudentToDelete(s)}
                                     className="p-1 px-2 bg-rose-50 hover:bg-rose-600 hover:text-white text-rose-700 border border-rose-200 rounded text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1"
                                     title="छात्र हटाएं (Delete Student)"
                                   >
                                     <i className="fa-solid fa-trash-can text-[10px]"></i>
+                                    <span className="hidden sm:inline text-[10px]">Delete</span>
                                   </button>
                                 </div>
                               </td>
@@ -10096,12 +10344,24 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                               {hw.Teacher || 'Faculty'}
                             </td>
                             <td className="px-4 py-3 text-center whitespace-nowrap">
-                              <button
-                                onClick={() => setSelectedHomeworkDetail(hw)}
-                                className="px-2.5 py-1 bg-slate-100 hover:bg-[#0c2340] hover:text-amber-300 text-slate-700 rounded text-[11px] font-semibold transition-colors cursor-pointer"
-                              >
-                                View Details
-                              </button>
+                              <div className="flex items-center justify-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedHomeworkDetail(hw)}
+                                  className="px-2.5 py-1 bg-slate-100 hover:bg-[#0c2340] hover:text-amber-300 text-slate-700 rounded text-[11px] font-semibold transition-colors cursor-pointer"
+                                  title="होमवर्क विवरण देखें"
+                                >
+                                  View Details
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setHomeworkToDelete(hw)}
+                                  className="px-2 py-1 bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white rounded text-[11px] font-semibold transition-colors cursor-pointer"
+                                  title="होमवर्क हटाएं (Delete Homework)"
+                                >
+                                  <i className="fa-solid fa-trash-can"></i>
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         ))
@@ -11079,7 +11339,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             <span className="text-blue-950 font-black">कुल सत्र शुल्क: ₹{metrics.totalSessionFee.toLocaleString('en-IN')}</span>
                           </div>
                           <div className="text-slate-600 leading-normal">
-                            प्रवेश शुल्क: <strong>₹{(metrics.admissionFee || 1000).toLocaleString('en-IN')}</strong> + {metrics.totalSessionFee - (metrics.admissionFee || 1000)} ({selectedStudentDetail.Session_Start_Month || 'April'} से {new Date().toLocaleString('en-US', { month: 'long' })}) • दर: ₹{(metrics.monthlyTuition || 450).toLocaleString('en-IN')}/माह • कुल जमा: <strong>₹{metrics.totalPaid.toLocaleString('en-IN')}</strong> • {isDue ? `बकाया: ₹${bal}` : bal < 0 ? `अग्रिम: ₹${Math.abs(bal)}` : 'पूर्ण चुकता'}
+                            प्रवेश शुल्क: <strong>₹{(metrics.admissionFee || 1000).toLocaleString('en-IN')}</strong> + {metrics.totalSessionFee - (metrics.admissionFee || 1000)} ({selectedStudentDetail.Session_Start_Month || 'April'} से {new Date().toLocaleString('en-US', { month: 'long' })}) • दर: ₹{(metrics.monthlyTuition || 450).toLocaleString('en-IN')}/माह • कुल जमा: <strong>₹{metrics.totalPaid.toLocaleString('en-IN')}</strong>{Number(metrics.totalDiscount || 0) > 0 ? <span> • छूट/रियायत: <strong className="text-amber-700 font-bold">-₹{Number(metrics.totalDiscount).toLocaleString('en-IN')}</strong></span> : null} • {isDue ? `शुद्ध बकाया: ₹${bal}` : bal < 0 ? `अग्रिम: ₹${Math.abs(bal)}` : 'पूर्ण चुकता'}
                           </div>
                         </div>
                       );
@@ -11218,18 +11478,27 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
             )}
 
             <div className="mt-5 pt-4 border-t border-slate-100 flex items-center justify-between gap-2">
-              <div>
+              <div className="flex items-center gap-2">
                 {!hideModalPass && (
                   <button
                     type="button"
                     onClick={() => setHideModalPass(true)}
-                    className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold rounded-lg border border-rose-200 cursor-pointer flex items-center gap-1.5 transition-colors"
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg border border-slate-200 cursor-pointer flex items-center gap-1.5 transition-colors"
                     title="यह पास हटाएं"
                   >
-                    <i className="fa-solid fa-trash-can text-[11px]"></i>
-                    <span>पास हटाएं (Remove Pass)</span>
+                    <i className="fa-solid fa-eye-slash text-[11px]"></i>
+                    <span>पास छुपाएं (Hide Pass)</span>
                   </button>
                 )}
+                <button
+                  type="button"
+                  onClick={() => setStudentToDelete(selectedStudentDetail)}
+                  className="px-3 py-1.5 bg-rose-50 hover:bg-rose-600 hover:text-white text-rose-700 text-xs font-bold rounded-lg border border-rose-200 cursor-pointer flex items-center gap-1.5 transition-colors shadow-2xs"
+                  title="इस छात्र को स्कूल पोर्टल व डेटाबेस से हटाएं"
+                >
+                  <i className="fa-solid fa-trash-can text-[11px]"></i>
+                  <span>छात्र हटाएं (Delete)</span>
+                </button>
               </div>
               <button
                 onClick={() => setSelectedStudentDetail(null)}
@@ -11490,12 +11759,236 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               </div>
             </div>
 
-            <div className="flex justify-end">
+            <div className="flex items-center justify-between pt-2 border-t border-slate-100">
               <button
+                type="button"
+                onClick={() => {
+                  const toDel = selectedHomeworkDetail;
+                  setSelectedHomeworkDetail(null);
+                  setHomeworkToDelete(toDel);
+                }}
+                className="px-3.5 py-2 bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white text-xs font-bold rounded-xl cursor-pointer flex items-center gap-1.5 transition-colors border border-rose-200"
+                title="इस होमवर्क को हटाएं"
+              >
+                <i className="fa-solid fa-trash-can"></i>
+                <span>होमवर्क हटाएं (Delete)</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => setSelectedHomeworkDetail(null)}
-                className="px-4 py-2 bg-[#0c2340] text-amber-300 hover:text-amber-200 text-xs font-bold rounded-lg cursor-pointer"
+                className="px-4 py-2 bg-[#0c2340] text-amber-300 hover:text-amber-200 text-xs font-bold rounded-xl cursor-pointer"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* DELETE HOMEWORK CONFIRMATION MODAL                                        */}
+      {/* ========================================================================= */}
+      {homeworkToDelete && (
+        <div className="fixed inset-0 z-60 bg-black/60 flex items-center justify-center p-4 backdrop-blur-xs animate-fadeIn">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 relative">
+            <button
+              onClick={() => {
+                if (!isDeletingHomework) setHomeworkToDelete(null);
+              }}
+              disabled={isDeletingHomework}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-700 text-lg cursor-pointer disabled:opacity-50"
+            >
+              ✕
+            </button>
+
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center text-xl shrink-0">
+                <i className="fa-solid fa-trash-can"></i>
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">
+                  गृहकार्य हटाएं (Delete Homework)?
+                </h3>
+                <p className="text-xs text-slate-500">
+                  क्या आप वाकई इस होमवर्क रिकॉर्ड को स्थायी रूप से हटाना चाहते हैं?
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2 mb-4 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">कक्षा (Class):</span>
+                <span className="font-bold text-blue-950">
+                  Class {getClassName(homeworkToDelete.Class)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">विषय (Subject):</span>
+                <span className="font-semibold text-slate-800">
+                  {homeworkToDelete.Subject || 'General'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">तारीख (Date):</span>
+                <span className="font-semibold text-slate-800">
+                  {formatDate(homeworkToDelete.Date)}
+                </span>
+              </div>
+              {homeworkToDelete.Teacher && (
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">अध्यापक (Teacher):</span>
+                  <span className="font-semibold text-slate-800">
+                    {homeworkToDelete.Teacher}
+                  </span>
+                </div>
+              )}
+              <div className="pt-2 border-t border-slate-200/80">
+                <span className="text-slate-500 block mb-1">विवरण (Homework Detail):</span>
+                <p className="text-slate-700 font-medium line-clamp-3 bg-white p-2 rounded-lg border border-slate-200/60 whitespace-pre-wrap">
+                  {homeworkToDelete.Homework_Detail}
+                </p>
+              </div>
+            </div>
+
+            <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-5 flex items-start gap-2">
+              <i className="fa-solid fa-circle-exclamation mt-0.5 shrink-0 text-amber-600"></i>
+              <span>
+                <strong>नोट:</strong> यह होमवर्क अध्यापक पोर्टल, छात्र पोर्टल और प्रबंधक डैशबोर्ड से हमेशा के लिए हटा दिया जाएगा।
+              </span>
+            </p>
+
+            <div className="flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setHomeworkToDelete(null)}
+                disabled={isDeletingHomework}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl cursor-pointer disabled:opacity-50 transition-colors"
+              >
+                रद्द करें (Cancel)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteHomework(homeworkToDelete)}
+                disabled={isDeletingHomework}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl cursor-pointer shadow-sm hover:shadow transition-all flex items-center gap-1.5 disabled:opacity-50 active:scale-95"
+              >
+                {isDeletingHomework ? (
+                  <>
+                    <i className="fa-solid fa-spinner fa-spin"></i>
+                    <span>हटाया जा रहा है...</span>
+                  </>
+                ) : (
+                  <>
+                    <i className="fa-solid fa-trash-can"></i>
+                    <span>हाँ, हटाएं (Yes, Delete)</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* DELETE STUDENT CONFIRMATION MODAL                                         */}
+      {/* ========================================================================= */}
+      {studentToDelete && (
+        <div className="fixed inset-0 z-60 bg-black/60 flex items-center justify-center p-4 backdrop-blur-xs animate-fadeIn">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 relative">
+            <button
+              onClick={() => {
+                if (!isDeletingStudent) setStudentToDelete(null);
+              }}
+              disabled={isDeletingStudent}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-700 text-lg cursor-pointer disabled:opacity-50"
+            >
+              ✕
+            </button>
+
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center text-xl shrink-0">
+                <i className="fa-solid fa-user-xmark"></i>
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">
+                  छात्र हटाएं (Delete Student)?
+                </h3>
+                <p className="text-xs text-slate-500">
+                  क्या आप वाकई इस छात्र को स्कूल पोर्टल व डेटाबेस से हटाना चाहते हैं?
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2 mb-4 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">छात्र का नाम (Name):</span>
+                <span className="font-bold text-blue-950 text-sm">
+                  {studentToDelete.Student_Name}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">Student ID / Roll:</span>
+                <span className="font-mono font-semibold text-slate-800">
+                  {studentToDelete.Student_ID} {studentToDelete.Roll_Number ? `(Roll: ${studentToDelete.Roll_Number})` : ''}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">कक्षा (Class):</span>
+                <span className="font-semibold text-slate-800">
+                  Class {getClassName(studentToDelete.Class)}
+                </span>
+              </div>
+              {studentToDelete.Father_Name && (
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">पिता का नाम (Father):</span>
+                  <span className="font-semibold text-slate-800">
+                    {studentToDelete.Father_Name}
+                  </span>
+                </div>
+              )}
+              {studentToDelete.Parent_Mobile && (
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">मोबाइल (Mobile):</span>
+                  <span className="font-mono font-semibold text-slate-800">
+                    {studentToDelete.Parent_Mobile}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <p className="text-[11px] text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-2.5 mb-5 flex items-start gap-2">
+              <i className="fa-solid fa-triangle-exclamation mt-0.5 shrink-0 text-rose-600"></i>
+              <span>
+                <strong>चेतावनी:</strong> यह छात्र पोर्टल, हाजिरी, गृहकार्य एवं छात्र सूची से तुरंत हटा दिया जाएगा।
+              </span>
+            </p>
+
+            <div className="flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setStudentToDelete(null)}
+                disabled={isDeletingStudent}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl cursor-pointer disabled:opacity-50 transition-colors"
+              >
+                रद्द करें (Cancel)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteStudent(studentToDelete.Student_ID, studentToDelete.Student_Name)}
+                disabled={isDeletingStudent}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl cursor-pointer shadow-sm hover:shadow transition-all flex items-center gap-1.5 disabled:opacity-50 active:scale-95"
+              >
+                {isDeletingStudent ? (
+                  <>
+                    <i className="fa-solid fa-spinner fa-spin"></i>
+                    <span>हटाया जा रहा है...</span>
+                  </>
+                ) : (
+                  <>
+                    <i className="fa-solid fa-trash-can"></i>
+                    <span>हाँ, छात्र हटाएं (Yes, Delete)</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

@@ -20,6 +20,7 @@ interface ManagerOverviewModalsProps {
   onSyncAllPending?: () => Promise<void>;
   onOpenSyncSettings?: () => void;
   onDeleteStudent?: (studentId: string, studentName: string) => Promise<boolean>;
+  onRequestDeleteStudent?: (student: Student) => void;
   onOpenAttendanceCalendar?: (student?: Student) => void;
 }
 
@@ -59,6 +60,7 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
   onSyncAllPending,
   onOpenSyncSettings,
   onDeleteStudent,
+  onRequestDeleteStudent,
   onOpenAttendanceCalendar,
 }) => {
   const [activeModal, setActiveModal] = useState<ManagerModalType>(null);
@@ -923,14 +925,13 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                                 </button>
                               )}
 
-                              {onDeleteStudent && (
+                              {(onRequestDeleteStudent || onDeleteStudent) && (
                                 <button
                                   type="button"
                                   onClick={async () => {
-                                    const confirmDelete = window.confirm(
-                                      `क्या आप वाकई छात्र "${st.Student_Name || 'Unknown'}" (ID: ${st.Student_ID}) को पोर्टल व Sheet से हटाना चाहते हैं?`
-                                    );
-                                    if (confirmDelete) {
+                                    if (onRequestDeleteStudent) {
+                                      onRequestDeleteStudent(st);
+                                    } else if (onDeleteStudent) {
                                       setSyncNotice(`छात्र ${st.Student_Name} को हटाया जा रहा है...`);
                                       try {
                                         await onDeleteStudent(st.Student_ID, st.Student_Name || '');

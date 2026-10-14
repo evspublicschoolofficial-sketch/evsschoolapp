@@ -126,17 +126,21 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
       (r) => String(r.Student_ID || '').toLowerCase().trim() === sId
     );
 
-    const monthlyRate = getStandardFeeAmount(selectedStudent.Class, 'Monthly Tuition Fee', selectedStudent as any) || 600;
+    const monthlyDiscount = Number((selectedStudent as any).Monthly_Discount || (selectedStudent as any).Discount_Per_Month || 0) || 0;
+    const baseMonthlyRate = getStandardFeeAmount(selectedStudent.Class, 'Monthly Tuition Fee', selectedStudent as any) || 600;
+    const effectiveMonthlyRate = Math.max(0, baseMonthlyRate - monthlyDiscount);
 
-    // Map payments per month
-    const paidPerMonth: Record<string, number> = {};
+    // Map payments and discounts per month
+    const settledPerMonth: Record<string, number> = {};
     stRecords.forEach((r) => {
       const m = String(r.Month || '').trim();
       const paid = Number(r.Amount_Paid) || 0;
-      if (m && paid > 0) {
+      const discount = Number((r as any).Discount_Amount || (r as any).Discount || 0) || 0;
+      const totalSettled = paid + discount;
+      if (m && totalSettled > 0) {
         ACADEMIC_SESSION_MONTHS.forEach((sessionMonth) => {
           if (m.toLowerCase().includes(sessionMonth.toLowerCase())) {
-            paidPerMonth[sessionMonth] = (paidPerMonth[sessionMonth] || 0) + paid;
+            settledPerMonth[sessionMonth] = (settledPerMonth[sessionMonth] || 0) + totalSettled;
           }
         });
       }
@@ -144,13 +148,21 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
 
     const queue: Array<{ periodName: string; headType: string; dueAmount: number }> = [];
 
-    // Admission fee if applicable and not yet paid
-    const hasPaidAdmission = stRecords.some((r) => /(admission|प्रवेश)/i.test(String(r.Fee_Type || '')));
-    if (!hasPaidAdmission) {
-      const admRate = getStandardFeeAmount(selectedStudent.Class, 'Admission Fee', selectedStudent as any);
-      if (admRate > 0) {
-        queue.push({ periodName: 'प्रवेश शुल्क (Admission Fee)', headType: 'Admission Fee', dueAmount: admRate });
-      }
+    // Admission fee if applicable and not yet fully settled (paid or discounted)
+    const admissionRecords = stRecords.filter((r) => /(admission|प्रवेश)/i.test(String(r.Fee_Type || '')));
+    const admissionSettled = admissionRecords.reduce((sum, r) => {
+      const paid = Number(r.Amount_Paid) || 0;
+      const disc = Number((r as any).Discount_Amount || (r as any).Discount || 0) || 0;
+      return sum + paid + disc;
+    }, 0);
+    const admRate = getStandardFeeAmount(selectedStudent.Class, 'Admission Fee', selectedStudent as any);
+    const remainingAdmission = Math.max(0, admRate - admissionSettled);
+    if (remainingAdmission > 0) {
+      queue.push({
+        periodName: 'प्रवेश शुल्क (Admission Fee)',
+        headType: 'Admission Fee',
+        dueAmount: remainingAdmission,
+      });
     }
 
     // Academic session months (Only for months >= student's Session_StartMonth up to CURRENT MONTH)
@@ -170,8 +182,8 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
     const applicableMonths = ACADEMIC_SESSION_MONTHS.slice(validStartIdx, maxMonthIdx + 1);
 
     applicableMonths.forEach((m) => {
-      const alreadyPaid = paidPerMonth[m] || 0;
-      const remaining = Math.max(0, monthlyRate - alreadyPaid);
+      const alreadySettled = settledPerMonth[m] || 0;
+      const remaining = Math.max(0, effectiveMonthlyRate - alreadySettled);
       if (remaining > 0) {
         queue.push({ periodName: m, headType: 'Monthly Tuition Fee', dueAmount: remaining });
       }

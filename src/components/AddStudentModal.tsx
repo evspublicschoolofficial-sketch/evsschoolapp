@@ -64,6 +64,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
   const [parentMobile, setParentMobile] = useState<string>('');
   const [villageRoute, setVillageRoute] = useState<string>('');
   const [openingBalance, setOpeningBalance] = useState<string>('0');
+  const [feeDiscount, setFeeDiscount] = useState<string>('0');
   const [sessionStartMonth, setSessionStartMonth] = useState<string>('April');
   const [studentPhotoUrl, setStudentPhotoUrl] = useState<string>('');
   const [sendWelcomeWhatsApp, setSendWelcomeWhatsApp] = useState<boolean>(true);
