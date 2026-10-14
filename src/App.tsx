@@ -1617,14 +1617,36 @@ export default function App() {
       const end = jsonText.lastIndexOf('}');
       if (start === -1 || end === -1) return [];
       const data = JSON.parse(jsonText.slice(start, end + 1));
-      const cols: string[] = (data.table?.cols || []).map((c: any) => (c?.label || c?.id || '').trim());
+      const rawCols: any[] = data.table?.cols || [];
       const rows: any[] = data.table?.rows || [];
       const result: Record<string, any>[] = [];
 
-      for (const r of rows) {
+      let colLabels = rawCols.map((c: any) => (c?.label || '').trim());
+      const hasLabels = colLabels.some((l: string) => Boolean(l));
+
+      let startRow = 0;
+      if (!hasLabels && rows.length > 0) {
+        // When Google Sheets hasn't frozen row 1, row 0 contains the column headers
+        const headerCells = rows[0]?.c || [];
+        colLabels = headerCells.map((cell: any, idx: number) => {
+          const val = cell ? (cell.f !== undefined ? cell.f : cell.v) : '';
+          return val ? String(val).trim() : (rawCols[idx]?.id || `Col_${idx}`);
+        });
+        startRow = 1;
+      } else if (hasLabels && rows.length > 0) {
+        // If row 0 is a duplicate header row matching colLabels, skip it
+        const firstRowVals = (rows[0]?.c || []).map((c: any) => String(c?.v || c?.f || '').trim().toLowerCase());
+        const isHeaderRow = firstRowVals.some((v: string, i: number) => Boolean(v) && colLabels[i] && v === colLabels[i].toLowerCase());
+        if (isHeaderRow) {
+          startRow = 1;
+        }
+      }
+
+      for (let rIdx = startRow; rIdx < rows.length; rIdx++) {
+        const r = rows[rIdx];
         const item: Record<string, any> = {};
         let hasValue = false;
-        cols.forEach((col, idx) => {
+        colLabels.forEach((col, idx) => {
           if (!col) return;
           const cell = r.c ? r.c[idx] : null;
           let val = cell ? (cell.f !== undefined ? cell.f : cell.v) : '';
@@ -1662,10 +1684,11 @@ export default function App() {
     try {
       let parsed: Student[] = [];
       let success = false;
+      const cacheBust = `_t=${Date.now()}`;
 
       // 1. Try Google Apps Script endpoint first
       try {
-        const res = await fetch(`${getEffectiveApiUrl()}?action=getStudents`);
+        const res = await fetch(`${getEffectiveApiUrl()}?action=getStudents&${cacheBust}`);
         if (res.ok) {
           const data = await res.json();
           parsed = parseSheetData(data) as Student[];
@@ -1683,7 +1706,7 @@ export default function App() {
       if (!success) {
         try {
           const encoded = encodeURIComponent('Students');
-          const gvizRes = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}`);
+          const gvizRes = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}&${cacheBust}`);
           if (gvizRes.ok) {
             const text = await gvizRes.text();
             parsed = parseGvizData(text) as Student[];
@@ -1697,21 +1720,22 @@ export default function App() {
       }
 
       if (success && parsed.length > 0) {
-        // Keep entries with at least a Student_Name or Student_ID
+        // Keep entries with at least a Student_Name or Student_ID, skipping header row if present
         const valid = parsed
           .filter(
-            (s) => String(s.Student_Name || '').trim() !== '' || String(s.Student_ID || '').trim() !== ''
+            (s) => {
+              const name = String(s.Student_Name || '').trim();
+              const sid = String(s.Student_ID || '').trim();
+              if (sid.toLowerCase() === 'student_id' || name.toLowerCase() === 'student_name') return false;
+              return name !== '' || sid !== '';
+            }
           )
           .map((s) => {
-            // If QR code is not directly returned by GViz (due to =IMAGE(...) formula in sheet),
-            // construct the exact Google Sheet formula URL:
-            // =IMAGE(CONCATENATE("https://api.qrserver.com/v1/create-qr-code/?data=", A2, "&size=250x250"))
             const existingQr = String(s['QR code'] || s['QR_code'] || s['QRCode'] || s.qr_code || '').trim();
             const sId = String(s.Student_ID || '').trim();
             if (!existingQr && sId) {
               s['QR code'] = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(sId)}&size=250x250`;
             }
-            // Ensure Session_Start_Month is read or defaults to April
             s.Session_Start_Month =
               s.Session_Start_Month ||
               s.session_start_month ||
@@ -1746,22 +1770,6 @@ export default function App() {
           console.warn('Could not cache students in localStorage:', e);
         }
         setApiError(null);
-        // If parent is already logged in, update their selected student from freshly fetched sheet
-        try {
-          const savedLoggedIn = localStorage.getItem('evs_parent_logged_in') === 'true';
-          const savedStudentStr = localStorage.getItem('evs_parent_selected_student');
-          if (savedLoggedIn && savedStudentStr) {
-            const parsedStudent = JSON.parse(savedStudentStr);
-            const sid = String(parsedStudent.Student_ID || '').trim().toLowerCase();
-            const freshMatch = mergedStudents.find(
-              (s) => String(s.Student_ID || '').trim().toLowerCase() === sid
-            );
-            if (freshMatch) {
-              setSelectedStudent(freshMatch);
-            }
-          }
-        } catch {}
-
         return mergedStudents;
       } else {
         setStudents((prev) => {
@@ -1787,17 +1795,19 @@ export default function App() {
   };
 
   // Fetch Homework with automatic fallback and LocalStorage caching
-  const fetchHomework = async (silent = false) => {
-    if (!silent && homeworkList.length === 0) {
+  const fetchHomework = async (silent: boolean | any = false, showToast = false) => {
+    const isSilent = typeof silent === 'boolean' ? silent : false;
+    if (!isSilent) {
       setLoadingHomework(true);
     }
+    const cacheBust = `_t=${Date.now()}`;
     try {
       let parsed: Homework[] = [];
       let success = false;
 
       // 1. Try Google Apps Script endpoint first
       try {
-        const res = await fetch(`${getEffectiveApiUrl()}?action=getHomework`);
+        const res = await fetch(`${getEffectiveApiUrl()}?action=getHomework&${cacheBust}`);
         if (res.ok) {
           const data = await res.json();
           parsed = parseSheetData(data) as Homework[];
@@ -1815,7 +1825,7 @@ export default function App() {
       if (!success) {
         try {
           const encoded = encodeURIComponent('Homework');
-          const gvizRes = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}`);
+          const gvizRes = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}&${cacheBust}`);
           if (gvizRes.ok) {
             const text = await gvizRes.text();
             parsed = parseGvizData(text) as Homework[];
@@ -1831,7 +1841,7 @@ export default function App() {
       // 3. Load locally and server-persisted custom homework
       let serverCustomHw: Homework[] = [];
       try {
-        const sRes = await fetch('/api/homework');
+        const sRes = await fetch(`/api/homework?${cacheBust}`);
         if (sRes.ok) {
           const sData = await sRes.json();
           serverCustomHw = (sData?.homework || []) as Homework[];
@@ -1856,6 +1866,16 @@ export default function App() {
         const id = String(hw.Homework_ID || '').trim();
         const detail = String(hw.Homework_Detail || '').trim();
         const subject = String(hw.Subject || '').trim();
+
+        // Skip header row if returned by GViz
+        if (
+          id.toLowerCase() === 'homework_id' ||
+          subject.toLowerCase() === 'subject' ||
+          detail.toLowerCase() === 'homework_detail'
+        ) {
+          continue;
+        }
+
         const dedupeKey = id ? id.toLowerCase() : `${hw.Date}_${hw.Class}_${subject}_${detail}`.toLowerCase();
 
         if (dedupeKey && !seenIds.has(dedupeKey)) {
@@ -1864,23 +1884,24 @@ export default function App() {
         }
       }
 
-      if (valid.length > 0) {
-        // Sort newest date first
-        valid.sort((a, b) => {
-          const dateA = new Date(a.Date).getTime() || 0;
-          const dateB = new Date(b.Date).getTime() || 0;
-          return dateB - dateA;
-        });
-        setHomeworkList(valid);
-        try {
-          localStorage.setItem(CACHE_KEY_HOMEWORK, JSON.stringify(valid));
-        } catch (e) {
-          console.warn('Could not cache homework in localStorage:', e);
-        }
-        setApiError(null);
-      } else {
-        setHomeworkList([]);
-        setApiError(null);
+      // Sort newest date first
+      valid.sort((a, b) => {
+        const dateA = new Date(a.Date).getTime() || 0;
+        const dateB = new Date(b.Date).getTime() || 0;
+        return dateB - dateA;
+      });
+
+      setHomeworkList(valid);
+      try {
+        localStorage.setItem(CACHE_KEY_HOMEWORK, JSON.stringify(valid));
+      } catch (e) {
+        console.warn('Could not cache homework in localStorage:', e);
+      }
+      setApiError(null);
+
+      if (showToast) {
+        setSyncToastMessage('✅ हालिया होमवर्क सूची (Recent Homework) ताज़ा हो गई!');
+        setTimeout(() => setSyncToastMessage(null), 3000);
       }
     } catch (err: any) {
       console.error('Error fetching homework:', err);
@@ -2175,17 +2196,18 @@ export default function App() {
   };
 
   // Fetch Homework Tracker records from Google Sheets (Homework_Tracker sheet)
-  const fetchHomeworkTracker = async () => {
-    if (hwTrackerList.length === 0) {
+  const fetchHomeworkTracker = async (showToast = false, forceLoading = false) => {
+    if (forceLoading || hwTrackerList.length === 0) {
       setLoadingHwTracker(true);
     }
+    const cacheBust = `_t=${Date.now()}`;
     try {
       const records: HomeworkTrackerRecord[] = [];
 
       // 1. Fetch from Google Sheets GViz (in isolated try-catch so network/sheet errors do not block local/server sync)
       try {
         const encoded = encodeURIComponent('Homework_Tracker');
-        const res = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}`);
+        const res = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}&${cacheBust}`);
         if (res.ok) {
           const text = await res.text();
           const start = text.indexOf('{');
@@ -2213,6 +2235,16 @@ export default function App() {
               const rawCol3 = cells[3]?.v ? String(cells[3].v).trim() : '';
               const rawCol4 = cells[4]?.v ? String(cells[4].v).trim() : '';
               const rawCol5 = cells[5]?.v ? String(cells[5].v).trim() : '';
+
+              // CRITICAL: Skip header row if returned as a row by GViz
+              if (
+                rawCol0.toLowerCase() === 'id' ||
+                rawCol3.toLowerCase() === 'student_id' ||
+                rawCol5.toLowerCase() === 'last_homework_status' ||
+                rawCol2.toLowerCase() === 'class'
+              ) {
+                continue;
+              }
 
               let sId = rawCol3;
               let recId = rawCol0;
@@ -2250,7 +2282,7 @@ export default function App() {
       // 2. Merge custom status overrides and newly added tracker entries from server API and localStorage
       let serverCustomTrk: HomeworkTrackerRecord[] = [];
       try {
-        const sRes = await fetch('/api/homework-tracker');
+        const sRes = await fetch(`/api/homework-tracker?${cacheBust}`);
         if (sRes.ok) {
           const sData = await sRes.json();
           serverCustomTrk = (sData?.records || []) as HomeworkTrackerRecord[];
@@ -2302,6 +2334,11 @@ export default function App() {
       try {
         localStorage.setItem(CACHE_KEY_HW_TRACKER, JSON.stringify(records));
       } catch {}
+
+      if (showToast) {
+        setSyncToastMessage('✅ छात्र होमवर्क ट्रैकर डेटा (Homework Tracker) ताज़ा हो गया!');
+        setTimeout(() => setSyncToastMessage(null), 3000);
+      }
     } catch (err) {
       console.warn('Could not fetch Homework_Tracker sheet:', err);
     } finally {
@@ -2310,10 +2347,11 @@ export default function App() {
   };
 
   // Fetch Student Behavior records from Google Sheets (Student_Behavior sheet)
-  const fetchStudentBehavior = async () => {
-    if (behaviorList.length === 0) {
+  const fetchStudentBehavior = async (showToast = false, forceLoading = false) => {
+    if (forceLoading || behaviorList.length === 0) {
       setLoadingBehavior(true);
     }
+    const cacheBust = `_t=${Date.now()}`;
     try {
       const records: StudentBehaviorRecord[] = [];
 
@@ -2321,7 +2359,7 @@ export default function App() {
       try {
         const encoded = encodeURIComponent('Student_Behavior');
         const res = await fetch(
-          `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}`
+          `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}&${cacheBust}`
         );
         if (res.ok) {
           const text = await res.text();
@@ -2349,6 +2387,15 @@ export default function App() {
               const cells = r.c || [];
               const bId = cells[0]?.v ? String(cells[0].v).trim() : '';
               const sId = cells[1]?.v ? String(cells[1].v).trim() : '';
+
+              // CRITICAL: Skip header row if returned as a row by GViz
+              if (
+                bId.toLowerCase() === 'behavior_id' ||
+                sId.toLowerCase() === 'student_id'
+              ) {
+                continue;
+              }
+
               const dateVal = cells[2]?.f || cells[2]?.v || '';
               let formattedDate = String(dateVal || '');
               if (typeof dateVal === 'string' && dateVal.includes('Date(')) {
@@ -2396,7 +2443,7 @@ export default function App() {
       // 2. Merge server-persisted behavior records
       let serverCustomBeh: StudentBehaviorRecord[] = [];
       try {
-        const sRes = await fetch('/api/behavior');
+        const sRes = await fetch(`/api/behavior?${cacheBust}`);
         if (sRes.ok) {
           const sData = await sRes.json();
           serverCustomBeh = (sData?.behavior || []) as StudentBehaviorRecord[];
@@ -2431,6 +2478,11 @@ export default function App() {
       try {
         localStorage.setItem(CACHE_KEY_BEHAVIOR, JSON.stringify(mergedBeh));
       } catch {}
+
+      if (showToast) {
+        setSyncToastMessage('✅ छात्र आचरण व अनुशासन डेटा (Student Behavior) ताज़ा हो गया!');
+        setTimeout(() => setSyncToastMessage(null), 3000);
+      }
     } catch (err) {
       console.warn('Could not fetch Student_Behavior sheet:', err);
     } finally {
@@ -2441,21 +2493,27 @@ export default function App() {
   // Dedicated Complete Teacher Portal Refresh Handler
   const handleRefreshTeacherPortal = async () => {
     setIsRefreshingTeacherPortal(true);
+    setLoadingHwTracker(true);
+    setLoadingBehavior(true);
+    setLoadingHomework(true);
     setSyncToastMessage('🔄 टीचर पोर्टल का पूरा डेटा (होमवर्क, ट्रैकर, आचरण, छात्र) रिफ्रेश हो रहा है...');
     try {
       await Promise.allSettled([
-        fetchHomework(true),
-        fetchHomeworkTracker(),
-        fetchStudentBehavior(),
+        fetchHomework(false, false),
+        fetchHomeworkTracker(false, true),
+        fetchStudentBehavior(false, true),
         fetchStudents(true),
         fetchSchoolNotices(),
       ]);
       setSyncToastMessage('✅ टीचर पोर्टल (होमवर्क, ट्रैकर, आचरण व छात्र) ताज़ा हो गया!');
-      setTimeout(() => setSyncToastMessage(null), 3000);
+      setTimeout(() => setSyncToastMessage(null), 3500);
     } catch (e) {
       console.warn('Teacher portal refresh note:', e);
     } finally {
       setIsRefreshingTeacherPortal(false);
+      setLoadingHwTracker(false);
+      setLoadingBehavior(false);
+      setLoadingHomework(false);
     }
   };
 
@@ -2463,11 +2521,11 @@ export default function App() {
   const handleSelectTeacherTab = (tab: 'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior') => {
     setTeacherPortalTab(tab);
     if (tab === 'tracker') {
-      fetchHomeworkTracker();
+      fetchHomeworkTracker(false, true);
     } else if (tab === 'submissions') {
-      fetchHomework(true);
+      fetchHomework(false, false);
     } else if (tab === 'behavior') {
-      fetchStudentBehavior();
+      fetchStudentBehavior(false, true);
     }
   };
 
@@ -4540,10 +4598,24 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
   // Filtered Homework Tracker records for Teacher Dashboard
   const teacherFilteredTracker = useMemo(() => {
     return hwTrackerList.filter((rec) => {
+      // Join student name
+      const matchedStudent = students.find(
+        (s) =>
+          String(s.Student_ID || '').toLowerCase() === String(rec.Student_ID || '').toLowerCase() ||
+          String(s.Student_ID || '').toLowerCase() === String(rec.ID || '').toLowerCase()
+      );
+      const studentName = matchedStudent?.Student_Name || '';
+
       const matchClass =
         teacherTrackerClassFilter === 'all' ||
         String(rec.Class || '').toLowerCase() === teacherTrackerClassFilter.toLowerCase() ||
-        getClassName(rec.Class).toLowerCase() === teacherTrackerClassFilter.toLowerCase();
+        getClassName(rec.Class).toLowerCase() === teacherTrackerClassFilter.toLowerCase() ||
+        getClassName(rec.Class).toLowerCase() === getClassName(teacherTrackerClassFilter).toLowerCase() ||
+        (Boolean(matchedStudent?.Class) && (
+          String(matchedStudent?.Class).toLowerCase() === teacherTrackerClassFilter.toLowerCase() ||
+          getClassName(matchedStudent?.Class).toLowerCase() === teacherTrackerClassFilter.toLowerCase() ||
+          getClassName(matchedStudent?.Class).toLowerCase() === getClassName(teacherTrackerClassFilter).toLowerCase()
+        ));
 
       const matchStatus =
         teacherTrackerStatusFilter === 'all' ||
@@ -4553,14 +4625,6 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         (teacherTrackerStatusFilter === 'Incompleted' &&
           ((rec.Last_homework_Status || '').toLowerCase().includes('incom') ||
             (rec.Last_homework_Status || '').toLowerCase().includes('pend')));
-
-      // Join student name
-      const matchedStudent = students.find(
-        (s) =>
-          String(s.Student_ID || '').toLowerCase() === String(rec.Student_ID || '').toLowerCase() ||
-          String(s.Student_ID || '').toLowerCase() === String(rec.ID || '').toLowerCase()
-      );
-      const studentName = matchedStudent?.Student_Name || '';
 
       const matchSearch =
         teacherTrackerSearch === '' ||
@@ -8427,7 +8491,16 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       <h4 className="text-xs font-bold uppercase tracking-wider text-slate-600">
                         Recent Submissions ({homeworkList.slice(0, 5).length})
                       </h4>
-                      <span className="text-[10px] text-slate-400">Live feed</span>
+                      <button
+                        type="button"
+                        onClick={() => fetchHomework(false, true)}
+                        disabled={loadingHomework}
+                        className="text-[11px] text-blue-600 hover:text-blue-800 flex items-center gap-1 cursor-pointer font-semibold disabled:opacity-50"
+                        title="हालिया होमवर्क रिफ्रेश करें"
+                      >
+                        <i className={`fa-solid fa-rotate-right ${loadingHomework ? 'fa-spin text-blue-600' : ''}`}></i>
+                        <span>{loadingHomework ? 'रिफ्रेश...' : 'रिफ्रेश'}</span>
+                      </button>
                     </div>
 
                     <div className="space-y-3">
@@ -8481,12 +8554,14 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       <span>Scan Student QR</span>
                     </button>
                     <button
-                      onClick={fetchHomeworkTracker}
+                      type="button"
+                      onClick={() => fetchHomeworkTracker(true, true)}
                       disabled={loadingHwTracker}
-                      className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      className="px-3.5 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-all active:scale-95 shadow-2xs"
+                      title="होमवर्क ट्रैकर डेटा रिफ्रेश करें"
                     >
-                      <i className={`fa-solid fa-rotate-right ${loadingHwTracker ? 'fa-spin' : ''}`}></i>
-                      <span>Refresh</span>
+                      <i className={`fa-solid fa-rotate-right ${loadingHwTracker ? 'fa-spin text-emerald-600' : ''}`}></i>
+                      <span>{loadingHwTracker ? 'रिफ्रेश हो रहा है...' : 'Refresh'}</span>
                     </button>
                   </div>
                 </div>
@@ -8862,11 +8937,14 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     </p>
                   </div>
                   <button
-                    onClick={fetchHomework}
-                    className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-1.5 cursor-pointer"
+                    type="button"
+                    onClick={() => fetchHomework(false, true)}
+                    disabled={loadingHomework}
+                    className="px-3.5 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-all active:scale-95 shadow-2xs"
+                    title="हालिया होमवर्क सूची रिफ्रेश करें"
                   >
-                    <i className="fa-solid fa-rotate-right"></i>
-                    <span>Refresh Feed</span>
+                    <i className={`fa-solid fa-rotate-right ${loadingHomework ? 'fa-spin text-blue-600' : ''}`}></i>
+                    <span>{loadingHomework ? 'रिफ्रेश हो रहा है...' : 'Refresh Feed'}</span>
                   </button>
                 </div>
 
@@ -8951,13 +9029,14 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     </button>
 
                     <button
-                      onClick={fetchStudentBehavior}
+                      type="button"
+                      onClick={() => fetchStudentBehavior(true, true)}
                       disabled={loadingBehavior}
-                      className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      className="px-3.5 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-all active:scale-95 shadow-2xs"
                       title="आचरण डेटा ताज़ा करें"
                     >
-                      <i className={`fa-solid fa-rotate-right ${loadingBehavior ? 'fa-spin text-amber-500' : ''}`}></i>
-                      <span>Refresh</span>
+                      <i className={`fa-solid fa-rotate-right ${loadingBehavior ? 'fa-spin text-indigo-600' : ''}`}></i>
+                      <span>{loadingBehavior ? 'रिफ्रेश हो रहा है...' : 'Refresh'}</span>
                     </button>
                   </div>
                 </div>
