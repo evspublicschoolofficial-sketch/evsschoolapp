@@ -578,6 +578,8 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
       fullYearFee: summary.fullYearFee,
       monthlyTuition: summary.monthlyTuition,
       admissionFee: summary.admissionFee,
+      otherBilledFees: summary.otherBilledFees || 0,
+      itemizedOtherFees: summary.itemizedOtherFees || [],
       totalPaid: summary.totalPaid,
       totalDiscount: summary.totalDiscount || 0,
       balance: summary.currentDues,
@@ -1922,9 +1924,11 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                     <span className="text-xl sm:text-2xl font-black text-slate-800 mt-1 block">
                       ₹{studentFeeSummary.totalFee.toLocaleString('en-IN')}
                     </span>
-                    {studentFeeSummary.admissionFee > 0 && studentFeeSummary.elapsedMonths > 0 && (
+                    {studentFeeSummary.elapsedMonths > 0 && (
                       <span className="text-[10px] text-indigo-700 font-medium block mt-1">
-                        {studentFeeSummary.elapsedMonths} माह × ₹{studentFeeSummary.monthlyTuition} (₹{(studentFeeSummary.monthlyTuition * studentFeeSummary.elapsedMonths).toLocaleString('en-IN')}) + प्रवेश ₹{studentFeeSummary.admissionFee.toLocaleString('en-IN')}
+                        {studentFeeSummary.elapsedMonths} माह × ₹{studentFeeSummary.monthlyTuition} (₹{(studentFeeSummary.monthlyTuition * studentFeeSummary.elapsedMonths).toLocaleString('en-IN')})
+                        {studentFeeSummary.admissionFee > 0 ? ` + प्रवेश ₹${studentFeeSummary.admissionFee.toLocaleString('en-IN')}` : ''}
+                        {studentFeeSummary.otherBilledFees > 0 ? ` + पुस्तकें/अन्य ₹${studentFeeSummary.otherBilledFees.toLocaleString('en-IN')}` : ''}
                       </span>
                     )}
                   </div>

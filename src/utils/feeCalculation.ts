@@ -2,10 +2,12 @@ import { Student, FeeCollectionRecord } from '../types';
 import { getActiveFeeMasterConfig, normalizeClassKey } from './feeMaster';
 
 export interface StudentFeeMetrics {
-  totalSessionFee: number; // Unique billed total fee (till current month)
+  totalSessionFee: number; // Unique billed total fee (till current month, including books/exam/uniform if billed)
   fullYearFee?: number;    // Full 12-month session fee
   monthlyTuition?: number; // Detected monthly tuition
   admissionFee?: number;   // Standard or custom admission fee
+  otherBilledFees?: number;// Non-tuition fees billed (Books & Stationery, Exam, Uniform, etc.)
+  itemizedOtherFees?: Array<{ type: string; amount: number; paid: number; balance: number }>;
   totalPaid: number;       // SUM of Amount_Paid
   totalDiscount: number;   // SUM of discounts / concessions applied
   dueBalance: number;      // totalSessionFee - totalPaid - totalDiscount (negative if advance, e.g. 600 - 700 = -100)
@@ -227,7 +229,9 @@ export interface StudentSummaryResult {
   elapsedMonths: number;
   monthlyTuition: number;
   admissionFee: number;
-  totalBilledSessionFee: number; // Fees strictly till current running month
+  otherBilledFees: number;       // Non-tuition billed fees (Books & Stationery, Exam, Uniform, etc.)
+  itemizedOtherFees: Array<{ type: string; amount: number; paid: number; balance: number }>;
+  totalBilledSessionFee: number; // Fees strictly till current running month (Tuition + Admission + Books/Other)
   fullYearFee: number;           // Total full 12 months session fee
   totalPaid: number;
   totalDiscount: number;         // Total discount / concession given
@@ -244,7 +248,7 @@ export interface StudentSummaryResult {
  * 2. DYNAMIC CURRENT-MONTH DUES CALCULATION (PREVENT OVER-BILLING & ACCOUNT FOR DISCOUNTS)
  * Formula:
  * 1. Elapsed Months Count = Count of months from Session Start Month up to Current Month (e.g., April to October = 7 months).
- * 2. Total Billed Session Fee = (Monthly Tuition Fee * Elapsed Months) + Admission Fee (if applicable).
+ * 2. Total Billed Session Fee = (Monthly Tuition Fee * Elapsed Months) + Admission Fee (if applicable) + Other Billed Fees (Books, Exam, Uniform, etc.).
  * 3. Total Fees Paid = Sum of Amount_Paid (Col H / row[7]) across all valid payment receipts.
  * 4. Total Discount = Sum of Discount_Amount / Discount across fee receipts + any profile-level concession.
  * 5. Current Dues (DUE) = Math.max(0, Total Billed Session Fee - Total Fees Paid - Total Discount).
@@ -290,11 +294,57 @@ export const calculateStudentSummary = (
         : defaultAdmissionFee)
     : 0;
 
-  // 5. Total Billed Session Fee = (Monthly Tuition Fee * Elapsed Months) + Admission Fee (if applicable)
+  // 4b. Other Billed Fees (Books & Stationery, Exam Fee, Uniform, Annual Fee, etc.)
+  // Detects any fees explicitly billed or recorded as due/paid under non-tuition, non-admission heads
+  const nonTuitionRecords = reconciled.filter((r) => {
+    const type = String(r.Fee_Type || '').trim();
+    const isTuition = /(monthly|tuition|मासिक|ट्यूशन|multi-month)/i.test(type);
+    const isAdmission = /(admission|प्रवेश)/i.test(type);
+    return !isTuition && !isAdmission && type.length > 0;
+  });
+
+  const nonTuitionGroups = new Map<string, FeeCollectionRecord[]>();
+  nonTuitionRecords.forEach((r) => {
+    const typeKey = String(r.Fee_Type || '').trim().toLowerCase();
+    if (!nonTuitionGroups.has(typeKey)) nonTuitionGroups.set(typeKey, []);
+    nonTuitionGroups.get(typeKey)!.push(r);
+  });
+
+  let otherBilledFees = 0;
+  const itemizedOtherFees: Array<{ type: string; amount: number; paid: number; balance: number }> = [];
+
+  if (!isExempt) {
+    nonTuitionGroups.forEach((recs) => {
+      const origType = recs[0].Fee_Type || 'Other Fee';
+      // The billed amount is max of Total_Amount or sum of paid + balance
+      const billed = Math.max(
+        ...recs.map((r) => Number(r.Total_Amount) || 0),
+        recs.reduce((sum, r) => sum + (Number(r.Amount_Paid) || 0) + (Number(r.Balance_Amount) || 0), 0)
+      );
+      const paid = recs.reduce((sum, r) => sum + (Number(r.Amount_Paid) || 0), 0);
+      const disc = recs.reduce(
+        (sum, r) => sum + (Number((r as any).Discount_Amount || (r as any).Discount || 0) || 0),
+        0
+      );
+      const balance = Math.max(0, billed - paid - disc);
+
+      if (billed > 0) {
+        otherBilledFees += billed;
+        itemizedOtherFees.push({
+          type: origType,
+          amount: billed,
+          paid,
+          balance,
+        });
+      }
+    });
+  }
+
+  // 5. Total Billed Session Fee = (Monthly Tuition Fee * Elapsed Months) + Admission Fee + Other Billed Fees (Books, Exam, etc.)
   // Strictly capped at current running month (prevents over-billing for future unarrived months!)
-  const totalBilledSessionFee = (monthlyTuition * elapsedMonths) + admissionFee;
+  const totalBilledSessionFee = (monthlyTuition * elapsedMonths) + admissionFee + otherBilledFees;
   // Full 12-month annual fee
-  const fullYearFee = (monthlyTuition * 12) + admissionFee;
+  const fullYearFee = (monthlyTuition * 12) + admissionFee + otherBilledFees;
 
   // 6. Total Fees Paid = Sum of Amount_Paid across all valid payment receipts
   const totalPaid = reconciled.reduce((sum, r) => sum + (Number(r.Amount_Paid) || 0), 0);
@@ -328,6 +378,8 @@ export const calculateStudentSummary = (
     elapsedMonths,
     monthlyTuition,
     admissionFee,
+    otherBilledFees,
+    itemizedOtherFees,
     totalBilledSessionFee,
     fullYearFee,
     totalPaid,
@@ -371,6 +423,8 @@ export const computeStudentFeeMetrics = (
     fullYearFee: summary.fullYearFee,
     monthlyTuition: summary.monthlyTuition,
     admissionFee: summary.admissionFee,
+    otherBilledFees: summary.otherBilledFees,
+    itemizedOtherFees: summary.itemizedOtherFees,
     totalPaid: summary.totalPaid,
     totalDiscount: summary.totalDiscount,
     dueBalance: summary.netBalance,

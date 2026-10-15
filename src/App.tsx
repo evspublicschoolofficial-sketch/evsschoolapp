@@ -1218,6 +1218,7 @@ export default function App() {
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(initialSession.selectedStudent);
   const [parentChildren, setParentChildren] = useState<Student[]>(initialSession.parentChildren);
   const [parentLoggedIn, setParentLoggedIn] = useState<boolean>(initialSession.parentLoggedIn);
+  const [homeSelectedRole, setHomeSelectedRole] = useState<'parent' | 'teacher' | 'manager' | 'driver'>('parent');
 
   // Sync parent login session to localStorage
   useEffect(() => {
@@ -5345,6 +5346,288 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               </div>
             </div>
 
+            {/* ========================================================================= */}
+            {/* SCHOOL PORTAL ROLE LOGIN BANNER (With Role Dropdown & Parent as Default) */}
+            {/* ========================================================================= */}
+            <div id="home-login-banner" className="bg-white rounded-3xl shadow-xl border-2 border-amber-400 p-5 sm:p-8 animate-fadeIn relative overflow-hidden">
+              {/* Top Accent Strip */}
+              <div className="absolute top-0 left-0 right-0 h-2 bg-gradient-to-r from-amber-400 via-blue-600 to-amber-400"></div>
+
+              <div className="max-w-3xl mx-auto">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-5 border-b border-slate-100">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center text-2xl font-black shadow-md shrink-0">
+                      <i className="fa-solid fa-right-to-bracket text-blue-950"></i>
+                    </div>
+                    <div>
+                      <span className="text-[11px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
+                        डिजिटल स्कूल पोर्टल • Quick Portal Login
+                      </span>
+                      <h2 className="text-xl sm:text-2xl font-black text-slate-900 mt-1">
+                        स्कूल पोर्टल लॉगिन (School Portal Login)
+                      </h2>
+                    </div>
+                  </div>
+
+                  <div className="text-xs text-slate-500 font-semibold sm:text-right">
+                    <span>डिफ़ॉल्ट सिलेक्टेड: </span>
+                    <span className="text-amber-900 font-bold bg-amber-100 px-2.5 py-1 rounded-lg border border-amber-300 inline-flex items-center gap-1">
+                      <i className="fa-solid fa-user-group text-amber-700"></i>
+                      अभिभावक (Parent)
+                    </span>
+                  </div>
+                </div>
+
+                {/* ROLE DROPDOWN SELECTOR */}
+                <div className="mt-5 space-y-4">
+                  <div>
+                    <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-2 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <i className="fa-solid fa-user-gear text-amber-500 text-sm"></i>
+                        <span>अपनी भूमिका का चयन करें (Select Your Role):</span>
+                      </span>
+                      <span className="text-[11px] text-blue-900 font-bold hidden sm:inline">
+                        Dropdown से भूमिका बदलें
+                      </span>
+                    </label>
+
+                    <div className="relative">
+                      <select
+                        id="role-dropdown-selector"
+                        value={homeSelectedRole}
+                        onChange={(e) => setHomeSelectedRole(e.target.value as any)}
+                        className="w-full pl-4 pr-12 py-3.5 bg-slate-50 hover:bg-slate-100 focus:bg-white text-slate-950 font-black text-base sm:text-lg rounded-2xl border-2 border-slate-300 focus:border-amber-500 focus:ring-4 focus:ring-amber-400/20 outline-none transition-all cursor-pointer shadow-xs appearance-none"
+                      >
+                        <option value="parent">👨‍👩‍👦 1. अभिभावक (Parent) — [डिफ़ॉल्ट सिलेक्टेड / Default]</option>
+                        <option value="teacher">👩‍🏫 2. शिक्षक (Teacher)</option>
+                        <option value="manager">👔 3. स्कूल प्रबंधक (Manager / Admin)</option>
+                        <option value="driver">🚐 4. वैन चालक (Van Driver)</option>
+                      </select>
+                      <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-slate-600">
+                        <i className="fa-solid fa-chevron-down text-base"></i>
+                      </div>
+                    </div>
+
+                    <p className="text-[11px] sm:text-xs text-slate-500 mt-2 font-medium flex items-center gap-1.5">
+                      <i className="fa-solid fa-circle-info text-amber-500"></i>
+                      <span>
+                        {homeSelectedRole === 'parent' && 'अभिभावक केवल अपना रजिस्टर्ड 10-अंकीय फोन नंबर डालकर सीधे अपने बच्चे के पोर्टल में लॉगिन कर सकते हैं।'}
+                        {homeSelectedRole === 'teacher' && 'शिक्षक अपनी आईडी/मोबाइल और पासवर्ड दर्ज करके शिक्षक पोर्टल में प्रवेश करें।'}
+                        {homeSelectedRole === 'manager' && 'प्रबंधक अपना यूजरनेम और पासवर्ड दर्ज करके स्कूल एडमिनिस्ट्रेशन पोर्टल में लॉगिन करें।'}
+                        {homeSelectedRole === 'driver' && 'स्कूल वैन ड्राइवर लाइव रूट शेयरिंग व जीपीएस ट्रैकिंग पोर्टल खोलें।'}
+                      </span>
+                    </p>
+                  </div>
+
+                  {/* DYNAMIC FORM ACCORDING TO ROLE */}
+                  <div className="bg-slate-50/80 rounded-2xl p-4 sm:p-6 border border-slate-200 shadow-inner">
+                    {/* ROLE 1: PARENT LOGIN (DEFAULT) */}
+                    {homeSelectedRole === 'parent' && (
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          handleParentLogin(e);
+                        }}
+                        className="space-y-4"
+                      >
+                        <div>
+                          <label className="block text-xs font-bold text-slate-800 mb-1.5 flex items-center justify-between">
+                            <span className="flex items-center gap-1.5">
+                              <i className="fa-solid fa-phone text-amber-600"></i>
+                              <span>पंजीकृत मोबाइल नंबर (Registered Mobile Number):</span>
+                            </span>
+                            <span className="text-[10px] text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-md font-extrabold border border-emerald-300">
+                              केवल फोन नंबर डालें
+                            </span>
+                          </label>
+
+                          <div className="relative">
+                            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500 font-bold text-sm">
+                              <span>+91</span>
+                              <span className="mx-2 text-slate-300">|</span>
+                            </div>
+                            <input
+                              type="tel"
+                              maxLength={15}
+                              value={parentMobileInput}
+                              onChange={(e) => {
+                                setParentMobileInput(e.target.value);
+                                if (parentSearchAttempted) setParentSearchAttempted(false);
+                              }}
+                              placeholder="10-अंकीय मोबाइल नंबर दर्ज करें (उदा. 9876543210)"
+                              className="w-full pl-16 pr-10 py-3.5 bg-white text-slate-950 font-black text-base sm:text-lg rounded-xl border-2 border-slate-300 focus:border-amber-500 focus:ring-4 focus:ring-amber-500/15 outline-none transition-all placeholder:text-slate-400 placeholder:font-normal shadow-2xs"
+                              autoFocus
+                            />
+                            {parentMobileInput && (
+                              <button
+                                type="button"
+                                onClick={() => setParentMobileInput('')}
+                                className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                                title="साफ़ करें"
+                              >
+                                ✕
+                              </button>
+                            )}
+                          </div>
+
+                          {parentSearchAttempted && !parentLoggedIn && parentChildren.length === 0 && (
+                            <div className="mt-2.5 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2 animate-fadeIn">
+                              <i className="fa-solid fa-circle-exclamation text-rose-600 text-base shrink-0"></i>
+                              <span>
+                                मोबाइल नंबर <strong>"{parentMobileInput}"</strong> से कोई छात्र नहीं मिला। कृपया स्कूल रिकॉर्ड में दर्ज 10-अंकीय नंबर डालें या छात्र आईडी (उदा. S-9031319) दर्ज करें।
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={parentLoginSubmitting || !parentMobileInput.trim()}
+                          className="w-full py-3.5 px-6 bg-gradient-to-r from-amber-400 via-amber-500 to-amber-400 hover:from-amber-500 hover:to-amber-600 text-slate-950 font-black text-sm sm:text-base rounded-xl shadow-md hover:shadow-lg transition-all duration-150 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed active:scale-98"
+                        >
+                          {parentLoginSubmitting ? (
+                            <>
+                              <div className="w-5 h-5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin"></div>
+                              <span>लॉगिन हो रहा है (Logging in)...</span>
+                            </>
+                          ) : (
+                            <>
+                              <i className="fa-solid fa-arrow-right-to-bracket text-slate-950 text-lg"></i>
+                              <span>अभिभावक पोर्टल में लॉगिन करें (Login as Parent) →</span>
+                            </>
+                          )}
+                        </button>
+                      </form>
+                    )}
+
+                    {/* ROLE 2: TEACHER LOGIN */}
+                    {homeSelectedRole === 'teacher' && (
+                      <form onSubmit={handleTeacherLogin} className="space-y-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              शिक्षक यूजरनेम या मोबाइल नंबर:
+                            </label>
+                            <input
+                              type="text"
+                              value={teacherLoginInput}
+                              onChange={(e) => {
+                                setTeacherLoginInput(e.target.value);
+                                if (teacherLoginError) setTeacherLoginError(null);
+                              }}
+                              placeholder="User ID, Username or Mobile"
+                              className="w-full px-3.5 py-2.5 bg-white text-slate-900 font-bold text-sm rounded-xl border-2 border-slate-300 focus:border-blue-700 outline-none"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              पासवर्ड (Password):
+                            </label>
+                            <input
+                              type="password"
+                              value={teacherPasswordInput}
+                              onChange={(e) => {
+                                setTeacherPasswordInput(e.target.value);
+                                if (teacherLoginError) setTeacherLoginError(null);
+                              }}
+                              placeholder="पासवर्ड दर्ज करें"
+                              className="w-full px-3.5 py-2.5 bg-white text-slate-900 font-bold text-sm rounded-xl border-2 border-slate-300 focus:border-blue-700 outline-none"
+                            />
+                          </div>
+                        </div>
+
+                        {teacherLoginError && (
+                          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 font-bold flex items-center gap-2">
+                            <i className="fa-solid fa-circle-exclamation text-rose-600"></i>
+                            <span>{teacherLoginError}</span>
+                          </div>
+                        )}
+
+                        <button
+                          type="submit"
+                          disabled={teacherLoginSubmitting || !teacherLoginInput.trim() || !teacherPasswordInput.trim()}
+                          className="w-full py-3 px-6 bg-gradient-to-r from-blue-700 to-indigo-800 hover:from-blue-800 hover:to-indigo-900 text-white font-black text-sm rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                        >
+                          {teacherLoginSubmitting ? 'लॉगिन हो रहा है...' : 'शिक्षक पोर्टल में लॉगिन करें (Teacher Login) →'}
+                        </button>
+                      </form>
+                    )}
+
+                    {/* ROLE 3: MANAGER LOGIN */}
+                    {homeSelectedRole === 'manager' && (
+                      <form onSubmit={handleManagerLogin} className="space-y-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              प्रबंधक यूजरनेम या मोबाइल नंबर:
+                            </label>
+                            <input
+                              type="text"
+                              value={managerLoginInput}
+                              onChange={(e) => {
+                                setManagerLoginInput(e.target.value);
+                                if (managerLoginError) setManagerLoginError(null);
+                              }}
+                              placeholder="Manager Username / Mobile"
+                              className="w-full px-3.5 py-2.5 bg-white text-slate-900 font-bold text-sm rounded-xl border-2 border-slate-300 focus:border-emerald-600 outline-none"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              पासवर्ड (Password):
+                            </label>
+                            <input
+                              type="password"
+                              value={managerPasswordInput}
+                              onChange={(e) => {
+                                setManagerPasswordInput(e.target.value);
+                                if (managerLoginError) setManagerLoginError(null);
+                              }}
+                              placeholder="पासवर्ड दर्ज करें"
+                              className="w-full px-3.5 py-2.5 bg-white text-slate-900 font-bold text-sm rounded-xl border-2 border-slate-300 focus:border-emerald-600 outline-none"
+                            />
+                          </div>
+                        </div>
+
+                        {managerLoginError && (
+                          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 font-bold flex items-center gap-2">
+                            <i className="fa-solid fa-circle-exclamation text-rose-600"></i>
+                            <span>{managerLoginError}</span>
+                          </div>
+                        )}
+
+                        <button
+                          type="submit"
+                          disabled={managerLoginSubmitting || !managerLoginInput.trim() || !managerPasswordInput.trim()}
+                          className="w-full py-3 px-6 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white font-black text-sm rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                        >
+                          {managerLoginSubmitting ? 'सत्यापन हो रहा है...' : 'प्रबंधक पोर्टल में लॉगिन करें (Manager Login) →'}
+                        </button>
+                      </form>
+                    )}
+
+                    {/* ROLE 4: DRIVER LOGIN */}
+                    {homeSelectedRole === 'driver' && (
+                      <div className="space-y-4 text-center sm:text-left sm:flex sm:items-center sm:justify-between">
+                        <div>
+                          <h4 className="font-black text-slate-900 text-base">स्कूल वैन ड्राइवर पोर्टल (Driver Portal)</h4>
+                          <p className="text-xs text-slate-600 mt-0.5">लाइव बस/वैन रूट लोकेशन शेयरिंग व ट्रैकिंग हेतु ड्राइवर पोर्टल खोलें।</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab('driver')}
+                          className="px-6 py-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-black text-sm rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0"
+                        >
+                          <i className="fa-solid fa-van-shuttle"></i>
+                          <span>ड्राइवर पोर्टल खोलें →</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {/* 4 Selection Options / Buttons strictly in order: 1. Parent, 2. Manager, 3. Teacher, 4. Driver */}
             <div>
               <div className="flex items-center justify-between mb-4 px-1">
@@ -5359,7 +5642,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 {/* 1. Parent */}
                 <div
                   id="role-btn-parent"
-                  onClick={() => setActiveTab('parent')}
+                  onClick={() => {
+                    setHomeSelectedRole('parent');
+                    document.getElementById('home-login-banner')?.scrollIntoView({ behavior: 'smooth' });
+                  }}
                   className="group bg-white rounded-2xl p-6 shadow-md hover:shadow-2xl transition-all duration-200 border-2 border-slate-100 hover:border-amber-400 flex flex-col justify-between cursor-pointer relative overflow-hidden"
                 >
                   <div className="absolute top-0 right-0 w-24 h-24 bg-amber-50 rounded-bl-full transition-transform group-hover:scale-110 -z-0"></div>
@@ -5399,7 +5685,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 {/* 2. Manager */}
                 <div
                   id="role-btn-manager"
-                  onClick={() => setActiveTab('manager')}
+                  onClick={() => {
+                    setHomeSelectedRole('manager');
+                    document.getElementById('home-login-banner')?.scrollIntoView({ behavior: 'smooth' });
+                  }}
                   className="group bg-white rounded-2xl p-6 shadow-md hover:shadow-2xl transition-all duration-200 border-2 border-slate-100 hover:border-slate-800 flex flex-col justify-between cursor-pointer relative overflow-hidden"
                 >
                   <div className="absolute top-0 right-0 w-24 h-24 bg-slate-100 rounded-bl-full transition-transform group-hover:scale-110 -z-0"></div>
@@ -5439,7 +5728,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 {/* 3. Teacher */}
                 <div
                   id="role-btn-teacher"
-                  onClick={() => setActiveTab('teacher')}
+                  onClick={() => {
+                    setHomeSelectedRole('teacher');
+                    document.getElementById('home-login-banner')?.scrollIntoView({ behavior: 'smooth' });
+                  }}
                   className="group bg-white rounded-2xl p-6 shadow-md hover:shadow-2xl transition-all duration-200 border-2 border-slate-100 hover:border-blue-800 flex flex-col justify-between cursor-pointer relative overflow-hidden"
                 >
                   <div className="absolute top-0 right-0 w-24 h-24 bg-blue-50 rounded-bl-full transition-transform group-hover:scale-110 -z-0"></div>
@@ -5479,7 +5771,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 {/* 4. Driver */}
                 <div
                   id="role-btn-driver"
-                  onClick={() => setActiveTab('driver')}
+                  onClick={() => {
+                    setHomeSelectedRole('driver');
+                    document.getElementById('home-login-banner')?.scrollIntoView({ behavior: 'smooth' });
+                  }}
                   className="group bg-white rounded-2xl p-6 shadow-md hover:shadow-2xl transition-all duration-200 border-2 border-slate-100 hover:border-emerald-500 flex flex-col justify-between cursor-pointer relative overflow-hidden"
                 >
                   <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-50 rounded-bl-full transition-transform group-hover:scale-110 -z-0"></div>
@@ -7737,7 +8032,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           ₹{studentFeeSummary.totalFee.toLocaleString('en-IN')}
                         </div>
                         <div className="text-[11px] text-slate-600 mt-1.5 pt-1.5 border-t border-slate-200/80 leading-relaxed">
-                          <span className="font-semibold text-slate-700">सत्र गणना:</span> प्रवेश ₹{(studentFeeSummary.admissionFee || 1000).toLocaleString('en-IN')} + {studentFeeSummary.elapsedMonths} माह ({selectedStudent.Session_Start_Month || 'April'} से {studentFeeSummary.currentMonth || 'October'}) × ₹{(studentFeeSummary.monthlyTuition || 450).toLocaleString('en-IN')} = ₹{studentFeeSummary.totalFee.toLocaleString('en-IN')}
+                          <span className="font-semibold text-slate-700">सत्र गणना:</span> प्रवेश ₹{(studentFeeSummary.admissionFee || 1000).toLocaleString('en-IN')} + {studentFeeSummary.elapsedMonths} माह ({selectedStudent.Session_Start_Month || 'April'} से {studentFeeSummary.currentMonth || 'October'}) × ₹{(studentFeeSummary.monthlyTuition || 450).toLocaleString('en-IN')}{Number((studentFeeSummary as any).otherBilledFees || 0) > 0 ? ` + पुस्तकें/अन्य ₹${Number((studentFeeSummary as any).otherBilledFees).toLocaleString('en-IN')}` : ''} = ₹{studentFeeSummary.totalFee.toLocaleString('en-IN')}
                         </div>
                       </div>
 
@@ -11339,7 +11634,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             <span className="text-blue-950 font-black">कुल सत्र शुल्क: ₹{metrics.totalSessionFee.toLocaleString('en-IN')}</span>
                           </div>
                           <div className="text-slate-600 leading-normal">
-                            प्रवेश शुल्क: <strong>₹{(metrics.admissionFee || 1000).toLocaleString('en-IN')}</strong> + {metrics.totalSessionFee - (metrics.admissionFee || 1000)} ({selectedStudentDetail.Session_Start_Month || 'April'} से {new Date().toLocaleString('en-US', { month: 'long' })}) • दर: ₹{(metrics.monthlyTuition || 450).toLocaleString('en-IN')}/माह • कुल जमा: <strong>₹{metrics.totalPaid.toLocaleString('en-IN')}</strong>{Number(metrics.totalDiscount || 0) > 0 ? <span> • छूट/रियायत: <strong className="text-amber-700 font-bold">-₹{Number(metrics.totalDiscount).toLocaleString('en-IN')}</strong></span> : null} • {isDue ? `शुद्ध बकाया: ₹${bal}` : bal < 0 ? `अग्रिम: ₹${Math.abs(bal)}` : 'पूर्ण चुकता'}
+                            प्रवेश शुल्क: <strong>₹{(metrics.admissionFee || 1000).toLocaleString('en-IN')}</strong> + {metrics.totalSessionFee - (metrics.admissionFee || 1000) - (metrics.otherBilledFees || 0)} ({selectedStudentDetail.Session_Start_Month || 'April'} से {new Date().toLocaleString('en-US', { month: 'long' })}) • दर: ₹{(metrics.monthlyTuition || 450).toLocaleString('en-IN')}/माह{Number(metrics.otherBilledFees || 0) > 0 ? <span> • पुस्तकें/अन्य: <strong>+₹{Number(metrics.otherBilledFees).toLocaleString('en-IN')}</strong></span> : null} • कुल जमा: <strong>₹{metrics.totalPaid.toLocaleString('en-IN')}</strong>{Number(metrics.totalDiscount || 0) > 0 ? <span> • छूट/रियायत: <strong className="text-amber-700 font-bold">-₹{Number(metrics.totalDiscount).toLocaleString('en-IN')}</strong></span> : null} • {isDue ? `शुद्ध बकाया: ₹${bal}` : bal < 0 ? `अग्रिम: ₹${Math.abs(bal)}` : 'पूर्ण चुकता'}
                           </div>
                         </div>
                       );
@@ -12231,61 +12526,6 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
           </div>
         </div>
       </footer>
-
-      {/* MOBILE PERSISTENT ROLE NAVIGATION DOCK (Always visible on mobile screens) */}
-      <div className="fixed bottom-2.5 left-3 right-3 z-40 md:hidden bg-[#0c2340]/95 backdrop-blur-md text-white border border-amber-400/40 rounded-2xl p-1 shadow-2xl flex items-center justify-around text-[10px] font-bold">
-        <button
-          type="button"
-          onClick={() => setActiveTab('parent')}
-          className={`flex-1 py-1.5 px-1 rounded-xl flex flex-col items-center gap-0.5 transition-all cursor-pointer ${
-            activeTab === 'parent'
-              ? 'bg-amber-400 text-slate-950 font-black shadow-xs'
-              : 'text-slate-300 hover:text-white'
-          }`}
-        >
-          <i className="fa-solid fa-user-group text-xs"></i>
-          <span>अभिभावक</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('manager')}
-          className={`flex-1 py-1.5 px-1 rounded-xl flex flex-col items-center gap-0.5 transition-all cursor-pointer ${
-            activeTab === 'manager'
-              ? 'bg-amber-400 text-slate-950 font-black shadow-xs'
-              : 'text-slate-300 hover:text-white'
-          }`}
-        >
-          <i className="fa-solid fa-user-tie text-xs"></i>
-          <span>प्रबंधक</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('teacher')}
-          className={`flex-1 py-1.5 px-1 rounded-xl flex flex-col items-center gap-0.5 transition-all cursor-pointer ${
-            activeTab === 'teacher'
-              ? 'bg-amber-400 text-slate-950 font-black shadow-xs'
-              : 'text-slate-300 hover:text-white'
-          }`}
-        >
-          <i className="fa-solid fa-chalkboard-user text-xs"></i>
-          <span>शिक्षक</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('home')}
-          className={`flex-1 py-1.5 px-1 rounded-xl flex flex-col items-center gap-0.5 transition-all cursor-pointer ${
-            activeTab === 'home'
-              ? 'bg-amber-400 text-slate-950 font-black shadow-xs'
-              : 'text-slate-300 hover:text-white'
-          }`}
-        >
-          <i className="fa-solid fa-house text-xs"></i>
-          <span>होम (Roles)</span>
-        </button>
-      </div>
     </div>
   );
 }

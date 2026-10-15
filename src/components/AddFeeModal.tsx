@@ -165,6 +165,45 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
       });
     }
 
+    // Non-Tuition / One-Time Billed Dues (Books & Stationery, Exam Fee, Uniform, etc.)
+    const nonTuitionRecords = stRecords.filter((r) => {
+      const type = String(r.Fee_Type || '').trim();
+      const isTuition = /(monthly|tuition|मासिक|ट्यूशन|multi-month)/i.test(type);
+      const isAdmission = /(admission|प्रवेश)/i.test(type);
+      return !isTuition && !isAdmission && type.length > 0;
+    });
+
+    const nonTuitionGroups = new Map<string, typeof nonTuitionRecords>();
+    nonTuitionRecords.forEach((r) => {
+      const typeKey = String(r.Fee_Type || '').trim().toLowerCase();
+      if (!nonTuitionGroups.has(typeKey)) nonTuitionGroups.set(typeKey, []);
+      nonTuitionGroups.get(typeKey)!.push(r);
+    });
+
+    nonTuitionGroups.forEach((recs) => {
+      const origType = recs[0].Fee_Type || 'Other Fee';
+      const billed = Math.max(
+        ...recs.map((r) => Number(r.Total_Amount) || 0),
+        recs.reduce((sum, r) => sum + (Number(r.Amount_Paid) || 0) + (Number(r.Balance_Amount) || 0), 0)
+      );
+      const paid = recs.reduce((sum, r) => sum + (Number(r.Amount_Paid) || 0), 0);
+      const disc = recs.reduce(
+        (sum, r) => sum + (Number((r as any).Discount_Amount || (r as any).Discount || 0) || 0),
+        0
+      );
+      const remainingDue = Math.max(0, billed - paid - disc);
+
+      if (remainingDue > 0) {
+        const latestRec = recs[recs.length - 1];
+        const monthNote = latestRec?.Month ? ` (${latestRec.Month})` : '';
+        queue.push({
+          periodName: `${origType}${monthNote}`,
+          headType: origType,
+          dueAmount: remainingDue,
+        });
+      }
+    });
+
     // Academic session months (Only for months >= student's Session_StartMonth up to CURRENT MONTH)
     const startMonth = (selectedStudent as any).Session_Start_Month || 'April';
     const startIdx = ACADEMIC_SESSION_MONTHS.findIndex(
