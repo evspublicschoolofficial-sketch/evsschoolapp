@@ -1,0 +1,39 @@
+{
+  "id": "/",
+  "name": "E.V.S. Public School Portal",
+  "short_name": "EVS School",
+  "description": "Official Web Portal for E.V.S. Public School featuring Parent Portal, Teacher Dashboard, Manager Dashboard, and Driver Portal with real-time GPS van tracking.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0c2340",
+  "theme_color": "#0c2340",
+  "categories": ["education", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

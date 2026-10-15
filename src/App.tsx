@@ -28,6 +28,7 @@ import { SchoolNoticeBoard, DEFAULT_SEED_NOTICES } from './components/SchoolNoti
 import { VillageRouteAutoManager } from './components/VillageRouteAutoManager';
 import { EmergencyAlertBanner } from './components/EmergencyAlertBanner';
 import { playSirenPreview, playAnnouncementPreview } from './utils/sirenAudio';
+import { InstallAppModal } from './components/InstallAppModal';
 import { SchoolNotice } from './types';
 import { fetchFeeMasterDirectGViz } from './utils/feeMaster';
 import { computeStudentFeeMetrics, computeSchoolFeeTotals, normalizeStudentId, reconcileFeeRecords, calculateStudentSummary } from './utils/feeCalculation';
@@ -1219,6 +1220,22 @@ export default function App() {
   const [parentChildren, setParentChildren] = useState<Student[]>(initialSession.parentChildren);
   const [parentLoggedIn, setParentLoggedIn] = useState<boolean>(initialSession.parentLoggedIn);
   const [homeSelectedRole, setHomeSelectedRole] = useState<'parent' | 'teacher' | 'manager' | 'driver'>('parent');
+
+  // PWA & iOS App Installation States
+  const [showInstallModal, setShowInstallModal] = useState<boolean>(false);
+  const [isIOSDevice, setIsIOSDevice] = useState<boolean>(false);
+  const [isStandaloneApp, setIsStandaloneApp] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const ua = window.navigator.userAgent.toLowerCase();
+      setIsIOSDevice(/iphone|ipad|ipod/.test(ua));
+      const standalone =
+        window.matchMedia('(display-mode: standalone)').matches ||
+        (window.navigator as any).standalone === true;
+      setIsStandaloneApp(standalone);
+    }
+  }, []);
 
   // Sync parent login session to localStorage
   useEffect(() => {
@@ -5044,6 +5061,20 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     )}
                   </button>
 
+                  {/* Install App button for parents */}
+                  {!isStandaloneApp && (
+                    <button
+                      type="button"
+                      onClick={() => setShowInstallModal(true)}
+                      className="px-3 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black transition-all shadow-xs flex items-center gap-1.5 cursor-pointer shrink-0"
+                      title="iPhone / Android में ऐप इंस्टॉल करें"
+                    >
+                      <i className="fa-brands fa-apple text-sm"></i>
+                      <span className="hidden sm:inline">Install</span>
+                      <span>App</span>
+                    </button>
+                  )}
+
                   {/* Logout Button */}
                   <button
                     onClick={handleParentLogout}
@@ -5196,9 +5227,22 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               {/* CASE 5: UN-AUTHENTICATED - ON HOME SCREEN */}
               {!parentLoggedIn && !managerUser && !teacherUser && activeTab === 'home' && (
                 <div className="flex items-center gap-2">
+                  {!isStandaloneApp && (
+                    <button
+                      type="button"
+                      onClick={() => setShowInstallModal(true)}
+                      className="px-3 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-md border border-amber-300 cursor-pointer transition transform active:scale-95"
+                      title="iPhone / Android में App Install करें"
+                    >
+                      <i className="fa-brands fa-apple text-sm"></i>
+                      <span className="hidden sm:inline">iPhone / Android</span>
+                      <span>Install App</span>
+                    </button>
+                  )}
                   <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/40 text-xs font-bold shadow-xs">
                     <i className="fa-solid fa-shield-halved text-amber-400"></i>
-                    <span>सुरक्षित डिजिटल पोर्टल (लॉगिन आवश्यक)</span>
+                    <span className="hidden sm:inline">सुरक्षित डिजिटल पोर्टल (लॉगिन आवश्यक)</span>
+                    <span className="sm:hidden">सुरक्षित पोर्टल</span>
                   </span>
                 </div>
               )}
@@ -5343,6 +5387,45 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     </div>
                   </div>
                 </div>
+              </div>
+            </div>
+
+            {/* ========================================================================= */}
+            {/* IPHONE & ANDROID INSTALL BANNER & HELPER */}
+            {/* ========================================================================= */}
+            <div className="bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 rounded-3xl p-4 sm:p-5 text-slate-950 shadow-xl border-2 border-amber-300 flex flex-col md:flex-row items-center justify-between gap-4 animate-fadeIn">
+              <div className="flex items-center gap-3.5">
+                <div className="w-12 h-12 rounded-2xl bg-[#0c2340] text-amber-300 flex items-center justify-center text-2xl shadow-md shrink-0">
+                  <i className="fa-brands fa-apple"></i>
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-[#0c2340] text-amber-300">
+                      iPhone & Android App
+                    </span>
+                    <span className="text-xs font-black text-slate-950">
+                      {isStandaloneApp ? '✅ आपके फ़ोन पर स्थापित है' : '📱 बिना App Store के सीधा Phone में Install करें'}
+                    </span>
+                  </div>
+                  <h3 className="text-base sm:text-lg font-black text-slate-950 mt-0.5">
+                    iPhone (iOS) में कैसे Install करें? (PWA Installation Guide)
+                  </h3>
+                  <p className="text-xs text-slate-800 font-medium">
+                    iPhone Safari में <strong>Share (शेयर ⎋)</strong> ➔ <strong>'Add to Home Screen'</strong> पर क्लिक करके 1 मिनट में इंस्टॉल करें।
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2.5 w-full md:w-auto">
+                <button
+                  type="button"
+                  onClick={() => setShowInstallModal(true)}
+                  className="w-full md:w-auto px-5 py-3 rounded-2xl bg-[#0c2340] hover:bg-slate-900 text-amber-300 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg cursor-pointer transition transform active:scale-95 shrink-0"
+                >
+                  <i className="fa-solid fa-download text-amber-400"></i>
+                  <span>iPhone में कैसे Install करें?</span>
+                  <i className="fa-solid fa-arrow-right text-xs"></i>
+                </button>
               </div>
             </div>
 
@@ -12500,6 +12583,27 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         isParentView={activeTab === 'parent' || parentLoggedIn}
       />
 
+      {/* Install App Modal for iOS Safari & Android */}
+      <InstallAppModal
+        isOpen={showInstallModal}
+        onClose={() => setShowInstallModal(false)}
+      />
+
+      {/* Floating iPhone Quick Install Pill */}
+      {isIOSDevice && !isStandaloneApp && (
+        <aside
+          aria-label="iPhone App Install"
+          onClick={() => setShowInstallModal(true)}
+          className="fixed bottom-5 right-4 z-40 bg-[#0c2340] hover:bg-slate-900 text-amber-300 border-2 border-amber-400 px-4 py-2.5 rounded-full shadow-2xl flex items-center gap-2.5 text-xs font-black cursor-pointer backdrop-blur-sm transition-all transform active:scale-95"
+        >
+          <div className="w-6 h-6 rounded-full bg-amber-400 text-slate-950 flex items-center justify-center text-xs">
+            <i className="fa-brands fa-apple"></i>
+          </div>
+          <span>iPhone में App Install करें</span>
+          <i className="fa-solid fa-circle-arrow-right text-amber-400"></i>
+        </aside>
+      )}
+
       {/* FOOTER */}
       <footer className="bg-[#0c2340] text-slate-300 border-t-2 border-amber-400 mt-auto">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-5 text-xs flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -12515,7 +12619,16 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
             </div>
           </div>
 
-          <div className="flex items-center gap-3 text-slate-400 text-[11px]">
+          <div className="flex items-center gap-4 text-slate-400 text-[11px] flex-wrap justify-center sm:justify-end">
+            <button
+              onClick={() => setShowInstallModal(true)}
+              className="text-amber-300 hover:text-amber-200 font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+              title="iPhone व Android में ऐप इंस्टॉल करें"
+            >
+              <i className="fa-brands fa-apple text-sm"></i>
+              <span>iPhone / Android App</span>
+            </button>
+
             <button
               onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
               className="text-amber-300 hover:text-amber-200 font-semibold flex items-center gap-1 cursor-pointer transition-colors"

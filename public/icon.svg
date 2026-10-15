@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0c2340"/>
+      <stop offset="50%" stop-color="#10316b"/>
+      <stop offset="100%" stop-color="#06162a"/>
+    </linearGradient>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fcd34d"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)"/>
+  <circle cx="256" cy="235" r="148" fill="none" stroke="url(#goldGrad)" stroke-width="8"/>
+  <circle cx="256" cy="235" r="136" fill="#ffffff" fill-opacity="0.05"/>
+  <!-- School Emblem Roof -->
+  <path d="M 256 120 L 350 170 L 256 220 L 162 170 Z" fill="url(#goldGrad)"/>
+  <!-- Emblem Pillars -->
+  <path d="M 190 200 L 190 250 C 190 278 226 298 256 298 C 286 298 322 278 322 250 L 322 200 L 256 235 Z" fill="#f8fafc"/>
+  <path d="M 355 178 L 355 255 L 347 255 L 347 182 Z" fill="url(#goldGrad)"/>
+  <!-- Typography -->
+  <text x="256" y="348" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-weight="900" font-size="56" fill="#fbbf24" text-anchor="middle" letter-spacing="4">E.V.S.</text>
+  <text x="256" y="392" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-weight="800" font-size="22" fill="#f1f5f9" text-anchor="middle" letter-spacing="3">PUBLIC SCHOOL</text>
+  <rect x="136" y="415" width="240" height="28" rx="14" fill="#f59e0b"/>
+  <text x="256" y="434" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-weight="800" font-size="12" fill="#0c2340" text-anchor="middle" letter-spacing="2">OFFICIAL PORTAL</text>
+</svg>

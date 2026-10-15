@@ -37,3 +37,35 @@ self.addEventListener('sync', (event) => {
     );
   }
 });
+
+// PWA Fetch Cache Handler (network first with cache fallback)
+self.addEventListener('fetch', (event) => {
+  if (event.request.method !== 'GET') return;
+  const url = new URL(event.request.url);
+
+  // Bypass API and WebSocket routes
+  if (url.pathname.startsWith('/api') || url.pathname.startsWith('/ws')) {
+    return;
+  }
+
+  event.respondWith(
+    fetch(event.request)
+      .then((networkResponse) => {
+        if (networkResponse && networkResponse.status === 200) {
+          const responseToCache = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, responseToCache);
+          });
+        }
+        return networkResponse;
+      })
+      .catch(async () => {
+        const cachedResponse = await caches.match(event.request);
+        if (cachedResponse) return cachedResponse;
+        if (event.request.mode === 'navigate') {
+          return caches.match('/');
+        }
+        return new Response('Offline', { status: 503, statusText: 'Offline' });
+      })
+  );
+});
