@@ -14,6 +14,8 @@ export interface DataMutationEvent {
   entity: EntityType;
   action?: string;
   details?: any;
+  data?: any;
+  payload?: any;
   timestamp: number;
 }
 

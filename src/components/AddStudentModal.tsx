@@ -136,6 +136,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
         setParentMobile(String(studentToEdit.Parent_Mobile || ''));
         setVillageRoute(studentToEdit['Village/rRoute'] || studentToEdit.Village || '');
         setOpeningBalance(studentToEdit.Balance_Amount !== undefined ? String(studentToEdit.Balance_Amount) : '0');
+        setFeeDiscount(studentToEdit.Discount !== undefined && studentToEdit.Discount !== null ? String(studentToEdit.Discount) : (studentToEdit.Monthly_Discount !== undefined && studentToEdit.Monthly_Discount !== null ? String(studentToEdit.Monthly_Discount) : '0'));
         setSessionStartMonth(studentToEdit.Session_Start_Month || 'April');
         setStudentPhotoUrl(studentToEdit.Student_Photo || '');
         setSendWelcomeWhatsApp(false);
@@ -180,6 +181,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
         setParentMobile('');
         setVillageRoute('');
         setOpeningBalance('0');
+        setFeeDiscount('0');
         setSessionStartMonth('April');
         setStudentPhotoUrl('');
         setSendWelcomeWhatsApp(true);
@@ -277,6 +279,9 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
         'Village/rRoute': villageRoute.trim(),
         Village: villageRoute.trim(),
         Balance_Amount: openingBalance ? parseFloat(openingBalance) || 0 : 0,
+        Discount: feeDiscount ? parseFloat(feeDiscount) || 0 : 0,
+        Monthly_Discount: feeDiscount ? parseFloat(feeDiscount) || 0 : 0,
+        Fee_Discount: feeDiscount ? parseFloat(feeDiscount) || 0 : 0,
         Session_Start_Month: sessionStartMonth || 'April',
         Student_Photo: studentPhotoUrl.trim(),
         'QR code': generatedQrUrl,
@@ -594,11 +599,11 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
             </div>
           </div>
 
-          {/* Opening Balance, Fee Start Month & Photo URL */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {/* Opening Balance, Fee Discount, Fee Start Month & Photo URL */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">
-                प्रारंभिक बकाया फीस (Opening Due) ₹
+                प्रारंभिक बकाया (Opening Due) ₹
               </label>
               <div className="relative">
                 <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-500 text-xs font-bold pointer-events-none">
@@ -617,8 +622,28 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
             </div>
 
             <div>
+              <label className="block text-xs font-bold text-amber-800 mb-1">
+                मासिक छूट / रियायत (Discount ₹)
+              </label>
+              <div className="relative">
+                <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-amber-600 text-xs font-bold pointer-events-none">
+                  -₹
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  step="50"
+                  value={feeDiscount}
+                  onChange={(e) => setFeeDiscount(e.target.value)}
+                  placeholder="0"
+                  className="w-full pl-8 pr-3 py-2.5 rounded-xl border border-amber-300 focus:border-amber-600 text-xs font-mono font-bold bg-amber-50/40 text-amber-950"
+                />
+              </div>
+            </div>
+
+            <div>
               <label className="block text-xs font-bold text-blue-900 mb-1">
-                सत्र शुल्क प्रारंभ माह (Fee Start Month) <span className="text-rose-500">*</span>
+                सत्र प्रारंभ माह (Start Month) <span className="text-rose-500">*</span>
               </label>
               <div className="relative">
                 <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-blue-600 text-xs pointer-events-none">
@@ -640,7 +665,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
 
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">
-                छात्र फोटो लिंक (Student Photo URL)
+                छात्र फोटो लिंक (Photo URL)
               </label>
               <input
                 type="url"
