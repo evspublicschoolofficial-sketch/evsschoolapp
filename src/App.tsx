@@ -27,7 +27,7 @@ import { AttendanceCalendarModal } from './components/AttendanceCalendarModal';
 import { SchoolNoticeBoard, DEFAULT_SEED_NOTICES } from './components/SchoolNoticeBoard';
 import { VillageRouteAutoManager } from './components/VillageRouteAutoManager';
 import { EmergencyAlertBanner } from './components/EmergencyAlertBanner';
-import { playSirenPreview } from './utils/sirenAudio';
+import { playSirenPreview, playAnnouncementPreview } from './utils/sirenAudio';
 import { SchoolNotice } from './types';
 import { fetchFeeMasterDirectGViz } from './utils/feeMaster';
 import { computeStudentFeeMetrics, computeSchoolFeeTotals, normalizeStudentId, reconcileFeeRecords, calculateStudentSummary } from './utils/feeCalculation';
@@ -5969,19 +5969,19 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 {/* WHEN ON OVERVIEW: SHOW THE 4 INTERACTIVE CARDS */}
                 {parentActiveSection === 'overview' ? (
                   <div className="space-y-4 animate-fadeIn">
-                    {/* Emergency Siren Alert Banner Card in Parent Portal */}
+                    {/* School Announcement Banner Card in Parent Portal */}
                     {schoolNotices.some((n) => n.isEmergency || n.category === 'emergency') && (() => {
                       const emerg = schoolNotices.find((n) => n.isEmergency || n.category === 'emergency')!;
                       return (
-                        <div className="p-4 sm:p-5 bg-gradient-to-r from-rose-700 via-red-600 to-rose-700 text-white rounded-2xl shadow-xl border-2 border-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-fadeIn">
+                        <div className="p-4 sm:p-5 bg-gradient-to-r from-blue-800 via-indigo-700 to-blue-900 text-white rounded-2xl shadow-xl border-2 border-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-fadeIn">
                           <div className="flex items-start gap-3.5">
                             <div className="w-12 h-12 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center text-2xl font-black shrink-0 shadow-md animate-pulse">
-                              <i className="fa-solid fa-triangle-exclamation text-rose-700"></i>
+                              <i className="fa-solid fa-bullhorn text-blue-950"></i>
                             </div>
                             <div>
                               <div className="flex items-center gap-2 flex-wrap">
-                                <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-white text-rose-800 shadow-2xs">
-                                  🚨 आपातकालीन स्कूल सूचना
+                                <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 shadow-2xs">
+                                  📢 स्कूल उद्घोषणा प्रसारण
                                 </span>
                                 <span className="text-xs text-amber-200 font-bold">
                                   दिनांक: {emerg.date}
@@ -5990,23 +5990,23 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                               <h4 className="text-sm sm:text-base font-black text-white mt-1 leading-snug">
                                 {emerg.title}
                               </h4>
-                              <p className="text-xs text-rose-100 line-clamp-2 mt-1 font-medium">
+                              <p className="text-xs text-blue-100 line-clamp-2 mt-1 font-medium">
                                 {emerg.description}
                               </p>
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-2 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-rose-500/50 justify-end">
+                          <div className="flex items-center gap-2 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-blue-500/50 justify-end">
                             <button
                               type="button"
                               onClick={() => {
-                                playSirenPreview(8);
+                                playAnnouncementPreview(emerg.title, true);
                               }}
                               className="px-3.5 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black rounded-xl text-xs flex items-center gap-1.5 shadow-md cursor-pointer transition-transform active:scale-95"
-                              title="सायरन ध्वनि सुनें"
+                              title="अनाउंसमेंट ध्वनि सुनें"
                             >
-                              <i className="fa-solid fa-volume-high text-rose-700 text-sm"></i>
-                              <span>🔊 सायरन बजाएं</span>
+                              <i className="fa-solid fa-volume-high text-blue-900 text-sm"></i>
+                              <span>📢 अनाउंसमेंट सुनें</span>
                             </button>
                             <button
                               type="button"
@@ -6014,7 +6014,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                 setParentActiveSection('notices');
                                 window.scrollTo({ top: 0, behavior: 'smooth' });
                               }}
-                              className="px-4 py-2 bg-white hover:bg-amber-100 text-rose-950 font-black rounded-xl text-xs flex items-center gap-1 shadow-md cursor-pointer transition-transform active:scale-95"
+                              className="px-4 py-2 bg-white hover:bg-amber-100 text-blue-950 font-black rounded-xl text-xs flex items-center gap-1 shadow-md cursor-pointer transition-transform active:scale-95"
                             >
                               <span>पूरी सूचना पढ़ें →</span>
                             </button>

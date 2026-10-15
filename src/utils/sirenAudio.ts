@@ -1,15 +1,10 @@
-// Web Audio API based Emergency Siren Sound Generator
-// Generates realistic dual-tone emergency police/ambulance siren and alert chime without any external audio file dependency
+// Web Audio API based School Announcement & Chime Sound Generator
+// Replaces harsh emergency siren with a pleasant, melodious airport/school PA announcement chime and voice notification
 
 let activeAudioCtx: AudioContext | null = null;
-let sirenOscillator: OscillatorNode | null = null;
-let sirenHarmonicOsc: OscillatorNode | null = null;
-let sirenGainNode: GainNode | null = null;
-let sirenLfo: OscillatorNode | null = null;
-let sirenLfoGain: GainNode | null = null;
-let sirenHarmonicLfoGain: GainNode | null = null;
+let activeChimeGain: GainNode | null = null;
+let announcementIntervalTimer: any = null;
 let isPlaying = false;
-let autoStopTimer: any = null;
 
 // Create or resume AudioContext safely
 export const getAudioContext = (): AudioContext => {
@@ -36,169 +31,240 @@ export const unlockAudioContext = async (): Promise<boolean> => {
 };
 
 /**
- * Start continuous emergency siren sound (dual-tone urgent oscillating siren)
+ * Native Text-To-Speech announcement for parents
+ * Speaks a courteous Hindi / English school broadcast
  */
-export const startEmergencySiren = (): (() => void) => {
+export const speakAnnouncement = (customText?: string): void => {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
   try {
-    if (isPlaying) {
-      return stopEmergencySiren;
+    window.speechSynthesis.cancel();
+
+    const textToSpeak =
+      customText?.trim() ||
+      'कृपया ध्यान दें, ई.वी.एस. पब्लिक स्कूल की ओर से महत्वपूर्ण सूचना।';
+
+    const utterance = new SpeechSynthesisUtterance(textToSpeak);
+
+    // Pick Hindi or Indian English voice if available
+    const voices = window.speechSynthesis.getVoices();
+    const hiVoice = voices.find(
+      (v) =>
+        v.lang.toLowerCase().includes('hi-in') ||
+        v.lang.toLowerCase().includes('hi')
+    );
+    const inVoice = voices.find((v) =>
+      v.lang.toLowerCase().includes('en-in')
+    );
+
+    if (hiVoice) {
+      utterance.voice = hiVoice;
+      utterance.lang = hiVoice.lang;
+    } else if (inVoice) {
+      utterance.voice = inVoice;
+      utterance.lang = inVoice.lang;
+    } else {
+      utterance.lang = 'hi-IN';
     }
 
-    const ctx = getAudioContext();
+    utterance.rate = 0.92; // Slightly calm and measured pace
+    utterance.pitch = 1.05; // Polite, friendly tone
+    utterance.volume = 0.95;
 
-    // 1. Primary Wailing Oscillator (Sawtooth: 600Hz - 1100Hz)
-    sirenOscillator = ctx.createOscillator();
-    sirenOscillator.type = 'sawtooth';
-    sirenOscillator.frequency.value = 850; // Center frequency
-
-    // 2. Secondary Harmonic Oscillator (Square tone an octave/fifth higher for piercing urgency)
-    sirenHarmonicOsc = ctx.createOscillator();
-    sirenHarmonicOsc.type = 'triangle';
-    sirenHarmonicOsc.frequency.value = 1275; // 1.5x harmonic
-
-    // 3. LFO (Low Frequency Oscillator) to modulate pitch up and down (1.3Hz cycles)
-    sirenLfo = ctx.createOscillator();
-    sirenLfo.type = 'sine';
-    sirenLfo.frequency.value = 1.3; // 1.3 wails per second
-
-    sirenLfoGain = ctx.createGain();
-    sirenLfoGain.gain.value = 280; // +/- 280 Hz range (570Hz to 1130Hz)
-
-    sirenHarmonicLfoGain = ctx.createGain();
-    sirenHarmonicLfoGain.gain.value = 420; // 1.5x depth
-
-    // Connect LFO modulation to frequencies
-    sirenLfo.connect(sirenLfoGain);
-    sirenLfoGain.connect(sirenOscillator.frequency);
-
-    sirenLfo.connect(sirenHarmonicLfoGain);
-    sirenHarmonicLfoGain.connect(sirenHarmonicOsc.frequency);
-
-    // 4. Volume Output Gain with smooth attack
-    sirenGainNode = ctx.createGain();
-    const now = ctx.currentTime;
-    sirenGainNode.gain.setValueAtTime(0.001, now);
-    sirenGainNode.gain.exponentialRampToValueAtTime(0.4, now + 0.25);
-
-    // Sub-mix harmonic slightly quieter than main
-    const harmonicGain = ctx.createGain();
-    harmonicGain.gain.value = 0.35;
-    sirenHarmonicOsc.connect(harmonicGain);
-    harmonicGain.connect(sirenGainNode);
-
-    // Main osc to gain
-    sirenOscillator.connect(sirenGainNode);
-    sirenGainNode.connect(ctx.destination);
-
-    // Start all nodes
-    sirenLfo.start(now);
-    sirenOscillator.start(now);
-    sirenHarmonicOsc.start(now);
-
-    isPlaying = true;
-  } catch (err) {
-    console.warn('Unable to start siren audio context:', err);
-  }
-
-  return stopEmergencySiren;
-};
-
-/**
- * Stop emergency siren sound with smooth release
- */
-export const stopEmergencySiren = (): void => {
-  if (autoStopTimer) {
-    clearTimeout(autoStopTimer);
-    autoStopTimer = null;
-  }
-
-  try {
-    if (sirenGainNode && activeAudioCtx && activeAudioCtx.state === 'running') {
-      const now = activeAudioCtx.currentTime;
-      sirenGainNode.gain.setValueAtTime(sirenGainNode.gain.value, now);
-      sirenGainNode.gain.exponentialRampToValueAtTime(0.0001, now + 0.2);
-    }
-
-    setTimeout(() => {
-      try {
-        if (sirenOscillator) {
-          sirenOscillator.stop();
-          sirenOscillator.disconnect();
-          sirenOscillator = null;
-        }
-        if (sirenHarmonicOsc) {
-          sirenHarmonicOsc.stop();
-          sirenHarmonicOsc.disconnect();
-          sirenHarmonicOsc = null;
-        }
-        if (sirenLfo) {
-          sirenLfo.stop();
-          sirenLfo.disconnect();
-          sirenLfo = null;
-        }
-        if (sirenLfoGain) {
-          sirenLfoGain.disconnect();
-          sirenLfoGain = null;
-        }
-        if (sirenHarmonicLfoGain) {
-          sirenHarmonicLfoGain.disconnect();
-          sirenHarmonicLfoGain = null;
-        }
-        if (sirenGainNode) {
-          sirenGainNode.disconnect();
-          sirenGainNode = null;
-        }
-      } catch (e) {}
-      isPlaying = false;
-    }, 220);
+    window.speechSynthesis.speak(utterance);
   } catch (e) {
-    isPlaying = false;
+    console.warn('Speech synthesis warning:', e);
+  }
+};
+
+export const stopSpeechAnnouncement = (): void => {
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    try {
+      window.speechSynthesis.cancel();
+    } catch {}
   }
 };
 
 /**
- * Play a quick 3-beep emergency alert chime (useful for previewing or testing)
+ * Plays a warm, sweet, 4-tone melodious public announcement chime (Ding-Dong / Airport Chime)
+ * Notes: C5 (523.25Hz) -> E5 (659.25Hz) -> G5 (783.99Hz) -> C6 (1046.50Hz)
+ * Uses harmonic synthesis + low-pass filter for a smooth, warm acoustic resonance.
  */
-export const playEmergencyChime = (): void => {
+export const playAnnouncementChime = (): void => {
   try {
     const ctx = getAudioContext();
     const now = ctx.currentTime;
 
-    const beep = (freq: number, start: number, duration: number) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(freq, start);
+    // Master chime gain
+    const masterGain = ctx.createGain();
+    masterGain.gain.setValueAtTime(0.35, now);
+    masterGain.connect(ctx.destination);
+    activeChimeGain = masterGain;
 
-      gain.gain.setValueAtTime(0.001, start);
-      gain.gain.linearRampToValueAtTime(0.35, start + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.001, start + duration);
+    // Filter to eliminate any harsh high frequencies
+    const lowPass = ctx.createBiquadFilter();
+    lowPass.type = 'lowpass';
+    lowPass.frequency.setValueAtTime(3200, now);
+    lowPass.connect(masterGain);
 
-      osc.connect(gain);
-      gain.connect(ctx.destination);
+    // 4 Melodic Chime Notes (PA system / Airport Chime)
+    const notes = [
+      { freq: 523.25, time: 0.0, dur: 0.65 }, // C5
+      { freq: 659.25, time: 0.22, dur: 0.65 }, // E5
+      { freq: 783.99, time: 0.44, dur: 0.65 }, // G5
+      { freq: 1046.5, time: 0.68, dur: 1.1 }, // C6
+    ];
 
-      osc.start(start);
-      osc.stop(start + duration);
-    };
+    notes.forEach((n) => {
+      const startTime = now + n.time;
+      const endTime = startTime + n.dur;
 
-    // 3 urgent piercing beeps
-    beep(880, now, 0.14);
-    beep(1046, now + 0.16, 0.14);
-    beep(1318, now + 0.32, 0.28);
+      // 1. Fundamental tone (sine)
+      const osc1 = ctx.createOscillator();
+      osc1.type = 'sine';
+      osc1.frequency.setValueAtTime(n.freq, startTime);
+
+      // 2. Harmonic overtone (2nd harmonic) for bell-like chime warmth
+      const osc2 = ctx.createOscillator();
+      osc2.type = 'sine';
+      osc2.frequency.setValueAtTime(n.freq * 2, startTime);
+
+      // 3. Subtle triangle wave for body
+      const osc3 = ctx.createOscillator();
+      osc3.type = 'triangle';
+      osc3.frequency.setValueAtTime(n.freq, startTime);
+
+      const noteGain = ctx.createGain();
+      noteGain.gain.setValueAtTime(0.0001, startTime);
+      // Soft fast attack (no clicking)
+      noteGain.gain.linearRampToValueAtTime(0.3, startTime + 0.015);
+      // Gentle exponential decay
+      noteGain.gain.exponentialRampToValueAtTime(0.0001, endTime);
+
+      const harmonicGain = ctx.createGain();
+      harmonicGain.gain.setValueAtTime(0.08, startTime);
+
+      const triangleGain = ctx.createGain();
+      triangleGain.gain.setValueAtTime(0.06, startTime);
+
+      osc1.connect(noteGain);
+      osc2.connect(harmonicGain);
+      harmonicGain.connect(noteGain);
+      osc3.connect(triangleGain);
+      triangleGain.connect(noteGain);
+
+      noteGain.connect(lowPass);
+
+      osc1.start(startTime);
+      osc2.start(startTime);
+      osc3.start(startTime);
+
+      osc1.stop(endTime);
+      osc2.stop(endTime);
+      osc3.stop(endTime);
+    });
   } catch (err) {
-    console.warn('Unable to play emergency chime:', err);
+    console.warn('Unable to play announcement chime:', err);
   }
 };
 
 /**
- * Play siren preview for given duration in seconds (defaults to 4 seconds)
+ * Start periodic announcement alert:
+ * Plays sweet melodic chime followed by pleasant voice broadcast, repeating gently every 16 seconds.
  */
-export const playSirenPreview = (durationSeconds = 4): void => {
-  startEmergencySiren();
-  if (autoStopTimer) clearTimeout(autoStopTimer);
-  autoStopTimer = setTimeout(() => {
-    stopEmergencySiren();
-  }, durationSeconds * 1000);
+export const startAnnouncementAlert = (
+  noticeTitle?: string,
+  includeVoice = true
+): (() => void) => {
+  if (isPlaying) {
+    return stopAnnouncementAlert;
+  }
+
+  isPlaying = true;
+
+  const runAnnouncementCycle = () => {
+    // 1. Play sweet melodic chime
+    playAnnouncementChime();
+
+    // 2. Play polite voice announcement after chime ends
+    if (includeVoice) {
+      setTimeout(() => {
+        if (isPlaying) {
+          const spokenText = noticeTitle
+            ? `कृपया ध्यान दें। स्कूल आवश्यक सूचना: ${noticeTitle}`
+            : 'कृपया ध्यान दें, ई.वी.एस. पब्लिक स्कूल की ओर से महत्वपूर्ण सूचना।';
+          speakAnnouncement(spokenText);
+        }
+      }, 1100);
+    }
+  };
+
+  // Immediate cycle
+  runAnnouncementCycle();
+
+  // Gentle repeat every 16 seconds (comfortable, not annoying like a wailing siren)
+  if (announcementIntervalTimer) clearInterval(announcementIntervalTimer);
+  announcementIntervalTimer = setInterval(() => {
+    if (isPlaying) {
+      runAnnouncementCycle();
+    }
+  }, 16000);
+
+  return stopAnnouncementAlert;
 };
+
+/**
+ * Stop announcement sound and voice broadcast cleanly
+ */
+export const stopAnnouncementAlert = (): void => {
+  isPlaying = false;
+  if (announcementIntervalTimer) {
+    clearInterval(announcementIntervalTimer);
+    announcementIntervalTimer = null;
+  }
+
+  stopSpeechAnnouncement();
+
+  try {
+    if (activeChimeGain && activeAudioCtx && activeAudioCtx.state === 'running') {
+      const now = activeAudioCtx.currentTime;
+      activeChimeGain.gain.setValueAtTime(activeChimeGain.gain.value, now);
+      activeChimeGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.1);
+    }
+  } catch (e) {}
+};
+
+/**
+ * Play a quick one-shot announcement preview (chime + optional voice)
+ */
+export const playAnnouncementPreview = (
+  title?: string,
+  withVoice = true
+): void => {
+  unlockAudioContext().then(() => {
+    playAnnouncementChime();
+    if (withVoice) {
+      setTimeout(() => {
+        const text = title
+          ? `कृपया ध्यान दें। स्कूल सूचना: ${title}`
+          : 'कृपया ध्यान दें, स्कूल की ओर से आवश्यक सूचना।';
+        speakAnnouncement(text);
+      }, 1100);
+    }
+  });
+};
+
+// Aliases for full backwards-compatibility with previous siren function names
+export const startEmergencySiren = (noticeTitle?: string): (() => void) =>
+  startAnnouncementAlert(noticeTitle);
+
+export const stopEmergencySiren = (): void =>
+  stopAnnouncementAlert();
+
+export const playEmergencyChime = (): void =>
+  playAnnouncementPreview(undefined, false);
+
+export const playSirenPreview = (_durationSeconds = 4): void =>
+  playAnnouncementPreview(undefined, true);
 
 export const isEmergencySirenPlaying = (): boolean => isPlaying;
+export const isAnnouncementPlaying = (): boolean => isPlaying;

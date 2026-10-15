@@ -630,19 +630,19 @@ export const SchoolNoticeBoard: React.FC<SchoolNoticeBoardProps> = ({
                             stopEmergencySiren();
                             setPlayingSirenNoticeId(null);
                           } else {
-                            startEmergencySiren();
+                            startEmergencySiren(notice.title);
                             setPlayingSirenNoticeId(notice.id);
                           }
                         }}
                         className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 shadow-2xs ${
                           playingSirenNoticeId === notice.id
-                            ? 'bg-rose-600 text-white animate-pulse'
+                            ? 'bg-blue-700 text-white animate-pulse'
                             : 'bg-amber-100 hover:bg-amber-200 text-slate-900 border border-amber-300'
                         }`}
-                        title={playingSirenNoticeId === notice.id ? 'सायरन बंद करें' : 'सायरन ध्वनि बजाएं'}
+                        title={playingSirenNoticeId === notice.id ? 'अनाउंसमेंट बंद करें' : '📢 अनाउंसमेंट टोन सुनें'}
                       >
-                        <i className={`fa-solid ${playingSirenNoticeId === notice.id ? 'fa-volume-xmark text-white' : 'fa-bullhorn text-rose-600'}`}></i>
-                        <span>{playingSirenNoticeId === notice.id ? 'सायरन बंद करें' : '🔊 सायरन'}</span>
+                        <i className={`fa-solid ${playingSirenNoticeId === notice.id ? 'fa-volume-xmark text-white' : 'fa-bullhorn text-blue-800'}`}></i>
+                        <span>{playingSirenNoticeId === notice.id ? 'बंद करें' : '📢 अनाउंसमेंट'}</span>
                       </button>
                     )}
 
@@ -827,10 +827,10 @@ export const SchoolNoticeBoard: React.FC<SchoolNoticeBoardProps> = ({
                   </span>
                   <div>
                     <label htmlFor="emergency-toggle" className="font-black text-slate-900 block text-xs cursor-pointer">
-                      🚨 आपातकालीन सायरन सूचना (Play Siren Audio)
+                      📢 स्कूल उद्घोषणा व सूचना प्रसारण (School Announcement Alert)
                     </label>
                     <span className="text-[11px] text-slate-500 block mt-0.5">
-                      अभिभावकों के पोर्टल पर लाल इमरजेंसी अलर्ट व सायरन ध्वनि सुनाई देगी।
+                      अभिभावकों के पोर्टल पर आकर्षक उद्घोषणा बैनर व मधुर अनाउन्समेंट चाइम/ध्वनि सुनाई देगी।
                     </span>
                   </div>
                 </div>
@@ -840,10 +840,10 @@ export const SchoolNoticeBoard: React.FC<SchoolNoticeBoardProps> = ({
                     type="button"
                     onClick={playEmergencyChime}
                     className="px-2.5 py-1 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold rounded-lg text-[10px] flex items-center gap-1 cursor-pointer shadow-2xs"
-                    title="सायरन टेस्ट ध्वनि सुनें"
+                    title="अनाउंसमेंट टेस्ट ध्वनि सुनें"
                   >
                     <i className="fa-solid fa-volume-high"></i>
-                    <span>टेस्ट साउंड</span>
+                    <span>अनाउंसमेंट टेस्ट</span>
                   </button>
                   <input
                     id="emergency-toggle"
