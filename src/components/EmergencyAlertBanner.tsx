@@ -23,9 +23,12 @@ export const EmergencyAlertBanner: React.FC<EmergencyAlertBannerProps> = ({
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [isSirenActive, setIsSirenActive] = useState<boolean>(false);
   const [userMuted, setUserMuted] = useState<boolean>(false);
+  const [voiceLang, setVoiceLang] = useState<'hi' | 'en'>('hi');
   const sirenStopFnRef = useRef<(() => void) | null>(null);
 
-  const handleStartSiren = (noticeTitle?: string) => {
+  const isIOS = typeof window !== 'undefined' ? /iphone|ipad|ipod/.test(navigator.userAgent.toLowerCase()) : false;
+
+  const handleStartSiren = (noticeTitle?: string, lang: 'hi' | 'en' = voiceLang) => {
     try {
       unlockAudioContext();
       sirenStopFnRef.current = startEmergencySiren(noticeTitle || activeEmergency?.title);
@@ -71,11 +74,10 @@ export const EmergencyAlertBanner: React.FC<EmergencyAlertBannerProps> = ({
 
         // Also register one-touch audio unlock listener for mobile/browsers with strict autoplay policy
         const unlockOnFirstTouch = () => {
-          unlockAudioContext().then(() => {
-            if (!userMuted && !isEmergencySirenPlaying()) {
-              handleStartSiren(emergency.title);
-            }
-          });
+          unlockAudioContext();
+          if (!userMuted && !isEmergencySirenPlaying()) {
+            handleStartSiren(emergency.title);
+          }
           window.removeEventListener('click', unlockOnFirstTouch);
           window.removeEventListener('touchstart', unlockOnFirstTouch);
           window.removeEventListener('keydown', unlockOnFirstTouch);
@@ -210,26 +212,70 @@ export const EmergencyAlertBanner: React.FC<EmergencyAlertBannerProps> = ({
             </div>
 
             {/* Announcement Audio Controls Bar */}
-            <div className="bg-blue-50/80 border-b border-blue-200 px-5 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2 text-blue-950 text-xs font-bold">
-                <i className={`fa-solid ${isSirenActive ? 'fa-bullhorn animate-bounce text-blue-700' : 'fa-bell text-slate-400'}`}></i>
-                <span>{isSirenActive ? '📢 स्कूल अनाउंसमेंट चालू है (Announcement Active)' : 'अनाउंसमेंट ध्वनि बंद है'}</span>
+            <div className="bg-blue-50/90 border-b border-blue-200 px-4 sm:px-6 py-3 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2.5">
+                <div className="flex items-center gap-2 text-blue-950 text-xs font-bold">
+                  <i className={`fa-solid ${isSirenActive ? 'fa-bullhorn animate-bounce text-blue-700' : 'fa-bell text-slate-400'}`}></i>
+                  <span>{isSirenActive ? '📢 स्कूल उद्घोषणा चालू है (Playing Voice)' : 'अनाउंसमेंट ध्वनि बंद है'}</span>
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVoiceLang('hi');
+                      handleStartSiren(activeEmergency?.title, 'hi');
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-xs transition-transform active:scale-95 ${
+                      isSirenActive && voiceLang === 'hi'
+                        ? 'bg-blue-700 text-white'
+                        : 'bg-amber-400 text-slate-950 hover:bg-amber-300'
+                    }`}
+                    title="हिंदी में घोषणा सुनें"
+                  >
+                    <i className="fa-solid fa-volume-high"></i>
+                    <span>📢 सुनें (Hindi)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVoiceLang('en');
+                      handleStartSiren(activeEmergency?.title, 'en');
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-xs transition-transform active:scale-95 ${
+                      isSirenActive && voiceLang === 'en'
+                        ? 'bg-blue-700 text-white'
+                        : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                    }`}
+                    title="Listen announcement in English"
+                  >
+                    <i className="fa-solid fa-language"></i>
+                    <span>Listen (English)</span>
+                  </button>
+
+                  {isSirenActive && (
+                    <button
+                      type="button"
+                      onClick={handleStopSiren}
+                      className="px-3 py-1.5 rounded-xl text-xs font-black bg-rose-600 hover:bg-rose-700 text-white flex items-center gap-1 cursor-pointer shadow-xs transition-transform active:scale-95"
+                    >
+                      <i className="fa-solid fa-volume-xmark"></i>
+                      <span>म्यूट करें</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={toggleSiren}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-xs transition-transform active:scale-95 ${
-                    isSirenActive
-                      ? 'bg-blue-700 text-white hover:bg-blue-800'
-                      : 'bg-amber-400 text-slate-950 hover:bg-amber-300'
-                  }`}
-                >
-                  <i className={`fa-solid ${isSirenActive ? 'fa-volume-xmark' : 'fa-volume-high'}`}></i>
-                  <span>{isSirenActive ? 'म्यूट करें' : '📢 अनाउंसमेंट सुनें'}</span>
-                </button>
-              </div>
+              {/* iPhone specific guidance notice */}
+              {isIOS && (
+                <div className="bg-amber-100/80 border border-amber-300 rounded-lg px-2.5 py-1.5 text-[11px] text-amber-900 flex items-center gap-1.5 font-medium">
+                  <i className="fa-solid fa-circle-exclamation text-amber-600 shrink-0"></i>
+                  <span>
+                    <strong>iPhone यूज़र्स:</strong> आवाज़ सुनने हेतु कृपया iPhone के बाईं ओर का <strong>Silent Mode (Mute Switch)</strong> बंद करें व वॉल्यूम बढ़ाएं।
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Notice Body */}

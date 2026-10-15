@@ -27,7 +27,7 @@ import { AttendanceCalendarModal } from './components/AttendanceCalendarModal';
 import { SchoolNoticeBoard, DEFAULT_SEED_NOTICES } from './components/SchoolNoticeBoard';
 import { VillageRouteAutoManager } from './components/VillageRouteAutoManager';
 import { EmergencyAlertBanner } from './components/EmergencyAlertBanner';
-import { playSirenPreview, playAnnouncementPreview } from './utils/sirenAudio';
+import { playSirenPreview, playAnnouncementPreview, speakAnnouncement, unlockAudioContext } from './utils/sirenAudio';
 import { InstallAppModal } from './components/InstallAppModal';
 import { SchoolNotice } from './types';
 import { fetchFeeMasterDirectGViz } from './utils/feeMaster';
@@ -6246,15 +6246,14 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             <button
                               type="button"
                               onClick={() => {
-                                try {
-                                  window.speechSynthesis.cancel();
-                                  const utter = new SpeechSynthesisUtterance(aiGreeting);
-                                  utter.lang = 'hi-IN';
-                                  window.speechSynthesis.speak(utter);
-                                } catch {}
+                                unlockAudioContext();
+                                speakAnnouncement(aiGreeting, {
+                                  forceLanguage: 'hi',
+                                  englishFallback: `Student daily update: ${aiGreeting}`,
+                                });
                               }}
                               className="w-8 h-8 rounded-xl bg-white/15 hover:bg-white/25 text-white flex items-center justify-center text-xs transition-colors border border-white/20 cursor-pointer"
-                              title="बोलकर सुनें (Listen in Hindi)"
+                              title="बोलकर सुनें (Listen Aloud)"
                             >
                               <i className="fa-solid fa-volume-high text-amber-300"></i>
                             </button>
@@ -6374,28 +6373,46 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-2 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-blue-500/50 justify-end">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                playAnnouncementPreview(emerg.title, true);
-                              }}
-                              className="px-3.5 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black rounded-xl text-xs flex items-center gap-1.5 shadow-md cursor-pointer transition-transform active:scale-95"
-                              title="अनाउंसमेंट ध्वनि सुनें"
-                            >
-                              <i className="fa-solid fa-volume-high text-blue-900 text-sm"></i>
-                              <span>📢 अनाउंसमेंट सुनें</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setParentActiveSection('notices');
-                                window.scrollTo({ top: 0, behavior: 'smooth' });
-                              }}
-                              className="px-4 py-2 bg-white hover:bg-amber-100 text-blue-950 font-black rounded-xl text-xs flex items-center gap-1 shadow-md cursor-pointer transition-transform active:scale-95"
-                            >
-                              <span>पूरी सूचना पढ़ें →</span>
-                            </button>
+                          <div className="flex flex-col sm:items-end gap-1.5 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-blue-500/50 justify-end">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  playAnnouncementPreview(emerg.title, true, 'hi');
+                                }}
+                                className="px-3 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black rounded-xl text-xs flex items-center gap-1.5 shadow-md cursor-pointer transition-transform active:scale-95"
+                                title="हिंदी में घोषणा सुनें"
+                              >
+                                <i className="fa-solid fa-volume-high text-blue-900 text-sm"></i>
+                                <span>📢 सुनें (Hindi)</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  playAnnouncementPreview(emerg.title, true, 'en');
+                                }}
+                                className="px-2.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl text-xs flex items-center gap-1 shadow-md cursor-pointer transition-transform active:scale-95"
+                                title="Listen announcement in English"
+                              >
+                                <i className="fa-solid fa-language text-xs"></i>
+                                <span>English</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setParentActiveSection('notices');
+                                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                                }}
+                                className="px-3.5 py-2 bg-white hover:bg-amber-100 text-blue-950 font-black rounded-xl text-xs flex items-center gap-1 shadow-md cursor-pointer transition-transform active:scale-95"
+                              >
+                                <span>पूरी सूचना →</span>
+                              </button>
+                            </div>
+                            {isIOSDevice && (
+                              <span className="text-[10px] text-amber-200 font-medium">
+                                💡 iPhone: आवाज़ हेतु Silent Switch बंद रखें व Volume बढ़ाएं
+                              </span>
+                            )}
                           </div>
                         </div>
                       );
