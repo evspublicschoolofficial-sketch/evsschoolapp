@@ -305,6 +305,7 @@ async function startServer() {
   const HOMEWORK_FILE = '/tmp/evs_homework.json';
   const BEHAVIOR_FILE = '/tmp/evs_behavior.json';
   const HW_TRACKER_FILE = '/tmp/evs_hw_tracker.json';
+  const STAFF_ATTENDANCE_FILE = '/tmp/evs_staff_attendance.json';
 
   // Persistent deleted students
   const getDeletedStudents = (): string[] => {
@@ -537,6 +538,82 @@ async function startServer() {
     return list;
   };
 
+  // Persistent Staff Attendance Storage
+  const getStaffAttendanceList = (): any[] => {
+    try {
+      if (fs.existsSync(STAFF_ATTENDANCE_FILE)) {
+        return JSON.parse(fs.readFileSync(STAFF_ATTENDANCE_FILE, 'utf-8'));
+      }
+    } catch (e) {
+      console.warn('Error reading staff attendance file:', e);
+    }
+    return [];
+  };
+
+  const saveStaffAttendanceRecord = (item: any): any[] => {
+    const list = getStaffAttendanceList();
+    const userId = String(item.user_id || item.User_ID || '').trim();
+    const date = item.date || item.Date || new Date().toISOString().split('T')[0];
+    const recId = String(item.id || item.ID || `STAFF-ATT-${userId}-${date}`);
+    
+    const nowTimeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+    const normalized = {
+      id: recId,
+      user_id: userId,
+      username: item.username || item.Username || '',
+      name: item.name || item.Name || 'Staff Member',
+      designation: item.designation || item.Designation || 'Teacher',
+      date,
+      check_in_time: item.check_in_time || item.Check_In_Time || nowTimeStr,
+      check_out_time: item.check_out_time || item.Check_Out_Time || null,
+      status: item.status || 'Present',
+      method: item.method || 'School QR Scan',
+      school_code: item.school_code || 'EVS-CAMPUS-2026',
+      location: item.location || 'School Campus Gate',
+      remark: item.remark || item.Note || '',
+      timestamp: item.timestamp || Date.now(),
+      created_at: item.created_at || new Date().toISOString(),
+    };
+
+    const idx = list.findIndex(
+      (a) => a.id === recId || (userId && a.user_id && a.user_id.toLowerCase() === userId.toLowerCase() && a.date === date)
+    );
+
+    if (idx >= 0) {
+      list[idx] = {
+        ...list[idx],
+        ...normalized,
+        // preserve original check_in_time if already set and not provided explicitly
+        check_in_time: list[idx].check_in_time || normalized.check_in_time,
+      };
+    } else {
+      list.unshift(normalized);
+    }
+
+    try {
+      fs.writeFileSync(STAFF_ATTENDANCE_FILE, JSON.stringify(list, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Error saving staff attendance file:', e);
+    }
+
+    // Forward asynchronously to Google Apps Script if active
+    forwardToGoogleAppsScript({
+      action: 'recordStaffAttendance',
+      user_id: normalized.user_id,
+      name: normalized.name,
+      designation: normalized.designation,
+      date: normalized.date,
+      check_in_time: normalized.check_in_time,
+      check_out_time: normalized.check_out_time || '',
+      status: normalized.status,
+      method: normalized.method,
+      last_updated: new Date().toISOString(),
+    }).catch(() => {});
+
+    return list;
+  };
+
   // Endpoints for Local Server Data
   app.get('/api/homework', (_req, res) => {
     res.json({ homework: getHomeworkList() });
@@ -565,6 +642,27 @@ async function startServer() {
   app.post('/api/homework-tracker', (req, res) => {
     const item = req.body;
     const list = saveHwTrackerItem(item);
+    res.json({ success: true, records: list });
+  });
+
+  // Endpoints for Staff Attendance
+  app.get('/api/staff-attendance', (_req, res) => {
+    res.json({ records: getStaffAttendanceList() });
+  });
+
+  app.post('/api/staff-attendance', (req, res) => {
+    const item = req.body;
+    const list = saveStaffAttendanceRecord(item);
+    res.json({ success: true, records: list });
+  });
+
+  app.post('/api/staff-attendance/checkin', (req, res) => {
+    const item = req.body;
+    const list = saveStaffAttendanceRecord({
+      ...item,
+      method: item.method || 'School QR Scan',
+      status: item.status || 'Present',
+    });
     res.json({ success: true, records: list });
   });
 

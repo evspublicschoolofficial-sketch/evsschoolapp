@@ -457,8 +457,8 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
       setEditError('कुल देय राशि अमान्य है।');
       return;
     }
-    if (isNaN(paid) || paid <= 0) {
-      setEditError('कृपया वैध जमा राशि दर्ज करें (जमा राशि 0 से अधिक होनी चाहिए)।');
+    if (isNaN(paid) || paid < 0) {
+      setEditError('कृपया वैध जमा राशि दर्ज करें।');
       return;
     }
 
@@ -578,6 +578,11 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
       fullYearFee: summary.fullYearFee,
       monthlyTuition: summary.monthlyTuition,
       admissionFee: summary.admissionFee,
+      admissionPaid: summary.admissionPaid || 0,
+      admissionDue: summary.admissionDue || 0,
+      tuitionBilled: summary.tuitionBilled || 0,
+      tuitionPaid: summary.tuitionPaid || 0,
+      tuitionDue: summary.tuitionDue || 0,
       otherBilledFees: summary.otherBilledFees || 0,
       itemizedOtherFees: summary.itemizedOtherFees || [],
       totalPaid: summary.totalPaid,
@@ -2038,6 +2043,100 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                       बकाया हटाकर ₹0 करें →
                     </button>
                   )}
+                </div>
+              </div>
+
+              {/* Itemized Fee Head Category Status (Admission, Tuition, Books, Exam, etc.) */}
+              <div className="p-4 rounded-2xl bg-white border border-slate-200/90 shadow-2xs space-y-2.5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs">
+                  <span className="font-black text-slate-800 flex items-center gap-1.5">
+                    <i className="fa-solid fa-layer-group text-blue-900"></i>
+                    <span>मद-वार फीस स्थिति (Fee Head Category-Wise Breakdown)</span>
+                  </span>
+                  <span className="text-[11px] text-slate-400 font-medium">
+                    प्रत्येक शुल्क मद (Admission, Tuition, Books) अलग-अलग खाते में सुरक्षित
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  {/* Head 1: Admission Fee */}
+                  <div className="p-3 rounded-xl bg-amber-50/60 border border-amber-200/80 flex items-center justify-between">
+                    <div>
+                      <div className="text-[11px] font-bold text-amber-950 flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                        <span>प्रवेश शुल्क (Admission Fee)</span>
+                      </div>
+                      <div className="text-xs text-amber-900 mt-0.5">
+                        मानक देय: <strong>₹{studentFeeSummary.admissionFee.toLocaleString('en-IN')}</strong> • जमा: <strong>₹{(studentFeeSummary.admissionPaid || 0).toLocaleString('en-IN')}</strong>
+                      </div>
+                    </div>
+                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${
+                      (studentFeeSummary.admissionDue || 0) <= 0 && studentFeeSummary.admissionFee > 0
+                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                        : (studentFeeSummary.admissionDue || 0) > 0
+                        ? 'bg-rose-100 text-rose-800 border-rose-300'
+                        : 'bg-slate-100 text-slate-700 border-slate-300'
+                    }`}>
+                      {(studentFeeSummary.admissionDue || 0) <= 0 && studentFeeSummary.admissionFee > 0
+                        ? 'पूर्ण चुकता'
+                        : (studentFeeSummary.admissionDue || 0) > 0
+                        ? `बकाया ₹${(studentFeeSummary.admissionDue || 0).toLocaleString('en-IN')}`
+                        : 'माफ / ₹0'}
+                    </span>
+                  </div>
+
+                  {/* Head 2: Monthly Tuition */}
+                  <div className="p-3 rounded-xl bg-blue-50/60 border border-blue-200/80 flex items-center justify-between">
+                    <div>
+                      <div className="text-[11px] font-bold text-blue-950 flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-blue-600"></span>
+                        <span>मासिक शिक्षण शुल्क ({studentFeeSummary.elapsedMonths} माह)</span>
+                      </div>
+                      <div className="text-xs text-blue-900 mt-0.5">
+                        देय: <strong>₹{(studentFeeSummary.tuitionBilled || (studentFeeSummary.monthlyTuition * studentFeeSummary.elapsedMonths)).toLocaleString('en-IN')}</strong> • जमा: <strong>₹{(studentFeeSummary.tuitionPaid || 0).toLocaleString('en-IN')}</strong>
+                      </div>
+                    </div>
+                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${
+                      (studentFeeSummary.tuitionDue || 0) <= 0
+                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                        : 'bg-rose-100 text-rose-800 border-rose-300'
+                    }`}>
+                      {(studentFeeSummary.tuitionDue || 0) <= 0
+                        ? 'पूर्ण चुकता'
+                        : `बकाया ₹${(studentFeeSummary.tuitionDue || 0).toLocaleString('en-IN')}`}
+                    </span>
+                  </div>
+
+                  {/* Head 3: Books, Exams & Other */}
+                  <div className="p-3 rounded-xl bg-purple-50/60 border border-purple-200/80 flex items-center justify-between">
+                    <div>
+                      <div className="text-[11px] font-bold text-purple-950 flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-purple-600"></span>
+                        <span>पुस्तकें / परीक्षा / अन्य मदें</span>
+                      </div>
+                      <div className="text-xs text-purple-900 mt-0.5">
+                        देय: <strong>₹{studentFeeSummary.otherBilledFees.toLocaleString('en-IN')}</strong>
+                        {studentFeeSummary.itemizedOtherFees?.length > 0 && (
+                          <span className="text-[10px] text-purple-700 block truncate max-w-[200px]" title={studentFeeSummary.itemizedOtherFees.map(f => `${f.type}: ₹${f.paid}/${f.amount}`).join(' • ')}>
+                            {studentFeeSummary.itemizedOtherFees.map(f => `${f.type}: ₹${f.paid}/${f.amount}`).join(' • ')}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${
+                      studentFeeSummary.otherBilledFees === 0
+                        ? 'bg-slate-100 text-slate-600 border-slate-300'
+                        : (studentFeeSummary.itemizedOtherFees.reduce((acc, f) => acc + f.balance, 0) <= 0)
+                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                        : 'bg-rose-100 text-rose-800 border-rose-300'
+                    }`}>
+                      {studentFeeSummary.otherBilledFees === 0
+                        ? 'कोई देय नहीं'
+                        : (studentFeeSummary.itemizedOtherFees.reduce((acc, f) => acc + f.balance, 0) <= 0)
+                        ? 'पूर्ण चुकता'
+                        : `बकाया ₹${studentFeeSummary.itemizedOtherFees.reduce((acc, f) => acc + f.balance, 0).toLocaleString('en-IN')}`}
+                    </span>
+                  </div>
                 </div>
               </div>
 

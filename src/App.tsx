@@ -29,7 +29,10 @@ import { VillageRouteAutoManager } from './components/VillageRouteAutoManager';
 import { EmergencyAlertBanner } from './components/EmergencyAlertBanner';
 import { playSirenPreview, playAnnouncementPreview, speakAnnouncement, unlockAudioContext } from './utils/sirenAudio';
 import { InstallAppModal } from './components/InstallAppModal';
-import { SchoolNotice } from './types';
+import { SchoolNotice, StaffAttendanceRecord } from './types';
+import { SchoolQRCodeModal } from './components/SchoolQRCodeModal';
+import { StaffAttendanceScannerModal } from './components/StaffAttendanceScannerModal';
+import { StaffAttendanceView } from './components/StaffAttendanceView';
 import { fetchFeeMasterDirectGViz } from './utils/feeMaster';
 import { computeStudentFeeMetrics, computeSchoolFeeTotals, normalizeStudentId, reconcileFeeRecords, calculateStudentSummary } from './utils/feeCalculation';
 import { realtimeSync } from './utils/realtimeSync';
@@ -169,6 +172,7 @@ export const CACHE_KEY_FEES_BALANCES = 'evs_cache_fees_balances';
 export const CACHE_KEY_HW_TRACKER = 'evs_cache_hw_tracker';
 export const CACHE_KEY_BEHAVIOR = 'evs_cache_behavior';
 export const CACHE_KEY_USERS = 'evs_cache_users';
+export const CACHE_KEY_STAFF_ATTENDANCE = 'evs_cache_staff_attendance';
 export const CACHE_KEY_TIMESTAMP = 'evs_cache_timestamp';
 export const CACHE_TTL_MS = 60 * 60 * 1000; // 1 Hour Cache Expiration
 
@@ -1486,15 +1490,23 @@ export default function App() {
   const [teacherLoginError, setTeacherLoginError] = useState<string | null>(null);
   const [teacherLoginSubmitting, setTeacherLoginSubmitting] = useState<boolean>(false);
   const [showTeacherPassword, setShowTeacherPassword] = useState<boolean>(false);
-  const [teacherPortalTab, setTeacherPortalTab] = useState<'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior'>(() => {
+  const [teacherPortalTab, setTeacherPortalTab] = useState<'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior' | 'staff_attendance'>(() => {
     try {
       const saved = localStorage.getItem('evs_teacher_portal_tab');
-      if (saved && ['upload', 'tracker', 'submissions', 'notices', 'behavior'].includes(saved)) {
-        return saved as 'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior';
+      if (saved && ['upload', 'tracker', 'submissions', 'notices', 'behavior', 'staff_attendance'].includes(saved)) {
+        return saved as 'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior' | 'staff_attendance';
       }
     } catch {}
     return 'upload';
   });
+
+  // Staff Attendance States (School QR Code scanning & presence records)
+  const [staffAttendanceList, setStaffAttendanceList] = useState<StaffAttendanceRecord[]>(() =>
+    getCachedData<StaffAttendanceRecord[]>(CACHE_KEY_STAFF_ATTENDANCE, [])
+  );
+  const [loadingStaffAttendance, setLoadingStaffAttendance] = useState<boolean>(false);
+  const [isStaffAttendanceScannerOpen, setIsStaffAttendanceScannerOpen] = useState<boolean>(false);
+  const [isSchoolQrModalOpen, setIsSchoolQrModalOpen] = useState<boolean>(false);
 
   const [isRefreshingTeacherPortal, setIsRefreshingTeacherPortal] = useState<boolean>(false);
   const [behaviorDateFilter, setBehaviorDateFilter] = useState<string>('');
@@ -1573,10 +1585,10 @@ export default function App() {
   const [managerSelectedFeeStudent, setManagerSelectedFeeStudent] = useState<Student | null>(null);
 
   // Manager Dashboard State
-  const [managerTab, setManagerTab] = useState<'students' | 'homework' | 'behavior' | 'fees' | 'users' | 'vanTracking' | 'attendance' | 'notices' | 'autoTransport'>(() => {
+  const [managerTab, setManagerTab] = useState<'students' | 'homework' | 'behavior' | 'fees' | 'users' | 'vanTracking' | 'attendance' | 'notices' | 'autoTransport' | 'staffAttendance'>(() => {
     try {
       const saved = localStorage.getItem('evs_manager_tab');
-      if (saved && ['students', 'homework', 'behavior', 'fees', 'users', 'vanTracking', 'attendance', 'notices', 'autoTransport'].includes(saved)) {
+      if (saved && ['students', 'homework', 'behavior', 'fees', 'users', 'vanTracking', 'attendance', 'notices', 'autoTransport', 'staffAttendance'].includes(saved)) {
         return saved as any;
       }
     } catch {}
@@ -2576,8 +2588,9 @@ export default function App() {
         fetchStudentBehavior(false, true),
         fetchStudents(true),
         fetchSchoolNotices(),
+        fetchStaffAttendance(true),
       ]);
-      setSyncToastMessage('✅ टीचर पोर्टल (होमवर्क, ट्रैकर, आचरण व छात्र) ताज़ा हो गया!');
+      setSyncToastMessage('✅ टीचर पोर्टल (होमवर्क, ट्रैकर, आचरण, छात्र व उपस्थिति) ताज़ा हो गया!');
       setTimeout(() => setSyncToastMessage(null), 3500);
     } catch (e) {
       console.warn('Teacher portal refresh note:', e);
@@ -2589,8 +2602,108 @@ export default function App() {
     }
   };
 
+  // Staff Attendance Fetch & Check-In Handlers
+  const fetchStaffAttendance = async (silent = false): Promise<StaffAttendanceRecord[]> => {
+    if (!silent) setLoadingStaffAttendance(true);
+    try {
+      const res = await fetch(`/api/staff-attendance?_t=${Date.now()}`);
+      if (res.ok) {
+        const data = await res.json();
+        const records = (data?.records || []) as StaffAttendanceRecord[];
+        if (records.length > 0 || staffAttendanceList.length === 0) {
+          setStaffAttendanceList(records);
+          try {
+            localStorage.setItem(CACHE_KEY_STAFF_ATTENDANCE, JSON.stringify(records));
+          } catch {}
+          return records;
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to fetch staff attendance:', e);
+    } finally {
+      if (!silent) setLoadingStaffAttendance(false);
+    }
+    return staffAttendanceList;
+  };
+
+  const handleStaffCheckInSuccess = async (rec: Partial<StaffAttendanceRecord>, isCheckOut = false) => {
+    const now = new Date();
+    const dateStr = rec.date || now.toISOString().split('T')[0];
+    const timeStr = rec.check_in_time || now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const recId = rec.id || `STAFF-ATT-${rec.user_id}-${dateStr}`;
+
+    const newRecord: StaffAttendanceRecord = {
+      id: recId,
+      user_id: String(rec.user_id || ''),
+      username: rec.username || '',
+      name: rec.name || 'Staff Member',
+      designation: rec.designation || 'Teacher',
+      date: dateStr,
+      check_in_time: timeStr,
+      check_out_time: isCheckOut ? (rec.check_out_time || timeStr) : undefined,
+      status: rec.status || 'Present',
+      method: rec.method || 'School QR Scan',
+      school_code: rec.school_code || 'EVS-CAMPUS-2026',
+      location: rec.location || 'School Campus Gate',
+      remark: rec.remark || '',
+      timestamp: Date.now(),
+      created_at: new Date().toISOString(),
+    };
+
+    setStaffAttendanceList((prev) => {
+      const idx = prev.findIndex(
+        (a) => a.id === recId || (a.user_id === newRecord.user_id && a.date === dateStr)
+      );
+      let updated: StaffAttendanceRecord[];
+      if (idx >= 0) {
+        updated = [...prev];
+        updated[idx] = {
+          ...updated[idx],
+          ...newRecord,
+          check_in_time: updated[idx].check_in_time || newRecord.check_in_time,
+          check_out_time: isCheckOut ? (rec.check_out_time || timeStr) : updated[idx].check_out_time,
+        };
+      } else {
+        updated = [newRecord, ...prev];
+      }
+      try {
+        localStorage.setItem(CACHE_KEY_STAFF_ATTENDANCE, JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
+    try {
+      await fetch('/api/staff-attendance/checkin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newRecord),
+      });
+      setSyncToastMessage(
+        isCheckOut
+          ? `✅ प्रस्थान समय (${timeStr}) दर्ज हो गया!`
+          : `✅ उपस्थिति (${timeStr}) सफलतापूर्वक दर्ज हुई!`
+      );
+      setTimeout(() => setSyncToastMessage(null), 3500);
+    } catch (e) {
+      console.warn('Could not post staff attendance to server:', e);
+    }
+  };
+
+  // Today's attendance record for current logged-in teacher
+  const myTodayAttendanceRecord = useMemo(() => {
+    if (!teacherUser) return null;
+    const myId = String(teacherUser.User_ID || teacherUser.Mobile_number || '').trim().toLowerCase();
+    const myName = (teacherUser.Name || '').trim().toLowerCase();
+    const todayStr = new Date().toISOString().split('T')[0];
+    return staffAttendanceList.find(
+      (r) =>
+        r.date === todayStr &&
+        (String(r.user_id).trim().toLowerCase() === myId || (myName && r.name.toLowerCase() === myName))
+    );
+  }, [staffAttendanceList, teacherUser]);
+
   // Switch tabs in Teacher Portal with automatic tab-specific data refresh
-  const handleSelectTeacherTab = (tab: 'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior') => {
+  const handleSelectTeacherTab = (tab: 'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior' | 'staff_attendance') => {
     setTeacherPortalTab(tab);
     if (tab === 'tracker') {
       fetchHomeworkTracker(false, true);
@@ -2598,6 +2711,8 @@ export default function App() {
       fetchHomework(false, false);
     } else if (tab === 'behavior') {
       fetchStudentBehavior(false, true);
+    } else if (tab === 'staff_attendance') {
+      fetchStaffAttendance(true);
     }
   };
 
@@ -2706,6 +2821,7 @@ export default function App() {
         fetchHomeworkTracker(),
         fetchStudentBehavior(),
         fetchUsers(),
+        fetchStaffAttendance(true),
       ]);
       const now = Date.now();
       setLastSyncTimestamp(now);
@@ -8245,7 +8361,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                               <tr className="bg-[#0c2340] text-white">
                                 <th className="px-3.5 py-3 font-semibold">रसीद सं. (Receipt #)</th>
                                 <th className="px-3.5 py-3 font-semibold">दिनांक (Date)</th>
-                                <th className="px-3.5 py-3 font-semibold">महीना/विवरण (Head)</th>
+                                <th className="px-3.5 py-3 font-semibold">शुल्क विवरण व अवधि (Fee Head & Period)</th>
                                 <th className="px-3.5 py-3 font-semibold">माध्यम (Mode)</th>
                                 <th className="px-3.5 py-3 font-semibold text-right">जमा राशि (Amount)</th>
                                 <th className="px-3.5 py-3 font-semibold">प्राप्तकर्ता (Collector)</th>
@@ -8259,7 +8375,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                 const amt = Number(fee.Amount_Paid || 0);
                                 const mode = fee.Payment_Mode || 'Cash';
                                 const collector = fee.Received_By || 'School Office';
-                                const monthHead = fee.Month || fee.Fee_Type || 'School Tuition Fee';
+                                const headTitle = fee.Fee_Type || 'Monthly Tuition Fee';
+                                const periodStr = fee.Month || '';
 
                                 return (
                                   <tr key={receiptId + idx} className="hover:bg-slate-50 transition-colors">
@@ -8270,7 +8387,27 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                       {dateStr}
                                     </td>
                                     <td className="px-3.5 py-3 font-medium text-slate-900">
-                                      {monthHead}
+                                      <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                                        <span className={`w-2 h-2 rounded-full shrink-0 ${
+                                          /(admission|प्रवेश)/i.test(headTitle) ? 'bg-amber-500' :
+                                          /(book|पुस्तक)/i.test(headTitle) ? 'bg-indigo-500' :
+                                          /(exam|परीक्षा)/i.test(headTitle) ? 'bg-purple-500' :
+                                          /(uniform|यूनिफॉर्म)/i.test(headTitle) ? 'bg-teal-500' :
+                                          /(advance|अग्रिम)/i.test(headTitle) ? 'bg-purple-600' :
+                                          'bg-blue-600'
+                                        }`}></span>
+                                        <span>{headTitle}</span>
+                                      </div>
+                                      {periodStr && (
+                                        <div className="text-[11px] text-slate-500 font-medium pl-3.5">
+                                          अवधि: {periodStr}
+                                        </div>
+                                      )}
+                                      {(fee as any).Allocations_Summary && (
+                                        <div className="text-[10px] text-indigo-700 font-bold pl-3.5">
+                                          {(fee as any).Allocations_Summary}
+                                        </div>
+                                      )}
                                     </td>
                                     <td className="px-3.5 py-3 whitespace-nowrap">
                                       <span className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-700 text-[10px] font-bold">
@@ -8669,12 +8806,45 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 self-end sm:self-auto">
+              <div className="flex items-center gap-2 self-end sm:self-auto flex-wrap">
+                {/* Staff Attendance Status & Quick Check-In */}
+                {myTodayAttendanceRecord ? (
+                  <button
+                    type="button"
+                    onClick={() => handleSelectTeacherTab('staff_attendance')}
+                    className="px-3.5 py-1.5 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/40 text-emerald-300 text-xs font-bold flex items-center gap-1.5 border border-emerald-400/40 cursor-pointer shadow-xs"
+                    title="आपकी आज की उपस्थिति दर्ज है - विवरण देखें"
+                  >
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span>उपस्थित ({myTodayAttendanceRecord.check_in_time})</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setIsStaffAttendanceScannerOpen(true)}
+                    className="px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-md active:scale-95 cursor-pointer"
+                    title="स्कूल QR कोड स्कैन करके आज की हाजिरी लगाएं"
+                  >
+                    <i className="fa-solid fa-camera"></i>
+                    <span>📷 स्कूल QR हाजिरी</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setIsSchoolQrModalOpen(true)}
+                  className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-amber-300 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer border border-white/20"
+                  title="स्कूल उपस्थिति QR कोड पोस्टर देखें व प्रिंट करें"
+                >
+                  <i className="fa-solid fa-qrcode"></i>
+                  <span className="hidden md:inline">स्कूल QR पोस्टर</span>
+                </button>
+
                 <button
                   onClick={handleRefreshTeacherPortal}
                   disabled={isRefreshingTeacherPortal}
                   className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm active:scale-95 disabled:opacity-50"
-                  title="टीचर पोर्टल का पूरा डेटा (होमवर्क, ट्रैकर, आचरण, छात्र) ताज़ा करें"
+                  title="टीचर पोर्टल का पूरा डेटा (होमवर्क, ट्रैकर, आचरण, छात्र व उपस्थिति) ताज़ा करें"
                 >
                   <i className={`fa-solid fa-rotate-right ${isRefreshingTeacherPortal ? 'fa-spin text-amber-300' : ''}`}></i>
                   <span>{isRefreshingTeacherPortal ? 'रिफ्रेश हो रहा है...' : 'डेटा रिफ्रेश करें'}</span>
@@ -8741,6 +8911,27 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
             {/* Teacher Sub-Navigation Tabs */}
             <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-2">
+              <button
+                onClick={() => handleSelectTeacherTab('staff_attendance')}
+                className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                  teacherPortalTab === 'staff_attendance'
+                    ? 'bg-[#0c2340] text-amber-300 shadow-sm ring-2 ring-amber-400/50'
+                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                }`}
+              >
+                <i className="fa-solid fa-id-card-clip text-amber-400"></i>
+                <span>स्टाफ हाजिरी (Staff Attendance)</span>
+                {myTodayAttendanceRecord ? (
+                  <span className="px-2 py-0.2 rounded-full bg-emerald-500/20 text-emerald-700 text-[11px] font-bold">
+                    ✓ उपस्थित
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.2 rounded-full bg-amber-500/20 text-amber-800 text-[11px] font-bold">
+                    चेक-इन
+                  </span>
+                )}
+              </button>
+
               <button
                 onClick={() => handleSelectTeacherTab('upload')}
                 className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
@@ -9940,6 +10131,18 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 </div>
               </div>
             )}
+
+            {/* TAB 6: STAFF ATTENDANCE & QR CHECK-IN (स्टाफ हाजिरी) */}
+            {teacherPortalTab === 'staff_attendance' && teacherUser && (
+              <StaffAttendanceView
+                currentUser={teacherUser}
+                allStaffUsers={usersList}
+                attendanceRecords={staffAttendanceList}
+                onOpenScanner={() => setIsStaffAttendanceScannerOpen(true)}
+                onOpenSchoolQr={() => setIsSchoolQrModalOpen(true)}
+                onManualCheckIn={handleStaffCheckInSuccess}
+              />
+            )}
           </div>
         )}
 
@@ -10270,6 +10473,19 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               >
                 <i className="fa-solid fa-id-card-clip text-amber-600"></i>
                 <span>Staff & Users Sheet ({filteredUsers.length})</span>
+              </button>
+
+              <button
+                id="manager-tab-staff-attendance"
+                onClick={() => setManagerTab('staffAttendance')}
+                className={`pb-3 px-3 text-xs sm:text-sm font-bold flex items-center gap-2 border-b-2 cursor-pointer transition-colors ${
+                  managerTab === 'staffAttendance'
+                    ? 'border-blue-900 text-blue-900'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <i className="fa-solid fa-clipboard-user text-emerald-600"></i>
+                <span>स्टाफ उपस्थिति (Staff Attendance)</span>
               </button>
 
               <button
@@ -11427,6 +11643,19 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   )}
                 </div>
               </div>
+            )}
+
+            {/* VIEW 5B: STAFF ATTENDANCE (School QR & Staff Roster) */}
+            {managerTab === 'staffAttendance' && (
+              <StaffAttendanceView
+                currentUser={managerUser || { Name: 'School Manager', Designation: 'Manager', User_ID: 'M1', Username: 'manager', Mobile_number: '' }}
+                allStaffUsers={usersList}
+                attendanceRecords={staffAttendanceList}
+                onOpenScanner={() => setIsStaffAttendanceScannerOpen(true)}
+                onOpenSchoolQr={() => setIsSchoolQrModalOpen(true)}
+                onManualCheckIn={handleStaffCheckInSuccess}
+                isManager={true}
+              />
             )}
 
             {/* VIEW 6: VAN LIVE TRACKING */}
@@ -12605,6 +12834,24 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         isOpen={showInstallModal}
         onClose={() => setShowInstallModal(false)}
       />
+
+      {/* School Official Staff Attendance QR Code Poster Modal */}
+      <SchoolQRCodeModal
+        isOpen={isSchoolQrModalOpen}
+        onClose={() => setIsSchoolQrModalOpen(false)}
+        schoolName="E.V.S. PUBLIC SCHOOL"
+      />
+
+      {/* Staff QR Attendance Scanner Modal */}
+      {(teacherUser || managerUser) && (
+        <StaffAttendanceScannerModal
+          isOpen={isStaffAttendanceScannerOpen}
+          onClose={() => setIsStaffAttendanceScannerOpen(false)}
+          currentUser={teacherUser || managerUser || { Name: 'Staff Member', Designation: 'Staff', User_ID: 'STAFF1', Username: 'staff', Mobile_number: '' }}
+          todayRecord={myTodayAttendanceRecord}
+          onCheckInSuccess={handleStaffCheckInSuccess}
+        />
+      )}
 
       {/* Floating iPhone Quick Install Pill */}
       {isIOSDevice && !isStandaloneApp && (

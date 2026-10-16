@@ -103,3 +103,21 @@ export interface SchoolNotice {
   isPinned?: boolean;
   isEmergency?: boolean;
 }
+
+export interface StaffAttendanceRecord {
+  id: string;
+  user_id: string;
+  username?: string;
+  name: string;
+  designation: string;
+  date: string; // YYYY-MM-DD
+  check_in_time: string; // e.g. "08:30 AM"
+  check_out_time?: string; // e.g. "02:30 PM"
+  status: 'Present' | 'Late' | 'Half-Day' | 'Absent' | 'On-Duty' | 'Leave';
+  method: 'School QR Scan' | 'Manual' | 'Manager Override';
+  school_code?: string;
+  location?: string;
+  remark?: string;
+  timestamp: number;
+  created_at: string;
+}

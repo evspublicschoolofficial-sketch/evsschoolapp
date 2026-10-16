@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { StudentRecordForScan } from './StudentQRScannerModal';
-import { computeStudentFeeMetrics } from '../utils/feeCalculation';
+import { computeStudentFeeMetrics, isTuitionFeeRecord } from '../utils/feeCalculation';
 import {
   getStandardFeeAmount,
   isFreeStudent,
@@ -25,13 +25,13 @@ interface AddFeeModalProps {
   initialSelectedStudentId?: string;
 }
 
-const MONTHS_LIST = [
+export const MONTHS_LIST = [
   'April', 'May', 'June', 'July', 'August', 'September',
   'October', 'November', 'December', 'January', 'February', 'March',
   'Quarter 1 (Apr-Jun)', 'Quarter 2 (Jul-Sep)', 'Quarter 3 (Oct-Dec)', 'Quarter 4 (Jan-Mar)', 'Full Academic Session'
 ];
 
-const FEE_TYPES = [
+export const FEE_TYPES = [
   'Monthly Tuition Fee (मासिक शिक्षण शुल्क)',
   'Advance Fee Deposit (अग्रिम शुल्क जमा)',
   'Admission Fee (प्रवेश शुल्क)',
@@ -43,6 +43,90 @@ const FEE_TYPES = [
   'Late Fee / Fine (विलंब शुल्क)',
   'Miscellaneous / Other (अन्य)',
 ];
+
+/**
+ * Returns dynamic period options and default period tailored to each specific fee type.
+ * For example, Admission Fee defaults to Session/One-Time, Books to Book Set/Session, etc.
+ */
+export const getPeriodsForFeeType = (selectedFeeType: string): { defaultPeriod: string; options: string[] } => {
+  const norm = selectedFeeType.toLowerCase();
+  if (norm.includes('admission') || norm.includes('प्रवेश')) {
+    return {
+      defaultPeriod: 'सत्र 2026-27 (प्रवेश शुल्क / Annual)',
+      options: [
+        'सत्र 2026-27 (प्रवेश शुल्क / Annual)',
+        'एकमुश्त (One-Time Admission)',
+        'April (प्रवेश)', 'May (प्रवेश)', 'June (प्रवेश)', 'July (प्रवेश)',
+        'August (प्रवेश)', 'September (प्रवेश)', 'October (प्रवेश)',
+        'November (प्रवेश)', 'December (प्रवेश)', 'January (प्रवेश)',
+        'February (प्रवेश)', 'March (प्रवेश)'
+      ],
+    };
+  }
+  if (norm.includes('book') || norm.includes('पुस्तक') || norm.includes('stationary')) {
+    return {
+      defaultPeriod: 'सत्र 2026-27 (पुस्तक सेट / Books Set)',
+      options: [
+        'सत्र 2026-27 (पुस्तक सेट / Books Set)',
+        'एकमुश्त (One-Time)',
+        'April (पुस्तकें)', 'May (पुस्तकें)', 'June (पुस्तकें)', 'July (पुस्तकें)',
+        'August (पुस्तकें)', 'September (पुस्तकें)', 'October (पुस्तकें)',
+        'November (पुस्तकें)', 'December (पुस्तकें)', 'January (पुस्तकें)',
+        'February (पुस्तकें)', 'March (पुस्तकें)'
+      ],
+    };
+  }
+  if (norm.includes('exam') || norm.includes('परीक्षा')) {
+    return {
+      defaultPeriod: 'Half-Yearly Exam (छमाही परीक्षा)',
+      options: [
+        'Half-Yearly Exam (छमाही परीक्षा)',
+        'Annual Exam (वार्षिक परीक्षा)',
+        'Quarter 1 Exam (प्रथम त्रैमासिक)',
+        'Quarter 2 Exam (द्वितीय त्रैमासिक)',
+        'Unit Test 1',
+        'Unit Test 2',
+        'Full Session Exam (वार्षिक)',
+        'September (परीक्षा)', 'February (परीक्षा)', 'March (वार्षिक परीक्षा)'
+      ],
+    };
+  }
+  if (norm.includes('uniform') || norm.includes('यूनिफॉर्म')) {
+    return {
+      defaultPeriod: 'सत्र 2026-27 (यूनिफॉर्म सेट)',
+      options: [
+        'सत्र 2026-27 (यूनिफॉर्म सेट)',
+        'Winter Uniform (सर्दियों की वर्दी)',
+        'Summer Uniform (गर्मियों की वर्दी)',
+        'एकमुश्त (One-Time)'
+      ],
+    };
+  }
+  if (norm.includes('annual') || norm.includes('वार्षिक')) {
+    return {
+      defaultPeriod: 'Full Academic Session (वार्षिक शुल्क)',
+      options: [
+        'Full Academic Session (वार्षिक शुल्क)',
+        'सत्र 2026-27',
+        'Term 1',
+        'Term 2'
+      ],
+    };
+  }
+  if (norm.includes('advance') || norm.includes('अग्रिम')) {
+    return {
+      defaultPeriod: 'Advance Fee Deposit (अग्रिम जमा)',
+      options: [
+        'Advance Fee Deposit (अग्रिम जमा)',
+        ...MONTHS_LIST
+      ],
+    };
+  }
+  return {
+    defaultPeriod: 'April',
+    options: MONTHS_LIST,
+  };
+};
 
 export const AddFeeModal: React.FC<AddFeeModalProps> = ({
   isOpen,
@@ -130,9 +214,12 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
     const baseMonthlyRate = getStandardFeeAmount(selectedStudent.Class, 'Monthly Tuition Fee', selectedStudent as any) || 600;
     const effectiveMonthlyRate = Math.max(0, baseMonthlyRate - monthlyDiscount);
 
-    // Map payments and discounts per month
+    // Map payments and discounts per month (STRICTLY for Tuition records)
+    // Non-tuition fees (Admission, Books, Exam, Uniform, etc.) must NEVER settle monthly tuition!
     const settledPerMonth: Record<string, number> = {};
     stRecords.forEach((r) => {
+      if (!isTuitionFeeRecord(r.Fee_Type)) return;
+
       const m = String(r.Month || '').trim();
       const paid = Number(r.Amount_Paid) || 0;
       const discount = Number((r as any).Discount_Amount || (r as any).Discount || 0) || 0;
@@ -426,7 +513,7 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
         Payment_Mode: finalPaymentMode,
         Received_By: receivedBy.trim(),
         Allocations_Summary: multiMonthResult ? multiMonthResult.coveredMonthsSummary : undefined,
-        Notes: multiMonthResult?.partialMonthNote || remarks || (numPaidAmount === 0 ? 'Monthly Fee Bill (Due)' : (freeStudentInfo.isFree ? '100% Fee Waived' : undefined)),
+        Notes: multiMonthResult?.partialMonthNote || remarks || (numPaidAmount === 0 ? `${cleanFeeType} Due (बकाया)` : (freeStudentInfo.isFree ? '100% Fee Waived' : undefined)),
       };
 
       await onFeeAdded(newRec, sendWhatsAppImmediate);
@@ -775,6 +862,18 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
                   const val = e.target.value;
                   setFeeType(val);
                   setUserManuallyEditedPaid(false);
+                  const periods = getPeriodsForFeeType(val);
+                  // Automatically switch the period when selecting non-tuition fees
+                  if (!val.toLowerCase().includes('tuition') && !val.includes('शिक्षण')) {
+                    setMonth(periods.defaultPeriod);
+                  } else {
+                    const curMonthIdx = new Date().getMonth();
+                    const monthNames = [
+                      'January', 'February', 'March', 'April', 'May', 'June',
+                      'July', 'August', 'September', 'October', 'November', 'December'
+                    ];
+                    setMonth(monthNames[curMonthIdx] || 'September');
+                  }
                   if (val.includes('Advance') || val.includes('अग्रिम')) {
                     setIsAdvanceMode(true);
                     setTotalAmount('0');
@@ -794,15 +893,20 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                माह / अवधि (Fee Month) <span className="text-rose-500">*</span>
+              <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
+                <span>माह / अवधि (Fee Period) <span className="text-rose-500">*</span></span>
+                {(!feeType.toLowerCase().includes('tuition') && !feeType.includes('शिक्षण') && !isAdvanceMode) && (
+                  <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.2 rounded border border-amber-200">
+                    एकमुश्त / विशेष मद
+                  </span>
+                )}
               </label>
               <select
                 value={month}
                 onChange={(e) => setMonth(e.target.value)}
                 className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs focus:border-blue-800 outline-none bg-white font-medium"
               >
-                {MONTHS_LIST.map((m) => (
+                {getPeriodsForFeeType(feeType).options.map((m) => (
                   <option key={m} value={m}>
                     {m}
                   </option>
@@ -810,6 +914,16 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
               </select>
             </div>
           </div>
+
+          {/* Fee Head Segregation Confirmation Banner */}
+          {(!feeType.toLowerCase().includes('tuition') && !feeType.includes('शिक्षण') && !isAdvanceMode) && (
+            <div className="p-2.5 rounded-xl bg-blue-50/80 border border-blue-200 text-blue-900 text-[11px] flex items-center gap-2">
+              <i className="fa-solid fa-circle-check text-blue-600 text-sm shrink-0"></i>
+              <span>
+                यह राशि केवल <strong>{feeType.split('(')[0].trim()}</strong> खाते में जमा होगी। यह किसी भी माह की मासिक ट्यूशन फीस में नहीं कटेगी।
+              </span>
+            </div>
+          )}
 
           {/* 4. MULTI-MONTH CHRONOLOGICAL AUTO-DISTRIBUTION PANEL */}
           {isMultiMonthMode && (

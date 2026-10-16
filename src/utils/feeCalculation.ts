@@ -6,6 +6,11 @@ export interface StudentFeeMetrics {
   fullYearFee?: number;    // Full 12-month session fee
   monthlyTuition?: number; // Detected monthly tuition
   admissionFee?: number;   // Standard or custom admission fee
+  admissionPaid?: number;  // Paid toward admission fee
+  admissionDue?: number;   // Balance due on admission fee
+  tuitionBilled?: number;  // Monthly tuition billed till running month
+  tuitionPaid?: number;    // Paid toward monthly tuition
+  tuitionDue?: number;     // Balance due on monthly tuition
   otherBilledFees?: number;// Non-tuition fees billed (Books & Stationery, Exam, Uniform, etc.)
   itemizedOtherFees?: Array<{ type: string; amount: number; paid: number; balance: number }>;
   totalPaid: number;       // SUM of Amount_Paid
@@ -229,6 +234,11 @@ export interface StudentSummaryResult {
   elapsedMonths: number;
   monthlyTuition: number;
   admissionFee: number;
+  admissionPaid: number;         // Amount paid strictly toward admission fee
+  admissionDue: number;          // Balance due strictly on admission fee
+  tuitionBilled: number;         // Monthly tuition billed till running month
+  tuitionPaid: number;           // Amount paid strictly toward monthly tuition
+  tuitionDue: number;            // Balance due strictly on monthly tuition
   otherBilledFees: number;       // Non-tuition billed fees (Books & Stationery, Exam, Uniform, etc.)
   itemizedOtherFees: Array<{ type: string; amount: number; paid: number; balance: number }>;
   totalBilledSessionFee: number; // Fees strictly till current running month (Tuition + Admission + Books/Other)
@@ -243,6 +253,34 @@ export interface StudentSummaryResult {
   recordsCount: number;
   records: FeeCollectionRecord[];
 }
+
+/**
+ * Check if a fee record is strictly a monthly tuition fee record.
+ * One-time / non-tuition fees (Admission, Books, Exam, Uniform, Transport, etc.) must NEVER settle monthly tuition.
+ */
+export const isTuitionFeeRecord = (feeType?: string): boolean => {
+  const clean = String(feeType || '').trim().toLowerCase();
+  if (!clean) return true;
+  if (/(admission|प्रवेश|book|पुस्तक|exam|परीक्षा|uniform|यूनिफॉर्म|annual|वार्षिक|transport|वाहन|bus|late fee|fine|advance|अग्रिम|miscellaneous|अन्य)/i.test(clean)) {
+    return false;
+  }
+  return true;
+};
+
+export const isAdmissionFeeRecord = (feeType?: string): boolean => {
+  const clean = String(feeType || '').trim().toLowerCase();
+  return /(admission|प्रवेश)/i.test(clean);
+};
+
+export const isBooksFeeRecord = (feeType?: string): boolean => {
+  const clean = String(feeType || '').trim().toLowerCase();
+  return /(book|पुस्तक|stationary)/i.test(clean);
+};
+
+export const isExamFeeRecord = (feeType?: string): boolean => {
+  const clean = String(feeType || '').trim().toLowerCase();
+  return /(exam|परीक्षा)/i.test(clean);
+};
 
 /**
  * 2. DYNAMIC CURRENT-MONTH DUES CALCULATION (PREVENT OVER-BILLING & ACCOUNT FOR DISCOUNTS)
@@ -365,6 +403,25 @@ export const calculateStudentSummary = (
 
   const totalDiscount = Math.max(totalReceiptDiscount, totalProfileDiscount);
 
+  // Category-wise Breakdown (Strictly segregated by Fee Type)
+  const admissionRecords = reconciled.filter((r) => isAdmissionFeeRecord(r.Fee_Type));
+  const admissionPaid = admissionRecords.reduce((sum, r) => sum + (Number(r.Amount_Paid) || 0), 0);
+  const admissionDiscount = admissionRecords.reduce(
+    (sum, r) => sum + (Number((r as any).Discount_Amount || (r as any).Discount || 0) || 0),
+    0
+  );
+  const admissionDue = isExempt ? 0 : Math.max(0, admissionFee - admissionPaid - admissionDiscount);
+
+  const tuitionRecords = reconciled.filter((r) => isTuitionFeeRecord(r.Fee_Type));
+  const tuitionBilled = isExempt ? 0 : monthlyTuition * elapsedMonths;
+  const tuitionPaid = tuitionRecords.reduce((sum, r) => sum + (Number(r.Amount_Paid) || 0), 0);
+  const tuitionReceiptDiscount = tuitionRecords.reduce(
+    (sum, r) => sum + (Number((r as any).Discount_Amount || (r as any).Discount || 0) || 0),
+    0
+  );
+  const tuitionDiscount = Math.max(tuitionReceiptDiscount, profileMonthlyDiscount * elapsedMonths);
+  const tuitionDue = isExempt ? 0 : Math.max(0, tuitionBilled - tuitionPaid - tuitionDiscount);
+
   // 8. Current Dues (DUE) = Math.max(0, Total Billed Session Fee - Total Fees Paid - Total Discount)
   const netBalance = isExempt ? 0 : (totalBilledSessionFee - totalPaid - totalDiscount);
   const currentDues = Math.max(0, netBalance);
@@ -378,6 +435,11 @@ export const calculateStudentSummary = (
     elapsedMonths,
     monthlyTuition,
     admissionFee,
+    admissionPaid,
+    admissionDue,
+    tuitionBilled,
+    tuitionPaid,
+    tuitionDue,
     otherBilledFees,
     itemizedOtherFees,
     totalBilledSessionFee,
@@ -423,6 +485,11 @@ export const computeStudentFeeMetrics = (
     fullYearFee: summary.fullYearFee,
     monthlyTuition: summary.monthlyTuition,
     admissionFee: summary.admissionFee,
+    admissionPaid: summary.admissionPaid,
+    admissionDue: summary.admissionDue,
+    tuitionBilled: summary.tuitionBilled,
+    tuitionPaid: summary.tuitionPaid,
+    tuitionDue: summary.tuitionDue,
     otherBilledFees: summary.otherBilledFees,
     itemizedOtherFees: summary.itemizedOtherFees,
     totalPaid: summary.totalPaid,
