@@ -584,8 +584,10 @@ async function startServer() {
       list[idx] = {
         ...list[idx],
         ...normalized,
-        // preserve original check_in_time if already set and not provided explicitly
+        // preserve original check_in_time if already set
         check_in_time: list[idx].check_in_time || normalized.check_in_time,
+        // preserve original check_out_time if not explicitly updating it
+        check_out_time: normalized.check_out_time || list[idx].check_out_time || null,
       };
     } else {
       list.unshift(normalized);

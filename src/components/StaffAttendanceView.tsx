@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { SchoolUser, StaffAttendanceRecord } from '../types';
+import { StaffMonthlyReportView } from './StaffMonthlyReportView';
 
 interface StaffAttendanceViewProps {
   currentUser: SchoolUser;
@@ -20,7 +21,7 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
   onManualCheckIn,
   isManager = false,
 }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'my_attendance' | 'all_today' | 'history'>(
+  const [activeSubTab, setActiveSubTab] = useState<'my_attendance' | 'all_today' | 'history' | 'monthly_report'>(
     isManager ? 'all_today' : 'my_attendance'
   );
   const [selectedDate, setSelectedDate] = useState<string>(() => {
@@ -198,8 +199,22 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
               onClick={onOpenScanner}
               className="px-5 py-3.5 rounded-2xl font-black text-xs sm:text-sm bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 shadow-lg hover:shadow-amber-400/30 transition-all flex items-center gap-2.5 cursor-pointer transform hover:-translate-y-0.5 active:translate-y-0"
             >
-              <i className="fa-solid fa-camera text-base"></i>
-              <span>📷 स्कूल QR स्कैन करें (Check-In)</span>
+              {myTodayRecord?.check_in_time && !myTodayRecord?.check_out_time ? (
+                <>
+                  <i className="fa-solid fa-arrow-right-from-bracket text-base"></i>
+                  <span>🚪 स्कूल QR स्कैन करें (चेक-आउट दर्ज करें)</span>
+                </>
+              ) : myTodayRecord?.check_in_time && myTodayRecord?.check_out_time ? (
+                <>
+                  <i className="fa-solid fa-check-double text-base"></i>
+                  <span>✅ आज की हाजिरी पूर्ण (QR पुनः स्कैन)</span>
+                </>
+              ) : (
+                <>
+                  <i className="fa-solid fa-camera text-base"></i>
+                  <span>📷 स्कूल QR स्कैन करें (Check-In)</span>
+                </>
+              )}
             </button>
 
             <button
@@ -211,7 +226,48 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
               <i className="fa-solid fa-qrcode text-amber-300"></i>
               <span>स्कूल QR कोड देखें / प्रिंट</span>
             </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('monthly_report')}
+              className={`px-4 py-3.5 rounded-2xl font-bold text-xs sm:text-sm transition-all flex items-center gap-2 cursor-pointer shadow-md ${
+                activeSubTab === 'monthly_report'
+                  ? 'bg-amber-400 text-slate-950 font-black ring-2 ring-amber-300'
+                  : 'bg-gradient-to-r from-purple-600/90 to-indigo-600/90 hover:from-purple-600 hover:to-indigo-600 text-white border border-purple-400/40'
+              }`}
+              title="माह के अंत का पूरा डाटा, स्कूल खुला, हाजिरी, गैरहाजिरी, लेट और ऐड एक्स्ट्रा देखें"
+            >
+              <i className="fa-solid fa-chart-pie text-amber-300"></i>
+              <span>📊 मासिक स्टाफ डाटा (Monthly Report)</span>
+            </button>
           </div>
+        </div>
+      </div>
+
+      {/* Geofence & GPS Security Verification Banner */}
+      <div className="bg-gradient-to-r from-blue-50 via-emerald-50 to-blue-50 border border-blue-200/80 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs shadow-2xs">
+        <div className="flex items-start sm:items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold text-lg shrink-0 shadow-xs">
+            <i className="fa-solid fa-location-dot"></i>
+          </div>
+          <div>
+            <div className="font-bold text-slate-900 flex items-center gap-2">
+              <span>स्कूल कैंपस GPS जियोफेंस सुरक्षा (Campus Geofence Active)</span>
+              <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                सख्त उपस्थिति नियम
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-600 mt-0.5">
+              अटेंडेंस केवल स्कूल में शारीरिक रूप से मौजूद रहकर लाइव कैमरे से QR स्कैन करने पर ही लगेगी। फोटो या बाहर से स्कैन स्वतः अस्वीकृत हो जाएगा।
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 self-start md:self-auto shrink-0">
+          <span className="px-3 py-1.5 rounded-xl bg-white border border-slate-200 font-mono text-slate-700 font-semibold text-[11px] flex items-center gap-1.5 shadow-2xs">
+            <i className="fa-solid fa-compass text-blue-600"></i>
+            <span>कैंपस दायरा: 500 मीटर</span>
+          </span>
         </div>
       </div>
 
@@ -262,29 +318,47 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
             }`}
           >
             <i className="fa-solid fa-calendar-days text-amber-400"></i>
-            <span>तारीख अनुसार रिपोर्ट (Date Report)</span>
+            <span>तारीख अनुसार (Date Report)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('monthly_report')}
+            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
+              activeSubTab === 'monthly_report'
+                ? 'bg-[#0c2340] text-amber-300 shadow-sm'
+                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            <i className="fa-solid fa-chart-pie text-purple-400"></i>
+            <span>मासिक स्टाफ विश्लेषण (Monthly Data)</span>
+            <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 text-[10px] font-black">
+              महीने का डाटा
+            </span>
           </button>
         </div>
 
-        {/* Date Selector for history & roster */}
-        <div className="flex items-center gap-2 text-xs font-semibold text-slate-700 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-2xs">
-          <span>तारीख:</span>
-          <input
-            type="date"
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            className="font-bold text-slate-900 border-none bg-transparent focus:outline-none cursor-pointer"
-          />
-          {selectedDate !== todayStr && (
-            <button
-              type="button"
-              onClick={() => setSelectedDate(todayStr)}
-              className="text-[11px] text-amber-600 hover:text-amber-800 font-bold underline ml-1"
-            >
-              आज (Today)
-            </button>
-          )}
-        </div>
+        {/* Date Selector for history & roster (shown when in single-day view) */}
+        {activeSubTab !== 'monthly_report' && (
+          <div className="flex items-center gap-2 text-xs font-semibold text-slate-700 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-2xs">
+            <span>तारीख:</span>
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="font-bold text-slate-900 border-none bg-transparent focus:outline-none cursor-pointer"
+            />
+            {selectedDate !== todayStr && (
+              <button
+                type="button"
+                onClick={() => setSelectedDate(todayStr)}
+                className="text-[11px] text-amber-600 hover:text-amber-800 font-bold underline ml-1"
+              >
+                आज (Today)
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* VIEW 1: MY ATTENDANCE LOG */}
@@ -609,6 +683,16 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* VIEW 3: ALL STAFF MONTHLY REPORT & ANALYTICS */}
+      {activeSubTab === 'monthly_report' && (
+        <StaffMonthlyReportView
+          currentUser={currentUser}
+          allStaffUsers={allStaffUsers}
+          attendanceRecords={attendanceRecords}
+          isManager={isManager}
+        />
       )}
 
       {/* MANUAL CHECK-IN MODAL (FOR MANAGER OR EMERGENCIES) */}

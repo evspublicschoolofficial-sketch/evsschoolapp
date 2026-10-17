@@ -33,6 +33,7 @@ import { SchoolNotice, StaffAttendanceRecord } from './types';
 import { SchoolQRCodeModal } from './components/SchoolQRCodeModal';
 import { StaffAttendanceScannerModal } from './components/StaffAttendanceScannerModal';
 import { StaffAttendanceView } from './components/StaffAttendanceView';
+import { TeacherHomeworkChecker } from './components/TeacherHomeworkChecker';
 import { fetchFeeMasterDirectGViz } from './utils/feeMaster';
 import { computeStudentFeeMetrics, computeSchoolFeeTotals, normalizeStudentId, reconcileFeeRecords, calculateStudentSummary } from './utils/feeCalculation';
 import { realtimeSync } from './utils/realtimeSync';
@@ -1521,6 +1522,8 @@ export default function App() {
   const [teacherTrackerSearch, setTeacherTrackerSearch] = useState<string>('');
   const [teacherTrackerClassFilter, setTeacherTrackerClassFilter] = useState<string>('all');
   const [teacherTrackerStatusFilter, setTeacherTrackerStatusFilter] = useState<'all' | 'Completed' | 'Incompleted'>('all');
+  const [teacherTrackerViewMode, setTeacherTrackerViewMode] = useState<'by_homework' | 'all_records'>('by_homework');
+  const [teacherSubmissionsFilter, setTeacherSubmissionsFilter] = useState<'my' | 'all'>('my');
 
   // QR Code Scanner Modal State (For searching students in Teacher & Manager portals)
   const [qrScannerOpen, setQrScannerOpen] = useState<boolean>(false);
@@ -2632,6 +2635,18 @@ export default function App() {
     const timeStr = rec.check_in_time || now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
     const recId = rec.id || `STAFF-ATT-${rec.user_id}-${dateStr}`;
 
+    const existingRecord = staffAttendanceList.find(
+      (a) => a.id === recId || (a.user_id === String(rec.user_id || '') && a.date === dateStr)
+    );
+
+    const checkInTime = isCheckOut
+      ? (existingRecord?.check_in_time || rec.check_in_time || timeStr)
+      : (rec.check_in_time || timeStr);
+
+    const checkOutTime = isCheckOut
+      ? (rec.check_out_time || timeStr)
+      : existingRecord?.check_out_time;
+
     const newRecord: StaffAttendanceRecord = {
       id: recId,
       user_id: String(rec.user_id || ''),
@@ -2639,15 +2654,15 @@ export default function App() {
       name: rec.name || 'Staff Member',
       designation: rec.designation || 'Teacher',
       date: dateStr,
-      check_in_time: timeStr,
-      check_out_time: isCheckOut ? (rec.check_out_time || timeStr) : undefined,
+      check_in_time: checkInTime,
+      check_out_time: checkOutTime,
       status: rec.status || 'Present',
       method: rec.method || 'School QR Scan',
       school_code: rec.school_code || 'EVS-CAMPUS-2026',
       location: rec.location || 'School Campus Gate',
       remark: rec.remark || '',
       timestamp: Date.now(),
-      created_at: new Date().toISOString(),
+      created_at: existingRecord?.created_at || new Date().toISOString(),
     };
 
     setStaffAttendanceList((prev) => {
@@ -4572,6 +4587,157 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         : '⚠️ छात्र का होमवर्क अपूर्ण (Incompleted) मार्क हो गया!'
     );
     setTimeout(() => setSyncToastMessage(null), 2500);
+  };
+
+  // 1-Click Set Individual Student Homework Status
+  const handleSetStudentHomeworkStatus = (
+    studentId: string,
+    hwDate: string,
+    hwClass: string,
+    hwSubject: string,
+    targetStatus: 'Completed' | 'Incompleted'
+  ) => {
+    const sId = String(studentId || '').trim();
+    const cleanDate = hwDate || new Date().toISOString().split('T')[0];
+    const recId = `TRK-${sId}-${cleanDate}`;
+
+    setHwTrackerList((prev) => {
+      const idx = prev.findIndex(
+        (r) =>
+          String(r.Student_ID || r.ID || '').trim().toLowerCase() === sId.toLowerCase() &&
+          (r.Date === cleanDate || !r.Date || r.Date.replace(/-/g, '/') === cleanDate.replace(/-/g, '/'))
+      );
+
+      let updated: HomeworkTrackerRecord[];
+      if (idx >= 0) {
+        updated = prev.map((r, i) =>
+          i === idx
+            ? { ...r, Last_homework_Status: targetStatus, Subject: hwSubject || r.Subject || 'General' }
+            : r
+        );
+      } else {
+        const newRecord: HomeworkTrackerRecord = {
+          ID: recId,
+          Date: cleanDate,
+          Class: hwClass || '',
+          Student_ID: sId,
+          Subject: hwSubject || 'General',
+          Last_homework_Status: targetStatus,
+        };
+        updated = [newRecord, ...prev];
+      }
+
+      try {
+        localStorage.setItem('evs_custom_hw_tracker', JSON.stringify(updated));
+      } catch (e) {
+        console.warn('localStorage error:', e);
+      }
+      return updated;
+    });
+
+    // Sync to backend API & Google Apps Script
+    const payload = {
+      action: 'updateHomeworkTracker',
+      record_id: recId,
+      student_id: sId,
+      date: cleanDate,
+      class: hwClass,
+      subject: hwSubject,
+      status: targetStatus,
+    };
+
+    try {
+      fetch('/api/homework-tracker', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).catch(() => {});
+
+      const activeScriptUrl = getEffectiveApiUrl();
+      fetch(activeScriptUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload),
+      }).catch(() => {});
+    } catch {}
+
+    const matchedStudent = students.find((s) => String(s.Student_ID || '').toLowerCase() === sId.toLowerCase());
+    const name = matchedStudent?.Student_Name || sId;
+    setSyncToastMessage(
+      targetStatus === 'Completed'
+        ? `✅ ${name} का कार्य Complete (पूर्ण) मार्क किया गया!`
+        : `⚠️ ${name} का कार्य Incomplete (अपूर्ण) मार्क किया गया!`
+    );
+    setTimeout(() => setSyncToastMessage(null), 2500);
+  };
+
+  // Bulk Set Class Homework Status
+  const handleBulkSetHomeworkStatus = (
+    studentIds: string[],
+    hwDate: string,
+    hwClass: string,
+    hwSubject: string,
+    targetStatus: 'Completed' | 'Incompleted'
+  ) => {
+    const cleanDate = hwDate || new Date().toISOString().split('T')[0];
+    const idSet = new Set(studentIds.map((id) => String(id).trim().toLowerCase()));
+
+    setHwTrackerList((prev) => {
+      const updated = prev.map((r) => {
+        const rId = String(r.Student_ID || r.ID || '').trim().toLowerCase();
+        if (idSet.has(rId)) {
+          return { ...r, Last_homework_Status: targetStatus };
+        }
+        return r;
+      });
+
+      // Add records for any students not yet in the tracker
+      studentIds.forEach((sId) => {
+        const has = updated.some(
+          (u) =>
+            String(u.Student_ID || u.ID || '').trim().toLowerCase() === String(sId).trim().toLowerCase() &&
+            (u.Date === cleanDate || !u.Date)
+        );
+        if (!has) {
+          updated.unshift({
+            ID: `TRK-${sId}-${cleanDate}`,
+            Date: cleanDate,
+            Class: hwClass || '',
+            Student_ID: String(sId).trim(),
+            Subject: hwSubject || 'General',
+            Last_homework_Status: targetStatus,
+          });
+        }
+      });
+
+      try {
+        localStorage.setItem('evs_custom_hw_tracker', JSON.stringify(updated));
+      } catch (e) {
+        console.warn('localStorage error:', e);
+      }
+      return updated;
+    });
+
+    // Notify backend
+    try {
+      fetch('/api/homework-tracker', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'bulkUpdateHomeworkTracker',
+          student_ids: studentIds,
+          date: cleanDate,
+          class: hwClass,
+          subject: hwSubject,
+          status: targetStatus,
+        }),
+      }).catch(() => {});
+    } catch {}
+
+    setSyncToastMessage(
+      `✅ सभी ${studentIds.length} छात्रों का होमवर्क '${targetStatus === 'Completed' ? 'पूर्ण (Completed)' : 'अपूर्ण'}' मार्क किया गया!`
+    );
+    setTimeout(() => setSyncToastMessage(null), 3000);
   };
 
   // Add Fee Handler (Manager & Principal)
@@ -8807,23 +8973,46 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               </div>
 
               <div className="flex items-center gap-2 self-end sm:self-auto flex-wrap">
-                {/* Staff Attendance Status & Quick Check-In */}
+                {/* Staff Attendance Status & Quick Check-In / Check-Out */}
                 {myTodayAttendanceRecord ? (
-                  <button
-                    type="button"
-                    onClick={() => handleSelectTeacherTab('staff_attendance')}
-                    className="px-3.5 py-1.5 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/40 text-emerald-300 text-xs font-bold flex items-center gap-1.5 border border-emerald-400/40 cursor-pointer shadow-xs"
-                    title="आपकी आज की उपस्थिति दर्ज है - विवरण देखें"
-                  >
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                    <span>उपस्थित ({myTodayAttendanceRecord.check_in_time})</span>
-                  </button>
+                  myTodayAttendanceRecord.check_out_time ? (
+                    <button
+                      type="button"
+                      onClick={() => handleSelectTeacherTab('staff_attendance')}
+                      className="px-3.5 py-1.5 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/40 text-emerald-300 text-xs font-bold flex items-center gap-1.5 border border-emerald-400/40 cursor-pointer shadow-xs"
+                      title="आज की उपस्थिति पूर्ण: चेक-इन व चेक-आउट दर्ज हैं"
+                    >
+                      <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                      <span>पूर्ण (In: {myTodayAttendanceRecord.check_in_time} • Out: {myTodayAttendanceRecord.check_out_time})</span>
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setIsStaffAttendanceScannerOpen(true)}
+                        className="px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-md active:scale-95 cursor-pointer"
+                        title="दोबारा स्कूल QR स्कैन करके चेक-आउट दर्ज करें"
+                      >
+                        <i className="fa-solid fa-arrow-right-from-bracket"></i>
+                        <span>🚪 स्कूल चेक-आउट</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSelectTeacherTab('staff_attendance')}
+                        className="px-3 py-1.5 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/40 text-emerald-300 text-xs font-bold flex items-center gap-1.5 border border-emerald-400/40 cursor-pointer shadow-xs"
+                        title="आपकी उपस्थिति दर्ज है - विवरण देखें"
+                      >
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                        <span>इन: {myTodayAttendanceRecord.check_in_time}</span>
+                      </button>
+                    </>
+                  )
                 ) : (
                   <button
                     type="button"
                     onClick={() => setIsStaffAttendanceScannerOpen(true)}
-                    className="px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-md active:scale-95 cursor-pointer"
-                    title="स्कूल QR कोड स्कैन करके आज की हाजिरी लगाएं"
+                    className="px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-md active:scale-95 cursor-pointer animate-pulse"
+                    title="स्कूल गेट QR कोड स्कैन करके आज की हाजिरी लगाएं"
                   >
                     <i className="fa-solid fa-camera"></i>
                     <span>📷 स्कूल QR हाजिरी</span>
@@ -8948,14 +9137,14 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 onClick={() => handleSelectTeacherTab('tracker')}
                 className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
                   teacherPortalTab === 'tracker'
-                    ? 'bg-[#0c2340] text-amber-300 shadow-sm'
+                    ? 'bg-[#0c2340] text-amber-300 shadow-sm ring-2 ring-amber-400/50'
                     : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
                 }`}
               >
                 <i className="fa-solid fa-list-check text-emerald-400"></i>
-                <span>छात्र होमवर्क ट्रैकर (Homework Tracker)</span>
-                <span className="px-2 py-0.2 rounded-full bg-emerald-500/20 text-emerald-700 text-[11px]">
-                  {hwTrackerList.length}
+                <span>होमवर्क चेकर व ट्रैकर (Check HW)</span>
+                <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-black">
+                  1-क्लिक चेकर
                 </span>
               </button>
 
@@ -9369,6 +9558,54 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   </div>
                 </div>
 
+                {/* View Mode Switcher: 1-Click by Assigned Homework vs All Raw Records */}
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setTeacherTrackerViewMode('by_homework')}
+                      className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                        teacherTrackerViewMode === 'by_homework'
+                          ? 'bg-[#0c2340] text-amber-300 shadow-sm ring-2 ring-amber-400/50'
+                          : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                      }`}
+                    >
+                      <i className="fa-solid fa-list-check text-emerald-400"></i>
+                      <span>दिए गए होमवर्क से 1-क्लिक चेकर (Check by HW)</span>
+                      <span className="px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black">
+                        सरल तरीका
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setTeacherTrackerViewMode('all_records')}
+                      className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                        teacherTrackerViewMode === 'all_records'
+                          ? 'bg-[#0c2340] text-amber-300 shadow-sm'
+                          : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                      }`}
+                    >
+                      <i className="fa-solid fa-table-list text-blue-400"></i>
+                      <span>समस्त छात्र तालिका व QR स्कैनर</span>
+                    </button>
+                  </div>
+                </div>
+
+                {teacherTrackerViewMode === 'by_homework' ? (
+                  <TeacherHomeworkChecker
+                    currentUser={teacherUser}
+                    homeworkList={homeworkList}
+                    students={students}
+                    hwTrackerList={hwTrackerList}
+                    onSetStudentStatus={handleSetStudentHomeworkStatus}
+                    onBulkSetStatus={handleBulkSetHomeworkStatus}
+                    getClassName={getClassName}
+                    getStudentPhoto={getStudentPhoto}
+                    onOpenUploadTab={() => setTeacherPortalTab('upload')}
+                  />
+                ) : (
+                  <>
                 {/* PROMINENT QR SCANNER BANNER FOR YESTERDAY'S HOMEWORK TRACKING */}
                 <div className="bg-gradient-to-r from-amber-400 via-amber-300 to-amber-400 p-4 rounded-2xl border-2 border-amber-500/50 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
@@ -9723,6 +9960,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     </tbody>
                   </table>
                 </div>
+                </>
+              )}
               </div>
             )}
 
@@ -9751,64 +9990,134 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   </button>
                 </div>
 
-                {homeworkList.length === 0 ? (
-                  <div className="p-8 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200 text-slate-500 text-xs">
-                    <i className="fa-solid fa-book-open text-2xl text-slate-300 mb-2 block"></i>
-                    अभी कोई होमवर्क रिकॉर्ड दर्ज नहीं है। आप टैब 1 (Upload Homework) से नया होमवर्क अपलोड कर सकते हैं।
+                {/* Filter Switcher: My Homework vs All Homework */}
+                <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setTeacherSubmissionsFilter('my')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                        teacherSubmissionsFilter === 'my'
+                          ? 'bg-[#0c2340] text-amber-300 shadow-2xs'
+                          : 'bg-white text-slate-600 hover:text-slate-900 border border-slate-200'
+                      }`}
+                    >
+                      <i className="fa-solid fa-user-check mr-1.5 text-emerald-500"></i>
+                      <span>
+                        केवल मेरे द्वारा दिए गए होमवर्क ({
+                          homeworkList.filter((h) =>
+                            (h.Teacher || '').toLowerCase().includes((teacherUser.Name || '').toLowerCase())
+                          ).length
+                        })
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTeacherSubmissionsFilter('all')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                        teacherSubmissionsFilter === 'all'
+                          ? 'bg-[#0c2340] text-amber-300 shadow-2xs'
+                          : 'bg-white text-slate-600 hover:text-slate-900 border border-slate-200'
+                      }`}
+                    >
+                      <i className="fa-solid fa-users mr-1.5 text-blue-500"></i>
+                      <span>समस्त स्कूल होमवर्क ({homeworkList.length})</span>
+                    </button>
                   </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {homeworkList.map((hw, idx) => (
-                      <div
-                        key={hw.Homework_ID || idx}
-                        className="p-4 bg-slate-50 rounded-xl border border-slate-200/80 hover:border-blue-300 transition-all space-y-2 relative"
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-blue-950 text-sm">
-                            {hw.Subject} • Class {getClassName(hw.Class)}
-                          </span>
-                          <div className="flex items-center gap-2">
-                            <span className="text-[11px] text-slate-500 font-medium">{formatDate(hw.Date)}</span>
-                            <button
-                              type="button"
-                              onClick={() => setHomeworkToDelete(hw)}
-                              className="text-slate-400 hover:text-rose-600 p-1 rounded-md hover:bg-rose-50 transition-colors cursor-pointer"
-                              title="यह होमवर्क हटाएं (Delete Homework)"
-                            >
-                              <i className="fa-solid fa-trash-can text-xs"></i>
-                            </button>
-                          </div>
-                        </div>
-                        <p className="text-xs text-slate-700 whitespace-pre-wrap">{hw.Homework_Detail}</p>
-                        <div className="flex items-center justify-between pt-2 border-t border-slate-200 text-[11px] text-slate-500">
-                          <span>अध्यापक: <strong className="text-slate-700">{hw.Teacher || 'Faculty'}</strong></span>
-                          <div className="flex items-center gap-1.5">
-                            <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-800 font-semibold text-[10px]">
-                              {hw.Target_Type || 'Poori Class'}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => setSelectedHomeworkDetail(hw)}
-                              className="px-2 py-0.5 rounded bg-slate-100 hover:bg-[#0c2340] hover:text-amber-300 text-slate-700 font-semibold transition-all cursor-pointer text-[10px]"
-                              title="विवरण देखें"
-                            >
-                              विवरण
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setHomeworkToDelete(hw)}
-                              className="px-2 py-0.5 rounded bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white font-semibold transition-all flex items-center gap-1 cursor-pointer text-[10px]"
-                              title="यह होमवर्क हटाएं"
-                            >
-                              <i className="fa-solid fa-trash-can text-[9px]"></i>
-                              <span>हटाएं</span>
-                            </button>
-                          </div>
-                        </div>
+                </div>
+
+                {(() => {
+                  const currentTeacher = (teacherUser.Name || '').toLowerCase();
+                  const displayedList =
+                    teacherSubmissionsFilter === 'my'
+                      ? homeworkList.filter(
+                          (h) =>
+                            (h.Teacher || '').toLowerCase().includes(currentTeacher) ||
+                            (teacherUser.Assigned_Class &&
+                              getClassName(h.Class).toLowerCase() ===
+                                getClassName(teacherUser.Assigned_Class).toLowerCase())
+                        )
+                      : homeworkList;
+
+                  if (displayedList.length === 0) {
+                    return (
+                      <div className="p-8 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200 text-slate-500 text-xs">
+                        <i className="fa-solid fa-book-open text-2xl text-slate-300 mb-2 block"></i>
+                        {teacherSubmissionsFilter === 'my'
+                          ? `आप (${teacherUser.Name}) द्वारा अभी कोई होमवर्क दर्ज नहीं है। आप टैब 1 (Upload Homework) से नया होमवर्क अपलोड कर सकते हैं।`
+                          : 'अभी कोई होमवर्क रिकॉर्ड दर्ज नहीं है।'}
                       </div>
-                    ))}
-                  </div>
-                )}
+                    );
+                  }
+
+                  return (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {displayedList.map((hw, idx) => (
+                        <div
+                          key={hw.Homework_ID || idx}
+                          className="p-4 bg-slate-50 rounded-xl border border-slate-200/80 hover:border-blue-300 transition-all space-y-2 relative"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-blue-950 text-sm">
+                              {hw.Subject} • Class {getClassName(hw.Class)}
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[11px] text-slate-500 font-medium">{formatDate(hw.Date)}</span>
+                              <button
+                                type="button"
+                                onClick={() => setHomeworkToDelete(hw)}
+                                className="text-slate-400 hover:text-rose-600 p-1 rounded-md hover:bg-rose-50 transition-colors cursor-pointer"
+                                title="यह होमवर्क हटाएं (Delete Homework)"
+                              >
+                                <i className="fa-solid fa-trash-can text-xs"></i>
+                              </button>
+                            </div>
+                          </div>
+                          <p className="text-xs text-slate-700 whitespace-pre-wrap">{hw.Homework_Detail}</p>
+                          <div className="flex items-center justify-between pt-2 border-t border-slate-200 text-[11px] text-slate-500">
+                            <span>
+                              अध्यापक: <strong className="text-slate-700">{hw.Teacher || 'Faculty'}</strong>
+                            </span>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setTeacherTrackerViewMode('by_homework');
+                                  setTeacherPortalTab('tracker');
+                                }}
+                                className="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] flex items-center gap-1 cursor-pointer shadow-2xs transition-all active:scale-95"
+                                title="इस होमवर्क के छात्रों का कार्य चेक करें"
+                              >
+                                <i className="fa-solid fa-list-check"></i>
+                                <span>चेक करें</span>
+                              </button>
+                              <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-800 font-semibold text-[10px]">
+                                {hw.Target_Type || 'Poori Class'}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedHomeworkDetail(hw)}
+                                className="px-2 py-0.5 rounded bg-slate-100 hover:bg-[#0c2340] hover:text-amber-300 text-slate-700 font-semibold transition-all cursor-pointer text-[10px]"
+                                title="विवरण देखें"
+                              >
+                                विवरण
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setHomeworkToDelete(hw)}
+                                className="px-2 py-0.5 rounded bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white font-semibold transition-all flex items-center gap-1 cursor-pointer text-[10px]"
+                                title="यह होमवर्क हटाएं"
+                              >
+                                <i className="fa-solid fa-trash-can text-[9px]"></i>
+                                <span>हटाएं</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
