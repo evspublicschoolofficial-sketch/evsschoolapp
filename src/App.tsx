@@ -34,6 +34,7 @@ import { SchoolQRCodeModal } from './components/SchoolQRCodeModal';
 import { StaffAttendanceScannerModal } from './components/StaffAttendanceScannerModal';
 import { StaffAttendanceView } from './components/StaffAttendanceView';
 import { TeacherHomeworkChecker } from './components/TeacherHomeworkChecker';
+import { FloatingSocialBar } from './components/FloatingSocialBar';
 import { fetchFeeMasterDirectGViz } from './utils/feeMaster';
 import { computeStudentFeeMetrics, computeSchoolFeeTotals, normalizeStudentId, reconcileFeeRecords, calculateStudentSummary } from './utils/feeCalculation';
 import { realtimeSync } from './utils/realtimeSync';
@@ -13176,6 +13177,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
           <i className="fa-solid fa-circle-arrow-right text-amber-400"></i>
         </aside>
       )}
+
+      {/* Continuous Floating Social Media Bar (WhatsApp, Instagram, Facebook, Call) */}
+      <FloatingSocialBar />
 
       {/* FOOTER */}
       <footer className="bg-[#0c2340] text-slate-300 border-t-2 border-amber-400 mt-auto">
