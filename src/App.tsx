@@ -2632,73 +2632,128 @@ export default function App() {
       console.warn('Failed to fetch local staff attendance:', e);
     }
 
-    // 2. Also check if user has created the 'Staff_Attendance' tab in Google Sheets
-    try {
-      const encoded = encodeURIComponent('Staff_Attendance');
-      const gvizRes = await fetch(
-        `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}&_t=${Date.now()}`
-      );
-      if (gvizRes.ok) {
+    // 2. Also check if user has created the 'Staff_Attendance ' tab in Google Sheets
+    const staffTabs = ['Staff_Attendance ', 'Staff_Attendance', 'Staff Attendance', 'StaffAttendance', 'staff_attendance'];
+
+    const parseGvizDate = (raw: any): string => {
+      if (!raw) return '';
+      const m = String(raw).match(/Date\((\d+),(\d+),(\d+)/);
+      if (m) {
+        const y = m[1];
+        const mo = String(Number(m[2]) + 1).padStart(2, '0');
+        const d = String(m[3]).padStart(2, '0');
+        return `${y}-${mo}-${d}`;
+      }
+      return String(raw).trim();
+    };
+
+    const parseGvizTime = (raw: any, isCheckOut = false): string | undefined => {
+      if (!raw) return undefined;
+      const s = String(raw).trim();
+      const m = s.match(/Date\(\d+,\d+,\d+,(\d+),(\d+)/);
+      if (m) {
+        let h = Number(m[1]);
+        const min = String(m[2]).padStart(2, '0');
+        // Handle afternoon checkout e.g. 2:15 PM in schools
+        if (isCheckOut && h >= 1 && h <= 6) h += 12;
+        const ampm = h >= 12 ? 'PM' : 'AM';
+        const displayH = h % 12 || 12;
+        return `${String(displayH).padStart(2, '0')}:${min} ${ampm}`;
+      }
+      const m2 = s.match(/^(\d{1,2}):(\d{2})$/);
+      if (m2) {
+        let h = Number(m2[1]);
+        const min = m2[2];
+        if (isCheckOut && h >= 1 && h <= 6) h += 12;
+        const ampm = h >= 12 ? 'PM' : 'AM';
+        const displayH = h % 12 || 12;
+        return `${String(displayH).padStart(2, '0')}:${min} ${ampm}`;
+      }
+      return s;
+    };
+
+    for (const tab of staffTabs) {
+      try {
+        const encoded = encodeURIComponent(tab);
+        const gvizRes = await fetch(
+          `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}&_t=${Date.now()}`
+        );
+        if (!gvizRes.ok) continue;
         const text = await gvizRes.text();
         const start = text.indexOf('{');
         const end = text.lastIndexOf('}');
-        if (start !== -1 && end !== -1) {
-          const data = JSON.parse(text.slice(start, end + 1));
-          const cols = (data.table?.cols || []).map((c: any) =>
-            String(c?.label || c?.id || '').trim().toLowerCase()
-          );
+        if (start === -1 || end === -1) continue;
+        const data = JSON.parse(text.slice(start, end + 1));
+        const cols = (data.table?.cols || []).map((c: any) =>
+          String(c?.label || c?.id || '').trim().toLowerCase()
+        );
 
-          // Verify this is actually the Staff_Attendance tab (and not fallback to Users tab)
-          const hasAttendanceCols = cols.some(
-            (c: string) => c.includes('check_in') || c.includes('check in') || c.includes('attendance') || c.includes('date')
-          );
+        // Verify this is actually the Staff_Attendance tab (and not fallback to Users tab)
+        const hasAttendanceCols = cols.some(
+          (c: string) => c.includes('check_in') || c.includes('check in') || c.includes('late_minutes') || c.includes('extra_hours')
+        );
 
-          if (hasAttendanceCols) {
-            const rows = data.table?.rows || [];
-            const sheetRecords: StaffAttendanceRecord[] = [];
+        if (hasAttendanceCols) {
+          const rows = data.table?.rows || [];
+          const sheetRecords: StaffAttendanceRecord[] = [];
 
-            for (let i = 0; i < rows.length; i++) {
-              const r = rows[i];
-              const cells = (r.c || []).map((c: any) =>
-                c ? (c.f !== undefined && c.f !== null ? c.f : c.v) : ''
-              );
+          const idIdx = cols.findIndex((c: string) => c === 'id');
+          const nameIdx = cols.findIndex((c: string) => c.includes('name'));
+          const userIdx = cols.findIndex((c: string) => c.includes('user') || c.includes('uid'));
+          const desIdx = cols.findIndex((c: string) => c.includes('desig') || c === 'd');
+          const dateIdx = cols.findIndex((c: string) => c.includes('date'));
+          const inIdx = cols.findIndex((c: string) => c.includes('check_in') || (c.includes('in') && !c.includes('late')));
+          const outIdx = cols.findIndex((c: string) => c.includes('check_out') || c.includes('out'));
+          const statusIdx = cols.findIndex((c: string) => c.includes('status'));
+          const methodIdx = cols.findIndex((c: string) => c.includes('method'));
+          const locIdx = cols.findIndex((c: string) => c.includes('loc'));
+          const remIdx = cols.findIndex((c: string) => c.includes('rem') || c.includes('note'));
 
-              // Map columns according to standard Staff_Attendance layout
-              // Col 0: ID, Col 1: User_ID, Col 2: Name, Col 3: Designation, Col 4: Date, Col 5: Check_In_Time, Col 6: Check_Out_Time, Col 7: Status, Col 8: Method, Col 9: Location, Col 10: Remark
-              const recUserId = String(cells[1] || cells[0] || '').trim();
-              const recDate = String(cells[4] || '').trim();
-              if (!recUserId || !recDate) continue;
+          for (let i = 0; i < rows.length; i++) {
+            const r = rows[i];
+            const cells = (r.c || []).map((c: any) =>
+              c ? (c.f !== undefined && c.f !== null ? c.f : c.v) : ''
+            );
 
-              const recId = String(cells[0] || `STAFF-ATT-${recUserId}-${recDate}`).trim();
-              sheetRecords.push({
-                id: recId,
-                user_id: recUserId,
-                name: String(cells[2] || 'Staff Member').trim(),
-                designation: String(cells[3] || 'Teacher').trim(),
-                date: recDate,
-                check_in_time: cells[5] ? String(cells[5]).trim() : undefined,
-                check_out_time: cells[6] ? String(cells[6]).trim() : undefined,
-                status: (cells[7] ? String(cells[7]).trim() : 'Present') as any,
-                method: (cells[8] ? String(cells[8]).trim() : 'School QR Scan') as any,
-                location: cells[9] ? String(cells[9]).trim() : 'School Campus',
-                remark: cells[10] ? String(cells[10]).trim() : undefined,
-                timestamp: Date.now(),
-                created_at: new Date().toISOString(),
-              });
-            }
+            const recUserId = String((userIdx !== -1 ? cells[userIdx] : '') || cells[2] || cells[0] || '').trim();
+            const recName = String((nameIdx !== -1 ? cells[nameIdx] : '') || cells[1] || 'Staff Member').trim();
+            const rawDateVal = dateIdx !== -1 ? r.c?.[dateIdx]?.v : cells[4];
+            const recDate = parseGvizDate(rawDateVal) || String(cells[dateIdx !== -1 ? dateIdx : 4] || '').trim();
 
-            if (sheetRecords.length > 0) {
-              // Merge Google Sheets records with local records, giving precedence to latest updates
-              const map = new Map<string, StaffAttendanceRecord>();
-              mergedList.forEach((r) => map.set(`${r.user_id}_${r.date}`, r));
-              sheetRecords.forEach((r) => map.set(`${r.user_id}_${r.date}`, { ...map.get(`${r.user_id}_${r.date}`), ...r }));
-              mergedList = Array.from(map.values()).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-            }
+            if (!recUserId || !recDate) continue;
+
+            const recId = String((idIdx !== -1 ? cells[idIdx] : '') || `STAFF-ATT-${recUserId}-${recDate}`).trim();
+            const rawInVal = inIdx !== -1 ? r.c?.[inIdx]?.v : cells[5];
+            const rawOutVal = outIdx !== -1 ? r.c?.[outIdx]?.v : cells[6];
+
+            sheetRecords.push({
+              id: recId,
+              user_id: recUserId,
+              name: recName,
+              designation: String((desIdx !== -1 ? cells[desIdx] : '') || cells[3] || 'Teacher').trim(),
+              date: recDate,
+              check_in_time: parseGvizTime(rawInVal, false) || (cells[inIdx !== -1 ? inIdx : 5] ? String(cells[inIdx !== -1 ? inIdx : 5]).trim() : undefined),
+              check_out_time: parseGvizTime(rawOutVal, true) || (cells[outIdx !== -1 ? outIdx : 6] ? String(cells[outIdx !== -1 ? outIdx : 6]).trim() : undefined),
+              status: ((statusIdx !== -1 ? cells[statusIdx] : cells[7]) ? String(cells[statusIdx !== -1 ? statusIdx : 7]).trim() : 'Present') as any,
+              method: ((methodIdx !== -1 ? cells[methodIdx] : cells[10]) ? String(cells[methodIdx !== -1 ? methodIdx : 10]).trim() : 'School QR Scan') as any,
+              location: String((locIdx !== -1 ? cells[locIdx] : cells[11]) || 'School Campus').trim(),
+              remark: (remIdx !== -1 ? cells[remIdx] : cells[12]) ? String(cells[remIdx !== -1 ? remIdx : 12]).trim() : undefined,
+              timestamp: Date.now(),
+              created_at: new Date().toISOString(),
+            });
           }
+
+          if (sheetRecords.length > 0) {
+            const map = new Map<string, StaffAttendanceRecord>();
+            mergedList.forEach((rec) => map.set(`${rec.user_id}_${rec.date}`, rec));
+            sheetRecords.forEach((rec) => map.set(`${rec.user_id}_${rec.date}`, { ...map.get(`${rec.user_id}_${rec.date}`), ...rec }));
+            mergedList = Array.from(map.values()).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+          }
+          break; // Found and parsed Staff_Attendance tab
         }
+      } catch (gvizErr) {
+        console.warn('Google Sheets Staff_Attendance fetch check:', gvizErr);
       }
-    } catch (gvizErr) {
-      console.warn('Google Sheets Staff_Attendance fetch check:', gvizErr);
     }
 
     if (mergedList.length > 0) {

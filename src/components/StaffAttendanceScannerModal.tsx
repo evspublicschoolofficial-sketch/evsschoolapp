@@ -375,30 +375,44 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
       return;
     }
 
-    // 2. Strict Geolocation Enforcement ("सिर्फ वह आदमी स्कैन कर सके जो स्कूल में मौजूद हो लोकेशन खोल के")
-    if (locationStatus === 'permission_denied' || locationStatus === 'unavailable') {
+    // 2. Strict Geolocation Enforcement
+    if (locationStatus === 'permission_denied') {
       playErrorBuzz();
-      alert('🚫 लोकेशन (GPS) बंद है!\n\nनियम अनुसार केवल वही अध्यापक/स्टाफ हाजिरी लगा सकते हैं जो स्कूल में शारीरिक रूप से मौजूद हों।\nकृपया अपने फोन की लोकेशन (GPS) चालू करें और अनुमति दें।');
+      alert('🚫 लोकेशन (GPS) बंद है!\n\nकृपया अपने फोन की लोकेशन (GPS) चालू करें ताकि स्कूल उपस्थिति सत्यापित हो सके।');
       requestScanFrame();
       return;
     }
 
-    if (locationStatus === 'outside_campus') {
+    // Check if within campus or allowed override
+    const activeSchool = getActiveSchoolCoords();
+    const allowedRadius = activeSchool.radiusMeters || DEFAULT_CAMPUS_RADIUS_METERS;
+    const isWithinRadius = distanceFromSchool !== null && distanceFromSchool <= allowedRadius;
+
+    if (locationStatus === 'outside_campus' && !allowOverride && !isWithinRadius) {
       playErrorBuzz();
-      const distStr = distanceFromSchool ? `${distanceFromSchool} मीटर` : 'काफी';
-      alert(`🚫 अस्वीकृत: आप स्कूल परिसर से बाहर हैं (${distStr} दूर)!\n\nस्कूल के सख्त सुरक्षा नियमों के अनुसार, केवल स्कूल कैंपस में उपस्थित रहकर ही उपस्थिति (Check-In/Check-Out) दर्ज की जा सकती है। घर या किसी अन्य स्थान से हाजिरी लगाना अमान्य है।`);
+      const distStr = distanceFromSchool
+        ? (distanceFromSchool > 1000 ? `${(distanceFromSchool / 1000).toFixed(2)} km` : `${distanceFromSchool} मीटर`)
+        : 'काफी';
+      alert(`⚠️ आप स्कूल परिसर से ${distStr} दूर दिख रहे हैं!\n\nयदि आप स्कूल में हैं, तो कृपया स्क्रीन पर दिए गए "📍 मेरी इस लोकेशन को स्कूल लोकेशन बनाएं" या "✅ स्कूल में हूँ (हाजिरी लगाएं)" बटन पर टैप करें।`);
       requestScanFrame();
       return;
     }
 
+    // If status is checking, but user coords or distance already exists and is inside campus, proceed instantly!
+    // No "2 second ruko" alert popup!
     if (locationStatus === 'checking') {
-      // Prompt user to wait a moment while GPS locks
-      alert('📍 आपकी लाइव GPS लोकेशन जांची जा रही है। कृपया 2 सेकंड रुकें और पुनः स्कैन करें।');
-      requestScanFrame();
-      return;
+      const pre = getPrewarmedLocation();
+      const dist = pre ? calculateDistanceMeters(pre.lat, pre.lng, activeSchool.lat, activeSchool.lng) : distanceFromSchool;
+      if (pre && dist !== null && dist <= allowedRadius) {
+        // Location verified from pre-warmed GPS! Proceed immediately!
+      } else {
+        // Silently scan next frame without interrupting the user with an alert!
+        requestScanFrame();
+        return;
+      }
     }
 
-    // Location verified inside campus!
+    // Location verified inside campus! Scan immediately!
     playBeep();
     stopCamera();
     setDetectedCode(rawText);

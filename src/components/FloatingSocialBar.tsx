@@ -60,70 +60,84 @@ export const FloatingSocialBar: React.FC<FloatingSocialBarProps> = ({
   const [activeModalTab, setActiveModalTab] = useState<'form' | 'sheet_guide'>('form');
   const [editConfig, setEditConfig] = useState<SocialLinkConfig>(config);
 
-  // Auto-fetch from Google Sheets 'Social_Links' sheet if available
+  // Auto-fetch from Google Sheets 'Social_Links ' or 'Social_Links' sheet if available
   useEffect(() => {
     if (!spreadsheetId) return;
     const fetchSocialLinksFromSheet = async () => {
-      try {
-        const encoded = encodeURIComponent('Social_Links');
-        const res = await fetch(
-          `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json&sheet=${encoded}&_t=${Date.now()}`
-        );
-        if (!res.ok) return;
-        const text = await res.text();
-        const start = text.indexOf('{');
-        const end = text.lastIndexOf('}');
-        if (start === -1 || end === -1) return;
-        const data = JSON.parse(text.slice(start, end + 1));
-        const rows = data.table?.rows || [];
-        if (rows.length === 0) return;
-
-        const newCfg: Partial<SocialLinkConfig> = {};
-
-        for (const r of rows) {
-          const cells = (r.c || []).map((c: any) =>
-            c ? (c.f !== undefined && c.f !== null ? c.f : c.v) : ''
+      // Try variations including with trailing space as created by user
+      const tabVariations = ['Social_Links ', 'Social_Links', 'Social Links', 'SocialLinks', 'social_links'];
+      
+      for (const tab of tabVariations) {
+        try {
+          const encoded = encodeURIComponent(tab);
+          const res = await fetch(
+            `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json&sheet=${encoded}&_t=${Date.now()}`
           );
-          const col0 = String(cells[0] || '').trim().toLowerCase();
-          const col1 = String(cells[1] || '').trim();
-          const col2 = String(cells[2] || '').trim();
+          if (!res.ok) continue;
+          const text = await res.text();
+          const start = text.indexOf('{');
+          const end = text.lastIndexOf('}');
+          if (start === -1 || end === -1) continue;
+          const data = JSON.parse(text.slice(start, end + 1));
+          const cols = (data.table?.cols || []).map((c: any) =>
+            String(c?.label || c?.id || '').trim().toLowerCase()
+          );
 
-          // Key-Value row matching
-          if (col0.includes('whatsapp') && !col0.includes('message')) {
-            if (col1) newCfg.whatsappNumber = col1.replace(/\D/g, '');
-            if (col2) newCfg.whatsappMessage = col2;
-          } else if (col0.includes('whatsapp_message') || col0.includes('message')) {
-            if (col1) newCfg.whatsappMessage = col1;
-          } else if (col0.includes('instagram') || col0.includes('insta')) {
-            if (col1) {
-              newCfg.instagramUrl = col1.startsWith('http')
-                ? col1
-                : `https://instagram.com/${col1.replace('@', '')}`;
+          // Verify this sheet is actually the Social Links sheet (and not fallback to Users tab)
+          const isActualSocialTab = cols.some(
+            (c: string) => c.includes('platform') || c.includes('url') || c.includes('number') || c.includes('is_active')
+          );
+          if (!isActualSocialTab) continue;
+
+          const rows = data.table?.rows || [];
+          if (rows.length === 0) continue;
+
+          const newCfg: Partial<SocialLinkConfig> = {};
+
+          for (const r of rows) {
+            const cells = (r.c || []).map((c: any) =>
+              c ? (c.f !== undefined && c.f !== null ? c.f : c.v) : ''
+            );
+            const col0 = String(cells[0] || '').trim().toLowerCase();
+            const col1 = String(cells[1] || '').trim();
+            const col2 = String(cells[2] || '').trim();
+
+            // Match WhatsApp, Instagram, Facebook, Phone rows
+            if (col0.includes('whatsapp')) {
+              if (col1) newCfg.whatsappNumber = col1.replace(/\D/g, '');
+              if (col2 && !col2.toLowerCase().includes('true')) newCfg.whatsappMessage = col2;
+            } else if (col0.includes('instagram') || col0.includes('insta')) {
+              if (col1 && col1.toLowerCase() !== 'null') {
+                newCfg.instagramUrl = col1.startsWith('http')
+                  ? col1
+                  : `https://instagram.com/${col1.replace('@', '')}`;
+              }
+            } else if (col0.includes('facebook') || col0.includes('fb')) {
+              if (col1 && col1.toLowerCase() !== 'null') {
+                newCfg.facebookUrl = col1.startsWith('http')
+                  ? col1
+                  : `https://facebook.com/${col1}`;
+              }
+            } else if (col0.includes('phone') || col0.includes('call') || col0.includes('mobile')) {
+              if (col1) newCfg.phoneNumber = col1.replace(/\D/g, '');
+            } else if (col0.includes('youtube') || col0.includes('yt')) {
+              if (col1 && col1.toLowerCase() !== 'null') newCfg.youtubeUrl = col1;
             }
-          } else if (col0.includes('facebook') || col0.includes('fb')) {
-            if (col1) {
-              newCfg.facebookUrl = col1.startsWith('http')
-                ? col1
-                : `https://facebook.com/${col1}`;
-            }
-          } else if (col0.includes('phone') || col0.includes('call') || col0.includes('mobile')) {
-            if (col1) newCfg.phoneNumber = col1;
-          } else if (col0.includes('youtube') || col0.includes('yt')) {
-            if (col1) newCfg.youtubeUrl = col1;
           }
-        }
 
-        if (Object.keys(newCfg).length > 0) {
-          setConfig((prev) => {
-            const merged = { ...prev, ...newCfg };
-            try {
-              localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-            } catch {}
-            return merged;
-          });
+          if (Object.keys(newCfg).length > 0) {
+            setConfig((prev) => {
+              const merged = { ...prev, ...newCfg };
+              try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+              } catch {}
+              return merged;
+            });
+            break; // Successfully loaded from this tab
+          }
+        } catch (err) {
+          // Continue to next variation
         }
-      } catch (err) {
-        // Non-blocking fallback to local/default configuration
       }
     };
 
