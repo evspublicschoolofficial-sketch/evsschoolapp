@@ -2609,25 +2609,100 @@ export default function App() {
   // Staff Attendance Fetch & Check-In Handlers
   const fetchStaffAttendance = async (silent = false): Promise<StaffAttendanceRecord[]> => {
     if (!silent) setLoadingStaffAttendance(true);
+    let mergedList: StaffAttendanceRecord[] = [...staffAttendanceList];
+
+    // 1. Fetch from server persistent store
     try {
       const res = await fetch(`/api/staff-attendance?_t=${Date.now()}`);
       if (res.ok) {
         const data = await res.json();
         const records = (data?.records || []) as StaffAttendanceRecord[];
-        if (records.length > 0 || staffAttendanceList.length === 0) {
-          setStaffAttendanceList(records);
-          try {
-            localStorage.setItem(CACHE_KEY_STAFF_ATTENDANCE, JSON.stringify(records));
-          } catch {}
-          return records;
+        if (records.length > 0) {
+          mergedList = records;
         }
       }
     } catch (e) {
-      console.warn('Failed to fetch staff attendance:', e);
-    } finally {
-      if (!silent) setLoadingStaffAttendance(false);
+      console.warn('Failed to fetch local staff attendance:', e);
     }
-    return staffAttendanceList;
+
+    // 2. Also check if user has created the 'Staff_Attendance' tab in Google Sheets
+    try {
+      const encoded = encodeURIComponent('Staff_Attendance');
+      const gvizRes = await fetch(
+        `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}&_t=${Date.now()}`
+      );
+      if (gvizRes.ok) {
+        const text = await gvizRes.text();
+        const start = text.indexOf('{');
+        const end = text.lastIndexOf('}');
+        if (start !== -1 && end !== -1) {
+          const data = JSON.parse(text.slice(start, end + 1));
+          const cols = (data.table?.cols || []).map((c: any) =>
+            String(c?.label || c?.id || '').trim().toLowerCase()
+          );
+
+          // Verify this is actually the Staff_Attendance tab (and not fallback to Users tab)
+          const hasAttendanceCols = cols.some(
+            (c: string) => c.includes('check_in') || c.includes('check in') || c.includes('attendance') || c.includes('date')
+          );
+
+          if (hasAttendanceCols) {
+            const rows = data.table?.rows || [];
+            const sheetRecords: StaffAttendanceRecord[] = [];
+
+            for (let i = 0; i < rows.length; i++) {
+              const r = rows[i];
+              const cells = (r.c || []).map((c: any) =>
+                c ? (c.f !== undefined && c.f !== null ? c.f : c.v) : ''
+              );
+
+              // Map columns according to standard Staff_Attendance layout
+              // Col 0: ID, Col 1: User_ID, Col 2: Name, Col 3: Designation, Col 4: Date, Col 5: Check_In_Time, Col 6: Check_Out_Time, Col 7: Status, Col 8: Method, Col 9: Location, Col 10: Remark
+              const recUserId = String(cells[1] || cells[0] || '').trim();
+              const recDate = String(cells[4] || '').trim();
+              if (!recUserId || !recDate) continue;
+
+              const recId = String(cells[0] || `STAFF-ATT-${recUserId}-${recDate}`).trim();
+              sheetRecords.push({
+                id: recId,
+                user_id: recUserId,
+                name: String(cells[2] || 'Staff Member').trim(),
+                designation: String(cells[3] || 'Teacher').trim(),
+                date: recDate,
+                check_in_time: cells[5] ? String(cells[5]).trim() : undefined,
+                check_out_time: cells[6] ? String(cells[6]).trim() : undefined,
+                status: (cells[7] ? String(cells[7]).trim() : 'Present') as any,
+                method: (cells[8] ? String(cells[8]).trim() : 'School QR Scan') as any,
+                location: cells[9] ? String(cells[9]).trim() : 'School Campus',
+                remark: cells[10] ? String(cells[10]).trim() : undefined,
+                timestamp: Date.now(),
+                created_at: new Date().toISOString(),
+              });
+            }
+
+            if (sheetRecords.length > 0) {
+              // Merge Google Sheets records with local records, giving precedence to latest updates
+              const map = new Map<string, StaffAttendanceRecord>();
+              mergedList.forEach((r) => map.set(`${r.user_id}_${r.date}`, r));
+              sheetRecords.forEach((r) => map.set(`${r.user_id}_${r.date}`, { ...map.get(`${r.user_id}_${r.date}`), ...r }));
+              mergedList = Array.from(map.values()).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+            }
+          }
+        }
+      }
+    } catch (gvizErr) {
+      console.warn('Google Sheets Staff_Attendance fetch check:', gvizErr);
+    }
+
+    if (mergedList.length > 0) {
+      setStaffAttendanceList(mergedList);
+      try {
+        localStorage.setItem(CACHE_KEY_STAFF_ATTENDANCE, JSON.stringify(mergedList));
+      } catch {}
+    }
+
+    if (!silent) setLoadingStaffAttendance(false);
+    return mergedList;
   };
 
   const handleStaffCheckInSuccess = async (rec: Partial<StaffAttendanceRecord>, isCheckOut = false) => {
@@ -13179,7 +13254,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       )}
 
       {/* Continuous Floating Social Media Bar (WhatsApp, Instagram, Facebook, Call) */}
-      <FloatingSocialBar />
+      <FloatingSocialBar
+        isManager={Boolean(managerUser || activeTab === 'manager')}
+        spreadsheetId={SPREADSHEET_ID}
+      />
 
       {/* FOOTER */}
       <footer className="bg-[#0c2340] text-slate-300 border-t-2 border-amber-400 mt-auto">
