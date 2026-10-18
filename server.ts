@@ -306,6 +306,47 @@ async function startServer() {
   const BEHAVIOR_FILE = '/tmp/evs_behavior.json';
   const HW_TRACKER_FILE = '/tmp/evs_hw_tracker.json';
   const STAFF_ATTENDANCE_FILE = '/tmp/evs_staff_attendance.json';
+  const SCHOOL_LOCATION_FILE = '/tmp/evs_school_location.json';
+
+  const DEFAULT_SCHOOL_LOCATION = {
+    lat: 30.056038,
+    lng: 77.419096,
+    radiusMeters: 6000, // 6km initial radius to encompass school campus and allow immediate check-in
+    name: 'E.V.S. Public School',
+    geofenceEnabled: true,
+    updated_at: new Date().toISOString(),
+    updated_by: 'System Initial',
+  };
+
+  const getSchoolLocation = () => {
+    try {
+      if (fs.existsSync(SCHOOL_LOCATION_FILE)) {
+        return JSON.parse(fs.readFileSync(SCHOOL_LOCATION_FILE, 'utf-8'));
+      }
+    } catch (e) {
+      console.warn('Error reading school location file:', e);
+    }
+    return DEFAULT_SCHOOL_LOCATION;
+  };
+
+  const saveSchoolLocation = (body: any) => {
+    const current = getSchoolLocation();
+    const updated = {
+      lat: typeof body.lat === 'number' ? body.lat : current.lat,
+      lng: typeof body.lng === 'number' ? body.lng : current.lng,
+      radiusMeters: typeof body.radiusMeters === 'number' ? body.radiusMeters : current.radiusMeters,
+      name: body.name || current.name || 'E.V.S. Public School',
+      geofenceEnabled: body.geofenceEnabled !== undefined ? Boolean(body.geofenceEnabled) : current.geofenceEnabled,
+      updated_at: new Date().toISOString(),
+      updated_by: body.updated_by || 'Manager',
+    };
+    try {
+      fs.writeFileSync(SCHOOL_LOCATION_FILE, JSON.stringify(updated, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Error writing school location file:', e);
+    }
+    return updated;
+  };
 
   // Persistent deleted students
   const getDeletedStudents = (): string[] => {
@@ -666,6 +707,20 @@ async function startServer() {
       status: item.status || 'Present',
     });
     res.json({ success: true, records: list });
+  });
+
+  // Endpoints for School Campus GPS Location
+  app.get('/api/school-location', (_req, res) => {
+    res.json(getSchoolLocation());
+  });
+
+  app.post('/api/school-location', (req, res) => {
+    try {
+      const updated = saveSchoolLocation(req.body);
+      res.json({ success: true, location: updated });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e?.message || 'Failed to update school location' });
+    }
   });
 
   // Get list of deleted receipts

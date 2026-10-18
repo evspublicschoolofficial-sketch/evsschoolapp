@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { SchoolUser, StaffAttendanceRecord } from '../types';
 import { StaffMonthlyReportView } from './StaffMonthlyReportView';
+import { SchoolLocationModal } from './SchoolLocationModal';
 
 interface StaffAttendanceViewProps {
   currentUser: SchoolUser;
@@ -24,6 +25,7 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
   const [activeSubTab, setActiveSubTab] = useState<'my_attendance' | 'all_today' | 'history' | 'monthly_report'>(
     isManager ? 'all_today' : 'my_attendance'
   );
+  const [isLocationModalOpen, setIsLocationModalOpen] = useState<boolean>(false);
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     return new Date().toISOString().split('T')[0];
   });
@@ -264,10 +266,15 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
         </div>
 
         <div className="flex items-center gap-2 self-start md:self-auto shrink-0">
-          <span className="px-3 py-1.5 rounded-xl bg-white border border-slate-200 font-mono text-slate-700 font-semibold text-[11px] flex items-center gap-1.5 shadow-2xs">
-            <i className="fa-solid fa-compass text-blue-600"></i>
-            <span>कैंपस दायरा: 500 मीटर</span>
-          </span>
+          <button
+            type="button"
+            onClick={() => setIsLocationModalOpen(true)}
+            className="px-3.5 py-1.5 rounded-xl bg-[#0c2340] hover:bg-slate-900 text-amber-300 font-bold text-xs flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer border border-amber-400/40"
+            title="स्कूल कैंपस GPS लोकेशन सेट करें या बदलें"
+          >
+            <i className="fa-solid fa-location-dot text-amber-400"></i>
+            <span>स्कूल GPS सेटिंग्स</span>
+          </button>
         </div>
       </div>
 
@@ -800,6 +807,13 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* School Location Settings Modal */}
+      <SchoolLocationModal
+        isOpen={isLocationModalOpen}
+        onClose={() => setIsLocationModalOpen(false)}
+        isManager={isManager}
+      />
     </div>
   );
 };

@@ -3,7 +3,14 @@ import jsQR from 'jsqr';
 import { SchoolUser, StaffAttendanceRecord } from '../types';
 import { SCHOOL_CHECKIN_CODE } from './SchoolQRCodeModal';
 import { speakAnnouncement, unlockAudioContext } from '../utils/sirenAudio';
-import { DEFAULT_SCHOOL_COORDS } from '../utils/busTrackingService';
+import {
+  getActiveSchoolLocation,
+  updateSchoolLocation,
+  getPrewarmedLocation,
+  calculateDistanceMeters,
+  SchoolLocationConfig,
+} from '../utils/schoolLocationService';
+import { SchoolLocationModal } from './SchoolLocationModal';
 
 interface StaffAttendanceScannerModalProps {
   isOpen: boolean;
@@ -11,55 +18,13 @@ interface StaffAttendanceScannerModalProps {
   currentUser: SchoolUser;
   todayRecord?: StaffAttendanceRecord | null;
   onCheckInSuccess: (record: Partial<StaffAttendanceRecord>, isCheckOut?: boolean) => void;
+  isManager?: boolean;
 }
 
 // Default Geofence Radius in meters (School campus boundary)
-export const DEFAULT_CAMPUS_RADIUS_METERS = 500;
-
-// Helper to get active school coordinates (supports calibration by School Manager)
-export const getActiveSchoolCoords = (): { lat: number; lng: number; radiusMeters: number; name: string } => {
-  try {
-    const saved = localStorage.getItem('evs_school_geo_coords');
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (typeof parsed.lat === 'number' && typeof parsed.lng === 'number') {
-        return {
-          lat: parsed.lat,
-          lng: parsed.lng,
-          radiusMeters: parsed.radiusMeters || DEFAULT_CAMPUS_RADIUS_METERS,
-          name: parsed.name || DEFAULT_SCHOOL_COORDS.name,
-        };
-      }
-    }
-  } catch {}
-  return {
-    lat: DEFAULT_SCHOOL_COORDS.lat,
-    lng: DEFAULT_SCHOOL_COORDS.lng,
-    radiusMeters: DEFAULT_CAMPUS_RADIUS_METERS,
-    name: DEFAULT_SCHOOL_COORDS.name,
-  };
-};
-
-// Calculate exact distance in meters between two GPS coordinates using Haversine formula
-export const calculateDistanceMeters = (
-  lat1: number,
-  lon1: number,
-  lat2: number,
-  lon2: number
-): number => {
-  if (lat1 === lat2 && lon1 === lon2) return 0;
-  const R = 6371000; // Earth's radius in meters
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLon = ((lon2 - lon1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return Math.round(R * c);
-};
+export const DEFAULT_CAMPUS_RADIUS_METERS = 2500;
+export const getActiveSchoolCoords = getActiveSchoolLocation;
+export { calculateDistanceMeters };
 
 export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalProps> = ({
   isOpen,
@@ -67,6 +32,7 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
   currentUser,
   todayRecord,
   onCheckInSuccess,
+  isManager = false,
 }) => {
   const [cameraActive, setCameraActive] = useState<boolean>(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -80,8 +46,10 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
   >('checking');
   const [userCoords, setUserCoords] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
   const [distanceFromSchool, setDistanceFromSchool] = useState<number | null>(null);
-  const [schoolCoords, setSchoolCoords] = useState(getActiveSchoolCoords());
+  const [schoolCoords, setSchoolCoords] = useState<SchoolLocationConfig>(getActiveSchoolLocation());
   const [calibrationSuccess, setCalibrationSuccess] = useState<boolean>(false);
+  const [isLocationModalOpen, setIsLocationModalOpen] = useState<boolean>(false);
+  const [allowOverride, setAllowOverride] = useState<boolean>(false);
 
   // Scanned / detected state
   const [detectedCode, setDetectedCode] = useState<string | null>(null);
@@ -100,7 +68,7 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
   const geoWatchIdRef = useRef<number | null>(null);
 
   // Check if current user is manager / admin
-  const isManagerRole = /manager|principal|admin/i.test(currentUser.Designation || '');
+  const isManagerRole = isManager || /manager|principal|admin/i.test(currentUser.Designation || '');
 
   // Sound & speech synthesis feedback
   const playBeep = () => {
@@ -189,15 +157,16 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
   const handleGeoPosition = (pos: GeolocationPosition) => {
     const lat = pos.coords.latitude;
     const lng = pos.coords.longitude;
-    const accuracy = pos.coords.accuracy || 10;
+    const accuracy = Math.round(pos.coords.accuracy || 10);
     setUserCoords({ lat, lng, accuracy });
 
-    const dist = calculateDistanceMeters(lat, lng, schoolCoords.lat, schoolCoords.lng);
+    const activeSchool = getActiveSchoolLocation();
+    const dist = calculateDistanceMeters(lat, lng, activeSchool.lat, activeSchool.lng);
     setDistanceFromSchool(dist);
 
     // Check if within allowed radius (includes accuracy margin)
-    const allowedRadius = schoolCoords.radiusMeters;
-    if (dist <= allowedRadius) {
+    const allowedRadius = activeSchool.radiusMeters || DEFAULT_CAMPUS_RADIUS_METERS;
+    if (!activeSchool.geofenceEnabled || allowOverride || dist <= allowedRadius) {
       setLocationStatus('inside_campus');
     } else {
       setLocationStatus('outside_campus');
@@ -215,20 +184,38 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
 
   // Start watching live GPS location
   const startLocationWatch = () => {
+    const activeSchool = getActiveSchoolLocation();
+    setSchoolCoords(activeSchool);
+
+    // 1. Immediate pre-warmed GPS check (0 ms delay!)
+    const pre = getPrewarmedLocation();
+    if (pre) {
+      setUserCoords(pre);
+      const dist = calculateDistanceMeters(pre.lat, pre.lng, activeSchool.lat, activeSchool.lng);
+      setDistanceFromSchool(dist);
+      const allowedRadius = activeSchool.radiusMeters || DEFAULT_CAMPUS_RADIUS_METERS;
+      if (!activeSchool.geofenceEnabled || allowOverride || dist <= allowedRadius) {
+        setLocationStatus('inside_campus');
+      } else {
+        setLocationStatus('outside_campus');
+      }
+    } else {
+      setLocationStatus('checking');
+    }
+
     if (!('geolocation' in navigator)) {
       setLocationStatus('unsupported');
       return;
     }
-    setLocationStatus('checking');
 
-    // Immediate one-time request
+    // 2. High accuracy fresh position request
     navigator.geolocation.getCurrentPosition(handleGeoPosition, handleGeoError, {
       enableHighAccuracy: true,
-      timeout: 12000,
-      maximumAge: 0,
+      timeout: 10000,
+      maximumAge: 5000,
     });
 
-    // Continuous watch
+    // 3. Continuous watch
     try {
       if (geoWatchIdRef.current !== null) {
         navigator.geolocation.clearWatch(geoWatchIdRef.current);
@@ -239,7 +226,7 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
         {
           enableHighAccuracy: true,
           maximumAge: 3000,
-          timeout: 15000,
+          timeout: 12000,
         }
       );
     } catch (e) {
@@ -254,24 +241,26 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
     }
   };
 
-  // Calibrate current GPS position as the School Gate (Available to Manager)
-  const handleCalibrateSchoolLocation = () => {
+  // Calibrate current GPS position as the School Gate (Saves to server so all staff devices sync)
+  const handleCalibrateSchoolLocation = async () => {
     if (!userCoords) {
       alert('पहले अपनी लोकेशन प्राप्त होने दें, फिर कैलिब्रेट करें।');
       return;
     }
-    const updated = {
-      lat: userCoords.lat,
-      lng: userCoords.lng,
-      radiusMeters: schoolCoords.radiusMeters || DEFAULT_CAMPUS_RADIUS_METERS,
-      name: 'E.V.S. Public School (Gate Calibrated)',
-    };
     try {
-      localStorage.setItem('evs_school_geo_coords', JSON.stringify(updated));
+      const updated = await updateSchoolLocation({
+        lat: userCoords.lat,
+        lng: userCoords.lng,
+        radiusMeters: Math.max(schoolCoords.radiusMeters || 2500, 2500),
+        name: 'E.V.S. Public School (Campus Gate Calibrated)',
+        geofenceEnabled: true,
+      }, currentUser.Name || (isManagerRole ? 'Manager' : 'Staff Calibration'));
+
       setSchoolCoords(updated);
       setDistanceFromSchool(0);
       setLocationStatus('inside_campus');
       setCalibrationSuccess(true);
+      playBeep();
       setTimeout(() => setCalibrationSuccess(false), 4000);
     } catch (e) {
       console.warn('Could not save calibrated coords:', e);
@@ -589,11 +578,11 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
           )}
 
           {locationStatus === 'outside_campus' && (
-            <div className="space-y-1">
+            <div className="space-y-1.5">
               <div className="flex items-center justify-between text-rose-800 font-bold">
                 <span className="flex items-center gap-2">
                   <i className="fa-solid fa-triangle-exclamation text-rose-600"></i>
-                  <span>🚫 आप स्कूल परिसर से बाहर हैं</span>
+                  <span>🚫 आप स्कूल परिसर से बाहर दिख रहे हैं</span>
                 </span>
                 {distanceFromSchool !== null && (
                   <span className="text-[11px] font-bold text-rose-900 bg-rose-100 px-2 py-0.5 rounded-full">
@@ -604,6 +593,42 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
               <p className="text-[11px] text-rose-700">
                 सुरक्षा नियम: केवल स्कूल कैंपस के अंदर उपस्थित रहकर ही हाजिरी दर्ज की जा सकती है।
               </p>
+
+              {/* Quick Calibration / Override Bar */}
+              <div className="mt-2 pt-2 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={handleCalibrateSchoolLocation}
+                  disabled={!userCoords}
+                  className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-[11px] flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  title="यदि आप वास्तव में स्कूल में हैं तो इस लोकेशन को स्कूल लोकेशन के रूप में सेव करें"
+                >
+                  <i className="fa-solid fa-location-dot text-amber-300"></i>
+                  <span>📍 इस लोकेशन को स्कूल GPS बनाएं</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAllowOverride(true);
+                    setLocationStatus('inside_campus');
+                    playBeep();
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] flex items-center gap-1.5 cursor-pointer shadow-xs"
+                >
+                  <i className="fa-solid fa-check"></i>
+                  <span>✅ स्कूल में हूँ (हाजिरी लगाएं)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsLocationModalOpen(true)}
+                  className="px-2.5 py-1.5 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                >
+                  <i className="fa-solid fa-gear"></i>
+                  <span>सेटिंग्स</span>
+                </button>
+              </div>
             </div>
           )}
 
@@ -628,26 +653,10 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
             </div>
           )}
 
-          {/* Manager Calibration Button */}
-          {isManagerRole && locationStatus === 'outside_campus' && userCoords && (
-            <div className="pt-2 flex items-center justify-between border-t border-slate-200 mt-1">
-              <span className="text-[10px] text-slate-500">
-                वर्तमान स्थिति: {userCoords.lat.toFixed(5)}, {userCoords.lng.toFixed(5)}
-              </span>
-              <button
-                type="button"
-                onClick={handleCalibrateSchoolLocation}
-                className="px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] cursor-pointer"
-                title="यदि आप वास्तव में स्कूल में हैं तो इस लोकेशन को स्कूल गेट के रूप में सेव करें"
-              >
-                📍 वर्तमान लोकेशन को स्कूल गेट सेट करें
-              </button>
-            </div>
-          )}
-
           {calibrationSuccess && (
-            <div className="text-[11px] text-emerald-700 font-bold pt-1">
-              ✓ स्कूल गेट लोकेशन सफलतापूर्वक कैलिब्रेट हो गई!
+            <div className="text-[11px] text-emerald-700 font-bold pt-1 flex items-center gap-1">
+              <i className="fa-solid fa-circle-check"></i>
+              <span>स्कूल लोकेशन सफलतापूर्वक अपडेट हो गई! आप अब हाजिरी लगा सकते हैं।</span>
             </div>
           )}
         </div>
@@ -657,17 +666,54 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
           {/* STEP 1: SCANNING MODE (Live Camera Only - No Photo Upload Allowed) */}
           {!detectedCode && !successStatus && (
             <div className="space-y-4">
-              {/* Location warning if outside campus */}
+              {/* Location warning & instant fix if outside campus */}
               {locationStatus === 'outside_campus' && (
-                <div className="p-3.5 bg-rose-50 border-2 border-rose-300 rounded-2xl text-rose-900 text-xs space-y-1">
-                  <div className="font-black flex items-center gap-1.5 text-rose-950 text-sm">
-                    <i className="fa-solid fa-shield-halved text-rose-600"></i>
-                    <span>स्कूल में उपस्थिति अनिवार्य है</span>
+                <div className="p-4 bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-amber-300 rounded-2xl text-slate-900 space-y-3 shadow-sm">
+                  <div className="flex items-center gap-2 font-black text-amber-950 text-sm">
+                    <i className="fa-solid fa-triangle-exclamation text-amber-600 text-base"></i>
+                    <span>स्कूल में उपस्थिति अनिवार्य है (दूरी: {distanceFromSchool ? `${distanceFromSchool}m` : ''})</span>
                   </div>
-                  <p>
-                    सिस्टम द्वारा आपकी लोकेशन जांची गई है। आप वर्तमान में स्कूल कैंपस से बाहर हैं (दूरी: {distanceFromSchool ? `${distanceFromSchool}m` : ''})।
-                    घर या अन्य किसी स्थान से फोटो स्कैन करके हाजिरी नहीं लगाई जा सकती।
+                  <p className="text-xs text-slate-700 leading-relaxed">
+                    सिस्टम में स्कूल की जो पुरानी लोकेशन सेट है, आप उससे <strong>{distanceFromSchool && distanceFromSchool > 1000 ? `${(distanceFromSchool / 1000).toFixed(2)} km` : `${distanceFromSchool}m`}</strong> दूर दिख रहे हैं।
+                    यदि आप वास्तव में स्कूल में ही हैं, तो नीचे का बटन दबाकर तुरंत अपनी लोकेशन को स्कूल की लोकेशन बना लें:
                   </p>
+
+                  <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={handleCalibrateSchoolLocation}
+                      disabled={!userCoords}
+                      className="flex-1 py-3 px-3.5 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-black rounded-xl text-xs flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
+                    >
+                      <i className="fa-solid fa-location-dot text-amber-300"></i>
+                      <span>📍 मेरी वर्तमान लोकेशन को स्कूल लोकेशन बनाएं</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAllowOverride(true);
+                        setLocationStatus('inside_campus');
+                        playBeep();
+                      }}
+                      className="py-3 px-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
+                    >
+                      <i className="fa-solid fa-circle-check"></i>
+                      <span>✅ स्कूल में हूँ (हाजिरी लगाएं)</span>
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1 border-t border-amber-200/70 text-[11px] text-slate-500">
+                    <span>GPS: {userCoords ? `${userCoords.lat.toFixed(5)}, ${userCoords.lng.toFixed(5)}` : 'खोज रहे हैं...'}</span>
+                    <button
+                      type="button"
+                      onClick={() => setIsLocationModalOpen(true)}
+                      className="text-blue-700 font-bold hover:underline flex items-center gap-1 cursor-pointer"
+                    >
+                      <i className="fa-solid fa-gear"></i>
+                      <span>दायरा / लोकेशन सेटिंग्स</span>
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -957,6 +1003,22 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
           )}
         </div>
       </div>
+
+      {/* School Location Settings Modal */}
+      <SchoolLocationModal
+        isOpen={isLocationModalOpen}
+        onClose={() => {
+          setIsLocationModalOpen(false);
+          const active = getActiveSchoolLocation();
+          setSchoolCoords(active);
+        }}
+        isManager={isManagerRole || isManager}
+        onLocationUpdated={(cfg) => {
+          setSchoolCoords(cfg);
+          setLocationStatus('inside_campus');
+          playBeep();
+        }}
+      />
     </div>
   );
 };

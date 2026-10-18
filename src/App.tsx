@@ -36,6 +36,7 @@ import { StaffAttendanceView } from './components/StaffAttendanceView';
 import { TeacherHomeworkChecker } from './components/TeacherHomeworkChecker';
 import { FloatingSocialBar } from './components/FloatingSocialBar';
 import { fetchFeeMasterDirectGViz } from './utils/feeMaster';
+import { initGeolocationPrewarmer, syncSchoolLocationFromServer } from './utils/schoolLocationService';
 import { computeStudentFeeMetrics, computeSchoolFeeTotals, normalizeStudentId, reconcileFeeRecords, calculateStudentSummary } from './utils/feeCalculation';
 import { realtimeSync } from './utils/realtimeSync';
 import studentFarahPhoto from './assets/images/student_farah_1789483069291.jpg';
@@ -1179,6 +1180,12 @@ export default function App() {
       localStorage.setItem('evs_active_tab', activeTab);
     } catch {}
   }, [activeTab]);
+
+  // Immediate pre-warming of GPS location & school location on app startup
+  useEffect(() => {
+    initGeolocationPrewarmer();
+    syncSchoolLocationFromServer().catch(() => {});
+  }, []);
 
   // LocalStorage cached initial states (0.1s instant render)
   const [students, setStudents] = useState<Student[]>(() => getCachedData<Student[]>(CACHE_KEY_STUDENTS, []));
@@ -13235,6 +13242,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
           currentUser={teacherUser || managerUser || { Name: 'Staff Member', Designation: 'Staff', User_ID: 'STAFF1', Username: 'staff', Mobile_number: '' }}
           todayRecord={myTodayAttendanceRecord}
           onCheckInSuccess={handleStaffCheckInSuccess}
+          isManager={Boolean(managerUser || activeTab === 'manager')}
         />
       )}
 
