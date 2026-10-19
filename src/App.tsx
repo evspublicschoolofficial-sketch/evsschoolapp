@@ -2614,51 +2614,14 @@ export default function App() {
   };
 
   // Staff Attendance Fetch & Check-In Handlers
+  // RULE (As requested by user):
+  // 1. Google Sheet is the authoritative single source of truth.
+  // 2. If Google Sheet contains records, display ONLY what is in the sheet (discard any ghost/phantom local records).
+  // 3. Cache the Google Sheet records into localStorage so next time the app opens, it loads instantly from phone storage.
+  // 4. Only if Google Sheet is unreachable or completely empty, fallback to cached data.
   const fetchStaffAttendance = async (silent = false): Promise<StaffAttendanceRecord[]> => {
     if (!silent) setLoadingStaffAttendance(true);
 
-    // Build a map of all known attendance records to safely merge without losing any records
-    const recordsMap = new Map<string, StaffAttendanceRecord>();
-
-    // 1. Seed from current React state (so in-progress check-ins never get wiped out)
-    staffAttendanceList.forEach((r) => {
-      if (r.user_id && r.date) recordsMap.set(`${r.user_id}_${r.date}`, r);
-    });
-
-    // 2. Merge from LocalStorage cache
-    try {
-      const cached = localStorage.getItem(CACHE_KEY_STAFF_ATTENDANCE);
-      if (cached) {
-        const parsed = JSON.parse(cached) as StaffAttendanceRecord[];
-        if (Array.isArray(parsed)) {
-          parsed.forEach((r) => {
-            if (r.user_id && r.date) {
-              const k = `${r.user_id}_${r.date}`;
-              recordsMap.set(k, { ...recordsMap.get(k), ...r });
-            }
-          });
-        }
-      }
-    } catch {}
-
-    // 3. Merge from server persistent store (/api/staff-attendance)
-    try {
-      const res = await fetch(`/api/staff-attendance?_t=${Date.now()}`);
-      if (res.ok) {
-        const data = await res.json();
-        const serverRecords = (data?.records || []) as StaffAttendanceRecord[];
-        serverRecords.forEach((r) => {
-          if (r.user_id && r.date) {
-            const k = `${r.user_id}_${r.date}`;
-            recordsMap.set(k, { ...recordsMap.get(k), ...r });
-          }
-        });
-      }
-    } catch (e) {
-      console.warn('Failed to fetch local staff attendance:', e);
-    }
-
-    // 4. Also fetch from Google Sheets 'Staff_Attendance ' or 'Staff_Attendance'
     const staffTabs = ['Staff_Attendance ', 'Staff_Attendance', 'Staff Attendance', 'StaffAttendance', 'staff_attendance'];
 
     const parseGvizDate = (raw: any): string => {
@@ -2697,6 +2660,10 @@ export default function App() {
       return s;
     };
 
+    let sheetRecords: StaffAttendanceRecord[] = [];
+    let foundSheet = false;
+
+    // Fetch directly from Google Sheets
     for (const tab of staffTabs) {
       try {
         const encoded = encodeURIComponent(tab);
@@ -2719,6 +2686,7 @@ export default function App() {
         );
 
         if (hasAttendanceCols) {
+          foundSheet = true;
           const rows = data.table?.rows || [];
 
           const idIdx = cols.findIndex((c: string) => c === 'id');
@@ -2732,6 +2700,8 @@ export default function App() {
           const methodIdx = cols.findIndex((c: string) => c.includes('method'));
           const locIdx = cols.findIndex((c: string) => c.includes('loc'));
           const remIdx = cols.findIndex((c: string) => c.includes('rem') || c.includes('note'));
+
+          const parsedList: StaffAttendanceRecord[] = [];
 
           for (let i = 0; i < rows.length; i++) {
             const r = rows[i];
@@ -2753,25 +2723,24 @@ export default function App() {
             const parsedIn = parseGvizTime(rawInVal, false) || (cells[inIdx !== -1 ? inIdx : 5] ? String(cells[inIdx !== -1 ? inIdx : 5]).trim() : undefined);
             const parsedOut = parseGvizTime(rawOutVal, true) || (cells[outIdx !== -1 ? outIdx : 6] ? String(cells[outIdx !== -1 ? outIdx : 6]).trim() : undefined);
 
-            const k = `${recUserId}_${recDate}`;
-            const existing = recordsMap.get(k);
-
-            recordsMap.set(k, {
+            parsedList.push({
               id: recId,
               user_id: recUserId,
               name: recName,
               designation: String((desIdx !== -1 ? cells[desIdx] : '') || cells[3] || 'Teacher').trim(),
               date: recDate,
-              check_in_time: parsedIn || existing?.check_in_time,
-              check_out_time: parsedOut || existing?.check_out_time,
+              check_in_time: parsedIn,
+              check_out_time: parsedOut,
               status: ((statusIdx !== -1 ? cells[statusIdx] : cells[7]) ? String(cells[statusIdx !== -1 ? statusIdx : 7]).trim() : 'Present') as any,
               method: ((methodIdx !== -1 ? cells[methodIdx] : cells[10]) ? String(cells[methodIdx !== -1 ? methodIdx : 10]).trim() : 'School QR Scan') as any,
               location: String((locIdx !== -1 ? cells[locIdx] : cells[11]) || 'School Campus').trim(),
-              remark: (remIdx !== -1 ? cells[remIdx] : cells[12]) ? String(cells[remIdx !== -1 ? remIdx : 12]).trim() : existing?.remark,
-              timestamp: existing?.timestamp || Date.now(),
-              created_at: existing?.created_at || new Date().toISOString(),
+              remark: (remIdx !== -1 ? cells[remIdx] : cells[12]) ? String(cells[remIdx !== -1 ? remIdx : 12]).trim() : '',
+              timestamp: Date.now(),
+              created_at: new Date().toISOString(),
             });
           }
+
+          sheetRecords = parsedList;
           break; // Found and parsed Staff_Attendance tab
         }
       } catch (gvizErr) {
@@ -2779,17 +2748,51 @@ export default function App() {
       }
     }
 
-    const mergedList = Array.from(recordsMap.values()).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    let finalList: StaffAttendanceRecord[] = [];
 
-    if (mergedList.length > 0) {
-      setStaffAttendanceList(mergedList);
+    if (foundSheet && sheetRecords.length > 0) {
+      // 1. Google Sheet HAS DATA: As requested by user, ONLY show the Google Sheet data!
+      // Discard any phantom local/mock records that are not in the sheet.
+      finalList = sheetRecords.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+      // If a check-in just happened in this exact browser session within the last 30 seconds
+      // and hasn't yet shown up in the sheet query due to Google CDN delay, preserve it
+      const recentSessionCheckIns = staffAttendanceList.filter((r) => {
+        const isRecent = r.timestamp && Date.now() - r.timestamp < 30000;
+        const existsInSheet = sheetRecords.some(
+          (sr) => sr.user_id === r.user_id && sr.date === r.date
+        );
+        return isRecent && !existsInSheet;
+      });
+
+      if (recentSessionCheckIns.length > 0) {
+        finalList = [...recentSessionCheckIns, ...finalList];
+      }
+
+      // Save this authoritative sheet data into localStorage so next time the app opens,
+      // it loads this exact sheet data from phone storage without waiting!
       try {
-        localStorage.setItem(CACHE_KEY_STAFF_ATTENDANCE, JSON.stringify(mergedList));
+        localStorage.setItem(CACHE_KEY_STAFF_ATTENDANCE, JSON.stringify(finalList));
+      } catch {}
+
+      setStaffAttendanceList(finalList);
+    } else {
+      // 2. Google Sheet is completely empty or network offline:
+      // ONLY then fallback to cached data from phone storage!
+      try {
+        const cached = localStorage.getItem(CACHE_KEY_STAFF_ATTENDANCE);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            finalList = parsed;
+            setStaffAttendanceList(finalList);
+          }
+        }
       } catch {}
     }
 
     if (!silent) setLoadingStaffAttendance(false);
-    return mergedList;
+    return finalList;
   };
 
   const handleStaffCheckInSuccess = async (rec: Partial<StaffAttendanceRecord>, isCheckOut = false) => {

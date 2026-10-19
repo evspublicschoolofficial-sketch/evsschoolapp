@@ -12,8 +12,8 @@ interface SocialLinkConfig {
 const DEFAULT_CONFIG: SocialLinkConfig = {
   whatsappNumber: '8954555074',
   whatsappMessage: 'WhatsApp पर चैट करें',
-  instagramUrl: 'https://instagram.com/evspublicschool',
-  facebookUrl: 'https://facebook.com/evspublicschool',
+  instagramUrl: 'https://instagram.com',
+  facebookUrl: 'https://facebook.com',
   youtubeUrl: '',
   phoneNumber: '9759762837',
 };
@@ -126,25 +126,25 @@ export const FloatingSocialBar: React.FC<FloatingSocialBarProps> = ({
           } else if (col0.includes('instagram') || col0.includes('insta')) {
             if (col1 && col1.toLowerCase() !== 'null' && col1.toLowerCase() !== 'none' && col1.trim() !== '') {
               newCfg.instagramUrl = col1.startsWith('http')
-                ? col1
-                : `https://instagram.com/${col1.replace('@', '')}`;
+                ? col1.trim()
+                : `https://instagram.com/${col1.replace('@', '').trim()}`;
             } else {
-              newCfg.instagramUrl = 'https://instagram.com/evspublicschool';
+              newCfg.instagramUrl = 'https://instagram.com';
             }
           } else if (col0.includes('facebook') || col0.includes('fb')) {
             if (col1 && col1.toLowerCase() !== 'null' && col1.toLowerCase() !== 'none' && col1.trim() !== '') {
               newCfg.facebookUrl = col1.startsWith('http')
-                ? col1
-                : `https://facebook.com/${col1}`;
+                ? col1.trim()
+                : `https://facebook.com/${col1.trim()}`;
             } else {
-              newCfg.facebookUrl = 'https://facebook.com/evspublicschool';
+              newCfg.facebookUrl = 'https://facebook.com';
             }
           } else if (col0.includes('phone') || col0.includes('call') || col0.includes('mobile') || col0.includes('helpline')) {
             const num = cleanNumber(col1);
             if (num) newCfg.phoneNumber = num;
           } else if (col0.includes('youtube') || col0.includes('yt')) {
             if (col1 && col1.toLowerCase() !== 'null' && col1.toLowerCase() !== 'none' && col1.trim() !== '') {
-              newCfg.youtubeUrl = col1;
+              newCfg.youtubeUrl = col1.trim();
             } else {
               newCfg.youtubeUrl = '';
             }
@@ -152,14 +152,19 @@ export const FloatingSocialBar: React.FC<FloatingSocialBarProps> = ({
         }
 
         if (Object.keys(newCfg).length > 0) {
-          setConfig((prev) => {
-            const merged = { ...prev, ...newCfg };
-            try {
-              localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-            } catch {}
-            return merged;
-          });
-          setEditConfig((prev) => ({ ...prev, ...newCfg }));
+          const finalConfig: SocialLinkConfig = {
+            whatsappNumber: newCfg.whatsappNumber || DEFAULT_CONFIG.whatsappNumber,
+            whatsappMessage: newCfg.whatsappMessage || DEFAULT_CONFIG.whatsappMessage,
+            instagramUrl: newCfg.instagramUrl || DEFAULT_CONFIG.instagramUrl,
+            facebookUrl: newCfg.facebookUrl || DEFAULT_CONFIG.facebookUrl,
+            youtubeUrl: newCfg.youtubeUrl || '',
+            phoneNumber: newCfg.phoneNumber || DEFAULT_CONFIG.phoneNumber,
+          };
+          setConfig(finalConfig);
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(finalConfig));
+          } catch {}
+          setEditConfig(finalConfig);
           setSheetSyncInfo({
             tabName: tab.trim(),
             syncedCount: Object.keys(newCfg).length,
