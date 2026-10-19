@@ -10,11 +10,11 @@ interface SocialLinkConfig {
 }
 
 const DEFAULT_CONFIG: SocialLinkConfig = {
-  whatsappNumber: '9759762837',
-  whatsappMessage: 'नमस्ते, मुझे E.V.S. पब्लिक स्कूल के बारे में जानकारी चाहिए।',
-  instagramUrl: 'https://www.instagram.com/evspublicschool',
-  facebookUrl: 'https://www.facebook.com/evspublicschool',
-  youtubeUrl: 'https://www.youtube.com',
+  whatsappNumber: '8954555074',
+  whatsappMessage: 'WhatsApp पर चैट करें',
+  instagramUrl: '',
+  facebookUrl: '',
+  youtubeUrl: '',
   phoneNumber: '9759762837',
 };
 
@@ -60,88 +60,125 @@ export const FloatingSocialBar: React.FC<FloatingSocialBarProps> = ({
   const [activeModalTab, setActiveModalTab] = useState<'form' | 'sheet_guide'>('form');
   const [editConfig, setEditConfig] = useState<SocialLinkConfig>(config);
 
-  // Auto-fetch from Google Sheets 'Social_Links ' or 'Social_Links' sheet if available
-  useEffect(() => {
+  const [sheetSyncInfo, setSheetSyncInfo] = useState<{
+    tabName: string;
+    syncedCount: number;
+    time: string;
+    whatsApp?: string;
+    phone?: string;
+  } | null>(null);
+  const [isSyncingSheet, setIsSyncingSheet] = useState<boolean>(false);
+
+  // Clean numbers (handling floats like 8954555074.0 from GViz)
+  const cleanNumber = (val: any): string => {
+    if (!val) return '';
+    return String(val).replace(/\.0+$/, '').replace(/\D/g, '');
+  };
+
+  // Auto-fetch from Google Sheets 'Social_Links ' or 'Social_Links' sheet
+  const fetchSocialLinksFromSheet = async (manual = false) => {
     if (!spreadsheetId) return;
-    const fetchSocialLinksFromSheet = async () => {
-      // Try variations including with trailing space as created by user
-      const tabVariations = ['Social_Links ', 'Social_Links', 'Social Links', 'SocialLinks', 'social_links'];
-      
-      for (const tab of tabVariations) {
-        try {
-          const encoded = encodeURIComponent(tab);
-          const res = await fetch(
-            `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json&sheet=${encoded}&_t=${Date.now()}`
+    setIsSyncingSheet(true);
+    // Try variations including with trailing space as created by user
+    const tabVariations = ['Social_Links ', 'Social_Links', 'Social Links', 'SocialLinks', 'social_links'];
+    let found = false;
+
+    for (const tab of tabVariations) {
+      try {
+        const encoded = encodeURIComponent(tab);
+        const res = await fetch(
+          `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json&sheet=${encoded}&_t=${Date.now()}`
+        );
+        if (!res.ok) continue;
+        const text = await res.text();
+        const start = text.indexOf('{');
+        const end = text.lastIndexOf('}');
+        if (start === -1 || end === -1) continue;
+        const data = JSON.parse(text.slice(start, end + 1));
+        const cols = (data.table?.cols || []).map((c: any) =>
+          String(c?.label || c?.id || '').trim().toLowerCase()
+        );
+
+        // Verify this sheet is actually the Social Links sheet (and not fallback to Users tab)
+        const isActualSocialTab = cols.some(
+          (c: string) => c.includes('platform') || c.includes('url') || c.includes('number') || c.includes('is_active')
+        );
+        if (!isActualSocialTab) continue;
+
+        const rows = data.table?.rows || [];
+        if (rows.length === 0) continue;
+
+        const newCfg: Partial<SocialLinkConfig> = {};
+
+        for (const r of rows) {
+          const cells = (r.c || []).map((c: any) =>
+            c ? (c.f !== undefined && c.f !== null ? c.f : c.v) : ''
           );
-          if (!res.ok) continue;
-          const text = await res.text();
-          const start = text.indexOf('{');
-          const end = text.lastIndexOf('}');
-          if (start === -1 || end === -1) continue;
-          const data = JSON.parse(text.slice(start, end + 1));
-          const cols = (data.table?.cols || []).map((c: any) =>
-            String(c?.label || c?.id || '').trim().toLowerCase()
-          );
+          const col0 = String(cells[0] || '').trim().toLowerCase();
+          const col1 = cells[1] !== undefined && cells[1] !== null ? String(cells[1]).trim() : '';
+          const col2 = cells[2] !== undefined && cells[2] !== null ? String(cells[2]).trim() : '';
 
-          // Verify this sheet is actually the Social Links sheet (and not fallback to Users tab)
-          const isActualSocialTab = cols.some(
-            (c: string) => c.includes('platform') || c.includes('url') || c.includes('number') || c.includes('is_active')
-          );
-          if (!isActualSocialTab) continue;
-
-          const rows = data.table?.rows || [];
-          if (rows.length === 0) continue;
-
-          const newCfg: Partial<SocialLinkConfig> = {};
-
-          for (const r of rows) {
-            const cells = (r.c || []).map((c: any) =>
-              c ? (c.f !== undefined && c.f !== null ? c.f : c.v) : ''
-            );
-            const col0 = String(cells[0] || '').trim().toLowerCase();
-            const col1 = String(cells[1] || '').trim();
-            const col2 = String(cells[2] || '').trim();
-
-            // Match WhatsApp, Instagram, Facebook, Phone rows
-            if (col0.includes('whatsapp')) {
-              if (col1) newCfg.whatsappNumber = col1.replace(/\D/g, '');
-              if (col2 && !col2.toLowerCase().includes('true')) newCfg.whatsappMessage = col2;
-            } else if (col0.includes('instagram') || col0.includes('insta')) {
-              if (col1 && col1.toLowerCase() !== 'null') {
-                newCfg.instagramUrl = col1.startsWith('http')
-                  ? col1
-                  : `https://instagram.com/${col1.replace('@', '')}`;
-              }
-            } else if (col0.includes('facebook') || col0.includes('fb')) {
-              if (col1 && col1.toLowerCase() !== 'null') {
-                newCfg.facebookUrl = col1.startsWith('http')
-                  ? col1
-                  : `https://facebook.com/${col1}`;
-              }
-            } else if (col0.includes('phone') || col0.includes('call') || col0.includes('mobile')) {
-              if (col1) newCfg.phoneNumber = col1.replace(/\D/g, '');
-            } else if (col0.includes('youtube') || col0.includes('yt')) {
-              if (col1 && col1.toLowerCase() !== 'null') newCfg.youtubeUrl = col1;
+          // Match WhatsApp, Instagram, Facebook, Phone rows
+          if (col0.includes('whatsapp')) {
+            const num = cleanNumber(col1);
+            if (num) newCfg.whatsappNumber = num;
+            if (col2 && !col2.toLowerCase().includes('true')) newCfg.whatsappMessage = col2;
+          } else if (col0.includes('instagram') || col0.includes('insta')) {
+            if (col1 && col1.toLowerCase() !== 'null' && col1.toLowerCase() !== 'none' && col1.trim() !== '') {
+              newCfg.instagramUrl = col1.startsWith('http')
+                ? col1
+                : `https://instagram.com/${col1.replace('@', '')}`;
+            } else {
+              newCfg.instagramUrl = '';
+            }
+          } else if (col0.includes('facebook') || col0.includes('fb')) {
+            if (col1 && col1.toLowerCase() !== 'null' && col1.toLowerCase() !== 'none' && col1.trim() !== '') {
+              newCfg.facebookUrl = col1.startsWith('http')
+                ? col1
+                : `https://facebook.com/${col1}`;
+            } else {
+              newCfg.facebookUrl = '';
+            }
+          } else if (col0.includes('phone') || col0.includes('call') || col0.includes('mobile') || col0.includes('helpline')) {
+            const num = cleanNumber(col1);
+            if (num) newCfg.phoneNumber = num;
+          } else if (col0.includes('youtube') || col0.includes('yt')) {
+            if (col1 && col1.toLowerCase() !== 'null' && col1.toLowerCase() !== 'none' && col1.trim() !== '') {
+              newCfg.youtubeUrl = col1;
+            } else {
+              newCfg.youtubeUrl = '';
             }
           }
-
-          if (Object.keys(newCfg).length > 0) {
-            setConfig((prev) => {
-              const merged = { ...prev, ...newCfg };
-              try {
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-              } catch {}
-              return merged;
-            });
-            break; // Successfully loaded from this tab
-          }
-        } catch (err) {
-          // Continue to next variation
         }
-      }
-    };
 
-    fetchSocialLinksFromSheet();
+        if (Object.keys(newCfg).length > 0) {
+          setConfig((prev) => {
+            const merged = { ...prev, ...newCfg };
+            try {
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+            } catch {}
+            return merged;
+          });
+          setEditConfig((prev) => ({ ...prev, ...newCfg }));
+          setSheetSyncInfo({
+            tabName: tab.trim(),
+            syncedCount: Object.keys(newCfg).length,
+            time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
+            whatsApp: newCfg.whatsappNumber,
+            phone: newCfg.phoneNumber,
+          });
+          found = true;
+          break; // Successfully loaded from this tab
+        }
+      } catch (err) {
+        // Continue to next variation
+      }
+    }
+    setIsSyncingSheet(false);
+  };
+
+  useEffect(() => {
+    fetchSocialLinksFromSheet(false);
   }, [spreadsheetId]);
 
   const toggleMinimized = () => {
@@ -288,80 +325,84 @@ export const FloatingSocialBar: React.FC<FloatingSocialBarProps> = ({
             </div>
 
             {/* 2. INSTAGRAM FLOATING BUBBLE */}
-            <div className="relative group flex items-center justify-center animate-float-2">
-              {/* Outer Pulse Ring */}
-              <div
-                className="absolute inset-0 rounded-full bg-pink-500/20 animate-pulse-ring pointer-events-none"
-                style={{ animationDelay: '0.8s' }}
-              ></div>
+            {Boolean(config.instagramUrl && config.instagramUrl.trim()) && (
+              <div className="relative group flex items-center justify-center animate-float-2">
+                {/* Outer Pulse Ring */}
+                <div
+                  className="absolute inset-0 rounded-full bg-pink-500/20 animate-pulse-ring pointer-events-none"
+                  style={{ animationDelay: '0.8s' }}
+                ></div>
 
-              {/* Tooltip */}
-              <div
-                className={`absolute ${
-                  position === 'right' ? 'right-full mr-3' : 'left-full ml-3'
-                } hidden group-hover:flex items-center px-3 py-1.5 rounded-xl bg-slate-950 text-white text-xs font-bold whitespace-nowrap shadow-xl border border-pink-500/30 backdrop-blur-md pointer-events-none transition-all z-50`}
-              >
-                <span className="flex items-center gap-1.5 text-pink-400">
-                  <i className="fa-brands fa-instagram text-sm"></i>
-                  <span>Instagram पेज फॉलो करें</span>
-                </span>
+                {/* Tooltip */}
+                <div
+                  className={`absolute ${
+                    position === 'right' ? 'right-full mr-3' : 'left-full ml-3'
+                  } hidden group-hover:flex items-center px-3 py-1.5 rounded-xl bg-slate-950 text-white text-xs font-bold whitespace-nowrap shadow-xl border border-pink-500/30 backdrop-blur-md pointer-events-none transition-all z-50`}
+                >
+                  <span className="flex items-center gap-1.5 text-pink-400">
+                    <i className="fa-brands fa-instagram text-sm"></i>
+                    <span>Instagram पेज फॉलो करें</span>
+                  </span>
+                </div>
+
+                {/* Button */}
+                <a
+                  href={config.instagramUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="relative z-10 w-13 h-13 sm:w-14 sm:h-14 rounded-2xl sm:rounded-3xl bg-gradient-to-tr from-[#f09433] via-[#e6683c] via-[#dc2743] via-[#cc2366] to-[#bc1888] text-white flex items-center justify-center text-2xl sm:text-3xl shadow-xl shadow-pink-600/40 hover:scale-115 active:scale-95 transition-all duration-300 cursor-pointer border-2 border-white/50 group-hover:-rotate-6"
+                  aria-label="Instagram School Page"
+                >
+                  <i className="fa-brands fa-instagram drop-shadow-md"></i>
+                </a>
+
+                {/* Floating Shadow */}
+                <div
+                  className="absolute -bottom-2 w-10 h-2 bg-pink-950/40 rounded-full blur-xs animate-float-shadow pointer-events-none"
+                  style={{ animationDelay: '0.8s' }}
+                ></div>
               </div>
-
-              {/* Button */}
-              <a
-                href={config.instagramUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="relative z-10 w-13 h-13 sm:w-14 sm:h-14 rounded-2xl sm:rounded-3xl bg-gradient-to-tr from-[#f09433] via-[#e6683c] via-[#dc2743] via-[#cc2366] to-[#bc1888] text-white flex items-center justify-center text-2xl sm:text-3xl shadow-xl shadow-pink-600/40 hover:scale-115 active:scale-95 transition-all duration-300 cursor-pointer border-2 border-white/50 group-hover:-rotate-6"
-                aria-label="Instagram School Page"
-              >
-                <i className="fa-brands fa-instagram drop-shadow-md"></i>
-              </a>
-
-              {/* Floating Shadow */}
-              <div
-                className="absolute -bottom-2 w-10 h-2 bg-pink-950/40 rounded-full blur-xs animate-float-shadow pointer-events-none"
-                style={{ animationDelay: '0.8s' }}
-              ></div>
-            </div>
+            )}
 
             {/* 3. FACEBOOK FLOATING BUBBLE */}
-            <div className="relative group flex items-center justify-center animate-float-3">
-              {/* Outer Pulse Ring */}
-              <div
-                className="absolute inset-0 rounded-full bg-blue-500/20 animate-pulse-ring pointer-events-none"
-                style={{ animationDelay: '1.4s' }}
-              ></div>
+            {Boolean(config.facebookUrl && config.facebookUrl.trim()) && (
+              <div className="relative group flex items-center justify-center animate-float-3">
+                {/* Outer Pulse Ring */}
+                <div
+                  className="absolute inset-0 rounded-full bg-blue-500/20 animate-pulse-ring pointer-events-none"
+                  style={{ animationDelay: '1.4s' }}
+                ></div>
 
-              {/* Tooltip */}
-              <div
-                className={`absolute ${
-                  position === 'right' ? 'right-full mr-3' : 'left-full ml-3'
-                } hidden group-hover:flex items-center px-3 py-1.5 rounded-xl bg-slate-950 text-white text-xs font-bold whitespace-nowrap shadow-xl border border-blue-500/30 backdrop-blur-md pointer-events-none transition-all z-50`}
-              >
-                <span className="flex items-center gap-1.5 text-blue-400">
-                  <i className="fa-brands fa-facebook-f text-sm"></i>
-                  <span>Facebook पेज देखें</span>
-                </span>
+                {/* Tooltip */}
+                <div
+                  className={`absolute ${
+                    position === 'right' ? 'right-full mr-3' : 'left-full ml-3'
+                  } hidden group-hover:flex items-center px-3 py-1.5 rounded-xl bg-slate-950 text-white text-xs font-bold whitespace-nowrap shadow-xl border border-blue-500/30 backdrop-blur-md pointer-events-none transition-all z-50`}
+                >
+                  <span className="flex items-center gap-1.5 text-blue-400">
+                    <i className="fa-brands fa-facebook-f text-sm"></i>
+                    <span>Facebook पेज देखें</span>
+                  </span>
+                </div>
+
+                {/* Button */}
+                <a
+                  href={config.facebookUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="relative z-10 w-13 h-13 sm:w-14 sm:h-14 rounded-2xl sm:rounded-3xl bg-gradient-to-tr from-[#1877F2] via-[#166fe5] to-[#0d65d9] text-white flex items-center justify-center text-2xl sm:text-3xl shadow-xl shadow-blue-600/40 hover:scale-115 active:scale-95 transition-all duration-300 cursor-pointer border-2 border-white/50 group-hover:rotate-6"
+                  aria-label="Facebook School Page"
+                >
+                  <i className="fa-brands fa-facebook-f drop-shadow-md"></i>
+                </a>
+
+                {/* Floating Shadow */}
+                <div
+                  className="absolute -bottom-2 w-10 h-2 bg-blue-950/40 rounded-full blur-xs animate-float-shadow pointer-events-none"
+                  style={{ animationDelay: '1.4s' }}
+                ></div>
               </div>
-
-              {/* Button */}
-              <a
-                href={config.facebookUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="relative z-10 w-13 h-13 sm:w-14 sm:h-14 rounded-2xl sm:rounded-3xl bg-gradient-to-tr from-[#1877F2] via-[#166fe5] to-[#0d65d9] text-white flex items-center justify-center text-2xl sm:text-3xl shadow-xl shadow-blue-600/40 hover:scale-115 active:scale-95 transition-all duration-300 cursor-pointer border-2 border-white/50 group-hover:rotate-6"
-                aria-label="Facebook School Page"
-              >
-                <i className="fa-brands fa-facebook-f drop-shadow-md"></i>
-              </a>
-
-              {/* Floating Shadow */}
-              <div
-                className="absolute -bottom-2 w-10 h-2 bg-blue-950/40 rounded-full blur-xs animate-float-shadow pointer-events-none"
-                style={{ animationDelay: '1.4s' }}
-              ></div>
-            </div>
+            )}
 
             {/* 4. CALL DIRECT BUBBLE */}
             <div
@@ -462,6 +503,34 @@ export const FloatingSocialBar: React.FC<FloatingSocialBarProps> = ({
             {/* TAB 1: DIRECT EDIT FORM */}
             {activeModalTab === 'form' && (
               <form onSubmit={handleSaveSettings} className="space-y-3.5 text-xs">
+                {/* Google Sheets Live Sync Status Card */}
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-emerald-950">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
+                    <div>
+                      <div className="font-bold flex items-center gap-1.5">
+                        <span>Google Sheet ('Social_Links ')</span>
+                        <span className="px-1.5 py-0.2 bg-emerald-200 text-emerald-900 rounded-md text-[10px]">
+                          लाइव सिंक सक्रिय
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-emerald-800">
+                        {sheetSyncInfo
+                          ? `समय ${sheetSyncInfo.time} पर लोड हुआ (WhatsApp: ${sheetSyncInfo.whatsApp || config.whatsappNumber}, फोन: ${sheetSyncInfo.phone || config.phoneNumber})`
+                          : `शीट से संपर्क लोड: WhatsApp (${config.whatsappNumber}), फोन (${config.phoneNumber})`}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={isSyncingSheet}
+                    onClick={() => fetchSocialLinksFromSheet(true)}
+                    className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-xl text-[11px] shrink-0 cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    <i className={`fa-solid fa-arrows-rotate ${isSyncingSheet ? 'fa-spin' : ''}`}></i>
+                    <span>{isSyncingSheet ? 'सिंक हो रहा...' : 'रिफ्रेश'}</span>
+                  </button>
+                </div>
                 <div>
                   <label className="block font-bold text-slate-700 mb-1 flex items-center gap-1.5">
                     <i className="fa-brands fa-whatsapp text-emerald-600 text-sm"></i>

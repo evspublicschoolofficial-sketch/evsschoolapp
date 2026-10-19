@@ -398,21 +398,9 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
       return;
     }
 
-    // If status is checking, but user coords or distance already exists and is inside campus, proceed instantly!
-    // No "2 second ruko" alert popup!
-    if (locationStatus === 'checking') {
-      const pre = getPrewarmedLocation();
-      const dist = pre ? calculateDistanceMeters(pre.lat, pre.lng, activeSchool.lat, activeSchool.lng) : distanceFromSchool;
-      if (pre && dist !== null && dist <= allowedRadius) {
-        // Location verified from pre-warmed GPS! Proceed immediately!
-      } else {
-        // Silently scan next frame without interrupting the user with an alert!
-        requestScanFrame();
-        return;
-      }
-    }
-
-    // Location verified inside campus! Scan immediately!
+    // As requested: "बस स्कैनर खुलते ही एकदम स्कैनर जो है ना, स्कैन करना चाहिए यह क्यूआर कोड।"
+    // Even if location status is still checking in background, do NOT block scanning!
+    // Scan the QR code instantly!
     playBeep();
     stopCamera();
     setDetectedCode(rawText);

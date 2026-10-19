@@ -2616,23 +2616,49 @@ export default function App() {
   // Staff Attendance Fetch & Check-In Handlers
   const fetchStaffAttendance = async (silent = false): Promise<StaffAttendanceRecord[]> => {
     if (!silent) setLoadingStaffAttendance(true);
-    let mergedList: StaffAttendanceRecord[] = [...staffAttendanceList];
 
-    // 1. Fetch from server persistent store
+    // Build a map of all known attendance records to safely merge without losing any records
+    const recordsMap = new Map<string, StaffAttendanceRecord>();
+
+    // 1. Seed from current React state (so in-progress check-ins never get wiped out)
+    staffAttendanceList.forEach((r) => {
+      if (r.user_id && r.date) recordsMap.set(`${r.user_id}_${r.date}`, r);
+    });
+
+    // 2. Merge from LocalStorage cache
+    try {
+      const cached = localStorage.getItem(CACHE_KEY_STAFF_ATTENDANCE);
+      if (cached) {
+        const parsed = JSON.parse(cached) as StaffAttendanceRecord[];
+        if (Array.isArray(parsed)) {
+          parsed.forEach((r) => {
+            if (r.user_id && r.date) {
+              const k = `${r.user_id}_${r.date}`;
+              recordsMap.set(k, { ...recordsMap.get(k), ...r });
+            }
+          });
+        }
+      }
+    } catch {}
+
+    // 3. Merge from server persistent store (/api/staff-attendance)
     try {
       const res = await fetch(`/api/staff-attendance?_t=${Date.now()}`);
       if (res.ok) {
         const data = await res.json();
-        const records = (data?.records || []) as StaffAttendanceRecord[];
-        if (records.length > 0) {
-          mergedList = records;
-        }
+        const serverRecords = (data?.records || []) as StaffAttendanceRecord[];
+        serverRecords.forEach((r) => {
+          if (r.user_id && r.date) {
+            const k = `${r.user_id}_${r.date}`;
+            recordsMap.set(k, { ...recordsMap.get(k), ...r });
+          }
+        });
       }
     } catch (e) {
       console.warn('Failed to fetch local staff attendance:', e);
     }
 
-    // 2. Also check if user has created the 'Staff_Attendance ' tab in Google Sheets
+    // 4. Also fetch from Google Sheets 'Staff_Attendance ' or 'Staff_Attendance'
     const staffTabs = ['Staff_Attendance ', 'Staff_Attendance', 'Staff Attendance', 'StaffAttendance', 'staff_attendance'];
 
     const parseGvizDate = (raw: any): string => {
@@ -2654,7 +2680,6 @@ export default function App() {
       if (m) {
         let h = Number(m[1]);
         const min = String(m[2]).padStart(2, '0');
-        // Handle afternoon checkout e.g. 2:15 PM in schools
         if (isCheckOut && h >= 1 && h <= 6) h += 12;
         const ampm = h >= 12 ? 'PM' : 'AM';
         const displayH = h % 12 || 12;
@@ -2695,7 +2720,6 @@ export default function App() {
 
         if (hasAttendanceCols) {
           const rows = data.table?.rows || [];
-          const sheetRecords: StaffAttendanceRecord[] = [];
 
           const idIdx = cols.findIndex((c: string) => c === 'id');
           const nameIdx = cols.findIndex((c: string) => c.includes('name'));
@@ -2726,28 +2750,27 @@ export default function App() {
             const rawInVal = inIdx !== -1 ? r.c?.[inIdx]?.v : cells[5];
             const rawOutVal = outIdx !== -1 ? r.c?.[outIdx]?.v : cells[6];
 
-            sheetRecords.push({
+            const parsedIn = parseGvizTime(rawInVal, false) || (cells[inIdx !== -1 ? inIdx : 5] ? String(cells[inIdx !== -1 ? inIdx : 5]).trim() : undefined);
+            const parsedOut = parseGvizTime(rawOutVal, true) || (cells[outIdx !== -1 ? outIdx : 6] ? String(cells[outIdx !== -1 ? outIdx : 6]).trim() : undefined);
+
+            const k = `${recUserId}_${recDate}`;
+            const existing = recordsMap.get(k);
+
+            recordsMap.set(k, {
               id: recId,
               user_id: recUserId,
               name: recName,
               designation: String((desIdx !== -1 ? cells[desIdx] : '') || cells[3] || 'Teacher').trim(),
               date: recDate,
-              check_in_time: parseGvizTime(rawInVal, false) || (cells[inIdx !== -1 ? inIdx : 5] ? String(cells[inIdx !== -1 ? inIdx : 5]).trim() : undefined),
-              check_out_time: parseGvizTime(rawOutVal, true) || (cells[outIdx !== -1 ? outIdx : 6] ? String(cells[outIdx !== -1 ? outIdx : 6]).trim() : undefined),
+              check_in_time: parsedIn || existing?.check_in_time,
+              check_out_time: parsedOut || existing?.check_out_time,
               status: ((statusIdx !== -1 ? cells[statusIdx] : cells[7]) ? String(cells[statusIdx !== -1 ? statusIdx : 7]).trim() : 'Present') as any,
               method: ((methodIdx !== -1 ? cells[methodIdx] : cells[10]) ? String(cells[methodIdx !== -1 ? methodIdx : 10]).trim() : 'School QR Scan') as any,
               location: String((locIdx !== -1 ? cells[locIdx] : cells[11]) || 'School Campus').trim(),
-              remark: (remIdx !== -1 ? cells[remIdx] : cells[12]) ? String(cells[remIdx !== -1 ? remIdx : 12]).trim() : undefined,
-              timestamp: Date.now(),
-              created_at: new Date().toISOString(),
+              remark: (remIdx !== -1 ? cells[remIdx] : cells[12]) ? String(cells[remIdx !== -1 ? remIdx : 12]).trim() : existing?.remark,
+              timestamp: existing?.timestamp || Date.now(),
+              created_at: existing?.created_at || new Date().toISOString(),
             });
-          }
-
-          if (sheetRecords.length > 0) {
-            const map = new Map<string, StaffAttendanceRecord>();
-            mergedList.forEach((rec) => map.set(`${rec.user_id}_${rec.date}`, rec));
-            sheetRecords.forEach((rec) => map.set(`${rec.user_id}_${rec.date}`, { ...map.get(`${rec.user_id}_${rec.date}`), ...rec }));
-            mergedList = Array.from(map.values()).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
           }
           break; // Found and parsed Staff_Attendance tab
         }
@@ -2755,6 +2778,8 @@ export default function App() {
         console.warn('Google Sheets Staff_Attendance fetch check:', gvizErr);
       }
     }
+
+    const mergedList = Array.from(recordsMap.values()).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
     if (mergedList.length > 0) {
       setStaffAttendanceList(mergedList);
@@ -2825,21 +2850,45 @@ export default function App() {
       return updated;
     });
 
+    // 1. Post to node server storage
     try {
       await fetch('/api/staff-attendance/checkin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newRecord),
       });
-      setSyncToastMessage(
-        isCheckOut
-          ? `✅ प्रस्थान समय (${timeStr}) दर्ज हो गया!`
-          : `✅ उपस्थिति (${timeStr}) सफलतापूर्वक दर्ज हुई!`
-      );
-      setTimeout(() => setSyncToastMessage(null), 3500);
     } catch (e) {
       console.warn('Could not post staff attendance to server:', e);
     }
+
+    // 2. Post to Google Apps Script forwarder & Google Sheet directly
+    const appsScriptPayload = {
+      action: 'recordStaffAttendance',
+      ...newRecord,
+      is_checkout: isCheckOut,
+    };
+
+    fetch('/api/forward-apps-script', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(appsScriptPayload),
+    }).catch(() => {});
+
+    try {
+      const activeScriptUrl = getEffectiveApiUrl();
+      fetch(activeScriptUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(appsScriptPayload),
+      }).catch(() => {});
+    } catch {}
+
+    setSyncToastMessage(
+      isCheckOut
+        ? `✅ प्रस्थान समय (${timeStr}) दर्ज हो गया!`
+        : `✅ उपस्थिति (${timeStr}) सफलतापूर्वक दर्ज हुई!`
+    );
+    setTimeout(() => setSyncToastMessage(null), 3500);
   };
 
   // Today's attendance record for current logged-in teacher
@@ -10588,6 +10637,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 onOpenScanner={() => setIsStaffAttendanceScannerOpen(true)}
                 onOpenSchoolQr={() => setIsSchoolQrModalOpen(true)}
                 onManualCheckIn={handleStaffCheckInSuccess}
+                onRefresh={() => fetchStaffAttendance(false)}
+                isLoading={loadingStaffAttendance}
               />
             )}
           </div>
@@ -12101,6 +12152,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 onOpenScanner={() => setIsStaffAttendanceScannerOpen(true)}
                 onOpenSchoolQr={() => setIsSchoolQrModalOpen(true)}
                 onManualCheckIn={handleStaffCheckInSuccess}
+                onRefresh={() => fetchStaffAttendance(false)}
+                isLoading={loadingStaffAttendance}
                 isManager={true}
               />
             )}

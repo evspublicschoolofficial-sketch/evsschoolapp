@@ -555,7 +555,7 @@ function doGet(e) {
   }
 
   // 10. GET FALLBACK: Delegate write actions when called via GET query parameters
-  if (action === "addHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "editFee" || action === "deleteFee") {
+  if (action === "addHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance") {
     return doPost(e);
   }
 
@@ -950,6 +950,11 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
+    // 8. RECORD / UPDATE STAFF ATTENDANCE (School QR Check-In & Check-Out)
+    if (action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "staffAttendance") {
+      return handleRecordStaffAttendance(ss, data);
+    }
+
     return ContentService.createTextOutput(JSON.stringify({
       status: "error",
       message: "Unknown action: " + action
@@ -1020,6 +1025,97 @@ function handleUpdateBusTracking(ss, data) {
     location: location,
     updated_at: istTimestamp
   })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleRecordStaffAttendance(ss, data) {
+  var sheet = ss.getSheetByName("Staff_Attendance") || ss.getSheetByName("Staff_Attendance ") || ss.getSheetByName("Staff Attendance");
+  if (!sheet) {
+    sheet = ss.insertSheet("Staff_Attendance");
+  }
+
+  // Ensure header row exists
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow([
+      "ID", "Name", "User_ID", "Designation", "Date", "Check_In_Time", "Check_Out_Time",
+      "Status", "Late_Minutes", "Extra_Hours", "Method", "Location", "Remark", "Timestamp", "Check_Out_Timestamp"
+    ]);
+  }
+
+  var curDate = String(data.date || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd")).trim();
+  var userId = String(data.user_id || data.userId || "").trim().toLowerCase();
+  var userName = String(data.name || data.staff_name || "").trim().toLowerCase();
+  var isCheckOut = data.is_checkout === true || data.is_checkout === "true" || Boolean(data.check_out_time);
+  var istTimestamp = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+
+  var rows = sheet.getDataRange().getValues();
+  var foundRow = -1;
+
+  for (var r = 1; r < rows.length; r++) {
+    var rowDate = String(rows[r][4] || "");
+    if (rows[r][4] instanceof Date) {
+      rowDate = Utilities.formatDate(rows[r][4], "Asia/Kolkata", "yyyy-MM-dd");
+    } else {
+      rowDate = rowDate.trim().split("T")[0];
+    }
+    var rowUserId = String(rows[r][2] || "").trim().toLowerCase();
+    var rowName = String(rows[r][1] || "").trim().toLowerCase();
+
+    if (rowDate === curDate && ((userId && rowUserId === userId) || (userName && rowName === userName))) {
+      foundRow = r + 1;
+      break;
+    }
+  }
+
+  if (foundRow > 0) {
+    // Update existing row (e.g. Check-Out or update status/remark)
+    if (data.check_out_time || isCheckOut) {
+      sheet.getRange(foundRow, 7).setValue(data.check_out_time || Utilities.formatDate(new Date(), "Asia/Kolkata", "hh:mm a"));
+      sheet.getRange(foundRow, 15).setValue(istTimestamp);
+    }
+    if (data.status) sheet.getRange(foundRow, 8).setValue(data.status);
+    if (data.late_minutes !== undefined) sheet.getRange(foundRow, 9).setValue(Number(data.late_minutes));
+    if (data.extra_hours !== undefined) sheet.getRange(foundRow, 10).setValue(Number(data.extra_hours));
+    if (data.method) sheet.getRange(foundRow, 11).setValue(data.method);
+    if (data.location) sheet.getRange(foundRow, 12).setValue(data.location);
+    if (data.remark) sheet.getRange(foundRow, 13).setValue(data.remark);
+
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      message: "Staff attendance updated (Check-Out) in Google Sheet!",
+      row: foundRow,
+      action_type: "updated"
+    })).setMimeType(ContentService.MimeType.JSON);
+  } else {
+    // Append new attendance row
+    var recId = String(data.id || "STAFF-ATT-" + (userId || "STF") + "-" + curDate).trim();
+    var checkInTime = String(data.check_in_time || Utilities.formatDate(new Date(), "Asia/Kolkata", "hh:mm a")).trim();
+    var checkOutTime = data.check_out_time ? String(data.check_out_time).trim() : "";
+
+    sheet.appendRow([
+      recId,
+      data.name || "Staff Member",
+      data.user_id || "",
+      data.designation || "Teacher",
+      curDate,
+      checkInTime,
+      checkOutTime,
+      data.status || "Present",
+      data.late_minutes !== undefined ? Number(data.late_minutes) : 0,
+      data.extra_hours !== undefined ? Number(data.extra_hours) : 0,
+      data.method || "School QR Scan",
+      data.location || "School Campus Gate",
+      data.remark || "समय पर उपस्थित",
+      istTimestamp,
+      checkOutTime ? istTimestamp : ""
+    ]);
+
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      message: "Staff attendance recorded (Check-In) in Google Sheet!",
+      row: sheet.getLastRow(),
+      action_type: "inserted"
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
 }
 
 // Academic Session Months order (April = 1 ... March = 12)

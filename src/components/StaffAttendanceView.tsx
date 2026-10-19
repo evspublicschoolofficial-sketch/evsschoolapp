@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { SchoolUser, StaffAttendanceRecord } from '../types';
 import { StaffMonthlyReportView } from './StaffMonthlyReportView';
 import { SchoolLocationModal } from './SchoolLocationModal';
+import { GoogleSheetSyncModal } from './GoogleSheetSyncModal';
 
 interface StaffAttendanceViewProps {
   currentUser: SchoolUser;
@@ -10,6 +11,8 @@ interface StaffAttendanceViewProps {
   onOpenScanner: () => void;
   onOpenSchoolQr: () => void;
   onManualCheckIn?: (record: Partial<StaffAttendanceRecord>) => void;
+  onRefresh?: () => Promise<void> | void;
+  isLoading?: boolean;
   isManager?: boolean;
 }
 
@@ -20,12 +23,15 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
   onOpenScanner,
   onOpenSchoolQr,
   onManualCheckIn,
+  onRefresh,
+  isLoading = false,
   isManager = false,
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<'my_attendance' | 'all_today' | 'history' | 'monthly_report'>(
     isManager ? 'all_today' : 'my_attendance'
   );
   const [isLocationModalOpen, setIsLocationModalOpen] = useState<boolean>(false);
+  const [showAppsScriptModal, setShowAppsScriptModal] = useState<boolean>(false);
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     return new Date().toISOString().split('T')[0];
   });
@@ -242,6 +248,31 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
               <i className="fa-solid fa-chart-pie text-amber-300"></i>
               <span>📊 मासिक स्टाफ डाटा (Monthly Report)</span>
             </button>
+
+            {onRefresh && (
+              <button
+                type="button"
+                onClick={onRefresh}
+                disabled={isLoading}
+                className="px-4 py-3.5 rounded-2xl font-bold text-xs sm:text-sm bg-emerald-600/90 hover:bg-emerald-600 text-white border border-emerald-400/40 transition-all flex items-center gap-2 cursor-pointer shadow-md disabled:opacity-50"
+                title="Google Sheet 'Staff_Attendance' व सर्वर से नवीनतम हाजिरी सिंक करें"
+              >
+                <i className={`fa-solid fa-arrows-rotate ${isLoading ? 'fa-spin' : ''}`}></i>
+                <span>{isLoading ? 'सिंक हो रहा...' : '🔄 Google Sheet सिंक'}</span>
+              </button>
+            )}
+
+            {isManager && (
+              <button
+                type="button"
+                onClick={() => setShowAppsScriptModal(true)}
+                className="px-4 py-3.5 rounded-2xl font-bold text-xs sm:text-sm bg-indigo-600/90 hover:bg-indigo-600 text-white border border-indigo-400/40 transition-all flex items-center gap-2 cursor-pointer shadow-md"
+                title="Google Apps Script कोड देखें व कॉपी करें (हाजिरी व सोशल मीडिया लिंक शीट सिंक हेतु)"
+              >
+                <i className="fa-solid fa-code text-amber-300"></i>
+                <span>📋 Apps Script कोड (Sheet Sync)</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -813,6 +844,12 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
         isOpen={isLocationModalOpen}
         onClose={() => setIsLocationModalOpen(false)}
         isManager={isManager}
+      />
+
+      {/* Google Apps Script Modal */}
+      <GoogleSheetSyncModal
+        isOpen={showAppsScriptModal}
+        onClose={() => setShowAppsScriptModal(false)}
       />
     </div>
   );

@@ -78,8 +78,8 @@ export const SchoolLocationModal: React.FC<SchoolLocationModalProps> = ({
 
   const handleSetCurrentAsSchool = async () => {
     if (!liveLocation) {
+      setIsFetchingGps(true);
       fetchLiveDeviceGps();
-      alert('कृपया 2 सेकंड रुकें, वर्तमान GPS लोकेशन प्राप्त की जा रही है...');
       return;
     }
 

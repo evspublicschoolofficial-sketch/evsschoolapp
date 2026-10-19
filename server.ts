@@ -706,6 +706,18 @@ async function startServer() {
       method: item.method || 'School QR Scan',
       status: item.status || 'Present',
     });
+
+    // Forward to Google Apps Script
+    const forwardPayload = {
+      action: 'recordStaffAttendance',
+      ...item,
+    };
+    fetch(currentAppsScriptUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(forwardPayload),
+    }).catch((e) => console.warn('Server forward staff attendance err:', e));
+
     res.json({ success: true, records: list });
   });
 
@@ -814,6 +826,8 @@ async function startServer() {
         saveHwTrackerItem(payload);
       } else if (payload?.action === 'updateBusTracking') {
         processTelemetryPayload(payload);
+      } else if (payload?.action === 'recordStaffAttendance' || payload?.action === 'addStaffAttendance') {
+        saveStaffAttendanceRecord(payload);
       }
 
       // Check if client provided a specific custom URL in payload or headers
