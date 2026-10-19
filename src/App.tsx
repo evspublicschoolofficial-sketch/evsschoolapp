@@ -2798,8 +2798,14 @@ export default function App() {
     const timeStr = rec.check_in_time || now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
     const recId = rec.id || `STAFF-ATT-${rec.user_id}-${dateStr}`;
 
+    const targetUid = String(rec.user_id || '').trim().toLowerCase();
+    const targetName = String(rec.name || '').trim().toLowerCase();
     const existingRecord = staffAttendanceList.find(
-      (a) => a.id === recId || (a.user_id === String(rec.user_id || '') && a.date === dateStr)
+      (a) =>
+        a.id === recId ||
+        (a.date === dateStr &&
+          ((targetUid && String(a.user_id || '').trim().toLowerCase() === targetUid) ||
+           (targetName && String(a.name || '').trim().toLowerCase() === targetName)))
     );
 
     const checkInTime = isCheckOut
@@ -2830,7 +2836,11 @@ export default function App() {
 
     setStaffAttendanceList((prev) => {
       const idx = prev.findIndex(
-        (a) => a.id === recId || (a.user_id === newRecord.user_id && a.date === dateStr)
+        (a) =>
+          a.id === recId ||
+          (a.date === dateStr &&
+            ((targetUid && String(a.user_id || '').trim().toLowerCase() === targetUid) ||
+             (targetName && String(a.name || '').trim().toLowerCase() === targetName)))
       );
       let updated: StaffAttendanceRecord[];
       if (idx >= 0) {
@@ -2891,18 +2901,26 @@ export default function App() {
     setTimeout(() => setSyncToastMessage(null), 3500);
   };
 
-  // Today's attendance record for current logged-in teacher
+  // Today's attendance record for current logged-in teacher / manager / staff
   const myTodayAttendanceRecord = useMemo(() => {
-    if (!teacherUser) return null;
-    const myId = String(teacherUser.User_ID || teacherUser.Mobile_number || '').trim().toLowerCase();
-    const myName = (teacherUser.Name || '').trim().toLowerCase();
+    const activeStaff = teacherUser || managerUser;
+    if (!activeStaff) return null;
+    const myId = String(activeStaff.User_ID || activeStaff.Mobile_number || '').trim().toLowerCase();
+    const myName = (activeStaff.Name || '').trim().toLowerCase();
+    const myUsername = (activeStaff.Username || '').trim().toLowerCase();
     const todayStr = new Date().toISOString().split('T')[0];
-    return staffAttendanceList.find(
-      (r) =>
-        r.date === todayStr &&
-        (String(r.user_id).trim().toLowerCase() === myId || (myName && r.name.toLowerCase() === myName))
-    );
-  }, [staffAttendanceList, teacherUser]);
+    return staffAttendanceList.find((r) => {
+      if (!r || r.date !== todayStr) return false;
+      const rUid = String(r.user_id || '').trim().toLowerCase();
+      const rName = String(r.name || '').trim().toLowerCase();
+      const rUser = String(r.username || '').trim().toLowerCase();
+      return (
+        (myId && (rUid === myId || rUid.includes(myId) || myId.includes(rUid))) ||
+        (myName && (rName === myName || rName.includes(myName) || myName.includes(rName))) ||
+        (myUsername && rUser === myUsername)
+      );
+    }) || null;
+  }, [staffAttendanceList, teacherUser, managerUser]);
 
   // Switch tabs in Teacher Portal with automatic tab-specific data refresh
   const handleSelectTeacherTab = (tab: 'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior' | 'staff_attendance') => {
@@ -13349,6 +13367,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
           onClose={() => setIsStaffAttendanceScannerOpen(false)}
           currentUser={teacherUser || managerUser || { Name: 'Staff Member', Designation: 'Staff', User_ID: 'STAFF1', Username: 'staff', Mobile_number: '' }}
           todayRecord={myTodayAttendanceRecord}
+          allRecords={staffAttendanceList}
           onCheckInSuccess={handleStaffCheckInSuccess}
           isManager={Boolean(managerUser || activeTab === 'manager')}
         />

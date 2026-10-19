@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import jsQR from 'jsqr';
 import { SchoolUser, StaffAttendanceRecord } from '../types';
 import { SCHOOL_CHECKIN_CODE } from './SchoolQRCodeModal';
@@ -17,6 +17,7 @@ interface StaffAttendanceScannerModalProps {
   onClose: () => void;
   currentUser: SchoolUser;
   todayRecord?: StaffAttendanceRecord | null;
+  allRecords?: StaffAttendanceRecord[];
   onCheckInSuccess: (record: Partial<StaffAttendanceRecord>, isCheckOut?: boolean) => void;
   isManager?: boolean;
 }
@@ -31,6 +32,7 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
   onClose,
   currentUser,
   todayRecord,
+  allRecords,
   onCheckInSuccess,
   isManager = false,
 }) => {
@@ -426,19 +428,75 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
     };
   }, [isOpen, facingMode]);
 
-  // Determine current scan mode: Check-In vs Check-Out vs Completed
-  // The user explicitly requested:
-  // "स्कैनर को ऐसे करो जो आदमी चेक इन हो गया, वही आदमी चेक आउट हो। दोबारा उसी स्कैनर को स्कैन करने जो चेक इन हुआ इंसान है अगर वह दोबारा स्कैनर को स्कैन करेगा तो उसे चेक आउट कर दो स्कूल से।"
-  const isAlreadyCheckedIn = Boolean(todayRecord?.check_in_time);
-  const isAlreadyCheckedOut = Boolean(todayRecord?.check_out_time);
+  // Manual override state if staff wants to toggle mode
+  const [manualModeOverride, setManualModeOverride] = useState<'checkout' | 'checkin' | null>(null);
 
-  // Automatically determine if this scan should be Check-Out or Check-In
-  const autoScanMode: 'checkout' | 'checkin' | 'completed' =
+  // Robust lookup of today's attendance record for currentUser
+  const effectiveTodayRecord = useMemo(() => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const targetUserId = String(currentUser.User_ID || currentUser.Mobile_number || '').trim().toLowerCase();
+    const targetName = String(currentUser.Name || '').trim().toLowerCase();
+    const targetUsername = String(currentUser.Username || '').trim().toLowerCase();
+
+    // 1. If todayRecord prop is valid for today and has check_in_time
+    if (todayRecord && todayRecord.date === todayStr && todayRecord.check_in_time) {
+      return todayRecord;
+    }
+
+    const matchesUser = (r: StaffAttendanceRecord) => {
+      if (!r) return false;
+      const rDate = String(r.date || '').trim().split('T')[0];
+      if (rDate !== todayStr) return false;
+
+      const rUid = String(r.user_id || '').trim().toLowerCase();
+      const rName = String(r.name || '').trim().toLowerCase();
+      const rUsername = String(r.username || '').trim().toLowerCase();
+
+      return Boolean(
+        (targetUserId && (rUid === targetUserId || rUid.includes(targetUserId) || targetUserId.includes(rUid))) ||
+        (targetName && (rName === targetName || rName.includes(targetName) || targetName.includes(rName))) ||
+        (targetUsername && rUsername === targetUsername)
+      );
+    };
+
+    // 2. Search in allRecords prop
+    if (allRecords && allRecords.length > 0) {
+      const found = allRecords.find(matchesUser);
+      if (found) return found;
+    }
+
+    // 3. Search in localStorage cache
+    try {
+      const cached = localStorage.getItem('evs_cache_staff_attendance');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) {
+          const found = parsed.find(matchesUser);
+          if (found) return found;
+        }
+      }
+    } catch {}
+
+    return todayRecord || null;
+  }, [todayRecord, allRecords, currentUser]);
+
+  // Determine current scan mode: Check-In vs Check-Out vs Completed
+  // If already checked in today (and no check-out time): automatically switch to 'checkout'!
+  const isAlreadyCheckedIn = Boolean(effectiveTodayRecord?.check_in_time);
+  const isAlreadyCheckedOut = Boolean(effectiveTodayRecord?.check_out_time);
+
+  // Auto-calculated mode based on prior scan status:
+  // - If checked in but not checked out: automatically do 'checkout' on 2nd scan!
+  // - If not checked in yet: do 'checkin' on 1st scan!
+  // - If both done: 'completed'
+  const computedScanMode: 'checkout' | 'checkin' | 'completed' =
     isAlreadyCheckedIn && !isAlreadyCheckedOut
       ? 'checkout'
       : !isAlreadyCheckedIn
       ? 'checkin'
       : 'completed';
+
+  const autoScanMode: 'checkout' | 'checkin' | 'completed' = manualModeOverride || computedScanMode;
 
   // Handle YES confirmation check-in / check-out
   const handleConfirmAction = async (forceCheckOut?: boolean) => {
@@ -483,7 +541,7 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
     if (shouldCheckOut) {
       attendancePayload.check_out_time = timeStr;
       // Preserve existing check_in_time
-      attendancePayload.check_in_time = todayRecord?.check_in_time || timeStr;
+      attendancePayload.check_in_time = effectiveTodayRecord?.check_in_time || timeStr;
     } else {
       attendancePayload.check_in_time = timeStr;
     }
@@ -720,14 +778,14 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
               )}
 
               {/* Already Checked In Notification in Scanner */}
-              {todayRecord?.check_in_time && !todayRecord?.check_out_time && (
+              {effectiveTodayRecord?.check_in_time && !effectiveTodayRecord?.check_out_time && (
                 <div className="p-3 bg-amber-50 border border-amber-300 rounded-2xl text-amber-950 text-xs flex items-center justify-between shadow-2xs">
                   <div className="flex items-center gap-2.5">
                     <div className="w-8 h-8 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center font-bold shrink-0">
                       <i className="fa-solid fa-clock"></i>
                     </div>
                     <div>
-                      <div className="font-bold">आप आज चेक-इन कर चुके हैं: सुबह {todayRecord.check_in_time}</div>
+                      <div className="font-bold">आप आज चेक-इन कर चुके हैं: सुबह {effectiveTodayRecord.check_in_time}</div>
                       <div className="text-amber-800 text-[11px]">
                         दोबारा स्कैन करने पर आपका <strong>स्कूल चेक-आउट</strong> स्वतः दर्ज होगा।
                       </div>
@@ -842,7 +900,7 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
                     स्कूल से प्रस्थान / चेक-आउट (Check-Out)
                   </h4>
                   <p className="text-xs text-amber-800 mt-0.5 font-medium">
-                    आप आज सुबह <strong>{todayRecord?.check_in_time}</strong> पर चेक-इन कर चुके हैं।
+                    आप आज सुबह <strong>{effectiveTodayRecord?.check_in_time || 'दर्ज समय'}</strong> पर चेक-इन कर चुके हैं।
                   </p>
                 </div>
               ) : (
@@ -858,6 +916,34 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
                   </p>
                 </div>
               )}
+
+              {/* Mode Switcher Buttons */}
+              <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-200/80 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setManualModeOverride('checkin')}
+                  className={`py-2 px-3 rounded-lg text-xs font-black flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                    autoScanMode === 'checkin'
+                      ? 'bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-400'
+                      : 'bg-white/70 text-slate-700 hover:bg-white'
+                  }`}
+                >
+                  <i className="fa-solid fa-arrow-right-to-bracket text-xs"></i>
+                  <span>1. स्कूल चेक-इन</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setManualModeOverride('checkout')}
+                  className={`py-2 px-3 rounded-lg text-xs font-black flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                    autoScanMode === 'checkout'
+                      ? 'bg-amber-500 text-slate-950 shadow-sm ring-2 ring-amber-400'
+                      : 'bg-white/70 text-slate-700 hover:bg-white'
+                  }`}
+                >
+                  <i className="fa-solid fa-arrow-right-from-bracket text-xs"></i>
+                  <span>2. स्कूल चेक-आउट</span>
+                </button>
+              </div>
 
               {/* Staff Details Card */}
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2 text-xs">
@@ -881,10 +967,10 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
                 </div>
 
                 {/* Arrival time if in Check-out mode */}
-                {autoScanMode === 'checkout' && todayRecord?.check_in_time && (
+                {autoScanMode === 'checkout' && effectiveTodayRecord?.check_in_time && (
                   <div className="flex justify-between items-center pb-2 border-b border-slate-200">
                     <span className="text-slate-500 font-medium">सुबह चेक-इन समय:</span>
-                    <span className="font-bold text-slate-800 font-mono">{todayRecord.check_in_time}</span>
+                    <span className="font-bold text-slate-800 font-mono">{effectiveTodayRecord.check_in_time}</span>
                   </div>
                 )}
 

@@ -12,8 +12,8 @@ interface SocialLinkConfig {
 const DEFAULT_CONFIG: SocialLinkConfig = {
   whatsappNumber: '8954555074',
   whatsappMessage: 'WhatsApp पर चैट करें',
-  instagramUrl: '',
-  facebookUrl: '',
+  instagramUrl: 'https://instagram.com/evspublicschool',
+  facebookUrl: 'https://facebook.com/evspublicschool',
   youtubeUrl: '',
   phoneNumber: '9759762837',
 };
@@ -129,7 +129,7 @@ export const FloatingSocialBar: React.FC<FloatingSocialBarProps> = ({
                 ? col1
                 : `https://instagram.com/${col1.replace('@', '')}`;
             } else {
-              newCfg.instagramUrl = '';
+              newCfg.instagramUrl = 'https://instagram.com/evspublicschool';
             }
           } else if (col0.includes('facebook') || col0.includes('fb')) {
             if (col1 && col1.toLowerCase() !== 'null' && col1.toLowerCase() !== 'none' && col1.trim() !== '') {
@@ -137,7 +137,7 @@ export const FloatingSocialBar: React.FC<FloatingSocialBarProps> = ({
                 ? col1
                 : `https://facebook.com/${col1}`;
             } else {
-              newCfg.facebookUrl = '';
+              newCfg.facebookUrl = 'https://facebook.com/evspublicschool';
             }
           } else if (col0.includes('phone') || col0.includes('call') || col0.includes('mobile') || col0.includes('helpline')) {
             const num = cleanNumber(col1);
@@ -325,84 +325,80 @@ export const FloatingSocialBar: React.FC<FloatingSocialBarProps> = ({
             </div>
 
             {/* 2. INSTAGRAM FLOATING BUBBLE */}
-            {Boolean(config.instagramUrl && config.instagramUrl.trim()) && (
-              <div className="relative group flex items-center justify-center animate-float-2">
-                {/* Outer Pulse Ring */}
-                <div
-                  className="absolute inset-0 rounded-full bg-pink-500/20 animate-pulse-ring pointer-events-none"
-                  style={{ animationDelay: '0.8s' }}
-                ></div>
+            <div className="relative group flex items-center justify-center animate-float-2">
+              {/* Outer Pulse Ring */}
+              <div
+                className="absolute inset-0 rounded-full bg-pink-500/20 animate-pulse-ring pointer-events-none"
+                style={{ animationDelay: '0.8s' }}
+              ></div>
 
-                {/* Tooltip */}
-                <div
-                  className={`absolute ${
-                    position === 'right' ? 'right-full mr-3' : 'left-full ml-3'
-                  } hidden group-hover:flex items-center px-3 py-1.5 rounded-xl bg-slate-950 text-white text-xs font-bold whitespace-nowrap shadow-xl border border-pink-500/30 backdrop-blur-md pointer-events-none transition-all z-50`}
-                >
-                  <span className="flex items-center gap-1.5 text-pink-400">
-                    <i className="fa-brands fa-instagram text-sm"></i>
-                    <span>Instagram पेज फॉलो करें</span>
-                  </span>
-                </div>
-
-                {/* Button */}
-                <a
-                  href={config.instagramUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="relative z-10 w-13 h-13 sm:w-14 sm:h-14 rounded-2xl sm:rounded-3xl bg-gradient-to-tr from-[#f09433] via-[#e6683c] via-[#dc2743] via-[#cc2366] to-[#bc1888] text-white flex items-center justify-center text-2xl sm:text-3xl shadow-xl shadow-pink-600/40 hover:scale-115 active:scale-95 transition-all duration-300 cursor-pointer border-2 border-white/50 group-hover:-rotate-6"
-                  aria-label="Instagram School Page"
-                >
-                  <i className="fa-brands fa-instagram drop-shadow-md"></i>
-                </a>
-
-                {/* Floating Shadow */}
-                <div
-                  className="absolute -bottom-2 w-10 h-2 bg-pink-950/40 rounded-full blur-xs animate-float-shadow pointer-events-none"
-                  style={{ animationDelay: '0.8s' }}
-                ></div>
+              {/* Tooltip */}
+              <div
+                className={`absolute ${
+                  position === 'right' ? 'right-full mr-3' : 'left-full ml-3'
+                } hidden group-hover:flex items-center px-3 py-1.5 rounded-xl bg-slate-950 text-white text-xs font-bold whitespace-nowrap shadow-xl border border-pink-500/30 backdrop-blur-md pointer-events-none transition-all z-50`}
+              >
+                <span className="flex items-center gap-1.5 text-pink-400">
+                  <i className="fa-brands fa-instagram text-sm"></i>
+                  <span>Instagram पेज फॉलो करें</span>
+                </span>
               </div>
-            )}
+
+              {/* Button */}
+              <a
+                href={config.instagramUrl && config.instagramUrl.trim() ? (config.instagramUrl.startsWith('http') ? config.instagramUrl : `https://instagram.com/${config.instagramUrl.replace('@', '')}`) : 'https://instagram.com/evspublicschool'}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="relative z-10 w-13 h-13 sm:w-14 sm:h-14 rounded-2xl sm:rounded-3xl bg-gradient-to-tr from-[#f09433] via-[#e6683c] via-[#dc2743] via-[#cc2366] to-[#bc1888] text-white flex items-center justify-center text-2xl sm:text-3xl shadow-xl shadow-pink-600/40 hover:scale-115 active:scale-95 transition-all duration-300 cursor-pointer border-2 border-white/50 group-hover:-rotate-6"
+                aria-label="Instagram School Page"
+              >
+                <i className="fa-brands fa-instagram drop-shadow-md"></i>
+              </a>
+
+              {/* Floating Shadow */}
+              <div
+                className="absolute -bottom-2 w-10 h-2 bg-pink-950/40 rounded-full blur-xs animate-float-shadow pointer-events-none"
+                style={{ animationDelay: '0.8s' }}
+              ></div>
+            </div>
 
             {/* 3. FACEBOOK FLOATING BUBBLE */}
-            {Boolean(config.facebookUrl && config.facebookUrl.trim()) && (
-              <div className="relative group flex items-center justify-center animate-float-3">
-                {/* Outer Pulse Ring */}
-                <div
-                  className="absolute inset-0 rounded-full bg-blue-500/20 animate-pulse-ring pointer-events-none"
-                  style={{ animationDelay: '1.4s' }}
-                ></div>
+            <div className="relative group flex items-center justify-center animate-float-3">
+              {/* Outer Pulse Ring */}
+              <div
+                className="absolute inset-0 rounded-full bg-blue-500/20 animate-pulse-ring pointer-events-none"
+                style={{ animationDelay: '1.4s' }}
+              ></div>
 
-                {/* Tooltip */}
-                <div
-                  className={`absolute ${
-                    position === 'right' ? 'right-full mr-3' : 'left-full ml-3'
-                  } hidden group-hover:flex items-center px-3 py-1.5 rounded-xl bg-slate-950 text-white text-xs font-bold whitespace-nowrap shadow-xl border border-blue-500/30 backdrop-blur-md pointer-events-none transition-all z-50`}
-                >
-                  <span className="flex items-center gap-1.5 text-blue-400">
-                    <i className="fa-brands fa-facebook-f text-sm"></i>
-                    <span>Facebook पेज देखें</span>
-                  </span>
-                </div>
-
-                {/* Button */}
-                <a
-                  href={config.facebookUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="relative z-10 w-13 h-13 sm:w-14 sm:h-14 rounded-2xl sm:rounded-3xl bg-gradient-to-tr from-[#1877F2] via-[#166fe5] to-[#0d65d9] text-white flex items-center justify-center text-2xl sm:text-3xl shadow-xl shadow-blue-600/40 hover:scale-115 active:scale-95 transition-all duration-300 cursor-pointer border-2 border-white/50 group-hover:rotate-6"
-                  aria-label="Facebook School Page"
-                >
-                  <i className="fa-brands fa-facebook-f drop-shadow-md"></i>
-                </a>
-
-                {/* Floating Shadow */}
-                <div
-                  className="absolute -bottom-2 w-10 h-2 bg-blue-950/40 rounded-full blur-xs animate-float-shadow pointer-events-none"
-                  style={{ animationDelay: '1.4s' }}
-                ></div>
+              {/* Tooltip */}
+              <div
+                className={`absolute ${
+                  position === 'right' ? 'right-full mr-3' : 'left-full ml-3'
+                } hidden group-hover:flex items-center px-3 py-1.5 rounded-xl bg-slate-950 text-white text-xs font-bold whitespace-nowrap shadow-xl border border-blue-500/30 backdrop-blur-md pointer-events-none transition-all z-50`}
+              >
+                <span className="flex items-center gap-1.5 text-blue-400">
+                  <i className="fa-brands fa-facebook-f text-sm"></i>
+                  <span>Facebook पेज देखें</span>
+                </span>
               </div>
-            )}
+
+              {/* Button */}
+              <a
+                href={config.facebookUrl && config.facebookUrl.trim() ? (config.facebookUrl.startsWith('http') ? config.facebookUrl : `https://facebook.com/${config.facebookUrl}`) : 'https://facebook.com/evspublicschool'}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="relative z-10 w-13 h-13 sm:w-14 sm:h-14 rounded-2xl sm:rounded-3xl bg-gradient-to-tr from-[#1877F2] via-[#166fe5] to-[#0d65d9] text-white flex items-center justify-center text-2xl sm:text-3xl shadow-xl shadow-blue-600/40 hover:scale-115 active:scale-95 transition-all duration-300 cursor-pointer border-2 border-white/50 group-hover:rotate-6"
+                aria-label="Facebook School Page"
+              >
+                <i className="fa-brands fa-facebook-f drop-shadow-md"></i>
+              </a>
+
+              {/* Floating Shadow */}
+              <div
+                className="absolute -bottom-2 w-10 h-2 bg-blue-950/40 rounded-full blur-xs animate-float-shadow pointer-events-none"
+                style={{ animationDelay: '1.4s' }}
+              ></div>
+            </div>
 
             {/* 4. CALL DIRECT BUBBLE */}
             <div
