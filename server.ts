@@ -307,21 +307,67 @@ async function startServer() {
   const HW_TRACKER_FILE = '/tmp/evs_hw_tracker.json';
   const STAFF_ATTENDANCE_FILE = '/tmp/evs_staff_attendance.json';
   const SCHOOL_LOCATION_FILE = '/tmp/evs_school_location.json';
+  const SCHOOL_SHIFT_SETTINGS_FILE = '/tmp/evs_school_shift_settings.json';
 
   const DEFAULT_SCHOOL_LOCATION = {
-    lat: 30.056038,
-    lng: 77.419096,
-    radiusMeters: 6000, // 6km initial radius to encompass school campus and allow immediate check-in
-    name: 'E.V.S. Public School',
+    lat: 30.078676,
+    lng: 77.469929,
+    radiusMeters: 4000,
+    name: 'EVS PUBLIC SCHOOL, Chilkana Sultanpur',
+    address: 'Saharanpur road, Chilkana Sultanpur, Chilkana, Uttar Pradesh 247231',
+    mapsUrl: 'https://maps.app.goo.gl/TCqvnXrQN2326Lpp6',
     geofenceEnabled: true,
     updated_at: new Date().toISOString(),
-    updated_by: 'System Initial',
+    updated_by: 'School Location Registered',
+  };
+
+  const DEFAULT_SCHOOL_SHIFT_SETTINGS = {
+    schoolOpeningTime: '08:00 AM',
+    schoolClosingTime: '02:00 PM',
+    graceMinutes: 15,
+    overtimeThresholdMinutes: 15,
+    fullDayMinHours: 5.5,
+    halfDayMinHours: 3.0,
+    updated_at: new Date().toISOString(),
+    updated_by: 'Default Schedule',
+  };
+
+  const getSchoolShiftSettings = () => {
+    try {
+      if (fs.existsSync(SCHOOL_SHIFT_SETTINGS_FILE)) {
+        return { ...DEFAULT_SCHOOL_SHIFT_SETTINGS, ...JSON.parse(fs.readFileSync(SCHOOL_SHIFT_SETTINGS_FILE, 'utf-8')) };
+      }
+    } catch (e) {
+      console.warn('Error reading school shift settings file:', e);
+    }
+    return DEFAULT_SCHOOL_SHIFT_SETTINGS;
+  };
+
+  const saveSchoolShiftSettings = (body: any) => {
+    const current = getSchoolShiftSettings();
+    const updated = {
+      ...current,
+      schoolOpeningTime: body.schoolOpeningTime || current.schoolOpeningTime || '08:00 AM',
+      schoolClosingTime: body.schoolClosingTime || current.schoolClosingTime || '02:00 PM',
+      graceMinutes: typeof body.graceMinutes === 'number' ? body.graceMinutes : current.graceMinutes,
+      overtimeThresholdMinutes: typeof body.overtimeThresholdMinutes === 'number' ? body.overtimeThresholdMinutes : current.overtimeThresholdMinutes,
+      fullDayMinHours: typeof body.fullDayMinHours === 'number' ? body.fullDayMinHours : current.fullDayMinHours,
+      halfDayMinHours: typeof body.halfDayMinHours === 'number' ? body.halfDayMinHours : current.halfDayMinHours,
+      updated_at: new Date().toISOString(),
+      updated_by: body.updated_by || 'Manager',
+    };
+    try {
+      fs.writeFileSync(SCHOOL_SHIFT_SETTINGS_FILE, JSON.stringify(updated, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Error writing school shift settings file:', e);
+    }
+    return updated;
   };
 
   const getSchoolLocation = () => {
     try {
       if (fs.existsSync(SCHOOL_LOCATION_FILE)) {
-        return JSON.parse(fs.readFileSync(SCHOOL_LOCATION_FILE, 'utf-8'));
+        return { ...DEFAULT_SCHOOL_LOCATION, ...JSON.parse(fs.readFileSync(SCHOOL_LOCATION_FILE, 'utf-8')) };
       }
     } catch (e) {
       console.warn('Error reading school location file:', e);
@@ -335,7 +381,9 @@ async function startServer() {
       lat: typeof body.lat === 'number' ? body.lat : current.lat,
       lng: typeof body.lng === 'number' ? body.lng : current.lng,
       radiusMeters: typeof body.radiusMeters === 'number' ? body.radiusMeters : current.radiusMeters,
-      name: body.name || current.name || 'E.V.S. Public School',
+      name: body.name || current.name || 'EVS PUBLIC SCHOOL, Chilkana Sultanpur',
+      address: body.address || current.address || 'Saharanpur road, Chilkana Sultanpur, Chilkana, Uttar Pradesh 247231',
+      mapsUrl: body.mapsUrl || current.mapsUrl || 'https://maps.app.goo.gl/TCqvnXrQN2326Lpp6',
       geofenceEnabled: body.geofenceEnabled !== undefined ? Boolean(body.geofenceEnabled) : current.geofenceEnabled,
       updated_at: new Date().toISOString(),
       updated_by: body.updated_by || 'Manager',
@@ -732,6 +780,20 @@ async function startServer() {
       res.json({ success: true, location: updated });
     } catch (e: any) {
       res.status(500).json({ success: false, error: e?.message || 'Failed to update school location' });
+    }
+  });
+
+  // Endpoints for School Shift Timing & Late/Overtime Rules
+  app.get('/api/school-shift-settings', (_req, res) => {
+    res.json(getSchoolShiftSettings());
+  });
+
+  app.post('/api/school-shift-settings', (req, res) => {
+    try {
+      const updated = saveSchoolShiftSettings(req.body);
+      res.json({ success: true, settings: updated });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e?.message || 'Failed to update school shift settings' });
     }
   });
 

@@ -1,5 +1,83 @@
 import { SchoolUser, StaffAttendanceRecord } from '../types';
 
+export interface SchoolShiftSettings {
+  schoolOpeningTime: string; // e.g. "08:30 AM"
+  schoolClosingTime: string; // e.g. "02:00 PM"
+  graceMinutes: number; // e.g. 10 minutes allowed after opening time before marking Late
+  overtimeThresholdMinutes: number; // e.g. 15 minutes after closing time to count as overtime
+  fullDayMinHours: number; // e.g. 5.5 hours for full day
+  halfDayMinHours: number; // e.g. 3.0 hours for half day
+}
+
+export const DEFAULT_SHIFT_SETTINGS: SchoolShiftSettings = {
+  schoolOpeningTime: '08:00 AM',
+  schoolClosingTime: '02:00 PM',
+  graceMinutes: 15,
+  overtimeThresholdMinutes: 15,
+  fullDayMinHours: 5.5,
+  halfDayMinHours: 3.0,
+};
+
+export const STORAGE_KEY_SHIFT_SETTINGS = 'evs_school_shift_settings';
+
+export function getSchoolShiftSettings(): SchoolShiftSettings {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY_SHIFT_SETTINGS);
+    if (saved) {
+      return { ...DEFAULT_SHIFT_SETTINGS, ...JSON.parse(saved) };
+    }
+  } catch {}
+  return DEFAULT_SHIFT_SETTINGS;
+}
+
+export function saveSchoolShiftSettings(settings: SchoolShiftSettings): void {
+  try {
+    localStorage.setItem(STORAGE_KEY_SHIFT_SETTINGS, JSON.stringify(settings));
+    window.dispatchEvent(new CustomEvent('evs_shift_settings_updated', { detail: settings }));
+  } catch {}
+}
+
+export async function syncShiftSettingsFromServer(): Promise<SchoolShiftSettings> {
+  try {
+    const res = await fetch(`/api/school-shift-settings?_t=${Date.now()}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.schoolOpeningTime) {
+        const merged: SchoolShiftSettings = {
+          ...DEFAULT_SHIFT_SETTINGS,
+          ...data,
+        };
+        saveSchoolShiftSettings(merged);
+        return merged;
+      }
+    }
+  } catch (e) {
+    console.warn('Could not sync shift settings from server:', e);
+  }
+  return getSchoolShiftSettings();
+}
+
+export async function saveShiftSettingsToServer(settings: SchoolShiftSettings): Promise<SchoolShiftSettings> {
+  saveSchoolShiftSettings(settings);
+  try {
+    const res = await fetch('/api/school-shift-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.settings) {
+        saveSchoolShiftSettings(data.settings);
+        return data.settings;
+      }
+    }
+  } catch (e) {
+    console.warn('Could not save shift settings to server:', e);
+  }
+  return settings;
+}
+
 /**
  * Parses time strings such as "08:30 AM", "8:15 am", "14:45", "02:15 PM" to minutes from midnight (0-1439).
  */
@@ -57,6 +135,150 @@ export function formatHoursDec(hours: number): string {
   if (!hours || hours <= 0) return '0 घंटे';
   const rounded = Math.round(hours * 10) / 10;
   return `${rounded} घंटे`;
+}
+
+export interface StaffTimeEvaluation {
+  isLate: boolean;
+  lateMinutes: number;
+  isEarlyArrival: boolean;
+  earlyArrivalMinutes: number;
+  isOnTime: boolean;
+  isEarlyDeparture: boolean;
+  earlyDepartureMinutes: number;
+  isOvertime: boolean;
+  overtimeMinutes: number;
+  totalDurationMinutes: number;
+  formattedDuration: string;
+  arrivalBadge: { text: string; bgClass: string; textClass: string; icon: string };
+  departureBadge: { text: string; bgClass: string; textClass: string; icon: string } | null;
+}
+
+/**
+ * Evaluates whether a staff member arrived on time, early, or late,
+ * whether they departed early or did overtime, and total working duration.
+ */
+export function evaluateStaffTimeStatus(
+  checkInTimeStr?: string | null,
+  checkOutTimeStr?: string | null,
+  settings: SchoolShiftSettings = getSchoolShiftSettings()
+): StaffTimeEvaluation {
+  const inMin = parseTimeToMinutes(checkInTimeStr);
+  const outMin = parseTimeToMinutes(checkOutTimeStr);
+
+  const openMin = parseTimeToMinutes(settings.schoolOpeningTime) ?? (8 * 60 + 30);
+  const closeMin = parseTimeToMinutes(settings.schoolClosingTime) ?? (14 * 60);
+  const graceCutoff = openMin + (settings.graceMinutes || 0);
+
+  let isLate = false;
+  let lateMinutes = 0;
+  let isEarlyArrival = false;
+  let earlyArrivalMinutes = 0;
+  let isOnTime = false;
+
+  let isEarlyDeparture = false;
+  let earlyDepartureMinutes = 0;
+  let isOvertime = false;
+  let overtimeMinutes = 0;
+  let totalDurationMinutes = 0;
+
+  if (inMin !== null) {
+    if (inMin > graceCutoff) {
+      isLate = true;
+      lateMinutes = inMin - openMin;
+    } else if (inMin < openMin) {
+      isEarlyArrival = true;
+      earlyArrivalMinutes = openMin - inMin;
+      isOnTime = true;
+    } else {
+      isOnTime = true;
+    }
+  }
+
+  if (outMin !== null) {
+    if (outMin < closeMin) {
+      isEarlyDeparture = true;
+      earlyDepartureMinutes = closeMin - outMin;
+    } else if (outMin > closeMin + (settings.overtimeThresholdMinutes || 0)) {
+      isOvertime = true;
+      overtimeMinutes = outMin - closeMin;
+    }
+  }
+
+  if (inMin !== null && outMin !== null && outMin >= inMin) {
+    totalDurationMinutes = outMin - inMin;
+  }
+
+  let arrivalBadge = {
+    text: 'उपस्थिति दर्ज',
+    bgClass: 'bg-emerald-100',
+    textClass: 'text-emerald-800',
+    icon: 'fa-check',
+  };
+
+  if (isLate) {
+    arrivalBadge = {
+      text: `${lateMinutes} मिनट लेट`,
+      bgClass: 'bg-amber-100',
+      textClass: 'text-amber-900',
+      icon: 'fa-triangle-exclamation',
+    };
+  } else if (isEarlyArrival && earlyArrivalMinutes >= 5) {
+    arrivalBadge = {
+      text: `${earlyArrivalMinutes} मिनट पहले आए`,
+      bgClass: 'bg-emerald-100',
+      textClass: 'text-emerald-800',
+      icon: 'fa-circle-check',
+    };
+  } else if (isOnTime) {
+    arrivalBadge = {
+      text: 'समय पर उपस्थित',
+      bgClass: 'bg-emerald-100',
+      textClass: 'text-emerald-800',
+      icon: 'fa-circle-check',
+    };
+  }
+
+  let departureBadge: StaffTimeEvaluation['departureBadge'] = null;
+  if (outMin !== null) {
+    if (isOvertime) {
+      departureBadge = {
+        text: `+${formatMinutesToHuman(overtimeMinutes)} ओवर-टाइम`,
+        bgClass: 'bg-indigo-100',
+        textClass: 'text-indigo-900',
+        icon: 'fa-business-time',
+      };
+    } else if (isEarlyDeparture && earlyDepartureMinutes >= 5) {
+      departureBadge = {
+        text: `${earlyDepartureMinutes} मिनट पहले निकले`,
+        bgClass: 'bg-rose-100',
+        textClass: 'text-rose-900',
+        icon: 'fa-person-walking-dashed-line-arrow-right',
+      };
+    } else {
+      departureBadge = {
+        text: 'समय पर प्रस्थान',
+        bgClass: 'bg-slate-100',
+        textClass: 'text-slate-800',
+        icon: 'fa-check',
+      };
+    }
+  }
+
+  return {
+    isLate,
+    lateMinutes,
+    isEarlyArrival,
+    earlyArrivalMinutes,
+    isOnTime,
+    isEarlyDeparture,
+    earlyDepartureMinutes,
+    isOvertime,
+    overtimeMinutes,
+    totalDurationMinutes,
+    formattedDuration: formatMinutesToHuman(totalDurationMinutes),
+    arrivalBadge,
+    departureBadge,
+  };
 }
 
 export interface DayAttendanceDetail {

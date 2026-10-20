@@ -5,6 +5,8 @@ export interface SchoolLocationConfig {
   lng: number;
   radiusMeters: number;
   name: string;
+  address?: string;
+  mapsUrl?: string;
   geofenceEnabled: boolean;
   updated_at?: string;
   updated_by?: string;
@@ -20,12 +22,14 @@ export interface LiveUserLocation {
 const STORAGE_KEY_LOCATION = 'evs_school_geo_coords';
 const STORAGE_KEY_PREWARMED_LOC = 'evs_prewarmed_user_coords';
 
-// Default school location configuration (default 2500m radius so nobody gets blocked by initial small differences)
+// Default school location configuration (EVS Public School, Saharanpur Road, Chilkana Sultanpur)
 export const DEFAULT_CONFIG: SchoolLocationConfig = {
   lat: DEFAULT_SCHOOL_COORDS.lat,
   lng: DEFAULT_SCHOOL_COORDS.lng,
-  radiusMeters: 2500,
-  name: 'E.V.S. Public School (Campus)',
+  radiusMeters: 4000,
+  name: 'EVS PUBLIC SCHOOL (Chilkana Sultanpur)',
+  address: 'Saharanpur road, Chilkana Sultanpur, Chilkana, Uttar Pradesh 247231',
+  mapsUrl: 'https://maps.app.goo.gl/TCqvnXrQN2326Lpp6',
   geofenceEnabled: true,
 };
 
@@ -101,8 +105,10 @@ export async function syncSchoolLocationFromServer(): Promise<SchoolLocationConf
         const merged: SchoolLocationConfig = {
           lat: data.lat,
           lng: data.lng,
-          radiusMeters: typeof data.radiusMeters === 'number' ? data.radiusMeters : 2500,
-          name: data.name || 'E.V.S. Public School',
+          radiusMeters: typeof data.radiusMeters === 'number' ? data.radiusMeters : 4000,
+          name: data.name || DEFAULT_CONFIG.name,
+          address: data.address || DEFAULT_CONFIG.address,
+          mapsUrl: data.mapsUrl || DEFAULT_CONFIG.mapsUrl,
           geofenceEnabled: data.geofenceEnabled !== false,
           updated_at: data.updated_at,
           updated_by: data.updated_by,

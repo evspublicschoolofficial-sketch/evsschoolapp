@@ -69,11 +69,13 @@ export interface VanTelemetry {
   isLiveFromSheet?: boolean;
 }
 
-// School Campus Coordinates (E.V.S. Public School, Saharanpur, UP)
+// School Campus Coordinates (EVS PUBLIC SCHOOL, Saharanpur Road, Chilkana Sultanpur)
 export const DEFAULT_SCHOOL_COORDS = {
-  lat: 30.056038,
-  lng: 77.419096,
-  name: 'E.V.S. Public School (Saharanpur)',
+  lat: 30.078676,
+  lng: 77.469929,
+  name: 'EVS PUBLIC SCHOOL, Chilkana Sultanpur',
+  address: 'Saharanpur road, Chilkana Sultanpur, Chilkana, Uttar Pradesh 247231',
+  mapsUrl: 'https://maps.app.goo.gl/TCqvnXrQN2326Lpp6',
 };
 
 // Parse coordinates string like "30.056038, 77.419096"

@@ -245,6 +245,77 @@ export const SchoolLocationModal: React.FC<SchoolLocationModalProps> = ({
             </div>
           </div>
 
+          {/* REGISTERED SCHOOL LOCATION & GOOGLE MAPS CARD */}
+          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-4 space-y-2.5">
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  <span className="font-black text-slate-900 text-sm">
+                    {currentConfig.name || 'EVS PUBLIC SCHOOL, Chilkana Sultanpur'}
+                  </span>
+                </div>
+                <div className="text-xs text-slate-600 flex items-start gap-1.5">
+                  <i className="fa-solid fa-map-pin text-rose-500 mt-0.5"></i>
+                  <span>Saharanpur road, Chilkana Sultanpur, Chilkana, Uttar Pradesh 247231</span>
+                </div>
+                <div className="text-[11px] font-mono text-slate-500">
+                  निर्देशांक: {currentConfig.lat.toFixed(6)}, {currentConfig.lng.toFixed(6)} • दायरा: {currentConfig.radiusMeters >= 1000 ? `${currentConfig.radiusMeters / 1000} km` : `${currentConfig.radiusMeters} m`}
+                </div>
+              </div>
+
+              <a
+                href="https://maps.app.goo.gl/TCqvnXrQN2326Lpp6"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm shrink-0 transition-transform active:scale-95"
+                title="Google Maps पर स्कूल लोकेशन देखें"
+              >
+                <i className="fa-solid fa-map-location-dot"></i>
+                <span className="hidden sm:inline">Google Maps पर देखें</span>
+                <span className="sm:hidden">Maps</span>
+                <i className="fa-solid fa-arrow-up-right-from-square text-[10px]"></i>
+              </a>
+            </div>
+
+            {/* Quick 1-click restore/apply EVS School coordinates button */}
+            <div className="pt-2 border-t border-blue-200/60 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[11px] text-slate-500">
+                क्या आप स्कूल लोकेशन को Chilkana Sultanpur आधिकारिक कैंपस पर रीसेट करना चाहते हैं?
+              </span>
+              <button
+                type="button"
+                onClick={async () => {
+                  setCustomLat('30.078676');
+                  setCustomLng('77.469929');
+                  setIsSaving(true);
+                  try {
+                    const updated = await updateSchoolLocation({
+                      lat: 30.078676,
+                      lng: 77.469929,
+                      radiusMeters: selectedRadius || 4000,
+                      geofenceEnabled: true,
+                      name: 'EVS PUBLIC SCHOOL, Chilkana Sultanpur',
+                    }, 'EVS School Coordinates Applied');
+                    setCurrentConfig(updated);
+                    setSaveSuccess(true);
+                    onLocationUpdated?.(updated);
+                    setTimeout(() => setSaveSuccess(false), 2000);
+                  } catch {
+                    alert('लोकेशन सेव करने में समस्या आई');
+                  } finally {
+                    setIsSaving(false);
+                  }
+                }}
+                disabled={isSaving}
+                className="px-3 py-1.5 rounded-xl bg-white hover:bg-amber-50 text-amber-900 border border-amber-300 font-bold text-xs shadow-2xs flex items-center gap-1.5 cursor-pointer"
+              >
+                <i className="fa-solid fa-building-flag text-amber-600"></i>
+                <span>Chilkana लोकेशन लागू करें</span>
+              </button>
+            </div>
+          </div>
+
           {/* QUICK 1-CLICK SETTING: "SET CURRENT LOCATION AS SCHOOL GPS" */}
           <div className="bg-gradient-to-br from-blue-900 to-[#0c2340] text-white p-4 sm:p-5 rounded-2xl shadow-lg space-y-3">
             <div className="flex items-center gap-2 text-amber-300 font-black text-sm">

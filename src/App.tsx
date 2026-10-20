@@ -10660,6 +10660,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 onManualCheckIn={handleStaffCheckInSuccess}
                 onRefresh={() => fetchStaffAttendance(false)}
                 isLoading={loadingStaffAttendance}
+                isManager={false}
               />
             )}
           </div>

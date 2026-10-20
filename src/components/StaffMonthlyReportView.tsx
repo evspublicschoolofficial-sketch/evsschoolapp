@@ -5,6 +5,8 @@ import {
   StaffMonthlyReport,
   formatMinutesToHuman,
   formatHoursDec,
+  getSchoolShiftSettings,
+  saveSchoolShiftSettings,
 } from '../utils/staffAttendanceMetrics';
 
 interface StaffMonthlyReportViewProps {
@@ -35,22 +37,25 @@ export const StaffMonthlyReportView: React.FC<StaffMonthlyReportViewProps> = ({
   const [customWorkingDays, setCustomWorkingDays] = useState<number | undefined>(undefined);
   const [showConfig, setShowConfig] = useState<boolean>(false);
 
-  // Shift Cutoffs
-  const [standardStartTime, setStandardStartTime] = useState<string>('08:30 AM');
-  const [standardEndTime, setStandardEndTime] = useState<string>('02:00 PM');
+  // Shift Cutoffs from centralized School Shift Settings
+  const [standardStartTime, setStandardStartTime] = useState<string>(() => getSchoolShiftSettings().schoolOpeningTime || '08:30 AM');
+  const [standardEndTime, setStandardEndTime] = useState<string>(() => getSchoolShiftSettings().schoolClosingTime || '02:00 PM');
 
   // View Mode: 'master_register' (all staff list) vs 'individual_report' (single person card)
   const [viewMode, setViewMode] = useState<'master_register' | 'individual_report'>(
     isManager ? 'master_register' : 'individual_report'
   );
 
-  // Selected staff user for individual report
+  // Selected staff user for individual report (Staff only sees themselves, Manager sees all staff)
   const staffList = useMemo(() => {
+    if (!isManager) {
+      return [currentUser];
+    }
     return allStaffUsers.length > 0 ? allStaffUsers : [currentUser];
-  }, [allStaffUsers, currentUser]);
+  }, [allStaffUsers, currentUser, isManager]);
 
   const [selectedStaffUserId, setSelectedStaffUserId] = useState<string>(() => {
-    if (defaultStaffId) return defaultStaffId;
+    if (defaultStaffId && isManager) return defaultStaffId;
     return currentUser.User_ID || currentUser.Username || String(currentUser.Mobile_number || '');
   });
 
@@ -412,8 +417,8 @@ export const StaffMonthlyReportView: React.FC<StaffMonthlyReportViewProps> = ({
         </div>
       </div>
 
-      {/* 5 OVERALL SUMMARY METRICS CARDS (FOR MONTH) */}
-      {schoolRollup && (
+      {/* 5 OVERALL SUMMARY METRICS CARDS (FOR MONTH - MANAGER ONLY) */}
+      {isManager && schoolRollup && (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
           {/* 1. कितने दिन स्कूल खुला */}
           <div className="bg-gradient-to-br from-blue-50 to-indigo-50/50 p-4 rounded-2xl border border-blue-200 shadow-2xs relative overflow-hidden">
@@ -737,8 +742,8 @@ export const StaffMonthlyReportView: React.FC<StaffMonthlyReportViewProps> = ({
               </div>
             </div>
 
-            {/* Selector Dropdown if multiple staff exist */}
-            {staffList.length > 1 && (
+            {/* Selector Dropdown if multiple staff exist (Manager Only) */}
+            {isManager && staffList.length > 1 && (
               <div className="flex items-center gap-2 w-full md:w-auto">
                 <label className="text-xs text-slate-600 font-bold shrink-0">
                   स्टाफ चुनें:

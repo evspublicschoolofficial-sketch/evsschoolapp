@@ -1,8 +1,17 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { SchoolUser, StaffAttendanceRecord } from '../types';
 import { StaffMonthlyReportView } from './StaffMonthlyReportView';
 import { SchoolLocationModal } from './SchoolLocationModal';
 import { GoogleSheetSyncModal } from './GoogleSheetSyncModal';
+import { SchoolShiftSettingsModal } from './SchoolShiftSettingsModal';
+import {
+  getSchoolShiftSettings,
+  saveSchoolShiftSettings,
+  syncShiftSettingsFromServer,
+  evaluateStaffTimeStatus,
+  SchoolShiftSettings,
+  formatMinutesToHuman,
+} from '../utils/staffAttendanceMetrics';
 
 interface StaffAttendanceViewProps {
   currentUser: SchoolUser;
@@ -32,6 +41,24 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
   );
   const [isLocationModalOpen, setIsLocationModalOpen] = useState<boolean>(false);
   const [showAppsScriptModal, setShowAppsScriptModal] = useState<boolean>(false);
+
+  // Centralized School Shift Timing & Late/Overtime Rules State
+  const [shiftSettings, setShiftSettings] = useState<SchoolShiftSettings>(() => getSchoolShiftSettings());
+  const [isShiftModalOpen, setIsShiftModalOpen] = useState<boolean>(false);
+
+  // Sync shift settings from server and listen for changes
+  useEffect(() => {
+    syncShiftSettingsFromServer().then((latest) => {
+      if (latest) setShiftSettings(latest);
+    });
+
+    const handleUpdate = (e: any) => {
+      if (e?.detail) setShiftSettings(e.detail);
+    };
+    window.addEventListener('evs_shift_settings_updated', handleUpdate);
+    return () => window.removeEventListener('evs_shift_settings_updated', handleUpdate);
+  }, []);
+
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     return new Date().toISOString().split('T')[0];
   });
@@ -200,7 +227,7 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
             </div>
           </div>
 
-          {/* Quick Action Buttons on Top Banner */}
+          {/* Quick Action Buttons on Top Banner - Only Essential Buttons */}
           <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
@@ -235,130 +262,137 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
               <span>स्कूल QR कोड देखें / प्रिंट</span>
             </button>
 
-            <button
-              type="button"
-              onClick={() => setActiveSubTab('monthly_report')}
-              className={`px-4 py-3.5 rounded-2xl font-bold text-xs sm:text-sm transition-all flex items-center gap-2 cursor-pointer shadow-md ${
-                activeSubTab === 'monthly_report'
-                  ? 'bg-amber-400 text-slate-950 font-black ring-2 ring-amber-300'
-                  : 'bg-gradient-to-r from-purple-600/90 to-indigo-600/90 hover:from-purple-600 hover:to-indigo-600 text-white border border-purple-400/40'
-              }`}
-              title="माह के अंत का पूरा डाटा, स्कूल खुला, हाजिरी, गैरहाजिरी, लेट और ऐड एक्स्ट्रा देखें"
-            >
-              <i className="fa-solid fa-chart-pie text-amber-300"></i>
-              <span>📊 मासिक स्टाफ डाटा (Monthly Report)</span>
-            </button>
-
             {onRefresh && (
               <button
                 type="button"
                 onClick={onRefresh}
                 disabled={isLoading}
-                className="px-4 py-3.5 rounded-2xl font-bold text-xs sm:text-sm bg-emerald-600/90 hover:bg-emerald-600 text-white border border-emerald-400/40 transition-all flex items-center gap-2 cursor-pointer shadow-md disabled:opacity-50"
-                title="Google Sheet 'Staff_Attendance' व सर्वर से नवीनतम हाजिरी सिंक करें"
+                className="px-3.5 py-3.5 rounded-2xl font-bold text-xs bg-white/10 hover:bg-white/20 text-white border border-white/20 transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                title="Google Sheet व सर्वर से हाजिरी रिफ्रेश करें"
               >
-                <i className={`fa-solid fa-arrows-rotate ${isLoading ? 'fa-spin' : ''}`}></i>
-                <span>{isLoading ? 'सिंक हो रहा...' : '🔄 Google Sheet सिंक'}</span>
-              </button>
-            )}
-
-            {isManager && (
-              <button
-                type="button"
-                onClick={() => setShowAppsScriptModal(true)}
-                className="px-4 py-3.5 rounded-2xl font-bold text-xs sm:text-sm bg-indigo-600/90 hover:bg-indigo-600 text-white border border-indigo-400/40 transition-all flex items-center gap-2 cursor-pointer shadow-md"
-                title="Google Apps Script कोड देखें व कॉपी करें (हाजिरी व सोशल मीडिया लिंक शीट सिंक हेतु)"
-              >
-                <i className="fa-solid fa-code text-amber-300"></i>
-                <span>📋 Apps Script कोड (Sheet Sync)</span>
+                <i className={`fa-solid fa-arrows-rotate ${isLoading ? 'fa-spin' : ''} text-amber-300`}></i>
+                <span>{isLoading ? 'सिंक...' : 'रिफ्रेश'}</span>
               </button>
             )}
           </div>
         </div>
       </div>
 
-      {/* Geofence & GPS Security Verification Banner */}
-      <div className="bg-gradient-to-r from-blue-50 via-emerald-50 to-blue-50 border border-blue-200/80 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs shadow-2xs">
+      {/* School Location, Address & Google Maps Banner */}
+      <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-emerald-50 border border-blue-200/90 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs shadow-2xs">
         <div className="flex items-start sm:items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold text-lg shrink-0 shadow-xs">
             <i className="fa-solid fa-location-dot"></i>
           </div>
-          <div>
-            <div className="font-bold text-slate-900 flex items-center gap-2">
-              <span>स्कूल कैंपस GPS जियोफेंस सुरक्षा (Campus Geofence Active)</span>
+          <div className="space-y-0.5">
+            <div className="font-black text-slate-900 flex flex-wrap items-center gap-2">
+              <span>EVS PUBLIC SCHOOL, Chilkana Sultanpur</span>
               <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">
-                सख्त उपस्थिति नियम
+                आधिकारिक स्कूल लोकेशन
               </span>
             </div>
-            <p className="text-[11px] text-slate-600 mt-0.5">
-              अटेंडेंस केवल स्कूल में शारीरिक रूप से मौजूद रहकर लाइव कैमरे से QR स्कैन करने पर ही लगेगी। फोटो या बाहर से स्कैन स्वतः अस्वीकृत हो जाएगा।
+            <p className="text-[11px] text-slate-600 flex items-center gap-1">
+              <i className="fa-solid fa-map-pin text-rose-500"></i>
+              <span>Saharanpur road, Chilkana Sultanpur, Chilkana, Uttar Pradesh 247231</span>
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 self-start md:self-auto shrink-0">
-          <button
-            type="button"
-            onClick={() => setIsLocationModalOpen(true)}
-            className="px-3.5 py-1.5 rounded-xl bg-[#0c2340] hover:bg-slate-900 text-amber-300 font-bold text-xs flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer border border-amber-400/40"
-            title="स्कूल कैंपस GPS लोकेशन सेट करें या बदलें"
+        <div className="flex flex-wrap items-center gap-2 self-start md:self-auto shrink-0">
+          <a
+            href="https://maps.app.goo.gl/TCqvnXrQN2326Lpp6"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-2xs transition-all"
+            title="Google Maps में स्कूल की लाइव लोकेशन देखें"
           >
-            <i className="fa-solid fa-location-dot text-amber-400"></i>
-            <span>स्कूल GPS सेटिंग्स</span>
-          </button>
+            <i className="fa-solid fa-map-location-dot"></i>
+            <span>Google Maps</span>
+            <i className="fa-solid fa-arrow-up-right-from-square text-[10px]"></i>
+          </a>
+
+          {isManager && (
+            <button
+              type="button"
+              onClick={() => setIsLocationModalOpen(true)}
+              className="px-3 py-1.5 rounded-xl bg-[#0c2340] hover:bg-slate-900 text-amber-300 font-bold text-xs flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer border border-amber-400/40"
+              title="स्कूल कैंपस GPS लोकेशन सेट करें या बदलें"
+            >
+              <i className="fa-solid fa-crosshairs text-amber-400"></i>
+              <span>GPS सेटिंग्स</span>
+            </button>
+          )}
+
+          {isManager && (
+            <button
+              type="button"
+              onClick={() => setIsShiftModalOpen(true)}
+              className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer"
+              title="स्कूल खुलने व बंद होने का समय सेट करें"
+            >
+              <i className="fa-solid fa-clock"></i>
+              <span>शिफ्ट: {shiftSettings.schoolOpeningTime} - {shiftSettings.schoolClosingTime}</span>
+            </button>
+          )}
         </div>
       </div>
 
       {/* Navigation Sub-Tabs */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
         <div className="flex flex-wrap gap-2">
-          {!isManager && (
+          {/* Staff Tab 1: My Attendance Log */}
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('my_attendance')}
+            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
+              activeSubTab === 'my_attendance'
+                ? 'bg-[#0c2340] text-amber-300 shadow-sm'
+                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            <i className="fa-solid fa-user-check text-emerald-400"></i>
+            <span>{isManager ? 'मेरी हाजिरी लॉग (My Attendance)' : 'मेरी हाजिरी लॉग (My Attendance)'}</span>
+            <span className="px-2 py-0.2 rounded-full bg-emerald-100 text-emerald-800 text-[11px]">
+              {myAttendanceHistory.length}
+            </span>
+          </button>
+
+          {/* Manager Tab: All Staff Today Roster (Only Manager Can See Other Staff) */}
+          {isManager && (
             <button
               type="button"
-              onClick={() => setActiveSubTab('my_attendance')}
+              onClick={() => setActiveSubTab('all_today')}
               className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
-                activeSubTab === 'my_attendance'
+                activeSubTab === 'all_today'
                   ? 'bg-[#0c2340] text-amber-300 shadow-sm'
                   : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
               }`}
             >
-              <i className="fa-solid fa-user-check text-emerald-400"></i>
-              <span>मेरी हाजिरी लॉग (My Attendance)</span>
-              <span className="px-2 py-0.2 rounded-full bg-emerald-100 text-emerald-800 text-[11px]">
-                {myAttendanceHistory.length}
+              <i className="fa-solid fa-users-viewfinder text-blue-400"></i>
+              <span>आज का स्टाफ चेक-इन रोस्टर (Staff Today)</span>
+              <span className="px-2 py-0.2 rounded-full bg-blue-100 text-blue-800 text-[11px]">
+                {presentCountOnSelectedDate}/{totalRegisteredStaff}
               </span>
             </button>
           )}
 
-          <button
-            type="button"
-            onClick={() => setActiveSubTab('all_today')}
-            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
-              activeSubTab === 'all_today'
-                ? 'bg-[#0c2340] text-amber-300 shadow-sm'
-                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-            }`}
-          >
-            <i className="fa-solid fa-users-viewfinder text-blue-400"></i>
-            <span>आज का स्टाफ चेक-इन रोस्टर (Staff Today)</span>
-            <span className="px-2 py-0.2 rounded-full bg-blue-100 text-blue-800 text-[11px]">
-              {presentCountOnSelectedDate}/{totalRegisteredStaff}
-            </span>
-          </button>
+          {/* Manager Tab: Date Report (Only Manager Can View Other Staff by Date) */}
+          {isManager && (
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('history')}
+              className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                activeSubTab === 'history'
+                  ? 'bg-[#0c2340] text-amber-300 shadow-sm'
+                  : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+              }`}
+            >
+              <i className="fa-solid fa-calendar-days text-amber-400"></i>
+              <span>तारीख अनुसार रजिस्टर (Date Report)</span>
+            </button>
+          )}
 
-          <button
-            type="button"
-            onClick={() => setActiveSubTab('history')}
-            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
-              activeSubTab === 'history'
-                ? 'bg-[#0c2340] text-amber-300 shadow-sm'
-                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-            }`}
-          >
-            <i className="fa-solid fa-calendar-days text-amber-400"></i>
-            <span>तारीख अनुसार (Date Report)</span>
-          </button>
-
+          {/* Monthly Report Tab: For Staff it's 'My Monthly Data', for Manager it's 'All Staff Monthly Register' */}
           <button
             type="button"
             onClick={() => setActiveSubTab('monthly_report')}
@@ -369,15 +403,15 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
             }`}
           >
             <i className="fa-solid fa-chart-pie text-purple-400"></i>
-            <span>मासिक स्टाफ विश्लेषण (Monthly Data)</span>
+            <span>{isManager ? 'मासिक स्टाफ विश्लेषण (All Staff Register)' : 'मेरी मासिक रिपोर्ट (My Monthly Data)'}</span>
             <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 text-[10px] font-black">
-              महीने का डाटा
+              {isManager ? 'सभी स्टाफ' : 'मेरा डाटा'}
             </span>
           </button>
         </div>
 
-        {/* Date Selector for history & roster (shown when in single-day view) */}
-        {activeSubTab !== 'monthly_report' && (
+        {/* Date Selector for history & roster (shown when Manager is in date view) */}
+        {isManager && activeSubTab !== 'monthly_report' && activeSubTab !== 'my_attendance' && (
           <div className="flex items-center gap-2 text-xs font-semibold text-slate-700 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-2xs">
             <span>तारीख:</span>
             <input
@@ -476,30 +510,59 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {myAttendanceHistory.map((rec) => (
-                      <tr key={rec.id} className="hover:bg-slate-50/80 transition-colors">
-                        <td className="px-4 py-3 font-bold text-slate-900">
-                          {new Date(rec.date).toLocaleDateString('hi-IN', {
-                            weekday: 'short',
-                            day: 'numeric',
-                            month: 'short',
-                            year: 'numeric',
-                          })}
-                        </td>
-                        <td className="px-4 py-3 font-mono font-bold text-emerald-700">
-                          <i className="fa-regular fa-clock mr-1 text-emerald-500"></i>
-                          {rec.check_in_time}
-                        </td>
-                        <td className="px-4 py-3 font-mono text-slate-600">
-                          {rec.check_out_time ? (
-                            <>
-                              <i className="fa-solid fa-arrow-right-from-bracket mr-1 text-slate-400"></i>
-                              {rec.check_out_time}
-                            </>
-                          ) : (
-                            <span className="text-slate-400 italic">—</span>
-                          )}
-                        </td>
+                    {myAttendanceHistory.map((rec) => {
+                      const timeEval = evaluateStaffTimeStatus(rec.check_in_time, rec.check_out_time, shiftSettings);
+                      return (
+                        <tr key={rec.id} className="hover:bg-slate-50/80 transition-colors">
+                          <td className="px-4 py-3 font-bold text-slate-900">
+                            {new Date(rec.date).toLocaleDateString('hi-IN', {
+                              weekday: 'short',
+                              day: 'numeric',
+                              month: 'short',
+                              year: 'numeric',
+                            })}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="font-mono font-bold text-emerald-700">
+                              <i className="fa-regular fa-clock mr-1 text-emerald-500"></i>
+                              {rec.check_in_time}
+                            </div>
+                            <div className="mt-1">
+                              <span
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${timeEval.arrivalBadge.bgClass} ${timeEval.arrivalBadge.textClass}`}
+                              >
+                                <i className={`fa-solid ${timeEval.arrivalBadge.icon}`}></i>
+                                <span>{timeEval.arrivalBadge.text}</span>
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 font-mono text-slate-600">
+                            {rec.check_out_time ? (
+                              <div>
+                                <div className="font-bold text-slate-800">
+                                  <i className="fa-solid fa-arrow-right-from-bracket mr-1 text-slate-400"></i>
+                                  {rec.check_out_time}
+                                </div>
+                                {timeEval.departureBadge && (
+                                  <div className="mt-1">
+                                    <span
+                                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${timeEval.departureBadge.bgClass} ${timeEval.departureBadge.textClass}`}
+                                    >
+                                      <i className={`fa-solid ${timeEval.departureBadge.icon}`}></i>
+                                      <span>{timeEval.departureBadge.text}</span>
+                                    </span>
+                                  </div>
+                                )}
+                                {timeEval.totalDurationMinutes > 0 && (
+                                  <div className="text-[10px] text-slate-500 font-sans mt-0.5 font-medium">
+                                    अवधि: {timeEval.formattedDuration}
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 italic">—</span>
+                            )}
+                          </td>
                         <td className="px-4 py-3">
                           <span
                             className={`px-2.5 py-1 rounded-full text-xs font-bold ${
@@ -527,7 +590,8 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
                           {rec.location || 'School Campus'}
                         </td>
                       </tr>
-                    ))}
+                    );
+                  })}
                   </tbody>
                 </table>
               </div>
@@ -536,8 +600,8 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
         </div>
       )}
 
-      {/* VIEW 2: ALL STAFF TODAY ROSTER */}
-      {(activeSubTab === 'all_today' || activeSubTab === 'history') && (
+      {/* VIEW 2: ALL STAFF TODAY ROSTER (MANAGER ONLY) */}
+      {isManager && (activeSubTab === 'all_today' || activeSubTab === 'history') && (
         <div className="space-y-6">
           {/* Summary Pills on Selected Date */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -631,91 +695,132 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
                     <th className="px-4 py-3">मोबाइल (Mobile)</th>
                     <th className="px-4 py-3">हाजिरी स्थिति</th>
                     <th className="px-4 py-3">चेक-इन समय (Arrival)</th>
-                    <th className="px-4 py-3">चेक-आउट समय</th>
+                    <th className="px-4 py-3">चेक-आउट समय (Departure)</th>
                     <th className="px-4 py-3">माध्यम</th>
                     {isManager && <th className="px-4 py-3 text-right">कार्य (Action)</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredRoster.map(({ user, attendance, isCheckedIn }) => (
-                    <tr
-                      key={user.User_ID || user.Username || String(user.Mobile_number)}
-                      className={`hover:bg-slate-50/80 transition-colors ${
-                        isCheckedIn ? 'bg-emerald-50/20' : ''
-                      }`}
-                    >
-                      <td className="px-4 py-3">
-                        <div className="font-bold text-slate-900">{user.Name}</div>
-                        <div className="text-[11px] text-slate-400 font-mono">
-                          ID: {user.User_ID || 'STAFF'}
-                        </div>
-                      </td>
-
-                      <td className="px-4 py-3">
-                        <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-xs font-semibold">
-                          {user.Designation || 'Teacher'}
-                        </span>
-                      </td>
-
-                      <td className="px-4 py-3 font-mono text-slate-600">
-                        {user.Mobile_number}
-                      </td>
-
-                      <td className="px-4 py-3">
-                        {isCheckedIn ? (
-                          <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 inline-flex items-center gap-1">
-                            <i className="fa-solid fa-check"></i>
-                            <span>उपस्थित (Present)</span>
-                          </span>
-                        ) : (
-                          <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-500 inline-flex items-center gap-1">
-                            <i className="fa-regular fa-clock"></i>
-                            <span>चेक-इन नहीं हुआ</span>
-                          </span>
-                        )}
-                      </td>
-
-                      <td className="px-4 py-3 font-mono font-bold text-emerald-700">
-                        {attendance?.check_in_time ? (
-                          <>
-                            <i className="fa-regular fa-clock mr-1 text-emerald-500"></i>
-                            {attendance.check_in_time}
-                          </>
-                        ) : (
-                          <span className="text-slate-400 italic">—</span>
-                        )}
-                      </td>
-
-                      <td className="px-4 py-3 font-mono text-slate-600">
-                        {attendance?.check_out_time || <span className="text-slate-400 italic">—</span>}
-                      </td>
-
-                      <td className="px-4 py-3 text-slate-600">
-                        {attendance ? (
-                          <span className="text-xs px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
-                            {attendance.method}
-                          </span>
-                        ) : (
-                          <span className="text-slate-400 italic">—</span>
-                        )}
-                      </td>
-
-                      {isManager && (
-                        <td className="px-4 py-3 text-right">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setManualSelectedUser(user);
-                              setManualModalOpen(true);
-                            }}
-                            className="px-2.5 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold text-xs border border-amber-300 transition-colors cursor-pointer"
-                          >
-                            {isCheckedIn ? 'संशोधन' : 'हाजिरी लगाएं'}
-                          </button>
+                  {filteredRoster.map(({ user, attendance, isCheckedIn }) => {
+                    const timeEval = attendance
+                      ? evaluateStaffTimeStatus(attendance.check_in_time, attendance.check_out_time, shiftSettings)
+                      : null;
+                    return (
+                      <tr
+                        key={user.User_ID || user.Username || String(user.Mobile_number)}
+                        className={`hover:bg-slate-50/80 transition-colors ${
+                          isCheckedIn ? 'bg-emerald-50/20' : ''
+                        }`}
+                      >
+                        <td className="px-4 py-3">
+                          <div className="font-bold text-slate-900">{user.Name}</div>
+                          <div className="text-[11px] text-slate-400 font-mono">
+                            ID: {user.User_ID || 'STAFF'}
+                          </div>
                         </td>
-                      )}
-                    </tr>
-                  ))}
+
+                        <td className="px-4 py-3">
+                          <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-xs font-semibold">
+                            {user.Designation || 'Teacher'}
+                          </span>
+                        </td>
+
+                        <td className="px-4 py-3 font-mono text-slate-600">
+                          {user.Mobile_number}
+                        </td>
+
+                        <td className="px-4 py-3">
+                          {isCheckedIn ? (
+                            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 inline-flex items-center gap-1">
+                              <i className="fa-solid fa-check"></i>
+                              <span>उपस्थित (Present)</span>
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-500 inline-flex items-center gap-1">
+                              <i className="fa-regular fa-clock"></i>
+                              <span>चेक-इन नहीं हुआ</span>
+                            </span>
+                          )}
+                        </td>
+
+                        <td className="px-4 py-3">
+                          {attendance?.check_in_time ? (
+                            <div>
+                              <div className="font-mono font-bold text-emerald-700">
+                                <i className="fa-regular fa-clock mr-1 text-emerald-500"></i>
+                                {attendance.check_in_time}
+                              </div>
+                              {timeEval?.arrivalBadge && (
+                                <div className="mt-1">
+                                  <span
+                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${timeEval.arrivalBadge.bgClass} ${timeEval.arrivalBadge.textClass}`}
+                                  >
+                                    <i className={`fa-solid ${timeEval.arrivalBadge.icon}`}></i>
+                                    <span>{timeEval.arrivalBadge.text}</span>
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 italic">—</span>
+                          )}
+                        </td>
+
+                        <td className="px-4 py-3">
+                          {attendance?.check_out_time ? (
+                            <div>
+                              <div className="font-mono font-bold text-slate-800">
+                                <i className="fa-solid fa-arrow-right-from-bracket mr-1 text-slate-400"></i>
+                                {attendance.check_out_time}
+                              </div>
+                              {timeEval?.departureBadge && (
+                                <div className="mt-1">
+                                  <span
+                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${timeEval.departureBadge.bgClass} ${timeEval.departureBadge.textClass}`}
+                                  >
+                                    <i className={`fa-solid ${timeEval.departureBadge.icon}`}></i>
+                                    <span>{timeEval.departureBadge.text}</span>
+                                  </span>
+                                </div>
+                              )}
+                              {timeEval && timeEval.totalDurationMinutes > 0 && (
+                                <div className="text-[10px] text-slate-500 font-sans mt-0.5 font-medium">
+                                  अवधि: {timeEval.formattedDuration}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 italic">—</span>
+                          )}
+                        </td>
+
+                        <td className="px-4 py-3 text-slate-600">
+                          {attendance ? (
+                            <span className="text-xs px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
+                              {attendance.method}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 italic">—</span>
+                          )}
+                        </td>
+
+                        {isManager && (
+                          <td className="px-4 py-3 text-right">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setManualSelectedUser(user);
+                                setManualModalOpen(true);
+                              }}
+                              className="px-2.5 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold text-xs border border-amber-300 transition-colors cursor-pointer"
+                            >
+                              {isCheckedIn ? 'संशोधन' : 'हाजिरी लगाएं'}
+                            </button>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -850,6 +955,13 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
       <GoogleSheetSyncModal
         isOpen={showAppsScriptModal}
         onClose={() => setShowAppsScriptModal(false)}
+      />
+
+      {/* School Shift Timings & Late/Overtime Rules Modal (Manager Only) */}
+      <SchoolShiftSettingsModal
+        isOpen={isShiftModalOpen}
+        onClose={() => setIsShiftModalOpen(false)}
+        onSettingsSaved={(newSettings) => setShiftSettings(newSettings)}
       />
     </div>
   );

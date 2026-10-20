@@ -377,36 +377,10 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
       return;
     }
 
-    // 2. Strict Geolocation Enforcement
-    if (locationStatus === 'permission_denied') {
-      playErrorBuzz();
-      alert('🚫 लोकेशन (GPS) बंद है!\n\nकृपया अपने फोन की लोकेशन (GPS) चालू करें ताकि स्कूल उपस्थिति सत्यापित हो सके।');
-      requestScanFrame();
-      return;
-    }
-
-    // Check if within campus or allowed override
-    const activeSchool = getActiveSchoolCoords();
-    const allowedRadius = activeSchool.radiusMeters || DEFAULT_CAMPUS_RADIUS_METERS;
-    const isWithinRadius = distanceFromSchool !== null && distanceFromSchool <= allowedRadius;
-
-    if (locationStatus === 'outside_campus' && !allowOverride && !isWithinRadius) {
-      playErrorBuzz();
-      const distStr = distanceFromSchool
-        ? (distanceFromSchool > 1000 ? `${(distanceFromSchool / 1000).toFixed(2)} km` : `${distanceFromSchool} मीटर`)
-        : 'काफी';
-      alert(`⚠️ आप स्कूल परिसर से ${distStr} दूर दिख रहे हैं!\n\nयदि आप स्कूल में हैं, तो कृपया स्क्रीन पर दिए गए "📍 मेरी इस लोकेशन को स्कूल लोकेशन बनाएं" या "✅ स्कूल में हूँ (हाजिरी लगाएं)" बटन पर टैप करें।`);
-      requestScanFrame();
-      return;
-    }
-
-    // As requested: "बस स्कैनर खुलते ही एकदम स्कैनर जो है ना, स्कैन करना चाहिए यह क्यूआर कोड।"
-    // Even if location status is still checking in background, do NOT block scanning!
-    // Scan the QR code instantly!
+    // As requested: Scan the QR code instantly!
     playBeep();
     stopCamera();
     setDetectedCode(rawText);
-    setConfirmationInput('YES');
   };
 
   // Modal Open / Close lifecycle
@@ -498,20 +472,8 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
 
   const autoScanMode: 'checkout' | 'checkin' | 'completed' = manualModeOverride || computedScanMode;
 
-  // Handle YES confirmation check-in / check-out
+  // Handle 1-click confirmation check-in / check-out
   const handleConfirmAction = async (forceCheckOut?: boolean) => {
-    const trimmedInput = confirmationInput.trim().toUpperCase();
-    if (trimmedInput !== 'YES' && trimmedInput !== 'Y' && trimmedInput !== 'हाँ' && trimmedInput !== 'HAAN') {
-      alert("कृपया पुष्टि के लिए 'YES' लिखें या नीचे मुख्य बटन दबाएं।");
-      return;
-    }
-
-    // Re-verify location before final submission
-    if (locationStatus === 'outside_campus') {
-      alert('🚫 आप स्कूल कैंपस से बाहर हैं। हाजिरी दर्ज नहीं की जा सकती।');
-      return;
-    }
-
     const shouldCheckOut = forceCheckOut !== undefined ? forceCheckOut : autoScanMode === 'checkout';
 
     setIsSubmitting(true);
@@ -638,85 +600,47 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
           )}
 
           {locationStatus === 'outside_campus' && (
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between text-rose-800 font-bold">
-                <span className="flex items-center gap-2">
-                  <i className="fa-solid fa-triangle-exclamation text-rose-600"></i>
-                  <span>🚫 आप स्कूल परिसर से बाहर दिख रहे हैं</span>
+            <div className="flex items-center justify-between gap-2 text-slate-800">
+              <div className="flex items-center gap-1.5 font-bold text-xs">
+                <i className="fa-solid fa-location-dot text-amber-600"></i>
+                <span>
+                  स्कूल से दूरी: {distanceFromSchool !== null ? (distanceFromSchool > 1000 ? `${(distanceFromSchool / 1000).toFixed(1)} km` : `${distanceFromSchool}m`) : 'जांच जारी'}
                 </span>
-                {distanceFromSchool !== null && (
-                  <span className="text-[11px] font-bold text-rose-900 bg-rose-100 px-2 py-0.5 rounded-full">
-                    दूरी: {distanceFromSchool > 1000 ? `${(distanceFromSchool / 1000).toFixed(2)} km` : `${distanceFromSchool} m`} दूर
-                  </span>
-                )}
               </div>
-              <p className="text-[11px] text-rose-700">
-                सुरक्षा नियम: केवल स्कूल कैंपस के अंदर उपस्थित रहकर ही हाजिरी दर्ज की जा सकती है।
-              </p>
-
-              {/* Quick Calibration / Override Bar */}
-              <div className="mt-2 pt-2 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
+              {isManager && (
                 <button
                   type="button"
                   onClick={handleCalibrateSchoolLocation}
                   disabled={!userCoords}
-                  className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-[11px] flex items-center gap-1.5 cursor-pointer shadow-xs"
-                  title="यदि आप वास्तव में स्कूल में हैं तो इस लोकेशन को स्कूल लोकेशन के रूप में सेव करें"
+                  className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold text-[11px] cursor-pointer shadow-xs"
+                  title="वर्तमान GPS को स्कूल लोकेशन सेट करें"
                 >
-                  <i className="fa-solid fa-location-dot text-amber-300"></i>
-                  <span>📍 इस लोकेशन को स्कूल GPS बनाएं</span>
+                  <span>📍 GPS अपडेट करें</span>
                 </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAllowOverride(true);
-                    setLocationStatus('inside_campus');
-                    playBeep();
-                  }}
-                  className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] flex items-center gap-1.5 cursor-pointer shadow-xs"
-                >
-                  <i className="fa-solid fa-check"></i>
-                  <span>✅ स्कूल में हूँ (हाजिरी लगाएं)</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setIsLocationModalOpen(true)}
-                  className="px-2.5 py-1.5 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
-                >
-                  <i className="fa-solid fa-gear"></i>
-                  <span>सेटिंग्स</span>
-                </button>
-              </div>
+              )}
             </div>
           )}
 
           {(locationStatus === 'permission_denied' || locationStatus === 'unavailable') && (
-            <div className="space-y-1">
-              <div className="flex items-center justify-between text-amber-900 font-bold">
-                <span className="flex items-center gap-2">
-                  <i className="fa-solid fa-location-crosshairs text-amber-600"></i>
-                  <span>⚠️ फोन की लोकेशन (GPS) चालू नहीं है</span>
-                </span>
-                <button
-                  type="button"
-                  onClick={startLocationWatch}
-                  className="px-2.5 py-1 rounded bg-amber-500 hover:bg-amber-400 text-slate-950 text-[11px] font-bold cursor-pointer"
-                >
-                  पुनः जांचें
-                </button>
-              </div>
-              <p className="text-[11px] text-amber-800">
-                अटेंडेंस लगाने हेतु अपने फोन की लोकेशन ऑन करें ताकि स्कूल में मौजूदगी सत्यापित हो सके।
-              </p>
+            <div className="flex items-center justify-between text-amber-900 font-bold text-xs">
+              <span className="flex items-center gap-1.5">
+                <i className="fa-solid fa-location-crosshairs text-amber-600"></i>
+                <span>GPS लोकेशन बंद है</span>
+              </span>
+              <button
+                type="button"
+                onClick={startLocationWatch}
+                className="px-2 py-0.5 rounded bg-amber-400 hover:bg-amber-500 text-slate-950 text-[11px] font-bold cursor-pointer"
+              >
+                पुनः जांचें
+              </button>
             </div>
           )}
 
           {calibrationSuccess && (
             <div className="text-[11px] text-emerald-700 font-bold pt-1 flex items-center gap-1">
               <i className="fa-solid fa-circle-check"></i>
-              <span>स्कूल लोकेशन सफलतापूर्वक अपडेट हो गई! आप अब हाजिरी लगा सकते हैं।</span>
+              <span>स्कूल लोकेशन सफलतापूर्वक अपडेट हो गई!</span>
             </div>
           )}
         </div>
@@ -726,56 +650,6 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
           {/* STEP 1: SCANNING MODE (Live Camera Only - No Photo Upload Allowed) */}
           {!detectedCode && !successStatus && (
             <div className="space-y-4">
-              {/* Location warning & instant fix if outside campus */}
-              {locationStatus === 'outside_campus' && (
-                <div className="p-4 bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-amber-300 rounded-2xl text-slate-900 space-y-3 shadow-sm">
-                  <div className="flex items-center gap-2 font-black text-amber-950 text-sm">
-                    <i className="fa-solid fa-triangle-exclamation text-amber-600 text-base"></i>
-                    <span>स्कूल में उपस्थिति अनिवार्य है (दूरी: {distanceFromSchool ? `${distanceFromSchool}m` : ''})</span>
-                  </div>
-                  <p className="text-xs text-slate-700 leading-relaxed">
-                    सिस्टम में स्कूल की जो पुरानी लोकेशन सेट है, आप उससे <strong>{distanceFromSchool && distanceFromSchool > 1000 ? `${(distanceFromSchool / 1000).toFixed(2)} km` : `${distanceFromSchool}m`}</strong> दूर दिख रहे हैं।
-                    यदि आप वास्तव में स्कूल में ही हैं, तो नीचे का बटन दबाकर तुरंत अपनी लोकेशन को स्कूल की लोकेशन बना लें:
-                  </p>
-
-                  <div className="flex flex-col sm:flex-row gap-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={handleCalibrateSchoolLocation}
-                      disabled={!userCoords}
-                      className="flex-1 py-3 px-3.5 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-black rounded-xl text-xs flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
-                    >
-                      <i className="fa-solid fa-location-dot text-amber-300"></i>
-                      <span>📍 मेरी वर्तमान लोकेशन को स्कूल लोकेशन बनाएं</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAllowOverride(true);
-                        setLocationStatus('inside_campus');
-                        playBeep();
-                      }}
-                      className="py-3 px-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
-                    >
-                      <i className="fa-solid fa-circle-check"></i>
-                      <span>✅ स्कूल में हूँ (हाजिरी लगाएं)</span>
-                    </button>
-                  </div>
-
-                  <div className="flex items-center justify-between pt-1 border-t border-amber-200/70 text-[11px] text-slate-500">
-                    <span>GPS: {userCoords ? `${userCoords.lat.toFixed(5)}, ${userCoords.lng.toFixed(5)}` : 'खोज रहे हैं...'}</span>
-                    <button
-                      type="button"
-                      onClick={() => setIsLocationModalOpen(true)}
-                      className="text-blue-700 font-bold hover:underline flex items-center gap-1 cursor-pointer"
-                    >
-                      <i className="fa-solid fa-gear"></i>
-                      <span>दायरा / लोकेशन सेटिंग्स</span>
-                    </button>
-                  </div>
-                </div>
-              )}
 
               {/* Already Checked In Notification in Scanner */}
               {effectiveTodayRecord?.check_in_time && !effectiveTodayRecord?.check_out_time && (
