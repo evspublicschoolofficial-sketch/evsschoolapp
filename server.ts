@@ -43,6 +43,10 @@ function saveTelemetryCache() {
 
 async function forwardToGoogleAppsScript(payload: any) {
   try {
+    const targetUrl = (typeof payload?.appsScriptUrl === 'string' && payload.appsScriptUrl.trim().startsWith('https://script.google.com/macros/s/'))
+      ? payload.appsScriptUrl.trim()
+      : currentAppsScriptUrl;
+
     const formattedPayload = payload.action ? payload : {
       action: 'updateBusTracking',
       bus_id: payload.busId || payload.bus_id || '121212',
@@ -53,23 +57,37 @@ async function forwardToGoogleAppsScript(payload: any) {
       status: payload.status || 'running',
     };
 
-    // 1. Try POST
-    const res = await fetch(currentAppsScriptUrl, {
+    // 1. Try POST to Google Apps Script
+    const res = await fetch(targetUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify(formattedPayload),
     });
     const text = await res.text();
 
-    // 2. If POST returned "Invalid action", attempt GET fallback for actions like updateBusTracking
+    // 2. Fallbacks if needed
     if (text.includes('Invalid action') && formattedPayload.action === 'updateBusTracking') {
       try {
-        const getUrl = `${currentAppsScriptUrl}?action=updateBusTracking&bus_id=${encodeURIComponent(formattedPayload.bus_id)}&driver_name=${encodeURIComponent(formattedPayload.driver_name)}&current_location=${encodeURIComponent(formattedPayload.current_location)}`;
+        const getUrl = `${targetUrl}?action=updateBusTracking&bus_id=${encodeURIComponent(formattedPayload.bus_id)}&driver_name=${encodeURIComponent(formattedPayload.driver_name)}&current_location=${encodeURIComponent(formattedPayload.current_location)}`;
         const gRes = await fetch(getUrl);
         const gText = await gRes.text();
         if (gText.includes('success') || gText.includes('updated')) {
           return { ok: true, response: gText };
         }
+      } catch {}
+    } else if (formattedPayload.action === 'addHomework' && (!res.ok || text.includes('error'))) {
+      try {
+        const getUrl = `${targetUrl}?action=addHomework&homework_id=${encodeURIComponent(formattedPayload.homework_id || '')}&date=${encodeURIComponent(formattedPayload.date || '')}&class_name=${encodeURIComponent(formattedPayload.class_name || formattedPayload.class || '')}&subject=${encodeURIComponent(formattedPayload.subject || '')}&detail=${encodeURIComponent(formattedPayload.detail || formattedPayload.Homework_Detail || '')}&teacher=${encodeURIComponent(formattedPayload.teacher || '')}`;
+        const gRes = await fetch(getUrl);
+        const gText = await gRes.text();
+        if (gText.includes('success')) return { ok: true, response: gText };
+      } catch {}
+    } else if (formattedPayload.action === 'updateHomeworkTracker' && (!res.ok || text.includes('error'))) {
+      try {
+        const getUrl = `${targetUrl}?action=updateHomeworkTracker&record_id=${encodeURIComponent(formattedPayload.record_id || formattedPayload.id || '')}&student_id=${encodeURIComponent(formattedPayload.student_id || '')}&date=${encodeURIComponent(formattedPayload.date || '')}&class=${encodeURIComponent(formattedPayload.class || '')}&subject=${encodeURIComponent(formattedPayload.subject || '')}&status=${encodeURIComponent(formattedPayload.status || '')}`;
+        const gRes = await fetch(getUrl);
+        const gText = await gRes.text();
+        if (gText.includes('success')) return { ok: true, response: gText };
       } catch {}
     }
 
@@ -727,6 +745,11 @@ async function startServer() {
   app.post('/api/homework', (req, res) => {
     const item = req.body;
     const list = saveHomeworkItem(item);
+    forwardToGoogleAppsScript({
+      action: 'addHomework',
+      appsScriptUrl: item.appsScriptUrl || req.headers['x-apps-script-url'],
+      ...item,
+    }).catch(() => {});
     res.json({ success: true, homework: list });
   });
 
@@ -737,6 +760,11 @@ async function startServer() {
   app.post('/api/behavior', (req, res) => {
     const item = req.body;
     const list = saveBehaviorItem(item);
+    forwardToGoogleAppsScript({
+      action: 'addBehavior',
+      appsScriptUrl: item.appsScriptUrl || req.headers['x-apps-script-url'],
+      ...item,
+    }).catch(() => {});
     res.json({ success: true, behavior: list });
   });
 
@@ -746,7 +774,36 @@ async function startServer() {
 
   app.post('/api/homework-tracker', (req, res) => {
     const item = req.body;
+    if (item.action === 'bulkUpdateHomeworkTracker' && Array.isArray(item.student_ids)) {
+      const cleanDate = item.date || new Date().toISOString().split('T')[0];
+      const hwClass = item.class || '';
+      const hwSubject = item.subject || 'General';
+      const targetStatus = item.status || 'Completed';
+      const scriptUrl = item.appsScriptUrl || req.headers['x-apps-script-url'];
+
+      for (const sId of item.student_ids) {
+        const singlePayload = {
+          action: 'updateHomeworkTracker',
+          record_id: `TRK-${sId}-${cleanDate}`,
+          student_id: sId,
+          date: cleanDate,
+          class: hwClass,
+          subject: hwSubject,
+          status: targetStatus,
+          appsScriptUrl: scriptUrl,
+        };
+        saveHwTrackerItem(singlePayload);
+        forwardToGoogleAppsScript(singlePayload).catch(() => {});
+      }
+      return res.json({ success: true, message: `Bulk updated ${item.student_ids.length} students in sheet` });
+    }
+
     const list = saveHwTrackerItem(item);
+    forwardToGoogleAppsScript({
+      action: 'updateHomeworkTracker',
+      appsScriptUrl: item.appsScriptUrl || req.headers['x-apps-script-url'],
+      ...item,
+    }).catch(() => {});
     res.json({ success: true, records: list });
   });
 
@@ -900,6 +957,23 @@ async function startServer() {
         saveBehaviorItem(payload);
       } else if (payload?.action === 'updateHomeworkTracker') {
         saveHwTrackerItem(payload);
+      } else if (payload?.action === 'bulkUpdateHomeworkTracker' && Array.isArray(payload?.student_ids)) {
+        const cleanDate = payload.date || new Date().toISOString().split('T')[0];
+        const hwClass = payload.class || '';
+        const hwSubject = payload.subject || 'General';
+        const targetStatus = payload.status || 'Completed';
+        for (const sId of payload.student_ids) {
+          const itemPayload = {
+            action: 'updateHomeworkTracker',
+            record_id: `TRK-${sId}-${cleanDate}`,
+            student_id: sId,
+            date: cleanDate,
+            class: hwClass,
+            subject: hwSubject,
+            status: targetStatus,
+          };
+          saveHwTrackerItem(itemPayload);
+        }
       } else if (payload?.action === 'updateBusTracking') {
         processTelemetryPayload(payload);
       } else if (payload?.action === 'recordStaffAttendance' || payload?.action === 'addStaffAttendance') {
@@ -912,7 +986,39 @@ async function startServer() {
         ? clientUrl.trim()
         : currentAppsScriptUrl;
 
+      // Update currentAppsScriptUrl cache if client provided a valid URL
+      if (typeof clientUrl === 'string' && clientUrl.trim().startsWith('https://script.google.com/macros/s/')) {
+        currentAppsScriptUrl = clientUrl.trim();
+        try {
+          fs.writeFileSync(URL_CONFIG_FILE, currentAppsScriptUrl, 'utf-8');
+        } catch {}
+      }
+
       console.log(`[AppsScriptForwarder] Action: ${payload?.action}, Target: ${targetUrl}`);
+
+      // If bulk update, also send individual items to Apps Script targetUrl
+      if (payload?.action === 'bulkUpdateHomeworkTracker' && Array.isArray(payload?.student_ids)) {
+        const cleanDate = payload.date || new Date().toISOString().split('T')[0];
+        const hwClass = payload.class || '';
+        const hwSubject = payload.subject || 'General';
+        const targetStatus = payload.status || 'Completed';
+        for (const sId of payload.student_ids) {
+          const itemPayload = {
+            action: 'updateHomeworkTracker',
+            record_id: `TRK-${sId}-${cleanDate}`,
+            student_id: sId,
+            date: cleanDate,
+            class: hwClass,
+            subject: hwSubject,
+            status: targetStatus,
+          };
+          fetch(targetUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify(itemPayload),
+          }).catch(() => {});
+        }
+      }
 
       let responseText = '';
       let remoteOk = false;

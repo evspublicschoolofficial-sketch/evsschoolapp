@@ -820,6 +820,48 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
+    // 5B. BULK UPDATE HOMEWORK TRACKER
+    if (action === "bulkUpdateHomeworkTracker") {
+      var sheet = ss.getSheetByName("Homework_Tracker");
+      if (!sheet) sheet = ss.insertSheet("Homework_Tracker");
+      if (sheet.getLastRow() === 0) {
+        sheet.appendRow(["ID", "Date", "Class", "Student_ID", "Subject", "Last_homework_Status"]);
+      }
+      var sIds = data.student_ids || [];
+      var curDate = String(data.date || new Date().toISOString().split("T")[0]).trim();
+      var curStatus = String(data.status || "Completed").trim();
+      var curClass = String(data.class || "").trim();
+      var curSubject = String(data.subject || "General").trim();
+
+      var rows = sheet.getDataRange().getValues();
+      var sIdMap = {};
+      for (var r = 1; r < rows.length; r++) {
+        var rowSId = String(rows[r][3] || "").trim().toLowerCase();
+        var rowDate = String(rows[r][1] || "").trim();
+        if (rowDate === curDate || !curDate) {
+          sIdMap[rowSId] = r + 1;
+        }
+      }
+
+      for (var i = 0; i < sIds.length; i++) {
+        var sid = String(sIds[i]).trim();
+        var lowerSid = sid.toLowerCase();
+        if (sIdMap[lowerSid]) {
+          sheet.getRange(sIdMap[lowerSid], 6).setValue(curStatus);
+          if (curClass) sheet.getRange(sIdMap[lowerSid], 3).setValue(curClass);
+          if (curSubject) sheet.getRange(sIdMap[lowerSid], 5).setValue(curSubject);
+        } else {
+          var recId = "TRK-" + sid + "-" + curDate;
+          sheet.appendRow([recId, curDate, curClass, sid, curSubject, curStatus]);
+        }
+      }
+
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        message: "Bulk Homework Tracker Status Updated in Google Sheet!"
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
     // 6. ADD / UPDATE STUDENT (Students sheet with Session_Start_Month)
     if (action === "addStudent") {
       var sheet = ss.getSheetByName("Students");

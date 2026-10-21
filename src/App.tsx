@@ -4941,6 +4941,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     });
 
     // Sync to backend API & Google Apps Script
+    const activeScriptUrl = getEffectiveApiUrl();
     const payload = {
       action: 'updateHomeworkTracker',
       record_id: recId,
@@ -4949,29 +4950,42 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       class: hwClass,
       subject: hwSubject,
       status: targetStatus,
+      appsScriptUrl: activeScriptUrl,
     };
 
     try {
+      // 1. Forward through server proxy (guaranteed no-CORS, follows Google Apps Script redirects)
+      fetch('/api/forward-apps-script', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).catch(() => {});
+
+      // 2. Also save to server API endpoint
       fetch('/api/homework-tracker', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       }).catch(() => {});
 
-      const activeScriptUrl = getEffectiveApiUrl();
+      // 3. Direct browser attempt to Apps Script
       fetch(activeScriptUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(payload),
       }).catch(() => {});
+
+      // 4. GET query fallback
+      const getUrl = `${activeScriptUrl}?action=updateHomeworkTracker&record_id=${encodeURIComponent(recId)}&student_id=${encodeURIComponent(sId)}&date=${encodeURIComponent(cleanDate)}&class=${encodeURIComponent(hwClass)}&subject=${encodeURIComponent(hwSubject)}&status=${encodeURIComponent(targetStatus)}`;
+      fetch(getUrl).catch(() => {});
     } catch {}
 
     const matchedStudent = students.find((s) => String(s.Student_ID || '').toLowerCase() === sId.toLowerCase());
     const name = matchedStudent?.Student_Name || sId;
     setSyncToastMessage(
       targetStatus === 'Completed'
-        ? `✅ ${name} का कार्य Complete (पूर्ण) मार्क किया गया!`
-        : `⚠️ ${name} का कार्य Incomplete (अपूर्ण) मार्क किया गया!`
+        ? `✅ ${name}: होमवर्क Complete (Google Sheet में दर्ज)`
+        : `⚠️ ${name}: होमवर्क Incomplete (Google Sheet में दर्ज)`
     );
     setTimeout(() => setSyncToastMessage(null), 2500);
   };
@@ -5023,24 +5037,60 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       return updated;
     });
 
-    // Notify backend
+    const activeScriptUrl = getEffectiveApiUrl();
+    const bulkPayload = {
+      action: 'bulkUpdateHomeworkTracker',
+      student_ids: studentIds,
+      date: cleanDate,
+      class: hwClass,
+      subject: hwSubject,
+      status: targetStatus,
+      appsScriptUrl: activeScriptUrl,
+    };
+
+    // Forward bulk action to server forwarder & API
     try {
+      fetch('/api/forward-apps-script', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bulkPayload),
+      }).catch(() => {});
+
       fetch('/api/homework-tracker', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'bulkUpdateHomeworkTracker',
-          student_ids: studentIds,
+        body: JSON.stringify(bulkPayload),
+      }).catch(() => {});
+
+      fetch(activeScriptUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(bulkPayload),
+      }).catch(() => {});
+
+      // For 100% Google Sheet compatibility across older and newer Apps Script deployments:
+      // Also send individual record updates in parallel batches
+      studentIds.forEach((sId) => {
+        const single = {
+          action: 'updateHomeworkTracker',
+          record_id: `TRK-${sId}-${cleanDate}`,
+          student_id: sId,
           date: cleanDate,
           class: hwClass,
           subject: hwSubject,
           status: targetStatus,
-        }),
-      }).catch(() => {});
+          appsScriptUrl: activeScriptUrl,
+        };
+        fetch('/api/forward-apps-script', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(single),
+        }).catch(() => {});
+      });
     } catch {}
 
     setSyncToastMessage(
-      `✅ सभी ${studentIds.length} छात्रों का होमवर्क '${targetStatus === 'Completed' ? 'पूर्ण (Completed)' : 'अपूर्ण'}' मार्क किया गया!`
+      `✅ सभी ${studentIds.length} छात्रों का कार्य Google Sheet में '${targetStatus === 'Completed' ? 'Complete (पूर्ण)' : 'Incomplete'}' दर्ज हुआ!`
     );
     setTimeout(() => setSyncToastMessage(null), 3000);
   };

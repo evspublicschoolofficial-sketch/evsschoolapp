@@ -42,11 +42,22 @@ export const TeacherHomeworkChecker: React.FC<TeacherHomeworkCheckerProps> = ({
   // Selected Homework ID to view & check students
   const [selectedHwId, setSelectedHwId] = useState<string | null>(null);
 
+  // Dedicated interactive modal to check homework (opens on mobile and desktop)
+  const [isCheckerModalOpen, setIsCheckerModalOpen] = useState<boolean>(false);
+
   // Student Search in selected homework
   const [studentSearch, setStudentSearch] = useState<string>('');
 
   // Status Filter in selected homework: 'all' | 'completed' | 'incompleted'
   const [studentStatusFilter, setStudentStatusFilter] = useState<'all' | 'completed' | 'incompleted'>('all');
+
+  // Handler to immediately open checker modal for a homework assignment
+  const handleOpenChecker = (hw: Homework) => {
+    setSelectedHwId(hw.Homework_ID);
+    setStudentSearch('');
+    setStudentStatusFilter('all');
+    setIsCheckerModalOpen(true);
+  };
 
   const currentTeacherName = (currentUser.Name || '').trim().toLowerCase();
 
@@ -310,13 +321,12 @@ export const TeacherHomeworkChecker: React.FC<TeacherHomeworkCheckerProps> = ({
                   <div
                     key={hw.Homework_ID || idx}
                     onClick={() => {
-                      setSelectedHwId(hw.Homework_ID);
-                      setStudentSearch('');
+                      handleOpenChecker(hw);
                     }}
                     className={`p-4 rounded-2xl border-2 transition-all cursor-pointer relative overflow-hidden ${
                       isSelected
-                        ? 'bg-amber-50/50 border-amber-500 shadow-md ring-2 ring-amber-400/40'
-                        : 'bg-white border-slate-200 hover:border-slate-300 hover:shadow-sm'
+                        ? 'bg-amber-50/60 border-amber-500 shadow-md ring-2 ring-amber-400/40'
+                        : 'bg-white border-slate-200 hover:border-amber-400 hover:shadow-sm'
                     }`}
                   >
                     {isSelected && (
@@ -351,16 +361,24 @@ export const TeacherHomeworkChecker: React.FC<TeacherHomeworkCheckerProps> = ({
                       </span>
                     </div>
 
-                    <div className="mt-2 flex items-center justify-between text-[11px] pt-1">
-                      <span className="text-emerald-700 font-bold flex items-center gap-1">
+                    <div className="mt-2.5 flex items-center justify-between text-[11px] pt-1 gap-2">
+                      <span className="text-emerald-700 font-bold flex items-center gap-1 shrink-0">
                         <i className="fa-solid fa-users text-[10px]"></i>
-                        <span>{totalInClass} छात्र नामांकित</span>
+                        <span>{totalInClass} छात्र</span>
                       </span>
 
-                      <span className="text-amber-800 font-bold text-[11px] flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenChecker(hw);
+                        }}
+                        className="px-3.5 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-500 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-sm active:scale-95 transition-all cursor-pointer ring-1 ring-amber-500/40"
+                      >
+                        <i className="fa-solid fa-list-check text-[11px]"></i>
                         <span>चेक करें</span>
                         <i className="fa-solid fa-chevron-right text-[10px]"></i>
-                      </span>
+                      </button>
                     </div>
                   </div>
                 );
@@ -386,9 +404,20 @@ export const TeacherHomeworkChecker: React.FC<TeacherHomeworkCheckerProps> = ({
                       {activeHomework.Subject}
                     </h3>
                   </div>
-                  <span className="text-xs font-mono font-bold text-slate-600 bg-white px-2.5 py-1 rounded-lg border border-slate-200 shadow-2xs self-start sm:self-auto">
-                    तारीख: {activeHomework.Date}
-                  </span>
+                  <div className="flex items-center gap-2 self-start sm:self-auto">
+                    <span className="text-xs font-mono font-bold text-slate-600 bg-white px-2.5 py-1 rounded-lg border border-slate-200 shadow-2xs">
+                      तारीख: {activeHomework.Date}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setIsCheckerModalOpen(true)}
+                      className="px-2.5 py-1 rounded-lg bg-amber-400 hover:bg-amber-500 text-slate-950 font-black text-xs flex items-center gap-1 shadow-2xs cursor-pointer active:scale-95 transition-all"
+                      title="पॉपअप चेकर खोलें"
+                    >
+                      <i className="fa-solid fa-expand text-[10px]"></i>
+                      <span>पॉपअप</span>
+                    </button>
+                  </div>
                 </div>
 
                 <div className="text-xs text-slate-800 bg-white p-3 rounded-xl border border-slate-200/80 shadow-2xs whitespace-pre-wrap">
@@ -635,6 +664,323 @@ export const TeacherHomeworkChecker: React.FC<TeacherHomeworkCheckerProps> = ({
           )}
         </div>
       </div>
+
+      {/* ============================================================== */}
+      {/* DEDICATED FULL-SCREEN INTERACTIVE HOMEWORK CHECKER MODAL */}
+      {/* ============================================================== */}
+      {isCheckerModalOpen && activeHomework && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto animate-fadeIn">
+          <div className="bg-white w-full max-w-3xl rounded-3xl shadow-2xl border-2 border-amber-400/50 overflow-hidden flex flex-col max-h-[95vh] my-auto">
+            {/* Modal Top Bar */}
+            <div className="bg-[#0c2340] text-white p-4 sm:p-5 flex items-center justify-between gap-3 border-b border-amber-400/30">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center text-lg font-black shrink-0 shadow-md">
+                  <i className="fa-solid fa-list-check"></i>
+                </div>
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="px-2.5 py-0.5 rounded-lg bg-amber-400 text-slate-950 font-black text-xs">
+                      कक्षा {getClassName(activeHomework.Class)}
+                    </span>
+                    <h3 className="font-black text-base sm:text-lg text-white">
+                      {activeHomework.Subject} होमवर्क चेकर
+                    </h3>
+                  </div>
+                  <div className="text-xs text-amber-200/90 flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-0.5">
+                    <span>📅 तारीख: {activeHomework.Date}</span>
+                    <span>👤 शिक्षक: {activeHomework.Teacher || 'Faculty'}</span>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsCheckerModalOpen(false)}
+                className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-sm font-black transition-all cursor-pointer shrink-0"
+                title="बंद करें"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body - Scrollable */}
+            <div className="p-4 sm:p-6 overflow-y-auto space-y-4 flex-1">
+              {/* Homework Detail Card */}
+              <div className="bg-gradient-to-br from-amber-50/70 to-blue-50/40 p-3.5 sm:p-4 rounded-2xl border border-amber-200/80 space-y-2">
+                <div className="text-xs text-slate-800 bg-white p-3 rounded-xl border border-slate-200 shadow-2xs whitespace-pre-wrap">
+                  <span className="font-bold text-slate-500 block mb-0.5 text-[10px] uppercase tracking-wider">
+                    गृहकार्य विवरण (Homework Detail):
+                  </span>
+                  {activeHomework.Homework_Detail}
+                </div>
+
+                {/* Progress Bar & Stats */}
+                <div className="space-y-1.5 pt-1">
+                  <div className="flex items-center justify-between text-xs font-bold">
+                    <span className="text-slate-800 flex items-center gap-1.5">
+                      <i className="fa-solid fa-chart-line text-emerald-600"></i>
+                      <span>प्रगति: {completedCount}/{totalClassCount} छात्र पूर्ण</span>
+                    </span>
+                    <span className="font-mono text-emerald-800 font-black">
+                      {completionPercentage}% पूर्ण
+                    </span>
+                  </div>
+
+                  <div className="w-full bg-slate-200 h-2.5 rounded-full overflow-hidden shadow-inner">
+                    <div
+                      className={`h-full rounded-full transition-all duration-300 ${
+                        completionPercentage >= 90
+                          ? 'bg-emerald-500'
+                          : completionPercentage >= 50
+                          ? 'bg-amber-500'
+                          : 'bg-rose-500'
+                      }`}
+                      style={{ width: `${completionPercentage}%` }}
+                    ></div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 1-Click Fast Bulk Actions & Google Sheet Status */}
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl flex flex-wrap items-center justify-between gap-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-black text-slate-800 flex items-center gap-1">
+                    <i className="fa-solid fa-bolt text-amber-500"></i>
+                    <span>त्वरित एक्शन:</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleMarkAllComplete}
+                    disabled={classStudents.length === 0}
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-sm flex items-center gap-1.5 cursor-pointer active:scale-95 disabled:opacity-50"
+                  >
+                    <i className="fa-solid fa-check-double"></i>
+                    <span>सभी पूर्ण (All Complete)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleMarkAllIncomplete}
+                    disabled={classStudents.length === 0}
+                    className="px-3 py-1.5 bg-white hover:bg-rose-50 text-rose-700 border border-rose-300 font-bold text-xs rounded-xl shadow-2xs flex items-center gap-1.5 cursor-pointer active:scale-95 disabled:opacity-50"
+                  >
+                    <i className="fa-solid fa-rotate-left"></i>
+                    <span>सभी अपूर्ण (Reset)</span>
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
+                  <i className="fa-solid fa-cloud-arrow-up text-emerald-600"></i>
+                  <span>Google Sheet ऑटो सिंक चालू</span>
+                </div>
+              </div>
+
+              {/* Search & Status Filters */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 pt-1">
+                <div className="relative flex-1">
+                  <i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                  <input
+                    type="text"
+                    value={studentSearch}
+                    onChange={(e) => setStudentSearch(e.target.value)}
+                    placeholder="छात्र का नाम या रोल नंबर खोजें..."
+                    className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 shadow-2xs"
+                  />
+                  {studentSearch && (
+                    <button
+                      onClick={() => setStudentSearch('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl text-xs shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setStudentStatusFilter('all')}
+                    className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                      studentStatusFilter === 'all'
+                        ? 'bg-white text-slate-900 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    सभी ({totalClassCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStudentStatusFilter('completed')}
+                    className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                      studentStatusFilter === 'completed'
+                        ? 'bg-emerald-600 text-white shadow-2xs'
+                        : 'text-emerald-700 hover:bg-emerald-50'
+                    }`}
+                  >
+                    पूर्ण ({completedCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStudentStatusFilter('incompleted')}
+                    className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                      studentStatusFilter === 'incompleted'
+                        ? 'bg-rose-600 text-white shadow-2xs'
+                        : 'text-rose-700 hover:bg-rose-50'
+                    }`}
+                  >
+                    अपूर्ण ({incompletedCount})
+                  </button>
+                </div>
+              </div>
+
+              {/* Student Cards List */}
+              {classStudents.length === 0 ? (
+                <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 text-xs text-slate-500">
+                  इस कक्षा में अभी कोई छात्र रिकॉर्ड उपलब्ध नहीं है।
+                </div>
+              ) : filteredStudents.length === 0 ? (
+                <div className="p-6 text-center bg-slate-50 rounded-2xl text-xs text-slate-500">
+                  खोज से कोई छात्र मेल नहीं खाया।
+                </div>
+              ) : (
+                <div className="space-y-2.5 max-h-[420px] overflow-y-auto pr-1">
+                  {filteredStudents.map(({ student, status, isCompleted }, index) => {
+                    const photo = getStudentPhoto ? getStudentPhoto(student) : '';
+                    const parentPhone = String(student.Parent_Mobile || '').replace(/\D/g, '');
+
+                    return (
+                      <div
+                        key={student.Student_ID || index}
+                        className={`p-3.5 rounded-2xl border-2 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                          isCompleted
+                            ? 'bg-emerald-50/50 border-emerald-300 shadow-2xs'
+                            : 'bg-white border-slate-200 hover:border-amber-300'
+                        }`}
+                      >
+                        {/* Student Info */}
+                        <div className="flex items-center gap-3">
+                          <div className="relative">
+                            {photo ? (
+                              <img
+                                src={photo}
+                                alt={student.Student_Name}
+                                className="w-11 h-11 rounded-xl object-cover border border-slate-200 shadow-2xs shrink-0"
+                              />
+                            ) : (
+                              <div className="w-11 h-11 rounded-xl bg-slate-200 text-slate-700 font-bold flex items-center justify-center text-sm shadow-2xs shrink-0">
+                                {student.Student_Name.charAt(0)}
+                              </div>
+                            )}
+                            <span
+                              className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white flex items-center justify-center text-[8px] font-black ${
+                                isCompleted ? 'bg-emerald-500 text-white' : 'bg-rose-500 text-white'
+                              }`}
+                            >
+                              {isCompleted ? '✓' : '✕'}
+                            </span>
+                          </div>
+
+                          <div>
+                            <div className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+                              <span>{student.Student_Name}</span>
+                              {student.Roll_Number && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 font-mono font-bold">
+                                  Roll {student.Roll_Number}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-slate-500 flex items-center gap-2 mt-0.5">
+                              <span>ID: {student.Student_ID}</span>
+                              {student.Father_Name && (
+                                <span>• पिता: {student.Father_Name}</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Status Badge & 1-Click Action Buttons */}
+                        <div className="flex flex-wrap items-center gap-2 self-end sm:self-auto shrink-0">
+                          <span
+                            className={`px-3 py-1.5 rounded-xl font-black text-xs inline-flex items-center gap-1.5 shadow-2xs ${
+                              isCompleted
+                                ? 'bg-emerald-100 text-emerald-950 border border-emerald-300'
+                                : 'bg-rose-100 text-rose-950 border border-rose-300'
+                            }`}
+                          >
+                            <i className={`fa-solid ${isCompleted ? 'fa-check' : 'fa-xmark'}`}></i>
+                            <span>{isCompleted ? 'Complete (पूर्ण)' : 'Incomplete (अपूर्ण)'}</span>
+                          </span>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const nextStatus = isCompleted ? 'Incompleted' : 'Completed';
+                              onSetStudentStatus(
+                                student.Student_ID,
+                                activeHomework.Date,
+                                activeHomework.Class,
+                                activeHomework.Subject,
+                                nextStatus
+                              );
+                            }}
+                            className={`px-4 py-2 rounded-xl font-black text-xs transition-all shadow-sm cursor-pointer flex items-center gap-1.5 active:scale-95 ${
+                              isCompleted
+                                ? 'bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300'
+                                : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-500/20'
+                            }`}
+                          >
+                            {isCompleted ? (
+                              <>
+                                <i className="fa-solid fa-rotate-left"></i>
+                                <span>अपूर्ण करें</span>
+                              </>
+                            ) : (
+                              <>
+                                <i className="fa-solid fa-check"></i>
+                                <span>✓ Complete मार्क करें</span>
+                              </>
+                            )}
+                          </button>
+
+                          {!isCompleted && parentPhone && (
+                            <a
+                              href={`https://wa.me/91${parentPhone}?text=${encodeURIComponent(
+                                `अस्सलाम वालेकुम! E.V.S. Public School से सूचना: आज दिनांक ${activeHomework.Date} को कक्षा ${getClassName(activeHomework.Class)} में दिए गए ${activeHomework.Subject} का होमवर्क (${activeHomework.Homework_Detail}) ${student.Student_Name} द्वारा पूरा नहीं किया गया है। कृपया बच्चे का कार्य पूरा करवाएं।`
+                              )}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="px-2.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold text-xs flex items-center gap-1 transition-all"
+                              title="माता-पिता को WhatsApp संदेश भेजें"
+                            >
+                              <i className="fa-brands fa-whatsapp text-emerald-600"></i>
+                              <span>अलर्ट</span>
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Bottom Done Bar */}
+            <div className="bg-slate-50 p-4 border-t border-slate-200 flex items-center justify-between gap-3">
+              <span className="text-xs text-slate-500 font-medium">
+                सभी बदलाव सीधे ऐप और Google Sheet में सेव हो रहे हैं।
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsCheckerModalOpen(false)}
+                className="px-6 py-2.5 rounded-xl bg-[#0c2340] hover:bg-slate-800 text-amber-300 font-black text-xs shadow-md transition-all active:scale-95 cursor-pointer flex items-center gap-2"
+              >
+                <i className="fa-solid fa-circle-check"></i>
+                <span>चेक पूरा हुआ (Done)</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+
