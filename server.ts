@@ -557,27 +557,41 @@ async function startServer() {
 
   const saveBehaviorItem = (item: any): any[] => {
     const list = getBehaviorList();
-    const bId = String(item.behavior_id || item.Behavior_ID || `BEH-${Date.now()}`);
-    const normalized = {
-      Behavior_ID: bId,
-      Student_ID: item.student_id || item.Student_ID || '',
-      Date: item.date || item.Date || new Date().toISOString().split('T')[0],
-      Class: item.class || item.Class || '',
-      Is_Bathed: item.is_bathed ?? item.Is_Bathed ?? true,
-      Nails_Clean: item.nails_clean ?? item.Nails_Clean ?? true,
-      Uniform_clean: item.uniform_clean ?? item.Uniform_clean ?? true,
-      Good_Manners: item.good_manners || item.Good_Manners || 'Good',
-      Discipline: item.discipline ?? item.Discipline ?? true,
-      Is_Present: item.is_present ?? item.Is_Present ?? true,
-      Remark: item.remark || item.Remark || '',
-      AI_Feedback: item.ai_feedback || item.AI_Feedback || '',
-    };
-    const idx = list.findIndex((b) => b.Behavior_ID === bId);
-    if (idx >= 0) {
-      list[idx] = normalized;
-    } else {
-      list.unshift(normalized);
+    const items = Array.isArray(item)
+      ? item
+      : item && Array.isArray(item.behavior)
+      ? item.behavior
+      : [item];
+
+    for (const it of items) {
+      if (!it) continue;
+      const sId = String(it.student_id || it.Student_ID || '').trim();
+      const dt = it.date || it.Date || new Date().toISOString().split('T')[0];
+      const bId = String(it.behavior_id || it.Behavior_ID || (sId ? `BEH-${sId}-${dt}` : `BEH-${Date.now()}`));
+      const normalized = {
+        Behavior_ID: bId,
+        Student_ID: sId,
+        Date: dt,
+        Class: it.class || it.Class || '',
+        Is_Bathed: it.is_bathed ?? it.Is_Bathed ?? true,
+        Nails_Clean: it.nails_clean ?? it.Nails_Clean ?? true,
+        Uniform_clean: it.uniform_clean ?? it.Uniform_clean ?? true,
+        Good_Manners: it.good_manners || it.Good_Manners || 'Good',
+        Discipline: it.discipline ?? it.Discipline ?? true,
+        Is_Present: it.is_present ?? it.Is_Present ?? true,
+        Remark: it.remark || it.Remark || '',
+        AI_Feedback: it.ai_feedback || it.AI_Feedback || '',
+      };
+      const idx = list.findIndex(
+        (b) => b.Behavior_ID === bId || (sId && String(b.Student_ID || '').trim() === sId && b.Date === dt)
+      );
+      if (idx >= 0) {
+        list[idx] = normalized;
+      } else {
+        list.unshift(normalized);
+      }
     }
+
     try {
       fs.writeFileSync(BEHAVIOR_FILE, JSON.stringify(list, null, 2), 'utf-8');
     } catch (e) {

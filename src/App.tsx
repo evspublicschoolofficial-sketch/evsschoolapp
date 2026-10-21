@@ -17,6 +17,7 @@ import { AddStudentModal } from './components/AddStudentModal';
 import { StudentHomeworkQRTrackerModal } from './components/StudentHomeworkQRTrackerModal';
 import { ManagerFeeDashboard } from './components/ManagerFeeDashboard';
 import { StudentBehaviorModal, StudentBehaviorInput } from './components/StudentBehaviorModal';
+import { ClassroomBulkAttendanceRegister } from './components/ClassroomBulkAttendanceRegister';
 import { DriverPortal } from './components/DriverPortal';
 import { ManagerVanTracker } from './components/ManagerVanTracker';
 import { StudentAvatar } from './components/StudentAvatar';
@@ -1547,6 +1548,9 @@ export default function App() {
   // Student Behavior & Conduct Modal State (उपस्थिति, आचरण, स्वच्छता व रिमार्क)
   const [behaviorModalOpen, setBehaviorModalOpen] = useState<boolean>(false);
   const [selectedBehaviorStudent, setSelectedBehaviorStudent] = useState<Student | null>(null);
+  const [bulkAttendanceModalOpen, setBulkAttendanceModalOpen] = useState<boolean>(false);
+  const [bulkAttendanceInitialClass, setBulkAttendanceInitialClass] = useState<string>('');
+  const [behaviorSubTab, setBehaviorSubTab] = useState<'bulkRegister' | 'history'>('bulkRegister');
 
   // Add Fee Modal State (Manager & Principal fee collection)
   const [addFeeModalOpen, setAddFeeModalOpen] = useState<boolean>(false);
@@ -4647,6 +4651,99 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     setTimeout(() => {
       fetchStudentBehavior();
     }, 1000);
+  };
+
+  // Batch Save Handler for Classroom Bulk Attendance & Conduct Register
+  const handleSaveBatchBehavior = async (records: Partial<StudentBehaviorRecord>[]) => {
+    if (!records || records.length === 0) return;
+
+    // 1. Update React state immediately
+    setBehaviorList((prev) => {
+      const updated = [...prev];
+      records.forEach((rec) => {
+        const sId = String(rec.Student_ID || '').trim().toLowerCase();
+        const dt = rec.Date;
+        const bId = rec.Behavior_ID;
+        const idx = updated.findIndex(
+          (b) =>
+            b.Behavior_ID === bId ||
+            (sId && String(b.Student_ID || '').trim().toLowerCase() === sId && b.Date === dt)
+        );
+        const fullRec = rec as StudentBehaviorRecord;
+        if (idx >= 0) {
+          updated[idx] = fullRec;
+        } else {
+          updated.unshift(fullRec);
+        }
+      });
+      return updated;
+    });
+
+    // 2. Persist in localStorage
+    try {
+      const existing = localStorage.getItem('evs_custom_behavior_records');
+      const list: StudentBehaviorRecord[] = existing ? JSON.parse(existing) : [];
+      records.forEach((rec) => {
+        const sId = String(rec.Student_ID || '').trim().toLowerCase();
+        const dt = rec.Date;
+        const bId = rec.Behavior_ID;
+        const fullRec = rec as StudentBehaviorRecord;
+        const idx = list.findIndex(
+          (b) =>
+            b.Behavior_ID === bId ||
+            (sId && String(b.Student_ID || '').trim().toLowerCase() === sId && b.Date === dt)
+        );
+        if (idx >= 0) {
+          list[idx] = fullRec;
+        } else {
+          list.unshift(fullRec);
+        }
+      });
+      localStorage.setItem('evs_custom_behavior_records', JSON.stringify(list));
+    } catch (e) {
+      console.warn('localStorage batch save error:', e);
+    }
+
+    // 3. Send batch to server API
+    try {
+      await fetch('/api/behavior', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ behavior: records }),
+      });
+    } catch (apiErr) {
+      console.warn('Server batch behavior error:', apiErr);
+    }
+
+    // 4. Background forward to Google Apps Script
+    records.forEach((rec) => {
+      try {
+        const behPayload = {
+          action: 'addBehavior',
+          behavior_id: rec.Behavior_ID,
+          student_id: rec.Student_ID,
+          date: rec.Date,
+          class: rec.Class,
+          is_bathed: rec.Is_Bathed,
+          nails_clean: rec.Nails_Clean,
+          uniform_clean: rec.Uniform_clean,
+          good_manners: rec.Good_Manners,
+          discipline: rec.Discipline,
+          is_present: rec.Is_Present,
+          remark: rec.Remark,
+          teacher: teacherUser?.Name || managerUser?.Name || 'Teacher',
+        };
+
+        fetch('/api/forward-apps-script', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(behPayload),
+        }).catch(() => {});
+      } catch {}
+    });
+
+    setSyncToastMessage(`✅ ${records.length} छात्रों की क्लास हाजिरी व आचरण सुरक्षित हो गया!`);
+    setTimeout(() => setSyncToastMessage(null), 4000);
   };
 
   // Dedicated Handler for Student Homework QR Tracker Modal (Complete/Incomplete)
@@ -10343,20 +10440,44 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
             {/* TAB 5: STUDENT BEHAVIOR & CONDUCT (दैनिक आचरण व अनुशासन) */}
             {teacherPortalTab === 'behavior' && (
-              <div className="space-y-5 animate-fadeIn">
-                {/* Header & Quick Action */}
-                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                  <div>
-                    <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center gap-2">
-                      <i className="fa-solid fa-user-check text-indigo-600"></i>
-                      <span>छात्र दैनिक आचरण, स्वच्छता व अनुशासन (Student Behavior & Conduct)</span>
-                    </h3>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      Student_Behavior शीट से लाइव प्राप्त रिकॉर्ड्स — छात्र का दैनिक आचरण, स्वच्छता, उपस्थिति व रिमार्क
-                    </p>
+              <div className="space-y-4 animate-fadeIn">
+                {/* Sub-Tab Navigation for Behavior & Attendance */}
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-2 sm:p-2.5 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setBehaviorSubTab('bulkRegister')}
+                      className={`px-3.5 sm:px-4 py-2 rounded-xl font-black text-xs sm:text-sm flex items-center gap-2 cursor-pointer transition-all ${
+                        behaviorSubTab === 'bulkRegister'
+                          ? 'bg-[#0c2340] text-amber-300 shadow-sm ring-1 ring-amber-400/40'
+                          : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      <i className="fa-solid fa-users-viewfinder text-amber-400"></i>
+                      <span>📋 पूरी क्लास का हाजिरी व आचरण रजिस्टर</span>
+                      <span className="px-2 py-0.2 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black uppercase">
+                        Fast
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setBehaviorSubTab('history')}
+                      className={`px-3.5 sm:px-4 py-2 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-2 cursor-pointer transition-all ${
+                        behaviorSubTab === 'history'
+                          ? 'bg-[#0c2340] text-amber-300 shadow-sm ring-1 ring-amber-400/40'
+                          : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      <i className="fa-solid fa-clock-rotate-left text-blue-400"></i>
+                      <span>📜 दर्ज रिकॉर्ड्स सूची (History)</span>
+                      <span className="px-2 py-0.2 rounded-full bg-slate-200 text-slate-800 text-[11px] font-bold">
+                        {behaviorList.length}
+                      </span>
+                    </button>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-center gap-1.5">
                     <button
                       type="button"
                       onClick={() => {
@@ -10364,38 +10485,46 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         setQrScannerSubtitle('आचरण दर्ज करने हेतु छात्र का QR कोड स्कैन करें');
                         setQrScannerOpen(true);
                       }}
-                      className="px-3.5 py-2 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm cursor-pointer transition-all active:scale-95"
+                      className="px-3 py-1.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition-all active:scale-95"
+                      title="छात्र QR स्कैन करें"
                     >
                       <i className="fa-solid fa-qrcode"></i>
-                      <span>QR स्कैन से दर्ज करें</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (students.length > 0) {
-                          setSelectedBehaviorStudent(students[0]);
-                          setBehaviorModalOpen(true);
-                        }
-                      }}
-                      className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm cursor-pointer transition-all active:scale-95"
-                    >
-                      <i className="fa-solid fa-plus"></i>
-                      <span>नया आचरण दर्ज करें</span>
+                      <span className="hidden sm:inline">QR स्कैन</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => fetchStudentBehavior(true, true)}
                       disabled={loadingBehavior}
-                      className="px-3.5 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-all active:scale-95 shadow-2xs"
+                      className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-all active:scale-95 shadow-2xs"
                       title="आचरण डेटा ताज़ा करें"
                     >
                       <i className={`fa-solid fa-rotate-right ${loadingBehavior ? 'fa-spin text-indigo-600' : ''}`}></i>
-                      <span>{loadingBehavior ? 'रिफ्रेश हो रहा है...' : 'Refresh'}</span>
+                      <span className="hidden sm:inline">{loadingBehavior ? 'रिफ्रेश...' : 'Refresh'}</span>
                     </button>
                   </div>
                 </div>
+
+                {/* VIEW A: FAST CLASSROOM BULK ATTENDANCE REGISTER */}
+                {behaviorSubTab === 'bulkRegister' && (
+                  <div className="animate-fadeIn">
+                    <ClassroomBulkAttendanceRegister
+                      students={students}
+                      behaviorRecords={behaviorList}
+                      classOptions={classOptions}
+                      initialClass={teacherUser?.Assigned_Class || classOptions[0] || '1'}
+                      teacherName={teacherUser?.Name || 'Teacher'}
+                      getClassName={getClassName}
+                      getStudentPhoto={getStudentPhoto}
+                      onSaveBatch={handleSaveBatchBehavior}
+                      isEmbedded={true}
+                    />
+                  </div>
+                )}
+
+                {/* VIEW B: HISTORY & PAST RECORDS */}
+                {behaviorSubTab === 'history' && (
+                  <div className="space-y-4 animate-fadeIn">
 
                 {/* Behavior Stats Cards */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -10648,6 +10777,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 </div>
               </div>
             )}
+          </div>
+        )}
 
             {/* TAB 6: STAFF ATTENDANCE & QR CHECK-IN (स्टाफ हाजिरी) */}
             {teacherPortalTab === 'staff_attendance' && teacherUser && (
@@ -12208,6 +12339,19 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     <button
                       type="button"
                       onClick={() => {
+                        setBulkAttendanceInitialClass('all');
+                        setBulkAttendanceModalOpen(true);
+                      }}
+                      className="px-3.5 py-2 rounded-xl text-xs font-black bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white flex items-center gap-1.5 shadow-xs cursor-pointer transition-all active:scale-95"
+                      title="किसी भी कक्षा की पूरी हाजिरी व आचरण रजिस्टर खोलें"
+                    >
+                      <i className="fa-solid fa-users-viewfinder text-amber-300"></i>
+                      <span>📋 क्लास हाजिरी रजिस्टर</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
                         setAttendanceCalendarMode('calendar');
                       }}
                       className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
@@ -12683,6 +12827,25 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
           fetchStudents();
         }}
       />
+
+      {/* Classroom Bulk Attendance Register Modal */}
+      {bulkAttendanceModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-5xl w-full max-h-[92vh] overflow-y-auto shadow-2xl border border-slate-200 p-4 sm:p-6 my-auto animate-scaleUp">
+            <ClassroomBulkAttendanceRegister
+              students={students}
+              behaviorRecords={behaviorList}
+              classOptions={classOptions}
+              initialClass={bulkAttendanceInitialClass || classOptions[0] || '1'}
+              teacherName={managerUser?.Name || teacherUser?.Name || 'School Manager'}
+              getClassName={getClassName}
+              getStudentPhoto={getStudentPhoto}
+              onSaveBatch={handleSaveBatchBehavior}
+              onClose={() => setBulkAttendanceModalOpen(false)}
+            />
+          </div>
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* ADD FEE COLLECTION MODAL (फ़ीस रसीद काटें व जमा करें)                         */}

@@ -55,7 +55,6 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
 
   // Scanned / detected state
   const [detectedCode, setDetectedCode] = useState<string | null>(null);
-  const [confirmationInput, setConfirmationInput] = useState<string>('YES');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [successStatus, setSuccessStatus] = useState<{
     time: string;
@@ -388,7 +387,6 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
     if (isOpen) {
       setSchoolCoords(getActiveSchoolCoords());
       setDetectedCode(null);
-      setConfirmationInput('YES');
       setSuccessStatus(null);
       startLocationWatch();
       startCamera();
@@ -863,29 +861,7 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
                 </div>
               </div>
 
-              {/* The "YES" Confirmation Input as explicitly requested by user */}
-              <div className="space-y-2 bg-amber-50/60 p-4 rounded-xl border border-amber-300">
-                <label className="block text-xs font-bold text-amber-950">
-                  {autoScanMode === 'checkout'
-                    ? "स्कूल से चेक-आउट दर्ज करने हेतु पुष्टि करें (Type 'YES' to confirm Check-Out):"
-                    : "स्कूल में हाजिरी दर्ज करने हेतु पुष्टि करें (Type 'YES' to confirm Check-In):"}
-                </label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={confirmationInput}
-                    onChange={(e) => setConfirmationInput(e.target.value)}
-                    placeholder="YES लिखे"
-                    className="w-full px-3 py-2.5 rounded-lg border-2 border-amber-400 bg-white text-base font-black text-center text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 tracking-widest uppercase"
-                    autoFocus
-                  />
-                </div>
-                <p className="text-[11px] text-amber-800">
-                  (डिफ़ॉल्ट 'YES' लिखा हुआ है, आप सीधे नीचे बटन दबाकर पुष्टि कर सकते हैं)
-                </p>
-              </div>
-
-              {/* Primary Action Button (Auto Switch based on check-in vs check-out) */}
+              {/* Primary Action Button (Direct 1-click confirmation) */}
               <div className="space-y-2 pt-2">
                 {autoScanMode === 'checkout' ? (
                   <button
@@ -896,7 +872,7 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
                   >
                     <i className="fa-solid fa-arrow-right-from-bracket text-lg"></i>
                     <span>
-                      {isSubmitting ? 'चेक-आउट दर्ज हो रहा है...' : '🚪 YES, स्कूल से चेक-आउट दर्ज करें'}
+                      {isSubmitting ? 'चेक-आउट दर्ज हो रहा है...' : '🚪 स्कूल चेक-आउट दर्ज करें'}
                     </span>
                   </button>
                 ) : (
@@ -908,7 +884,7 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
                   >
                     <i className="fa-solid fa-clipboard-check text-lg"></i>
                     <span>
-                      {isSubmitting ? 'हाजिरी दर्ज हो रही है...' : '✅ YES, स्कूल चेक-इन दर्ज करें'}
+                      {isSubmitting ? 'हाजिरी दर्ज हो रही है...' : '✅ स्कूल चेक-इन दर्ज करें'}
                     </span>
                   </button>
                 )}
@@ -919,7 +895,7 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
                     setDetectedCode(null);
                     startCamera();
                   }}
-                  className="w-full py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 text-center"
+                  className="w-full py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 text-center cursor-pointer"
                 >
                   पुनः स्कैन करें (Scan Again)
                 </button>
