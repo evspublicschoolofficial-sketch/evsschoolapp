@@ -4487,6 +4487,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     if (user.Assigned_Class) {
       setHwClass(user.Assigned_Class);
       setTeacherTrackerClassFilter(user.Assigned_Class);
+      setBehaviorClassFilter(user.Assigned_Class);
     }
     setTeacherLoginInput('');
     setTeacherPasswordInput('');
@@ -4657,19 +4658,78 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
   const handleSaveBatchBehavior = async (records: Partial<StudentBehaviorRecord>[]) => {
     if (!records || records.length === 0) return;
 
+    const effectiveScriptUrl = getEffectiveApiUrl();
+
+    // Standardize all boolean fields to string/boolean safe values and preserve keys
+    const formattedRecords: StudentBehaviorRecord[] = records.map((rec) => {
+      const sId = String(rec.Student_ID || (rec as any).student_id || '').trim();
+      const dt = rec.Date || (rec as any).date || new Date().toISOString().split('T')[0];
+      const cls = rec.Class || (rec as any).class || '';
+      const bId = rec.Behavior_ID || (rec as any).behavior_id || `BEH-${sId}-${dt}`;
+
+      const isPres =
+        rec.Is_Present === true ||
+        (rec as any).is_present === true ||
+        (rec.Is_Present !== false &&
+          (rec as any).is_present !== 'Absent' &&
+          String(rec.Is_Present || '').toLowerCase() !== 'absent');
+
+      const isBathed =
+        rec.Is_Bathed === true ||
+        (rec as any).is_bathed === true ||
+        (rec.Is_Bathed !== false &&
+          (rec as any).is_bathed !== 'No' &&
+          String(rec.Is_Bathed || '').toLowerCase() !== 'no');
+
+      const nailsClean =
+        rec.Nails_Clean === true ||
+        (rec as any).nails_clean === true ||
+        (rec.Nails_Clean !== false &&
+          (rec as any).nails_clean !== 'No' &&
+          String(rec.Nails_Clean || '').toLowerCase() !== 'no');
+
+      const uniformClean =
+        rec.Uniform_clean === true ||
+        (rec as any).uniform_clean === true ||
+        (rec.Uniform_clean !== false &&
+          (rec as any).uniform_clean !== 'No' &&
+          String(rec.Uniform_clean || '').toLowerCase() !== 'no');
+
+      const disciplineGood =
+        rec.Discipline === true ||
+        (rec as any).discipline === true ||
+        (rec.Discipline !== false &&
+          (rec as any).discipline !== 'Needs Improvement' &&
+          String(rec.Discipline || '').toLowerCase() !== 'needs improvement');
+
+      return {
+        Behavior_ID: bId,
+        Student_ID: sId,
+        Date: dt,
+        Class: cls,
+        Is_Present: isPres,
+        Is_Bathed: isBathed,
+        Nails_Clean: nailsClean,
+        Uniform_clean: uniformClean,
+        Good_Manners: rec.Good_Manners || (isPres ? 'उत्कृष्ट (Excellent)' : 'लागू नहीं (अनुपस्थित)'),
+        Discipline: disciplineGood,
+        Remark: rec.Remark || (isPres ? 'कक्षा में उपस्थित, स्वच्छ व अनुशासित' : 'आज छात्र विद्यालय में अनुपस्थित रहा।'),
+        AI_Feedback: rec.AI_Feedback || (isPres ? 'नियमित उपस्थिति व स्वच्छता बनाए रखें।' : 'आज छात्र विद्यालय में अनुपस्थित रहा।'),
+      } as StudentBehaviorRecord;
+    });
+
     // 1. Update React state immediately
     setBehaviorList((prev) => {
       const updated = [...prev];
-      records.forEach((rec) => {
-        const sId = String(rec.Student_ID || '').trim().toLowerCase();
-        const dt = rec.Date;
-        const bId = rec.Behavior_ID;
+      formattedRecords.forEach((fullRec) => {
+        const sId = String(fullRec.Student_ID || '').trim().toLowerCase();
+        const dt = fullRec.Date;
+        const bId = fullRec.Behavior_ID;
         const idx = updated.findIndex(
           (b) =>
             b.Behavior_ID === bId ||
             (sId && String(b.Student_ID || '').trim().toLowerCase() === sId && b.Date === dt)
         );
-        const fullRec = rec as StudentBehaviorRecord;
         if (idx >= 0) {
           updated[idx] = fullRec;
         } else {
@@ -4683,11 +4743,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     try {
       const existing = localStorage.getItem('evs_custom_behavior_records');
       const list: StudentBehaviorRecord[] = existing ? JSON.parse(existing) : [];
-      records.forEach((rec) => {
-        const sId = String(rec.Student_ID || '').trim().toLowerCase();
-        const dt = rec.Date;
-        const bId = rec.Behavior_ID;
-        const fullRec = rec as StudentBehaviorRecord;
+      formattedRecords.forEach((fullRec) => {
+        const sId = String(fullRec.Student_ID || '').trim().toLowerCase();
+        const dt = fullRec.Date;
+        const bId = fullRec.Behavior_ID;
         const idx = list.findIndex(
           (b) =>
             b.Behavior_ID === bId ||
@@ -4704,45 +4763,56 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       console.warn('localStorage batch save error:', e);
     }
 
-    // 3. Send batch to server API
+    // 3. Send batch to server API (server persists locally and forwards to Google Apps Script sequentially)
     try {
       await fetch('/api/behavior', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ behavior: records }),
+        body: JSON.stringify({
+          behavior: formattedRecords,
+          appsScriptUrl: effectiveScriptUrl,
+        }),
       });
     } catch (apiErr) {
       console.warn('Server batch behavior error:', apiErr);
     }
 
-    // 4. Background forward to Google Apps Script
-    records.forEach((rec) => {
-      try {
-        const behPayload = {
-          action: 'addBehavior',
-          behavior_id: rec.Behavior_ID,
-          student_id: rec.Student_ID,
-          date: rec.Date,
-          class: rec.Class,
-          is_bathed: rec.Is_Bathed,
-          nails_clean: rec.Nails_Clean,
-          uniform_clean: rec.Uniform_clean,
-          good_manners: rec.Good_Manners,
-          discipline: rec.Discipline,
-          is_present: rec.Is_Present,
-          remark: rec.Remark,
-          teacher: teacherUser?.Name || managerUser?.Name || 'Teacher',
-        };
+    // 4. Background forward directly to Google Apps Script with sequential delay
+    (async () => {
+      for (const rec of formattedRecords) {
+        try {
+          const isPres = rec.Is_Present;
+          const behPayload = {
+            action: 'addBehavior',
+            behavior_id: rec.Behavior_ID,
+            student_id: rec.Student_ID,
+            date: rec.Date,
+            class: rec.Class,
+            is_bathed: rec.Is_Bathed ? 'Yes' : 'No',
+            nails_clean: rec.Nails_Clean ? 'Yes' : 'No',
+            uniform_clean: rec.Uniform_clean ? 'Yes' : 'No',
+            good_manners: rec.Good_Manners,
+            discipline: rec.Discipline ? 'Good' : 'Needs Improvement',
+            is_present: isPres ? 'Present' : 'Absent',
+            remark: rec.Remark,
+            ai_feedback: rec.AI_Feedback,
+            teacher: teacherUser?.Name || managerUser?.Name || 'Teacher',
+            appsScriptUrl: effectiveScriptUrl,
+          };
 
-        fetch('/api/forward-apps-script', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(behPayload),
-        }).catch(() => {});
-      } catch {}
-    });
+          fetch('/api/forward-apps-script', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(behPayload),
+          }).catch(() => {});
 
-    setSyncToastMessage(`✅ ${records.length} छात्रों की क्लास हाजिरी व आचरण सुरक्षित हो गया!`);
+          // Small delay to ensure smooth lock acquisition
+          await new Promise((r) => setTimeout(r, 120));
+        } catch {}
+      }
+    })();
+
+    setSyncToastMessage(`✅ ${formattedRecords.length} छात्रों की क्लास हाजिरी व आचरण सुरक्षित हो गया!`);
     setTimeout(() => setSyncToastMessage(null), 4000);
   };
 
@@ -10563,6 +10633,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       behaviorRecords={behaviorList}
                       classOptions={classOptions}
                       initialClass={teacherUser?.Assigned_Class || classOptions[0] || '1'}
+                      lockedClass={teacherUser?.Assigned_Class}
                       teacherName={teacherUser?.Name || 'Teacher'}
                       getClassName={getClassName}
                       getStudentPhoto={getStudentPhoto}
@@ -10632,18 +10703,25 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     {/* Class Filter */}
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs text-slate-500">कक्षा:</span>
-                      <select
-                        value={behaviorClassFilter}
-                        onChange={(e) => setBehaviorClassFilter(e.target.value)}
-                        className="px-3 py-2 rounded-xl border border-slate-300 text-xs bg-white outline-none"
-                      >
-                        <option value="all">समस्त कक्षाएं (All)</option>
-                        {classOptions.map((c) => (
-                          <option key={c} value={c}>
-                            Class {getClassName(c)}
-                          </option>
-                        ))}
-                      </select>
+                      {teacherUser?.Assigned_Class ? (
+                        <div className="px-3 py-1.5 rounded-xl bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold flex items-center gap-1.5 shadow-2xs">
+                          <i className="fa-solid fa-lock text-amber-700"></i>
+                          <span>Class {getClassName(teacherUser.Assigned_Class)}</span>
+                        </div>
+                      ) : (
+                        <select
+                          value={behaviorClassFilter}
+                          onChange={(e) => setBehaviorClassFilter(e.target.value)}
+                          className="px-3 py-2 rounded-xl border border-slate-300 text-xs bg-white outline-none"
+                        >
+                          <option value="all">समस्त कक्षाएं (All)</option>
+                          {classOptions.map((c) => (
+                            <option key={c} value={c}>
+                              Class {getClassName(c)}
+                            </option>
+                          ))}
+                        </select>
+                      )}
                     </div>
 
                     {/* Date Filter */}
@@ -10695,10 +10773,18 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             String(b.Remark || '').toLowerCase().includes(behaviorSearch.toLowerCase()) ||
                             (matchedStudent && String(matchedStudent.Student_Name || '').toLowerCase().includes(behaviorSearch.toLowerCase()));
 
-                          const classMatch =
-                            behaviorClassFilter === 'all' ||
-                            String(b.Class || '').toLowerCase() === behaviorClassFilter.toLowerCase() ||
-                            (matchedStudent && String(matchedStudent.Class || '').toLowerCase() === behaviorClassFilter.toLowerCase());
+                          const teacherAssigned = teacherUser?.Assigned_Class ? teacherUser.Assigned_Class.trim().toLowerCase() : null;
+                          const effectiveClassTarget = teacherAssigned || (behaviorClassFilter !== 'all' ? behaviorClassFilter.toLowerCase() : null);
+
+                          const classMatch = !effectiveClassTarget ||
+                            String(b.Class || '').toLowerCase() === effectiveClassTarget ||
+                            getClassName(b.Class).toLowerCase() === effectiveClassTarget ||
+                            getClassName(b.Class).toLowerCase() === getClassName(effectiveClassTarget).toLowerCase() ||
+                            (matchedStudent && (
+                              String(matchedStudent.Class || '').toLowerCase() === effectiveClassTarget ||
+                              getClassName(matchedStudent.Class).toLowerCase() === effectiveClassTarget ||
+                              getClassName(matchedStudent.Class).toLowerCase() === getClassName(effectiveClassTarget).toLowerCase()
+                            ));
 
                           const dateMatch =
                             !behaviorDateFilter ||

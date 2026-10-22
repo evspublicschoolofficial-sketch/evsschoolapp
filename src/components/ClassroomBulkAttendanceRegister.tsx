@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Student, StudentBehaviorRecord } from '../types';
 import { StudentAvatar } from './StudentAvatar';
 
@@ -7,6 +7,7 @@ export interface ClassroomBulkAttendanceProps {
   behaviorRecords: StudentBehaviorRecord[];
   classOptions: string[];
   initialClass?: string;
+  lockedClass?: string; // When set, teacher is strictly locked to their assigned class
   teacherName?: string;
   getClassName?: (c?: string) => string;
   getStudentPhoto?: (s: Student) => string;
@@ -21,7 +22,7 @@ interface FaultTagDef {
   label: string;
   icon: string;
   field?: 'isBathed' | 'nailsClean' | 'uniformClean' | 'discipline';
-  faultValue?: boolean; // false when fault is active
+  faultValue?: boolean;
   remarkText: string;
 }
 
@@ -90,11 +91,30 @@ interface StudentRowState {
   showCustomNoteInput: boolean;
 }
 
+// Robust helper to parse boolean / string presence from Sheet or API
+const parseIsPresent = (val: any): boolean => {
+  if (val === false || val === 0) return false;
+  if (val === true || val === 1) return true;
+  const s = String(val ?? '').trim().toLowerCase();
+  if (s === 'absent' || s === 'no' || s === 'false' || s === '0' || s === 'a' || s === 'anupasthit') return false;
+  return true;
+};
+
+// Robust helper to parse cleanliness / fault tags
+const parseIsClean = (val: any): boolean => {
+  if (val === false || val === 0) return false;
+  if (val === true || val === 1) return true;
+  const s = String(val ?? '').trim().toLowerCase();
+  if (s === 'no' || s === 'false' || s === '0' || s === 'needs improvement') return false;
+  return true;
+};
+
 export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendanceProps> = ({
   students,
   behaviorRecords,
   classOptions,
   initialClass,
+  lockedClass,
   teacherName = 'School Teacher',
   getClassName = (c) => c || 'N/A',
   getStudentPhoto = (_s?: any) => '',
@@ -105,14 +125,23 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
 
-  // Selected Class
+  // Selected Class - strictly locked if lockedClass is provided
   const [selectedClass, setSelectedClass] = useState<string>(() => {
+    if (lockedClass) return lockedClass;
     if (initialClass && initialClass !== 'all') return initialClass;
     if (classOptions.length > 0) return classOptions[0];
     return '1';
   });
 
+  // Force selectedClass to lockedClass if lockedClass is passed
+  useEffect(() => {
+    if (lockedClass && selectedClass !== lockedClass) {
+      setSelectedClass(lockedClass);
+    }
+  }, [lockedClass, selectedClass]);
+
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'saved'>('all');
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
 
@@ -126,63 +155,125 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
     });
   }, [students, selectedClass, getClassName]);
 
+  // Saved records lookup for selectedDate
+  const savedRecordsMap = useMemo(() => {
+    const map = new Map<string, StudentBehaviorRecord>();
+    behaviorRecords.forEach((b) => {
+      const sId = String(b.Student_ID || '').trim().toLowerCase();
+      const bDate = String(b.Date || '').trim();
+      if (sId && bDate === selectedDate) {
+        map.set(sId, b);
+      }
+    });
+    return map;
+  }, [behaviorRecords, selectedDate]);
+
+  // Track student IDs that the teacher has manually touched in the UI
+  // This prevents background re-renders or pollings from flipping teacher's inputs
+  const touchedStudentsRef = useRef<Set<string>>(new Set());
+  const lastKeyRef = useRef<string>('');
+
   // Initial state map: Student_ID -> StudentRowState
   const [rowStates, setRowStates] = useState<Record<string, StudentRowState>>({});
 
-  // Populate row states whenever class or date changes
+  // Populate row states whenever class, date, or behaviorRecords changes
   useEffect(() => {
-    const newStates: Record<string, StudentRowState> = {};
+    const currentKey = `${selectedClass}_${selectedDate}`;
+    const isKeyChanged = lastKeyRef.current !== currentKey;
+    if (isKeyChanged) {
+      lastKeyRef.current = currentKey;
+      touchedStudentsRef.current.clear();
+    }
 
-    classStudents.forEach((st) => {
-      const sId = String(st.Student_ID || '');
-      // Check if there is an existing record for this student on this date
-      const existing = behaviorRecords.find(
-        (b) =>
-          String(b.Student_ID || '').trim().toLowerCase() === sId.trim().toLowerCase() &&
-          b.Date === selectedDate
-      );
+    setRowStates((prev) => {
+      const updated: Record<string, StudentRowState> = isKeyChanged ? {} : { ...prev };
 
-      if (existing) {
-        const faults = new Set<string>();
-        if (existing.Is_Bathed === false) faults.add('unbathed');
-        if (existing.Nails_Clean === false) faults.add('nails');
-        if (existing.Uniform_clean === false) faults.add('uniform');
-        if (existing.Discipline === false) faults.add('late');
+      classStudents.forEach((st) => {
+        const sId = String(st.Student_ID || '').trim();
+        const sIdLower = sId.toLowerCase();
 
-        // Check text in remark for hair / shoes / hw
-        const rem = existing.Remark || '';
-        if (/बाल/i.test(rem)) faults.add('hair');
-        if (/जूते|मोजे/i.test(rem)) faults.add('shoes');
-        if (/गृहकार्य|होमवर्क/i.test(rem)) faults.add('hw');
-        if (/उत्कृष्ट|शाबाश/i.test(rem)) faults.add('star');
+        // If user already manually edited this student in the current session, NEVER overwrite it!
+        if (!isKeyChanged && touchedStudentsRef.current.has(sId) && updated[sId]) {
+          return;
+        }
 
-        newStates[sId] = {
-          studentId: sId,
-          isPresent: existing.Is_Present !== false, // default true unless explicitly false
-          selectedFaults: faults,
-          customRemark: existing.Remark || '',
-          showCustomNoteInput: !!existing.Remark && !faults.has('star'),
-        };
-      } else {
-        // Default: ALL PRESENT, NO FAULTS ("सब ठीक है")
-        newStates[sId] = {
-          studentId: sId,
-          isPresent: true,
-          selectedFaults: new Set<string>(),
-          customRemark: '',
-          showCustomNoteInput: false,
-        };
-      }
+        const existing = savedRecordsMap.get(sIdLower);
+
+        if (existing) {
+          const faults = new Set<string>();
+          if (!parseIsClean(existing.Is_Bathed)) faults.add('unbathed');
+          if (!parseIsClean(existing.Nails_Clean)) faults.add('nails');
+          if (!parseIsClean(existing.Uniform_clean)) faults.add('uniform');
+          if (!parseIsClean(existing.Discipline)) faults.add('late');
+
+          const rem = existing.Remark || '';
+          if (/बाल/i.test(rem)) faults.add('hair');
+          if (/जूते|मोजे/i.test(rem)) faults.add('shoes');
+          if (/गृहकार्य|होमवर्क/i.test(rem)) faults.add('hw');
+          if (/उत्कृष्ट|शाबाश/i.test(rem)) faults.add('star');
+
+          updated[sId] = {
+            studentId: sId,
+            isPresent: parseIsPresent(existing.Is_Present),
+            selectedFaults: faults,
+            customRemark: existing.Remark || '',
+            showCustomNoteInput: !!existing.Remark && !faults.has('star'),
+          };
+        } else {
+          // If no existing saved record and not yet in state, default to Present with clean conduct
+          if (!updated[sId]) {
+            updated[sId] = {
+              studentId: sId,
+              isPresent: true,
+              selectedFaults: new Set<string>(),
+              customRemark: '',
+              showCustomNoteInput: false,
+            };
+          }
+        }
+      });
+
+      return updated;
     });
+  }, [classStudents, selectedDate, selectedClass, savedRecordsMap]);
 
-    setRowStates(newStates);
-  }, [classStudents, selectedDate, behaviorRecords]);
+  // Counts
+  const totalCount = classStudents.length;
+  const savedCount = useMemo(() => {
+    return classStudents.filter((st) =>
+      savedRecordsMap.has(String(st.Student_ID || '').trim().toLowerCase())
+    ).length;
+  }, [classStudents, savedRecordsMap]);
+  const pendingCount = Math.max(0, totalCount - savedCount);
 
-  // Search filtered student list
+  // Present / Absent / Fault counts in the current form
+  const presentCount = classStudents.filter(
+    (st) => rowStates[st.Student_ID]?.isPresent !== false
+  ).length;
+  const absentCount = totalCount - presentCount;
+  const faultCount = classStudents.filter((st) => {
+    const state = rowStates[st.Student_ID];
+    return state?.isPresent && state.selectedFaults.size > 0 && !state.selectedFaults.has('star');
+  }).length;
+
+  // Filtered students by status filter + search query
   const filteredStudents = useMemo(() => {
-    if (!searchQuery.trim()) return classStudents;
+    let list = classStudents;
+
+    // Status filter: pending vs saved vs all
+    if (statusFilter === 'pending') {
+      list = list.filter(
+        (st) => !savedRecordsMap.has(String(st.Student_ID || '').trim().toLowerCase())
+      );
+    } else if (statusFilter === 'saved') {
+      list = list.filter((st) =>
+        savedRecordsMap.has(String(st.Student_ID || '').trim().toLowerCase())
+      );
+    }
+
+    if (!searchQuery.trim()) return list;
     const q = searchQuery.toLowerCase().trim();
-    return classStudents.filter((st) => {
+    return list.filter((st) => {
       const name = (st.Student_Name || '').toLowerCase();
       const father = (st.Father_Name || '').toLowerCase();
       const roll = String(st.Roll_Number || '').toLowerCase();
@@ -196,25 +287,17 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
         id.includes(q)
       );
     });
-  }, [classStudents, searchQuery]);
-
-  // Counters
-  const totalCount = classStudents.length;
-  const presentCount = classStudents.filter(
-    (st) => rowStates[st.Student_ID]?.isPresent !== false
-  ).length;
-  const absentCount = totalCount - presentCount;
-  const faultCount = classStudents.filter((st) => {
-    const state = rowStates[st.Student_ID];
-    return state?.isPresent && state.selectedFaults.size > 0 && !state.selectedFaults.has('star');
-  }).length;
+  }, [classStudents, statusFilter, savedRecordsMap, searchQuery]);
 
   // 1-Click: Mark ALL Present
   const handleMarkAllPresent = () => {
+    classStudents.forEach((st) => {
+      touchedStudentsRef.current.add(String(st.Student_ID || '').trim());
+    });
     setRowStates((prev) => {
       const updated = { ...prev };
       classStudents.forEach((st) => {
-        const sId = String(st.Student_ID || '');
+        const sId = String(st.Student_ID || '').trim();
         if (updated[sId]) {
           updated[sId] = { ...updated[sId], isPresent: true };
         } else {
@@ -233,15 +316,26 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
 
   // 1-Click: Mark ALL Absent
   const handleMarkAllAbsent = () => {
+    classStudents.forEach((st) => {
+      touchedStudentsRef.current.add(String(st.Student_ID || '').trim());
+    });
     setRowStates((prev) => {
       const updated = { ...prev };
       classStudents.forEach((st) => {
-        const sId = String(st.Student_ID || '');
+        const sId = String(st.Student_ID || '').trim();
         if (updated[sId]) {
           updated[sId] = {
             ...updated[sId],
             isPresent: false,
             selectedFaults: new Set(),
+          };
+        } else {
+          updated[sId] = {
+            studentId: sId,
+            isPresent: false,
+            selectedFaults: new Set(),
+            customRemark: '',
+            showCustomNoteInput: false,
           };
         }
       });
@@ -251,6 +345,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
 
   // Toggle single student presence
   const handleTogglePresent = (studentId: string) => {
+    touchedStudentsRef.current.add(studentId);
     setRowStates((prev) => {
       const cur = prev[studentId] || {
         studentId,
@@ -274,6 +369,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
 
   // Toggle specific fault tag for a student
   const handleToggleFault = (studentId: string, faultId: string) => {
+    touchedStudentsRef.current.add(studentId);
     setRowStates((prev) => {
       const cur = prev[studentId];
       if (!cur || !cur.isPresent) return prev; // Cannot apply fault if absent
@@ -282,7 +378,6 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
       if (nextFaults.has(faultId)) {
         nextFaults.delete(faultId);
       } else {
-        // If selecting 'star' (excellent), remove faults
         if (faultId === 'star') {
           nextFaults.clear();
           nextFaults.add('star');
@@ -304,6 +399,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
 
   // Update custom remark for a student
   const handleRemarkChange = (studentId: string, text: string) => {
+    touchedStudentsRef.current.add(studentId);
     setRowStates((prev) => {
       const cur = prev[studentId];
       if (!cur) return prev;
@@ -339,7 +435,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
 
     try {
       const recordsToSave: Partial<StudentBehaviorRecord>[] = classStudents.map((st) => {
-        const sId = String(st.Student_ID || '');
+        const sId = String(st.Student_ID || '').trim();
         const state = rowStates[sId] || {
           studentId: sId,
           isPresent: true,
@@ -355,16 +451,27 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
           return {
             Behavior_ID: `BEH-${sId}-${selectedDate}`,
             Student_ID: sId,
+            student_id: sId,
             Date: selectedDate,
+            date: selectedDate,
             Class: st.Class || selectedClass,
+            class: st.Class || selectedClass,
             Is_Present: false,
+            is_present: 'Absent',
             Is_Bathed: false,
+            is_bathed: 'No',
             Nails_Clean: false,
+            nails_clean: 'No',
             Uniform_clean: false,
+            uniform_clean: 'No',
             Good_Manners: 'लागू नहीं (अनुपस्थित)',
+            good_manners: 'लागू नहीं (अनुपस्थित)',
             Discipline: false,
+            discipline: 'Needs Improvement',
             Remark: 'आज छात्र विद्यालय में अनुपस्थित रहा।',
+            remark: 'आज छात्र विद्यालय में अनुपस्थित रहा।',
             AI_Feedback: 'आज छात्र विद्यालय में अनुपस्थित रहा।',
+            ai_feedback: 'आज छात्र विद्यालय में अनुपस्थित रहा।',
           };
         }
 
@@ -372,9 +479,9 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
         const hasUnbathed = state.selectedFaults.has('unbathed');
         const hasNails = state.selectedFaults.has('nails');
         const hasUniform = state.selectedFaults.has('uniform');
+        const hasLate = state.selectedFaults.has('late');
         const isStar = state.selectedFaults.has('star');
 
-        // Build remark string from active tags
         const remarkParts: string[] = [];
         state.selectedFaults.forEach((fId) => {
           const def = FAULT_TAGS.find((t) => t.id === fId);
@@ -393,20 +500,39 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
         return {
           Behavior_ID: `BEH-${sId}-${selectedDate}`,
           Student_ID: sId,
+          student_id: sId,
           Date: selectedDate,
+          date: selectedDate,
           Class: st.Class || selectedClass,
+          class: st.Class || selectedClass,
           Is_Present: true,
+          is_present: 'Present',
           Is_Bathed: !hasUnbathed,
+          is_bathed: hasUnbathed ? 'No' : 'Yes',
           Nails_Clean: !hasNails,
+          nails_clean: hasNails ? 'No' : 'Yes',
           Uniform_clean: !hasUniform,
+          uniform_clean: hasUniform ? 'No' : 'Yes',
           Good_Manners: isStar
             ? 'उत्कृष्ट (Excellent)'
             : remarkParts.length > 0
             ? 'सुधार आवश्यक (Needs Improvement)'
             : 'उत्कृष्ट (Excellent)',
-          Discipline: !state.selectedFaults.has('late'),
+          good_manners: isStar
+            ? 'उत्कृष्ट (Excellent)'
+            : remarkParts.length > 0
+            ? 'सुधार आवश्यक (Needs Improvement)'
+            : 'उत्कृष्ट (Excellent)',
+          Discipline: !hasLate,
+          discipline: hasLate ? 'Needs Improvement' : 'Good',
           Remark: finalRemark,
+          remark: finalRemark,
           AI_Feedback: isStar
+            ? 'उत्कृष्ट आचरण व अनुशासन हेतु शाबाश!'
+            : remarkParts.length > 0
+            ? 'अभिभावक कृपया बच्चे की स्वच्छता व समय की पाबंदी पर ध्यान दें।'
+            : 'नियमित उपस्थिति व स्वच्छता बनाए रखें।',
+          ai_feedback: isStar
             ? 'उत्कृष्ट आचरण व अनुशासन हेतु शाबाश!'
             : remarkParts.length > 0
             ? 'अभिभावक कृपया बच्चे की स्वच्छता व समय की पाबंदी पर ध्यान दें।'
@@ -416,9 +542,10 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
 
       await onSaveBatch(recordsToSave);
 
+      touchedStudentsRef.current.clear();
       const msg = `🎉 क्लास ${getClassName(selectedClass)} की हाजिरी व आचरण सुरक्षित हो गया! (${presentCount} उपस्थित, ${absentCount} अनुपस्थित)`;
       setSaveSuccessMsg(msg);
-      setTimeout(() => setSaveSuccessMsg(null), 5000);
+      setTimeout(() => setSaveSuccessMsg(null), 6000);
     } catch (err: any) {
       alert(`हाजिरी सुरक्षित करने में त्रुटि: ${err?.message || 'अज्ञात त्रुटि'}`);
     } finally {
@@ -443,7 +570,14 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
               </span>
             </h2>
             <p className="text-xs text-slate-300 mt-0.5">
-              पूरी क्लास को 1-क्लिक में मार्क करें। जो गैरहाजिर हैं उन्हें अनमार्क करें और फॉल्ट वाले बच्चों के टैग पर टैप करें।
+              {lockedClass ? (
+                <span className="text-amber-200 font-semibold">
+                  <i className="fa-solid fa-lock mr-1"></i>
+                  आपको केवल अपनी निर्धारित कक्षा (Class {getClassName(lockedClass)}) की हाजिरी दर्ज करने की अनुमति है।
+                </span>
+              ) : (
+                'पूरी क्लास को 1-क्लिक में मार्क करें। जो गैरहाजिर हैं उन्हें अनमार्क करें और फॉल्ट वाले बच्चों के टैग पर टैप करें।'
+              )}
             </p>
           </div>
 
@@ -459,20 +593,28 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
               />
             </div>
 
-            <div className="bg-white/10 border border-white/20 rounded-xl px-3 py-1.5 flex items-center gap-2 text-xs">
-              <i className="fa-solid fa-graduation-cap text-amber-300"></i>
-              <select
-                value={selectedClass}
-                onChange={(e) => setSelectedClass(e.target.value)}
-                className="bg-transparent text-white font-bold outline-none cursor-pointer text-xs"
-              >
-                {classOptions.map((c) => (
-                  <option key={c} value={c} className="bg-slate-900 text-white">
-                    Class {getClassName(c)}
-                  </option>
-                ))}
-              </select>
-            </div>
+            {/* Class Picker or Locked Badge */}
+            {lockedClass ? (
+              <div className="bg-amber-400 text-slate-950 font-black px-3 py-1.5 rounded-xl text-xs flex items-center gap-1.5 shadow-sm">
+                <i className="fa-solid fa-lock text-slate-900"></i>
+                <span>कक्षा: Class {getClassName(lockedClass)}</span>
+              </div>
+            ) : (
+              <div className="bg-white/10 border border-white/20 rounded-xl px-3 py-1.5 flex items-center gap-2 text-xs">
+                <i className="fa-solid fa-graduation-cap text-amber-300"></i>
+                <select
+                  value={selectedClass}
+                  onChange={(e) => setSelectedClass(e.target.value)}
+                  className="bg-transparent text-white font-bold outline-none cursor-pointer text-xs"
+                >
+                  {classOptions.map((c) => (
+                    <option key={c} value={c} className="bg-slate-900 text-white">
+                      Class {getClassName(c)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             {onClose && (
               <button
@@ -505,11 +647,11 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
         </div>
       )}
 
-      {/* Summary KPI Cards & Quick Action Buttons */}
+      {/* Summary KPI Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
         <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between">
           <div>
-            <div className="text-[11px] font-bold text-slate-500">कक्षा के कुल छात्र</div>
+            <div className="text-[11px] font-bold text-slate-500">कुल छात्र (Total)</div>
             <div className="text-xl font-black text-slate-900">{totalCount}</div>
           </div>
           <div className="w-9 h-9 rounded-xl bg-slate-200 text-slate-700 flex items-center justify-center font-bold">
@@ -545,6 +687,64 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
           <div className="w-9 h-9 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center font-bold shadow-xs">
             <i className="fa-solid fa-triangle-exclamation"></i>
           </div>
+        </div>
+      </div>
+
+      {/* FILTER TABS FOR ALREADY RECORDED STUDENTS (छात्र स्थिति फ़िल्टर) */}
+      <div className="bg-slate-100/80 p-1.5 rounded-2xl flex flex-wrap items-center justify-between gap-2 border border-slate-200">
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setStatusFilter('all')}
+            className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-all cursor-pointer flex items-center gap-1.5 ${
+              statusFilter === 'all'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+            }`}
+          >
+            <i className="fa-solid fa-layer-group text-[11px]"></i>
+            <span>सभी छात्र ({totalCount})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setStatusFilter('pending')}
+            className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-all cursor-pointer flex items-center gap-1.5 ${
+              statusFilter === 'pending'
+                ? 'bg-amber-500 text-slate-950 font-black shadow-xs'
+                : 'text-amber-800 hover:bg-amber-50'
+            }`}
+            title="जिन छात्रों का आज का डेटा अभी तक दर्ज नहीं हुआ है"
+          >
+            <i className="fa-solid fa-clock text-[11px]"></i>
+            <span>⏳ केवल बाकी छात्र ({pendingCount})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setStatusFilter('saved')}
+            className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-all cursor-pointer flex items-center gap-1.5 ${
+              statusFilter === 'saved'
+                ? 'bg-emerald-600 text-white font-black shadow-xs'
+                : 'text-emerald-800 hover:bg-emerald-50'
+            }`}
+            title="जिन छात्रों का आज का डेटा दर्ज हो चुका है"
+          >
+            <i className="fa-solid fa-circle-check text-[11px]"></i>
+            <span>✅ आज दर्ज हो चुके ({savedCount})</span>
+          </button>
+        </div>
+
+        <div className="text-[11px] text-slate-500 font-medium px-2">
+          {pendingCount === 0 ? (
+            <span className="text-emerald-700 font-bold">
+              <i className="fa-solid fa-circle-check mr-1"></i>सभी छात्रों का रिकॉर्ड सुरक्षित है
+            </span>
+          ) : (
+            <span>
+              <strong>{pendingCount}</strong> छात्रों का डेटा बाकी है
+            </span>
+          )}
         </div>
       </div>
 
@@ -611,13 +811,48 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
       <div className="space-y-2.5">
         {filteredStudents.length === 0 ? (
           <div className="p-8 text-center bg-slate-50 rounded-2xl border border-slate-200 text-slate-500 text-xs">
-            <i className="fa-solid fa-user-slash text-2xl text-slate-400 mb-2"></i>
-            <p className="font-bold">इस कक्षा में कोई छात्र नहीं मिले।</p>
-            <p className="text-[11px] text-slate-400 mt-0.5">कृपया ऊपर से कक्षा बदलें या खोज शब्द हटाएं।</p>
+            {statusFilter === 'pending' && pendingCount === 0 ? (
+              <div>
+                <i className="fa-solid fa-champagne-glasses text-3xl text-emerald-500 mb-2"></i>
+                <p className="font-bold text-emerald-800 text-sm">शानदार! क्लास के सभी छात्र दर्ज हो चुके हैं!</p>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  इस क्लास का कोई भी छात्र आज बाकी नहीं है।
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter('all')}
+                  className="mt-3 px-3 py-1.5 rounded-xl bg-slate-800 text-white font-bold text-xs"
+                >
+                  सभी छात्र देखें (View All)
+                </button>
+              </div>
+            ) : statusFilter === 'saved' && savedCount === 0 ? (
+              <div>
+                <i className="fa-solid fa-hourglass-start text-3xl text-amber-500 mb-2"></i>
+                <p className="font-bold text-slate-700 text-sm">आज अभी तक कोई छात्र दर्ज नहीं हुआ है।</p>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  नीचे दिए गए छात्रों की हाजिरी मार्क करके "क्लास हाजिरी सेव करें" दबाएँ।
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter('all')}
+                  className="mt-3 px-3 py-1.5 rounded-xl bg-slate-800 text-white font-bold text-xs"
+                >
+                  सभी छात्र देखें (View All)
+                </button>
+              </div>
+            ) : (
+              <div>
+                <i className="fa-solid fa-user-slash text-2xl text-slate-400 mb-2"></i>
+                <p className="font-bold">कोई छात्र नहीं मिले।</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">कृपया खोज शब्द हटाएं या फ़िल्टर बदलें।</p>
+              </div>
+            )}
           </div>
         ) : (
           filteredStudents.map((student, idx) => {
-            const sId = String(student.Student_ID || '');
+            const sId = String(student.Student_ID || '').trim();
+            const sIdLower = sId.toLowerCase();
             const state = rowStates[sId] || {
               studentId: sId,
               isPresent: true,
@@ -629,6 +864,9 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
             const isPres = state.isPresent;
             const hasFaults = state.selectedFaults.size > 0 && !state.selectedFaults.has('star');
             const isStar = state.selectedFaults.has('star');
+
+            const savedRecord = savedRecordsMap.get(sIdLower);
+            const isSavedToday = Boolean(savedRecord);
 
             return (
               <div
@@ -662,7 +900,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
                     </div>
 
                     <div className="space-y-0.5">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="font-black text-slate-900 text-sm">
                           {student.Student_Name}
                         </span>
@@ -671,10 +909,23 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
                             रोल #{student.Roll_Number}
                           </span>
                         )}
+                        {/* Status Badge: Saved vs Pending */}
+                        {isSavedToday ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-black border border-emerald-300">
+                            <i className="fa-solid fa-circle-check text-emerald-600"></i>
+                            <span>आज दर्ज है ({parseIsPresent(savedRecord?.Is_Present) ? 'उपस्थित' : 'अनुपस्थित'})</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 text-[10px] font-bold border border-amber-300">
+                            <i className="fa-solid fa-clock text-amber-600"></i>
+                            <span>बाकी है (Pending)</span>
+                          </span>
+                        )}
                       </div>
 
                       <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-2">
-                        <span>पिता: {student.Father_Name || 'N/A'}</span>
+                        <span>ID: <strong className="text-slate-700">{sId}</strong></span>
+                        <span>• पिता: {student.Father_Name || 'N/A'}</span>
                         {student.Village && (
                           <span className="text-slate-400">• {student.Village}</span>
                         )}
@@ -701,7 +952,6 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
                 </div>
 
                 {/* BEHAVIOR & GROOMING SECTION */}
-                {/* Rule: "पहली बात तो जो एब्सेंट है, उसका तो आचरण है ही नहीं, सब कुछ गायब" */}
                 {!isPres ? (
                   <div className="mt-2.5 pt-2 border-t border-rose-200/80 flex items-center gap-2 text-xs text-rose-800 font-medium">
                     <i className="fa-solid fa-ban text-rose-500"></i>
@@ -769,7 +1019,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
                           <button
                             type="button"
                             onClick={() => handleRemarkChange(sId, '')}
-                            className="text-xs text-slate-400 hover:text-slate-600 font-bold px-1"
+                            className="text-xs text-slate-400 hover:text-slate-600 font-bold px-1 cursor-pointer"
                           >
                             ✕
                           </button>

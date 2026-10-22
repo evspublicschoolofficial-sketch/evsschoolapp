@@ -89,6 +89,13 @@ async function forwardToGoogleAppsScript(payload: any) {
         const gText = await gRes.text();
         if (gText.includes('success')) return { ok: true, response: gText };
       } catch {}
+    } else if (formattedPayload.action === 'addBehavior' && (!res.ok || text.includes('error'))) {
+      try {
+        const getUrl = `${targetUrl}?action=addBehavior&behavior_id=${encodeURIComponent(formattedPayload.behavior_id || '')}&student_id=${encodeURIComponent(formattedPayload.student_id || '')}&date=${encodeURIComponent(formattedPayload.date || '')}&class=${encodeURIComponent(formattedPayload.class || '')}&is_present=${encodeURIComponent(formattedPayload.is_present || 'Present')}&is_bathed=${encodeURIComponent(formattedPayload.is_bathed || 'Yes')}&nails_clean=${encodeURIComponent(formattedPayload.nails_clean || 'Yes')}&uniform_clean=${encodeURIComponent(formattedPayload.uniform_clean || 'Yes')}&discipline=${encodeURIComponent(formattedPayload.discipline || 'Good')}&good_manners=${encodeURIComponent(formattedPayload.good_manners || '')}&remark=${encodeURIComponent(formattedPayload.remark || '')}`;
+        const gRes = await fetch(getUrl);
+        const gText = await gRes.text();
+        if (gText.includes('success')) return { ok: true, response: gText };
+      } catch {}
     }
 
     return { ok: res.ok, response: text };
@@ -757,14 +764,64 @@ async function startServer() {
     res.json({ behavior: getBehaviorList() });
   });
 
-  app.post('/api/behavior', (req, res) => {
+  app.post('/api/behavior', async (req, res) => {
     const item = req.body;
     const list = saveBehaviorItem(item);
+    const targetScriptUrl = item.appsScriptUrl || req.headers['x-apps-script-url'] || currentAppsScriptUrl;
+
+    const items: any[] = Array.isArray(item)
+      ? item
+      : Array.isArray(item.behavior)
+      ? item.behavior
+      : Array.isArray(item.records)
+      ? item.records
+      : [item];
+
+    // 1. Send as batchAddBehavior so Apps Script processes all at once
     forwardToGoogleAppsScript({
-      action: 'addBehavior',
-      appsScriptUrl: item.appsScriptUrl || req.headers['x-apps-script-url'],
-      ...item,
+      action: 'batchAddBehavior',
+      records: items,
+      appsScriptUrl: targetScriptUrl,
     }).catch(() => {});
+
+    // 2. Also forward individual records sequentially to ensure 100% sheet sync without lock contention
+    (async () => {
+      for (const rec of items) {
+        if (!rec) continue;
+        const sid = rec.student_id || rec.Student_ID;
+        if (!sid) continue;
+
+        const isPresStr = (rec.is_present === false || rec.Is_Present === false || String(rec.is_present || '').toLowerCase() === 'absent') ? 'Absent' : 'Present';
+        const isBathedStr = (rec.is_bathed === false || rec.Is_Bathed === false || String(rec.is_bathed || '').toLowerCase() === 'no') ? 'No' : 'Yes';
+        const nailsCleanStr = (rec.nails_clean === false || rec.Nails_Clean === false || String(rec.nails_clean || '').toLowerCase() === 'no') ? 'No' : 'Yes';
+        const uniformCleanStr = (rec.uniform_clean === false || rec.Uniform_clean === false || String(rec.uniform_clean || '').toLowerCase() === 'no') ? 'No' : 'Yes';
+        const disciplineStr = (rec.discipline === false || rec.Discipline === false || String(rec.discipline || '').toLowerCase() === 'needs improvement') ? 'Needs Improvement' : 'Good';
+
+        try {
+          await forwardToGoogleAppsScript({
+            action: 'addBehavior',
+            behavior_id: rec.behavior_id || rec.Behavior_ID || `BEH-${sid}-${rec.date || rec.Date}`,
+            student_id: sid,
+            date: rec.date || rec.Date,
+            class: rec.class || rec.Class,
+            is_bathed: isBathedStr,
+            nails_clean: nailsCleanStr,
+            uniform_clean: uniformCleanStr,
+            good_manners: rec.good_manners || rec.Good_Manners || (isPresStr === 'Absent' ? 'लागू नहीं (अनुपस्थित)' : 'उत्कृष्ट (Excellent)'),
+            discipline: disciplineStr,
+            is_present: isPresStr,
+            remark: rec.remark || rec.Remark || '',
+            ai_feedback: rec.ai_feedback || rec.AI_Feedback || '',
+            appsScriptUrl: targetScriptUrl,
+          });
+          // Small delay to prevent Apps Script spreadsheet lock timeout
+          await new Promise((r) => setTimeout(r, 120));
+        } catch (fErr) {
+          console.warn(`[AppsScriptForwarder] Error forwarding behavior for ${sid}:`, fErr);
+        }
+      }
+    })();
+
     res.json({ success: true, behavior: list });
   });
 
@@ -954,7 +1011,27 @@ async function startServer() {
       } else if (payload?.action === 'addHomework') {
         saveHomeworkItem(payload);
       } else if (payload?.action === 'addBehavior') {
+        const isPresStr = (payload.is_present === false || payload.Is_Present === false || String(payload.is_present || '').toLowerCase() === 'absent') ? 'Absent' : 'Present';
+        const isBathedStr = (payload.is_bathed === false || payload.Is_Bathed === false || String(payload.is_bathed || '').toLowerCase() === 'no') ? 'No' : 'Yes';
+        const nailsCleanStr = (payload.nails_clean === false || payload.Nails_Clean === false || String(payload.nails_clean || '').toLowerCase() === 'no') ? 'No' : 'Yes';
+        const uniformCleanStr = (payload.uniform_clean === false || payload.Uniform_clean === false || String(payload.uniform_clean || '').toLowerCase() === 'no') ? 'No' : 'Yes';
+        const disciplineStr = (payload.discipline === false || payload.Discipline === false || String(payload.discipline || '').toLowerCase() === 'needs improvement') ? 'Needs Improvement' : 'Good';
+        payload.is_present = isPresStr;
+        payload.Is_Present = isPresStr === 'Present';
+        payload.is_bathed = isBathedStr;
+        payload.Is_Bathed = isBathedStr === 'Yes';
+        payload.nails_clean = nailsCleanStr;
+        payload.Nails_Clean = nailsCleanStr === 'Yes';
+        payload.uniform_clean = uniformCleanStr;
+        payload.Uniform_clean = uniformCleanStr === 'Yes';
+        payload.discipline = disciplineStr;
+        payload.Discipline = disciplineStr === 'Good';
         saveBehaviorItem(payload);
+      } else if (payload?.action === 'batchAddBehavior' && (Array.isArray(payload?.records) || Array.isArray(payload?.behavior))) {
+        const bItems = payload.records || payload.behavior;
+        for (const b of bItems) {
+          saveBehaviorItem(b);
+        }
       } else if (payload?.action === 'updateHomeworkTracker') {
         saveHwTrackerItem(payload);
       } else if (payload?.action === 'bulkUpdateHomeworkTracker' && Array.isArray(payload?.student_ids)) {
@@ -1077,7 +1154,7 @@ async function startServer() {
       }
 
       // If remote script returned "Invalid action" or failed, but we handled it locally on the school server
-      if (['deleteFee', 'deleteStudent', 'deleteHomework', 'addHomework', 'addBehavior', 'updateHomeworkTracker', 'updateBusTracking'].includes(payload?.action)) {
+      if (['deleteFee', 'deleteStudent', 'deleteHomework', 'addHomework', 'addBehavior', 'batchAddBehavior', 'updateHomeworkTracker', 'updateBusTracking'].includes(payload?.action)) {
         return res.json({
           success: true,
           message: `${payload.action} school server me safe ho gaya hai (Locally saved & synced)!`,

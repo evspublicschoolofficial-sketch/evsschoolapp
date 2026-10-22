@@ -753,27 +753,77 @@ function doPost(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
 
-    // 4. ADD BEHAVIOR
-    if (action === "addBehavior") {
+    // 4. ADD / BATCH ADD BEHAVIOR & ATTENDANCE
+    if (action === "addBehavior" || action === "batchAddBehavior") {
       var sheet = ss.getSheetByName("Student_Behavior");
       if (!sheet) sheet = ss.insertSheet("Student_Behavior");
-      sheet.appendRow([
-        data.behavior_id || "BEH-" + Date.now(),
-        data.student_id || "",
-        data.date || new Date().toISOString().split("T")[0],
-        data.class || "",
-        data.is_bathed || "Yes",
-        data.nails_clean || "Yes",
-        data.uniform_clean || "Yes",
-        data.good_manners || "Yes",
-        data.discipline || "Good",
-        data.is_present || "Present",
-        data.remark || "",
-        data.ai_feedback || ""
-      ]);
+      if (sheet.getLastRow() === 0) {
+        sheet.appendRow([
+          "Behavior_ID", "Student_ID", "Date", "Class",
+          "Is_Bathed", "Nails_Clean", "Uniform_clean",
+          "Good_Manners", "Discipline", "Is_Present", "Remark", "AI_Feedback"
+        ]);
+      }
+
+      var items = Array.isArray(data.records)
+        ? data.records
+        : Array.isArray(data.behavior)
+        ? data.behavior
+        : Array.isArray(data)
+        ? data
+        : [data];
+
+      var existingRows = sheet.getDataRange().getValues();
+      var keyMap = {};
+      for (var r = 1; r < existingRows.length; r++) {
+        var rowBId = String(existingRows[r][0] || "").trim().toLowerCase();
+        var rowSId = String(existingRows[r][1] || "").trim().toLowerCase();
+        var rowDate = String(existingRows[r][2] || "").trim();
+        if (rowBId) keyMap[rowBId] = r + 1;
+        if (rowSId && rowDate) keyMap[rowSId + "_" + rowDate] = r + 1;
+      }
+
+      for (var i = 0; i < items.length; i++) {
+        var it = items[i];
+        if (!it) continue;
+        var sId = String(it.student_id || it.Student_ID || "").trim();
+        if (!sId) continue;
+        var dt = String(it.date || it.Date || new Date().toISOString().split("T")[0]).trim();
+        var bId = String(it.behavior_id || it.Behavior_ID || ("BEH-" + sId + "-" + dt)).trim();
+        var cls = String(it.class || it.Class || "").trim();
+
+        var isPresStr = "Present";
+        if (it.is_present === false || String(it.is_present || "").toLowerCase() === "absent" || it.Is_Present === false) {
+          isPresStr = "Absent";
+        }
+
+        var isBathedStr = (it.is_bathed === false || String(it.is_bathed || "").toLowerCase() === "no") ? "No" : "Yes";
+        var nailsCleanStr = (it.nails_clean === false || String(it.nails_clean || "").toLowerCase() === "no") ? "No" : "Yes";
+        var uniformCleanStr = (it.uniform_clean === false || String(it.uniform_clean || "").toLowerCase() === "no") ? "No" : "Yes";
+        var disciplineStr = (it.discipline === false || String(it.discipline || "").toLowerCase() === "needs improvement") ? "Needs Improvement" : "Good";
+        var goodMannersStr = it.good_manners || it.Good_Manners || (isPresStr === "Absent" ? "लागू नहीं (अनुपस्थित)" : "उत्कृष्ट (Excellent)");
+        var remarkStr = String(it.remark || it.Remark || (isPresStr === "Absent" ? "आज छात्र विद्यालय में अनुपस्थित रहा।" : "कक्षा में उपस्थित, स्वच्छ व अनुशासित")).trim();
+        var feedbackStr = String(it.ai_feedback || it.AI_Feedback || "").trim();
+
+        var rowValues = [
+          bId, sId, dt, cls,
+          isBathedStr, nailsCleanStr, uniformCleanStr,
+          goodMannersStr, disciplineStr, isPresStr, remarkStr, feedbackStr
+        ];
+
+        var targetRow = keyMap[bId.toLowerCase()] || keyMap[sId.toLowerCase() + "_" + dt];
+        if (targetRow) {
+          sheet.getRange(targetRow, 1, 1, 12).setValues([rowValues]);
+        } else {
+          sheet.appendRow(rowValues);
+          keyMap[bId.toLowerCase()] = sheet.getLastRow();
+          keyMap[sId.toLowerCase() + "_" + dt] = sheet.getLastRow();
+        }
+      }
+
       return ContentService.createTextOutput(JSON.stringify({
         status: "success",
-        message: "Behavior Saved Successfully in Google Sheet!"
+        message: "Behavior & Attendance Records Saved Successfully in Google Sheet!"
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
