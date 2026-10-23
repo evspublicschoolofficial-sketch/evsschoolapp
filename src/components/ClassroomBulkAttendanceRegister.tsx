@@ -7,7 +7,8 @@ export interface ClassroomBulkAttendanceProps {
   behaviorRecords: StudentBehaviorRecord[];
   classOptions: string[];
   initialClass?: string;
-  lockedClass?: string; // When set, teacher is strictly locked to their assigned class
+  lockedClass?: string | string[]; // Can be single class or multiple classes (e.g. ['4th', '5th'] or '4th, 5th')
+  allowedClasses?: string[] | string; // Optional explicit allowed classes list
   teacherName?: string;
   getClassName?: (c?: string) => string;
   getStudentPhoto?: (s: Student) => string;
@@ -115,6 +116,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
   classOptions,
   initialClass,
   lockedClass,
+  allowedClasses,
   teacherName = 'School Teacher',
   getClassName = (c) => c || 'N/A',
   getStudentPhoto = (_s?: any) => '',
@@ -125,23 +127,46 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
 
-  // Selected Class - strictly locked if lockedClass is provided
+  // Normalize allowed classes list if teacher has assigned class(es)
+  const allowedClassList = useMemo<string[] | null>(() => {
+    const raw = allowedClasses ?? lockedClass;
+    if (!raw) return null;
+    let list: string[] = [];
+    if (Array.isArray(raw)) {
+      list = raw.map((s) => String(s ?? '').trim()).filter(Boolean);
+    } else {
+      const s = String(raw).trim();
+      if (!s) return null;
+      list = s.split(/[,;|]+/).map((item) => item.trim()).filter(Boolean);
+    }
+    const unique = Array.from(new Set(list));
+    return unique.length > 0 ? unique : null;
+  }, [allowedClasses, lockedClass]);
+
+  // Selected Class - strictly locked to allowed class(es) if assigned
   const [selectedClass, setSelectedClass] = useState<string>(() => {
-    if (lockedClass) return lockedClass;
+    if (allowedClassList && allowedClassList.length > 0) {
+      if (initialClass && allowedClassList.includes(initialClass)) return initialClass;
+      return allowedClassList[0];
+    }
     if (initialClass && initialClass !== 'all') return initialClass;
     if (classOptions.length > 0) return classOptions[0];
     return '1';
   });
 
-  // Force selectedClass to lockedClass if lockedClass is passed
+  // Ensure selectedClass is valid whenever allowedClassList changes
   useEffect(() => {
-    if (lockedClass && selectedClass !== lockedClass) {
-      setSelectedClass(lockedClass);
+    if (allowedClassList && allowedClassList.length > 0) {
+      if (!allowedClassList.includes(selectedClass)) {
+        setSelectedClass(allowedClassList[0]);
+      }
     }
-  }, [lockedClass, selectedClass]);
+  }, [allowedClassList, selectedClass]);
 
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'saved'>('all');
+  // By user request: Already recorded students are hidden for that day!
+  // If user explicitly wants to view/edit them, they can toggle showRecorded.
+  const [showRecorded, setShowRecorded] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
 
@@ -246,34 +271,21 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
   }, [classStudents, savedRecordsMap]);
   const pendingCount = Math.max(0, totalCount - savedCount);
 
-  // Present / Absent / Fault counts in the current form
-  const presentCount = classStudents.filter(
-    (st) => rowStates[st.Student_ID]?.isPresent !== false
-  ).length;
-  const absentCount = totalCount - presentCount;
-  const faultCount = classStudents.filter((st) => {
-    const state = rowStates[st.Student_ID];
-    return state?.isPresent && state.selectedFaults.size > 0 && !state.selectedFaults.has('star');
-  }).length;
+  // Separate pending vs all class students
+  const pendingStudents = useMemo(() => {
+    return classStudents.filter(
+      (st) => !savedRecordsMap.has(String(st.Student_ID || '').trim().toLowerCase())
+    );
+  }, [classStudents, savedRecordsMap]);
 
-  // Filtered students by status filter + search query
-  const filteredStudents = useMemo(() => {
-    let list = classStudents;
+  // List of students to display:
+  // Jinki haziri aur behaviour darj ho gaya unko us din ke liye hide karna hai!
+  const displayedStudents = useMemo(() => {
+    const baseList = showRecorded ? classStudents : pendingStudents;
 
-    // Status filter: pending vs saved vs all
-    if (statusFilter === 'pending') {
-      list = list.filter(
-        (st) => !savedRecordsMap.has(String(st.Student_ID || '').trim().toLowerCase())
-      );
-    } else if (statusFilter === 'saved') {
-      list = list.filter((st) =>
-        savedRecordsMap.has(String(st.Student_ID || '').trim().toLowerCase())
-      );
-    }
-
-    if (!searchQuery.trim()) return list;
+    if (!searchQuery.trim()) return baseList;
     const q = searchQuery.toLowerCase().trim();
-    return list.filter((st) => {
+    return baseList.filter((st) => {
       const name = (st.Student_Name || '').toLowerCase();
       const father = (st.Father_Name || '').toLowerCase();
       const roll = String(st.Roll_Number || '').toLowerCase();
@@ -287,16 +299,27 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
         id.includes(q)
       );
     });
-  }, [classStudents, statusFilter, savedRecordsMap, searchQuery]);
+  }, [classStudents, pendingStudents, showRecorded, searchQuery]);
 
-  // 1-Click: Mark ALL Present
+  // Present / Absent / Fault counts for the currently displayed list
+  const currentRegisterStudents = showRecorded ? classStudents : pendingStudents;
+  const presentCount = currentRegisterStudents.filter(
+    (st) => rowStates[st.Student_ID]?.isPresent !== false
+  ).length;
+  const absentCount = currentRegisterStudents.length - presentCount;
+  const faultCount = currentRegisterStudents.filter((st) => {
+    const state = rowStates[st.Student_ID];
+    return state?.isPresent && state.selectedFaults.size > 0 && !state.selectedFaults.has('star');
+  }).length;
+
+  // 1-Click: Mark ALL in current list Present
   const handleMarkAllPresent = () => {
-    classStudents.forEach((st) => {
+    displayedStudents.forEach((st) => {
       touchedStudentsRef.current.add(String(st.Student_ID || '').trim());
     });
     setRowStates((prev) => {
       const updated = { ...prev };
-      classStudents.forEach((st) => {
+      displayedStudents.forEach((st) => {
         const sId = String(st.Student_ID || '').trim();
         if (updated[sId]) {
           updated[sId] = { ...updated[sId], isPresent: true };
@@ -314,14 +337,14 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
     });
   };
 
-  // 1-Click: Mark ALL Absent
+  // 1-Click: Mark ALL in current list Absent
   const handleMarkAllAbsent = () => {
-    classStudents.forEach((st) => {
+    displayedStudents.forEach((st) => {
       touchedStudentsRef.current.add(String(st.Student_ID || '').trim());
     });
     setRowStates((prev) => {
       const updated = { ...prev };
-      classStudents.forEach((st) => {
+      displayedStudents.forEach((st) => {
         const sId = String(st.Student_ID || '').trim();
         if (updated[sId]) {
           updated[sId] = {
@@ -360,7 +383,6 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
         [studentId]: {
           ...cur,
           isPresent: nextPresent,
-          // "पहली बात तो जो एब्सेंट है, उसका तो आचरण है ही नहीं, सब कुछ गायब"
           selectedFaults: nextPresent ? cur.selectedFaults : new Set(),
         },
       };
@@ -428,13 +450,14 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
     });
   };
 
-  // Batch Save Handler
+  // Batch Save Handler (Saves displayed students and automatically hides them once saved)
   const handleSaveAll = async () => {
-    if (classStudents.length === 0) return;
+    const studentsToSave = displayedStudents;
+    if (studentsToSave.length === 0) return;
     setIsSaving(true);
 
     try {
-      const recordsToSave: Partial<StudentBehaviorRecord>[] = classStudents.map((st) => {
+      const recordsToSave: Partial<StudentBehaviorRecord>[] = studentsToSave.map((st) => {
         const sId = String(st.Student_ID || '').trim();
         const state = rowStates[sId] || {
           studentId: sId,
@@ -543,7 +566,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
       await onSaveBatch(recordsToSave);
 
       touchedStudentsRef.current.clear();
-      const msg = `🎉 क्लास ${getClassName(selectedClass)} की हाजिरी व आचरण सुरक्षित हो गया! (${presentCount} उपस्थित, ${absentCount} अनुपस्थित)`;
+      const msg = `🎉 क्लास ${getClassName(selectedClass)} के ${recordsToSave.length} छात्रों का डेटा सुरक्षित हो गया और वे सूची से हाइड हो गए!`;
       setSaveSuccessMsg(msg);
       setTimeout(() => setSaveSuccessMsg(null), 6000);
     } catch (err: any) {
@@ -570,13 +593,20 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
               </span>
             </h2>
             <p className="text-xs text-slate-300 mt-0.5">
-              {lockedClass ? (
-                <span className="text-amber-200 font-semibold">
-                  <i className="fa-solid fa-lock mr-1"></i>
-                  आपको केवल अपनी निर्धारित कक्षा (Class {getClassName(lockedClass)}) की हाजिरी दर्ज करने की अनुमति है।
-                </span>
+              {allowedClassList ? (
+                allowedClassList.length === 1 ? (
+                  <span className="text-amber-200 font-semibold">
+                    <i className="fa-solid fa-lock mr-1"></i>
+                    आपको स्कूल मैनेजर द्वारा निर्धारित कक्षा (Class {getClassName(allowedClassList[0])}) असाइन की गई है।
+                  </span>
+                ) : (
+                  <span className="text-amber-200 font-semibold">
+                    <i className="fa-solid fa-layer-group mr-1"></i>
+                    आपको स्कूल मैनेजर द्वारा {allowedClassList.length} कक्षाएं ({allowedClassList.map((c) => `Class ${getClassName(c)}`).join(', ')}) असाइन की गई हैं। ऊपर से कक्षा बदलें।
+                  </span>
+                )
               ) : (
-                'पूरी क्लास को 1-क्लिक में मार्क करें। जो गैरहाजिर हैं उन्हें अनमार्क करें और फॉल्ट वाले बच्चों के टैग पर टैप करें।'
+                'छात्रों को मार्क करें और सेव करें। सुरक्षित होने के बाद छात्र सूची से स्वतः छुप जाएंगे।'
               )}
             </p>
           </div>
@@ -593,11 +623,11 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
               />
             </div>
 
-            {/* Class Picker or Locked Badge */}
-            {lockedClass ? (
+            {/* Class Picker: Locked badge for 1 class, restricted dropdown for multiple assigned classes, or full list for manager */}
+            {allowedClassList && allowedClassList.length === 1 ? (
               <div className="bg-amber-400 text-slate-950 font-black px-3 py-1.5 rounded-xl text-xs flex items-center gap-1.5 shadow-sm">
                 <i className="fa-solid fa-lock text-slate-900"></i>
-                <span>कक्षा: Class {getClassName(lockedClass)}</span>
+                <span>कक्षा: Class {getClassName(allowedClassList[0])}</span>
               </div>
             ) : (
               <div className="bg-white/10 border border-white/20 rounded-xl px-3 py-1.5 flex items-center gap-2 text-xs">
@@ -607,12 +637,17 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
                   onChange={(e) => setSelectedClass(e.target.value)}
                   className="bg-transparent text-white font-bold outline-none cursor-pointer text-xs"
                 >
-                  {classOptions.map((c) => (
+                  {(allowedClassList && allowedClassList.length > 1 ? allowedClassList : classOptions).map((c) => (
                     <option key={c} value={c} className="bg-slate-900 text-white">
                       Class {getClassName(c)}
                     </option>
                   ))}
                 </select>
+                {allowedClassList && allowedClassList.length > 1 && (
+                  <span className="bg-amber-400 text-slate-950 text-[10px] font-black px-1.5 py-0.5 rounded-md">
+                    {allowedClassList.length} कक्षाएं
+                  </span>
+                )}
               </div>
             )}
 
@@ -640,7 +675,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
           <button
             type="button"
             onClick={() => setSaveSuccessMsg(null)}
-            className="text-xs text-emerald-700 hover:text-emerald-950 font-bold px-2 py-0.5"
+            className="text-xs text-emerald-700 hover:text-emerald-950 font-bold px-2 py-0.5 cursor-pointer"
           >
             ✕
           </button>
@@ -659,10 +694,20 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
           </div>
         </div>
 
+        <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-between">
+          <div>
+            <div className="text-[11px] font-bold text-amber-800">बाकी छात्र (Pending)</div>
+            <div className="text-xl font-black text-amber-900">{pendingCount}</div>
+          </div>
+          <div className="w-9 h-9 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center font-bold shadow-xs">
+            <i className="fa-solid fa-clock"></i>
+          </div>
+        </div>
+
         <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-between">
           <div>
-            <div className="text-[11px] font-bold text-emerald-700">उपस्थित (Present)</div>
-            <div className="text-xl font-black text-emerald-900">{presentCount}</div>
+            <div className="text-[11px] font-bold text-emerald-700">आज दर्ज (Recorded)</div>
+            <div className="text-xl font-black text-emerald-900">{savedCount}</div>
           </div>
           <div className="w-9 h-9 rounded-xl bg-emerald-500 text-white flex items-center justify-center font-bold shadow-xs">
             <i className="fa-solid fa-check"></i>
@@ -671,81 +716,41 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
 
         <div className="p-3 rounded-2xl bg-rose-50 border border-rose-200 flex items-center justify-between">
           <div>
-            <div className="text-[11px] font-bold text-rose-700">अनुपस्थित (Absent)</div>
+            <div className="text-[11px] font-bold text-rose-700">गैरहाजिर (Absent)</div>
             <div className="text-xl font-black text-rose-900">{absentCount}</div>
           </div>
           <div className="w-9 h-9 rounded-xl bg-rose-500 text-white flex items-center justify-center font-bold shadow-xs">
             <i className="fa-solid fa-xmark"></i>
           </div>
         </div>
-
-        <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-between">
-          <div>
-            <div className="text-[11px] font-bold text-amber-800">स्वच्छता/फॉल्ट वाले</div>
-            <div className="text-xl font-black text-amber-950">{faultCount}</div>
-          </div>
-          <div className="w-9 h-9 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center font-bold shadow-xs">
-            <i className="fa-solid fa-triangle-exclamation"></i>
-          </div>
-        </div>
       </div>
 
-      {/* FILTER TABS FOR ALREADY RECORDED STUDENTS (छात्र स्थिति फ़िल्टर) */}
-      <div className="bg-slate-100/80 p-1.5 rounded-2xl flex flex-wrap items-center justify-between gap-2 border border-slate-200">
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => setStatusFilter('all')}
-            className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-all cursor-pointer flex items-center gap-1.5 ${
-              statusFilter === 'all'
-                ? 'bg-slate-900 text-white shadow-xs'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
-            }`}
-          >
-            <i className="fa-solid fa-layer-group text-[11px]"></i>
-            <span>सभी छात्र ({totalCount})</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setStatusFilter('pending')}
-            className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-all cursor-pointer flex items-center gap-1.5 ${
-              statusFilter === 'pending'
-                ? 'bg-amber-500 text-slate-950 font-black shadow-xs'
-                : 'text-amber-800 hover:bg-amber-50'
-            }`}
-            title="जिन छात्रों का आज का डेटा अभी तक दर्ज नहीं हुआ है"
-          >
-            <i className="fa-solid fa-clock text-[11px]"></i>
-            <span>⏳ केवल बाकी छात्र ({pendingCount})</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setStatusFilter('saved')}
-            className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-all cursor-pointer flex items-center gap-1.5 ${
-              statusFilter === 'saved'
-                ? 'bg-emerald-600 text-white font-black shadow-xs'
-                : 'text-emerald-800 hover:bg-emerald-50'
-            }`}
-            title="जिन छात्रों का आज का डेटा दर्ज हो चुका है"
-          >
-            <i className="fa-solid fa-circle-check text-[11px]"></i>
-            <span>✅ आज दर्ज हो चुके ({savedCount})</span>
-          </button>
+      {/* STATUS BAR WITH HIDE/UNHIDE TOGGLE (नो बैज - सिर्फ स्वच्छ जानकारी व हाइड टॉगल) */}
+      <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div className="flex items-center gap-2">
+          <span className="text-slate-600 font-medium">
+            कक्षा कुल: <strong className="text-slate-900">{totalCount}</strong> | 
+            बाकी छात्र: <strong className="text-amber-800 font-bold">{pendingCount}</strong>
+            {savedCount > 0 && (
+              <span> | आज दर्ज हो चुके: <strong className="text-emerald-700 font-bold">{savedCount}</strong> ({showRecorded ? 'दिख रहे हैं' : 'छिपे हुए हैं'})</span>
+            )}
+          </span>
         </div>
 
-        <div className="text-[11px] text-slate-500 font-medium px-2">
-          {pendingCount === 0 ? (
-            <span className="text-emerald-700 font-bold">
-              <i className="fa-solid fa-circle-check mr-1"></i>सभी छात्रों का रिकॉर्ड सुरक्षित है
-            </span>
-          ) : (
-            <span>
-              <strong>{pendingCount}</strong> छात्रों का डेटा बाकी है
-            </span>
-          )}
-        </div>
+        {savedCount > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowRecorded(!showRecorded)}
+            className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all active:scale-95 shadow-2xs ${
+              showRecorded
+                ? 'bg-amber-100 hover:bg-amber-200 text-amber-950 border-amber-300'
+                : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-300'
+            }`}
+          >
+            <i className={`fa-solid ${showRecorded ? 'fa-eye-slash text-amber-700' : 'fa-eye text-blue-600'}`}></i>
+            <span>{showRecorded ? 'दर्ज छात्र पुनः छुपाएं (Hide)' : `आज दर्ज हो चुके छात्र देखें (${savedCount})`}</span>
+          </button>
+        )}
       </div>
 
       {/* Quick Action Toolbar */}
@@ -754,8 +759,9 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
           <button
             type="button"
             onClick={handleMarkAllPresent}
-            className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center gap-1.5 shadow-xs cursor-pointer transition-all active:scale-95"
-            title="पूरी क्लास को एक साथ Present मार्क करें"
+            disabled={displayedStudents.length === 0}
+            className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center gap-1.5 shadow-xs cursor-pointer transition-all active:scale-95 disabled:opacity-50"
+            title="दिख रहे छात्रों को Present मार्क करें"
           >
             <i className="fa-solid fa-check-double text-amber-300"></i>
             <span>सबको Present करें</span>
@@ -764,8 +770,9 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
           <button
             type="button"
             onClick={handleMarkAllAbsent}
-            className="px-3 py-2 rounded-xl bg-white hover:bg-rose-50 text-rose-700 border border-rose-300 font-bold flex items-center gap-1.5 cursor-pointer transition-all active:scale-95"
-            title="सबको Absent मार्क करें"
+            disabled={displayedStudents.length === 0}
+            className="px-3 py-2 rounded-xl bg-white hover:bg-rose-50 text-rose-700 border border-rose-300 font-bold flex items-center gap-1.5 cursor-pointer transition-all active:scale-95 disabled:opacity-50"
+            title="दिख रहे छात्रों को Absent मार्क करें"
           >
             <i className="fa-solid fa-rotate-left text-rose-500"></i>
             <span>सबको Absent करें</span>
@@ -799,7 +806,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
         <button
           type="button"
           onClick={handleSaveAll}
-          disabled={isSaving || classStudents.length === 0}
+          disabled={isSaving || displayedStudents.length === 0}
           className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-600 text-white font-black flex items-center gap-2 shadow-md cursor-pointer transition-all transform hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50"
         >
           <i className={`fa-solid ${isSaving ? 'fa-spinner fa-spin' : 'fa-floppy-disk'} text-amber-300`}></i>
@@ -809,50 +816,39 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
 
       {/* Student List Table / Cards */}
       <div className="space-y-2.5">
-        {filteredStudents.length === 0 ? (
+        {displayedStudents.length === 0 ? (
           <div className="p-8 text-center bg-slate-50 rounded-2xl border border-slate-200 text-slate-500 text-xs">
-            {statusFilter === 'pending' && pendingCount === 0 ? (
-              <div>
-                <i className="fa-solid fa-champagne-glasses text-3xl text-emerald-500 mb-2"></i>
-                <p className="font-bold text-emerald-800 text-sm">शानदार! क्लास के सभी छात्र दर्ज हो चुके हैं!</p>
-                <p className="text-[11px] text-slate-500 mt-1">
-                  इस क्लास का कोई भी छात्र आज बाकी नहीं है।
+            {pendingCount === 0 && savedCount > 0 && !showRecorded ? (
+              <div className="py-4">
+                <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-3 text-3xl shadow-sm">
+                  <i className="fa-solid fa-circle-check"></i>
+                </div>
+                <h3 className="text-base font-black text-emerald-900">
+                  शानदार! क्लास {getClassName(selectedClass)} के सभी छात्रों की हाजिरी व आचरण आज दर्ज हो चुका है!
+                </h3>
+                <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+                  सभी {savedCount} छात्रों का डेटा सुरक्षित है और नियमानुसार सूची से छुपा दिया गया है।
                 </p>
                 <button
                   type="button"
-                  onClick={() => setStatusFilter('all')}
-                  className="mt-3 px-3 py-1.5 rounded-xl bg-slate-800 text-white font-bold text-xs"
+                  onClick={() => setShowRecorded(true)}
+                  className="mt-4 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs inline-flex items-center gap-2 cursor-pointer transition-all active:scale-95 shadow-sm"
                 >
-                  सभी छात्र देखें (View All)
-                </button>
-              </div>
-            ) : statusFilter === 'saved' && savedCount === 0 ? (
-              <div>
-                <i className="fa-solid fa-hourglass-start text-3xl text-amber-500 mb-2"></i>
-                <p className="font-bold text-slate-700 text-sm">आज अभी तक कोई छात्र दर्ज नहीं हुआ है।</p>
-                <p className="text-[11px] text-slate-400 mt-1">
-                  नीचे दिए गए छात्रों की हाजिरी मार्क करके "क्लास हाजिरी सेव करें" दबाएँ।
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setStatusFilter('all')}
-                  className="mt-3 px-3 py-1.5 rounded-xl bg-slate-800 text-white font-bold text-xs"
-                >
-                  सभी छात्र देखें (View All)
+                  <i className="fa-solid fa-eye"></i>
+                  <span>दर्ज हो चुके छात्र देखें / पुनः संपादित करें ({savedCount})</span>
                 </button>
               </div>
             ) : (
               <div>
                 <i className="fa-solid fa-user-slash text-2xl text-slate-400 mb-2"></i>
                 <p className="font-bold">कोई छात्र नहीं मिले।</p>
-                <p className="text-[11px] text-slate-400 mt-0.5">कृपया खोज शब्द हटाएं या फ़िल्टर बदलें।</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">कृपया खोज शब्द हटाएं या ऊपर से कक्षा बदलें।</p>
               </div>
             )}
           </div>
         ) : (
-          filteredStudents.map((student, idx) => {
+          displayedStudents.map((student, idx) => {
             const sId = String(student.Student_ID || '').trim();
-            const sIdLower = sId.toLowerCase();
             const state = rowStates[sId] || {
               studentId: sId,
               isPresent: true,
@@ -864,9 +860,6 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
             const isPres = state.isPresent;
             const hasFaults = state.selectedFaults.size > 0 && !state.selectedFaults.has('star');
             const isStar = state.selectedFaults.has('star');
-
-            const savedRecord = savedRecordsMap.get(sIdLower);
-            const isSavedToday = Boolean(savedRecord);
 
             return (
               <div
@@ -882,7 +875,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
                 }`}
               >
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-                  {/* Student Identity */}
+                  {/* Student Identity (Clean, NO BADGES as requested) */}
                   <div className="flex items-center gap-3 min-w-[220px]">
                     <div className="relative shrink-0">
                       <StudentAvatar
@@ -907,18 +900,6 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
                         {student.Roll_Number && (
                           <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-md bg-slate-100 text-slate-600 border border-slate-200">
                             रोल #{student.Roll_Number}
-                          </span>
-                        )}
-                        {/* Status Badge: Saved vs Pending */}
-                        {isSavedToday ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-black border border-emerald-300">
-                            <i className="fa-solid fa-circle-check text-emerald-600"></i>
-                            <span>आज दर्ज है ({parseIsPresent(savedRecord?.Is_Present) ? 'उपस्थित' : 'अनुपस्थित'})</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 text-[10px] font-bold border border-amber-300">
-                            <i className="fa-solid fa-clock text-amber-600"></i>
-                            <span>बाकी है (Pending)</span>
                           </span>
                         )}
                       </div>
@@ -1035,7 +1016,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
       </div>
 
       {/* Sticky Bottom Save Bar */}
-      {filteredStudents.length > 0 && (
+      {displayedStudents.length > 0 && (
         <div className="sticky bottom-3 z-20 bg-gradient-to-r from-[#0c2340] to-slate-900 border border-amber-400/40 p-3.5 rounded-2xl shadow-2xl flex flex-col sm:flex-row items-center justify-between gap-3 text-white">
           <div className="flex items-center gap-2 text-xs">
             <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-400/40 flex items-center justify-center font-bold">
@@ -1046,7 +1027,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
                 कक्षा {getClassName(selectedClass)} • {selectedDate}
               </div>
               <div className="text-[11px] text-slate-300">
-                कुल: <strong className="text-white">{totalCount}</strong> | उपस्थित:{' '}
+                बाकी छात्र: <strong className="text-amber-300">{pendingCount}</strong> | उपस्थित:{' '}
                 <strong className="text-emerald-400">{presentCount}</strong> | अनुपस्थित:{' '}
                 <strong className="text-rose-400">{absentCount}</strong>
                 {faultCount > 0 && (
@@ -1068,7 +1049,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
               className="w-full sm:w-auto px-6 py-3 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-black text-xs sm:text-sm shadow-lg hover:shadow-amber-400/30 flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-95 disabled:opacity-50"
             >
               <i className={`fa-solid ${isSaving ? 'fa-spinner fa-spin' : 'fa-check-double'} text-base`}></i>
-              <span>{isSaving ? 'सेव हो रहा है...' : '💾 पूरी क्लास की हाजिरी व आचरण सेव करें'}</span>
+              <span>{isSaving ? 'सेव हो रहा है...' : '💾 बाकी छात्रों की हाजिरी सेव करें'}</span>
             </button>
           </div>
         </div>

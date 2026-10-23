@@ -557,7 +557,7 @@ function doGet(e) {
   }
 
   // 10. GET FALLBACK: Delegate write actions when called via GET query parameters
-  if (action === "addHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance") {
+  if (action === "addHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass") {
     return doPost(e);
   }
 
@@ -751,6 +751,30 @@ function doPost(e) {
       var setupRes = setupAllRequiredSheets();
       return ContentService.createTextOutput(JSON.stringify(setupRes))
         .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 3H. ASSIGN TEACHER CLASS BY MANAGER
+    if (action === "assignTeacherClass" || action === "updateUserClass") {
+      var userSheet = ss.getSheetByName("Users");
+      if (userSheet) {
+        var uData = userSheet.getDataRange().getValues();
+        var targetUid = String(data.user_id || data.userId || data.username || "").trim().toLowerCase();
+        var newCls = String(data.assigned_class || data.class || data.Assigned_Class || "").trim();
+        for (var r = 1; r < uData.length; r++) {
+          var rowUid = String(uData[r][0] || "").trim().toLowerCase();
+          var rowUser = String(uData[r][2] || "").trim().toLowerCase();
+          var rowName = String(uData[r][4] || "").trim().toLowerCase();
+          if ((targetUid && (rowUid === targetUid || rowUser === targetUid)) || (targetUid && rowName === targetUid)) {
+            // Column 7 (G) is Assigned_Class
+            userSheet.getRange(r + 1, 7).setValue(newCls);
+            break;
+          }
+        }
+        return ContentService.createTextOutput(JSON.stringify({
+          status: "success",
+          message: "Teacher class updated in Users sheet successfully"
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
     }
 
     // 4. ADD / BATCH ADD BEHAVIOR & ATTENDANCE

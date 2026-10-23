@@ -149,6 +149,26 @@ export interface SchoolUser {
   Last_AI_Run?: string;
 }
 
+// Helper to parse assigned class string or array into a clean array of class IDs/names
+export const parseAssignedClasses = (val: string | string[] | null | undefined): string[] => {
+  if (!val) return [];
+  if (Array.isArray(val)) {
+    return Array.from(new Set(val.map((s) => String(s || '').trim()).filter(Boolean)));
+  }
+  const s = String(val).trim();
+  if (!s) return [];
+  if (s.startsWith('[') && s.endsWith(']')) {
+    try {
+      const parsed = JSON.parse(s);
+      if (Array.isArray(parsed)) {
+        return Array.from(new Set(parsed.map((item) => String(item || '').trim()).filter(Boolean)));
+      }
+    } catch {}
+  }
+  const parts = s.split(/[,;|]+/).map((item) => item.trim()).filter(Boolean);
+  return Array.from(new Set(parts));
+};
+
 const SPREADSHEET_ID = '1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU';
 
 // Default standard Class ID to Class Name dictionary (from Classes sheet)
@@ -2962,6 +2982,13 @@ export default function App() {
       const rows = data.table?.rows || [];
       const userRecords: SchoolUser[] = [];
 
+      // Read any local/manager overrides for teacher class assignments
+      let assignedMap: Record<string, string> = {};
+      try {
+        const saved = localStorage.getItem('evs_custom_teacher_class_assignments');
+        if (saved) assignedMap = JSON.parse(saved);
+      } catch {}
+
       for (const r of rows) {
         const cells = (r.c || []).map((c: any) =>
           c ? (c.f !== undefined && c.f !== null ? c.f : c.v) : ''
@@ -2972,8 +2999,13 @@ export default function App() {
         const password = cells[3] ? String(cells[3]).trim() : '';
         const name = cells[4] ? String(cells[4]).trim() : '';
         const designation = cells[5] ? String(cells[5]).trim() : '';
-        const assignedClass = cells[6] ? String(cells[6]).trim() : '';
+        let assignedClass = cells[6] ? String(cells[6]).trim() : '';
         const lastAiRun = cells[7] ? String(cells[7]).trim() : '';
+
+        // Override if manager assigned a class
+        if (uId && assignedMap[uId] !== undefined) assignedClass = assignedMap[uId];
+        else if (username && assignedMap[username] !== undefined) assignedClass = assignedMap[username];
+        else if (name && assignedMap[name] !== undefined) assignedClass = assignedMap[name];
 
         if (uId || username || mobile || name) {
           userRecords.push({
@@ -4816,6 +4848,105 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     setTimeout(() => setSyncToastMessage(null), 4000);
   };
 
+  // Handler for Manager to Assign Class(es) to Teachers/Staff (Supports 1, 2, 3 or more classes)
+  const handleAssignClassToUser = async (userIdOrUsername: string, newClass: string | string[], userName?: string) => {
+    const cleanId = String(userIdOrUsername || '').trim();
+    const classesArray = Array.isArray(newClass)
+      ? Array.from(new Set(newClass.map((s) => String(s || '').trim()).filter(Boolean)))
+      : parseAssignedClasses(newClass);
+    const cleanClass = classesArray.join(', ');
+
+    // 1. Update React state for usersList
+    setUsersList((prev) => {
+      const updated = prev.map((u) => {
+        const match =
+          (u.User_ID && u.User_ID.toLowerCase() === cleanId.toLowerCase()) ||
+          (u.Username && u.Username.toLowerCase() === cleanId.toLowerCase()) ||
+          (userName && u.Name && u.Name.toLowerCase() === userName.toLowerCase());
+        if (match) {
+          return { ...u, Assigned_Class: cleanClass };
+        }
+        return u;
+      });
+      try {
+        localStorage.setItem(CACHE_KEY_USERS, JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
+    // 2. Persist in localStorage
+    try {
+      const saved = localStorage.getItem('evs_custom_teacher_class_assignments');
+      const assignments = saved ? JSON.parse(saved) : {};
+      assignments[cleanId] = cleanClass;
+      if (userName) assignments[userName] = cleanClass;
+      localStorage.setItem('evs_custom_teacher_class_assignments', JSON.stringify(assignments));
+    } catch (e) {
+      console.warn('localStorage error saving assignment:', e);
+    }
+
+    // 3. Update active teacherUser if currently logged in
+    setTeacherUser((prev) => {
+      if (!prev) return prev;
+      const match =
+        (prev.User_ID && prev.User_ID.toLowerCase() === cleanId.toLowerCase()) ||
+        (prev.Username && prev.Username.toLowerCase() === cleanId.toLowerCase()) ||
+        (userName && prev.Name && prev.Name.toLowerCase() === userName.toLowerCase());
+      if (match) {
+        const upd = { ...prev, Assigned_Class: cleanClass };
+        try {
+          localStorage.setItem(CACHE_KEY_ACTIVE_TEACHER_USER, JSON.stringify(upd));
+        } catch {}
+        if (classesArray.length > 0) {
+          setHwClass(classesArray[0]);
+          setTeacherTrackerClassFilter(classesArray[0]);
+          setBehaviorClassFilter(classesArray[0]);
+        }
+        return upd;
+      }
+      return prev;
+    });
+
+    // 4. Send to backend server
+    try {
+      await fetch('/api/assign-teacher-class', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: cleanId,
+          assignedClass: cleanClass,
+          appsScriptUrl: getEffectiveApiUrl(),
+        }),
+      });
+    } catch (err) {
+      console.warn('Backend server assignment error:', err);
+    }
+
+    // 5. Forward to Google Apps Script
+    try {
+      fetch('/api/forward-apps-script', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'assignTeacherClass',
+          user_id: cleanId,
+          assigned_class: cleanClass,
+          appsScriptUrl: getEffectiveApiUrl(),
+        }),
+      }).catch(() => {});
+    } catch {}
+
+    const classCount = classesArray.length;
+    let clsTitle = 'हटा दी गई';
+    if (classCount === 1) {
+      clsTitle = `Class ${getClassName(classesArray[0])}`;
+    } else if (classCount > 1) {
+      clsTitle = `${classCount} कक्षाएं (${classesArray.map((c) => `Class ${getClassName(c)}`).join(', ')})`;
+    }
+    setSyncToastMessage(`🎉 ${userName || 'अध्यापक'} को ${clsTitle} सफलतापूर्वक असाइन कर दी गई!`);
+    setTimeout(() => setSyncToastMessage(null), 4000);
+  };
+
   // Dedicated Handler for Student Homework QR Tracker Modal (Complete/Incomplete)
   const handleUpdateHomeworkStatusModal = (
     recordId: string,
@@ -5538,16 +5669,36 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       );
       const studentName = matchedStudent?.Student_Name || '';
 
-      const matchClass =
-        teacherTrackerClassFilter === 'all' ||
-        String(rec.Class || '').toLowerCase() === teacherTrackerClassFilter.toLowerCase() ||
-        getClassName(rec.Class).toLowerCase() === teacherTrackerClassFilter.toLowerCase() ||
-        getClassName(rec.Class).toLowerCase() === getClassName(teacherTrackerClassFilter).toLowerCase() ||
-        (Boolean(matchedStudent?.Class) && (
-          String(matchedStudent?.Class).toLowerCase() === teacherTrackerClassFilter.toLowerCase() ||
-          getClassName(matchedStudent?.Class).toLowerCase() === teacherTrackerClassFilter.toLowerCase() ||
-          getClassName(matchedStudent?.Class).toLowerCase() === getClassName(teacherTrackerClassFilter).toLowerCase()
-        ));
+      const teacherAssignedClasses = parseAssignedClasses(teacherUser?.Assigned_Class);
+      let matchClass = false;
+
+      if (teacherTrackerClassFilter === 'all') {
+        if (teacherAssignedClasses.length > 0) {
+          matchClass = teacherAssignedClasses.some(
+            (ac) =>
+              String(rec.Class || '').toLowerCase() === ac.toLowerCase() ||
+              getClassName(rec.Class).toLowerCase() === ac.toLowerCase() ||
+              getClassName(rec.Class).toLowerCase() === getClassName(ac).toLowerCase() ||
+              (Boolean(matchedStudent?.Class) && (
+                String(matchedStudent?.Class).toLowerCase() === ac.toLowerCase() ||
+                getClassName(matchedStudent?.Class).toLowerCase() === ac.toLowerCase() ||
+                getClassName(matchedStudent?.Class).toLowerCase() === getClassName(ac).toLowerCase()
+              ))
+          );
+        } else {
+          matchClass = true;
+        }
+      } else {
+        matchClass =
+          String(rec.Class || '').toLowerCase() === teacherTrackerClassFilter.toLowerCase() ||
+          getClassName(rec.Class).toLowerCase() === teacherTrackerClassFilter.toLowerCase() ||
+          getClassName(rec.Class).toLowerCase() === getClassName(teacherTrackerClassFilter).toLowerCase() ||
+          (Boolean(matchedStudent?.Class) && (
+            String(matchedStudent?.Class).toLowerCase() === teacherTrackerClassFilter.toLowerCase() ||
+            getClassName(matchedStudent?.Class).toLowerCase() === teacherTrackerClassFilter.toLowerCase() ||
+            getClassName(matchedStudent?.Class).toLowerCase() === getClassName(teacherTrackerClassFilter).toLowerCase()
+          ));
+      }
 
       const matchStatus =
         teacherTrackerStatusFilter === 'all' ||
@@ -5561,13 +5712,13 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       const matchSearch =
         teacherTrackerSearch === '' ||
         String(rec.Student_ID || '').toLowerCase().includes(teacherTrackerSearch.toLowerCase()) ||
-        String(rec.ID || '').toLowerCase().includes(teacherTrackerSearch.toLowerCase()) ||
+        String(rec.ID || '').toLowerCase() === teacherTrackerSearch.toLowerCase() ||
         String(rec.Subject || '').toLowerCase().includes(teacherTrackerSearch.toLowerCase()) ||
         studentName.toLowerCase().includes(teacherTrackerSearch.toLowerCase());
 
       return matchClass && matchStatus && matchSearch;
     });
-  }, [hwTrackerList, teacherTrackerClassFilter, teacherTrackerStatusFilter, teacherTrackerSearch, students, classMap]);
+  }, [hwTrackerList, teacherTrackerClassFilter, teacherTrackerStatusFilter, teacherTrackerSearch, students, classMap, teacherUser]);
 
   // Filtered Users from Users Sheet (for Manager Users Tab)
   const filteredUsers = useMemo(() => {
@@ -9390,7 +9541,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     यूजर आईडी: <span className="font-mono text-amber-300">{teacherUser.User_ID || teacherUser.Username}</span>
                     {teacherUser.Assigned_Class && (
                       <span className="ml-2 bg-blue-900/60 px-2 py-0.5 rounded text-[11px] border border-blue-400/30">
-                        कक्षा: Class {getClassName(teacherUser.Assigned_Class)}
+                        {parseAssignedClasses(teacherUser.Assigned_Class).length > 1
+                          ? `कक्षाएं: ${parseAssignedClasses(teacherUser.Assigned_Class).map((c) => `Class ${getClassName(c)}`).join(', ')}`
+                          : `कक्षा: Class ${getClassName(teacherUser.Assigned_Class)}`}
                       </span>
                     )}
                   </p>
@@ -9718,15 +9871,23 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
                         {/* Class Selection */}
                         <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                            Select Class <span className="text-rose-500">*</span>
+                          <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center justify-between">
+                            <span>Select Class <span className="text-rose-500">*</span></span>
+                            {parseAssignedClasses(teacherUser?.Assigned_Class).length > 0 && (
+                              <span className="text-[10px] text-amber-700 font-bold bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                                <i className="fa-solid fa-lock mr-1"></i>असाइन की गई कक्षाएं ({parseAssignedClasses(teacherUser?.Assigned_Class).length})
+                              </span>
+                            )}
                           </label>
                           <select
                             value={hwClass}
                             onChange={(e) => setHwClass(e.target.value)}
                             className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 focus:border-blue-800 focus:ring-2 focus:ring-blue-800/20 text-xs sm:text-sm outline-none transition-all bg-white"
                           >
-                            {classOptions.map((c) => (
+                            {(parseAssignedClasses(teacherUser?.Assigned_Class).length > 0
+                              ? parseAssignedClasses(teacherUser?.Assigned_Class)
+                              : classOptions
+                            ).map((c) => (
                               <option key={c} value={c}>
                                 Class {getClassName(c)} {c !== getClassName(c) ? `(${c})` : ''}
                               </option>
@@ -9738,10 +9899,15 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       {/* Quick Class Selector Chips */}
                       <div>
                         <span className="text-[11px] font-semibold text-slate-500 mb-1.5 block">
-                          Quick Class Chips (Class Name):
+                          {parseAssignedClasses(teacherUser?.Assigned_Class).length > 0
+                            ? 'आपकी असाइन कक्षाएं (Assigned Classes):'
+                            : 'Quick Class Chips (Class Name):'}
                         </span>
                         <div className="flex flex-wrap gap-1.5">
-                          {['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C10', 'C11', 'C12'].map(
+                          {(parseAssignedClasses(teacherUser?.Assigned_Class).length > 0
+                            ? parseAssignedClasses(teacherUser?.Assigned_Class)
+                            : ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C10', 'C11', 'C12']
+                          ).map(
                             (chip) => (
                               <button
                                 key={chip}
@@ -10628,18 +10794,32 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 {/* VIEW A: FAST CLASSROOM BULK ATTENDANCE REGISTER */}
                 {behaviorSubTab === 'bulkRegister' && (
                   <div className="animate-fadeIn">
-                    <ClassroomBulkAttendanceRegister
-                      students={students}
-                      behaviorRecords={behaviorList}
-                      classOptions={classOptions}
-                      initialClass={teacherUser?.Assigned_Class || classOptions[0] || '1'}
-                      lockedClass={teacherUser?.Assigned_Class}
-                      teacherName={teacherUser?.Name || 'Teacher'}
-                      getClassName={getClassName}
-                      getStudentPhoto={getStudentPhoto}
-                      onSaveBatch={handleSaveBatchBehavior}
-                      isEmbedded={true}
-                    />
+                    {!teacherUser?.Assigned_Class ? (
+                      <div className="p-8 bg-amber-50/80 border-2 border-amber-300 rounded-3xl text-center space-y-3 shadow-xs">
+                        <div className="w-16 h-16 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center mx-auto text-3xl shadow-xs">
+                          <i className="fa-solid fa-chalkboard-user"></i>
+                        </div>
+                        <h3 className="text-base font-black text-amber-950">
+                          कक्षा अभी असाइन नहीं हुई है (No Class Assigned)
+                        </h3>
+                        <p className="text-xs sm:text-sm text-amber-900 max-w-md mx-auto leading-relaxed">
+                          विद्यालय नियमानुसार, अध्यापक केवल स्कूल मैनेजर द्वारा असाइन की गई कक्षा की ही हाजिरी व आचरण दर्ज कर सकते हैं। कृपया स्कूल मैनेजर से अपनी कक्षा असाइन करवाएं।
+                        </p>
+                      </div>
+                    ) : (
+                      <ClassroomBulkAttendanceRegister
+                        students={students}
+                        behaviorRecords={behaviorList}
+                        classOptions={classOptions}
+                        initialClass={teacherUser.Assigned_Class}
+                        lockedClass={teacherUser.Assigned_Class}
+                        teacherName={teacherUser?.Name || 'Teacher'}
+                        getClassName={getClassName}
+                        getStudentPhoto={getStudentPhoto}
+                        onSaveBatch={handleSaveBatchBehavior}
+                        isEmbedded={true}
+                      />
+                    )}
                   </div>
                 )}
 
@@ -12398,14 +12578,37 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                               </div>
                             )}
 
-                            {user.Assigned_Class && (
-                              <div className="flex items-center justify-between">
-                                <span className="text-slate-400 text-[11px]">Assigned Class:</span>
-                                <span className="font-semibold text-slate-800">
-                                  {getClassName(user.Assigned_Class)}
+                            {/* Manager Class Assignment Control */}
+                            <div className="pt-2 border-t border-slate-100 flex flex-col gap-1.5">
+                              <div className="flex items-center justify-between text-xs font-bold text-slate-700">
+                                <span className="flex items-center gap-1">
+                                  <i className="fa-solid fa-graduation-cap text-amber-500 text-xs"></i>
+                                  <span>असाइन की गई कक्षा:</span>
                                 </span>
+                                {user.Assigned_Class ? (
+                                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                    Class {getClassName(user.Assigned_Class)}
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">
+                                    असाइन नहीं
+                                  </span>
+                                )}
                               </div>
-                            )}
+                              <select
+                                value={user.Assigned_Class || ''}
+                                onChange={(e) => handleAssignClassToUser(user.User_ID || user.Username, e.target.value, user.Name)}
+                                className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 text-xs font-bold bg-white text-slate-800 outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 shadow-2xs cursor-pointer"
+                                title="मैनेजर द्वारा अध्यापक को कक्षा असाइन करें"
+                              >
+                                <option value="">-- कोई कक्षा नहीं (No Class Assigned) --</option>
+                                {classOptions.map((c) => (
+                                  <option key={c} value={c}>
+                                    Class {getClassName(c)}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
 
                             {user.Last_AI_Run && (
                               <div className="flex items-center justify-between">

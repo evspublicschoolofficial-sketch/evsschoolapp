@@ -333,6 +333,31 @@ async function startServer() {
   const STAFF_ATTENDANCE_FILE = '/tmp/evs_staff_attendance.json';
   const SCHOOL_LOCATION_FILE = '/tmp/evs_school_location.json';
   const SCHOOL_SHIFT_SETTINGS_FILE = '/tmp/evs_school_shift_settings.json';
+  const TEACHER_ASSIGNMENTS_FILE = '/tmp/evs_teacher_class_assignments.json';
+
+  const getTeacherClassAssignments = (): Record<string, string> => {
+    try {
+      if (fs.existsSync(TEACHER_ASSIGNMENTS_FILE)) {
+        return JSON.parse(fs.readFileSync(TEACHER_ASSIGNMENTS_FILE, 'utf-8'));
+      }
+    } catch (e) {
+      console.warn('Error reading teacher assignments file:', e);
+    }
+    return {};
+  };
+
+  const saveTeacherClassAssignment = (userId: string, assignedClass: string): Record<string, string> => {
+    const assignments = getTeacherClassAssignments();
+    if (userId) {
+      assignments[userId] = assignedClass;
+      try {
+        fs.writeFileSync(TEACHER_ASSIGNMENTS_FILE, JSON.stringify(assignments, null, 2), 'utf-8');
+      } catch (e) {
+        console.warn('Error saving teacher assignments file:', e);
+      }
+    }
+    return assignments;
+  };
 
   const DEFAULT_SCHOOL_LOCATION = {
     lat: 30.078676,
@@ -925,6 +950,26 @@ async function startServer() {
     }
   });
 
+  // Endpoints for Teacher Class Assignments by Manager
+  app.get('/api/teacher-class-assignments', (_req, res) => {
+    res.json({ assignments: getTeacherClassAssignments() });
+  });
+
+  app.post('/api/assign-teacher-class', (req, res) => {
+    const { userId, assignedClass, appsScriptUrl } = req.body || {};
+    const updated = saveTeacherClassAssignment(String(userId || '').trim(), String(assignedClass || '').trim());
+
+    // Forward to Google Apps Script
+    forwardToGoogleAppsScript({
+      action: 'assignTeacherClass',
+      user_id: userId,
+      assigned_class: assignedClass,
+      appsScriptUrl: appsScriptUrl || req.headers['x-apps-script-url'] || currentAppsScriptUrl,
+    }).catch(() => {});
+
+    res.json({ success: true, assignments: updated });
+  });
+
   // Get list of deleted receipts
   app.get('/api/deleted-receipts', (_req, res) => {
     res.json({ receipts: getDeletedReceipts() });
@@ -1055,6 +1100,11 @@ async function startServer() {
         processTelemetryPayload(payload);
       } else if (payload?.action === 'recordStaffAttendance' || payload?.action === 'addStaffAttendance') {
         saveStaffAttendanceRecord(payload);
+      } else if (payload?.action === 'assignTeacherClass') {
+        saveTeacherClassAssignment(
+          String(payload.user_id || payload.userId || '').trim(),
+          String(payload.assigned_class || payload.assignedClass || '').trim()
+        );
       }
 
       // Check if client provided a specific custom URL in payload or headers
@@ -1154,7 +1204,7 @@ async function startServer() {
       }
 
       // If remote script returned "Invalid action" or failed, but we handled it locally on the school server
-      if (['deleteFee', 'deleteStudent', 'deleteHomework', 'addHomework', 'addBehavior', 'batchAddBehavior', 'updateHomeworkTracker', 'updateBusTracking'].includes(payload?.action)) {
+      if (['deleteFee', 'deleteStudent', 'deleteHomework', 'addHomework', 'addBehavior', 'batchAddBehavior', 'updateHomeworkTracker', 'updateBusTracking', 'assignTeacherClass'].includes(payload?.action)) {
         return res.json({
           success: true,
           message: `${payload.action} school server me safe ho gaya hai (Locally saved & synced)!`,
