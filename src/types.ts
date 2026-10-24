@@ -79,6 +79,7 @@ export interface StudentBehaviorRecord {
   Is_Present: boolean;
   Remark: string;
   AI_Feedback?: string;
+  [key: string]: any;
 }
 
 export interface SchoolUser {

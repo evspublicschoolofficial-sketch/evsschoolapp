@@ -590,26 +590,62 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    // 1. ADD HOMEWORK
+    // 1. ADD / UPDATE HOMEWORK (Deduplicated)
     if (action === "addHomework") {
       var sheet = ss.getSheetByName("Homework");
       if (!sheet) sheet = ss.insertSheet("Homework");
-      sheet.appendRow([
-        data.homework_id || "HW-" + Date.now(),
-        data.date || new Date().toISOString().split("T")[0],
-        data.class_name || data.class || "",
-        data.subject || "",
-        data.detail || "",
-        "Whole Class",
-        "",
-        "",
-        "",
-        "",
-        data.teacher || "Faculty"
-      ]);
+      if (sheet.getLastRow() === 0) {
+        sheet.appendRow(["Homework_ID", "Date", "Class", "Subject", "Homework_Detail", "Target_Type", "", "", "", "", "Teacher"]);
+      }
+      var hwId = String(data.homework_id || data.id || "HW-" + Date.now()).trim();
+      var hwDate = String(data.date || new Date().toISOString().split("T")[0]).trim();
+      var hwClass = String(data.class_name || data.class || "").trim();
+      var hwSubj = String(data.subject || "").trim();
+      var hwDetail = String(data.detail || data.Homework_Detail || "").trim();
+      var hwTeacher = String(data.teacher || "Faculty").trim();
+
+      var rows = sheet.getDataRange().getValues();
+      var foundRow = -1;
+      for (var r = 1; r < rows.length; r++) {
+        var rId = String(rows[r][0] || "").trim();
+        var rDate = String(rows[r][1] || "").trim();
+        var rClass = String(rows[r][2] || "").trim();
+        var rSubj = String(rows[r][3] || "").trim();
+        // Check ID match or (Date + Class + Subject) match
+        if ((hwId && rId.toLowerCase() === hwId.toLowerCase()) ||
+            (hwDate && rDate === hwDate && hwClass && rClass.toLowerCase() === hwClass.toLowerCase() && hwSubj && rSubj.toLowerCase() === hwSubj.toLowerCase())) {
+          foundRow = r + 1;
+          break;
+        }
+      }
+
+      if (foundRow > 0) {
+        sheet.getRange(foundRow, 1, 1, 11).setValues([[
+          hwId || rows[foundRow - 1][0],
+          hwDate,
+          hwClass,
+          hwSubj,
+          hwDetail,
+          "Whole Class",
+          "", "", "", "",
+          hwTeacher
+        ]]);
+      } else {
+        sheet.appendRow([
+          hwId,
+          hwDate,
+          hwClass,
+          hwSubj,
+          hwDetail,
+          "Whole Class",
+          "", "", "", "",
+          hwTeacher
+        ]);
+      }
+
       return ContentService.createTextOutput(JSON.stringify({
         status: "success",
-        message: "Homework Saved Successfully!"
+        message: "Homework Saved and Deduplicated Successfully!"
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
@@ -851,46 +887,71 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    // 5. UPDATE HOMEWORK TRACKER
+    // 5. UPDATE HOMEWORK TRACKER (In-place update & deduplicated)
     if (action === "updateHomeworkTracker") {
       var sheet = ss.getSheetByName("Homework_Tracker");
       if (!sheet) sheet = ss.insertSheet("Homework_Tracker");
       if (sheet.getLastRow() === 0) {
         sheet.appendRow(["ID", "Date", "Class", "Student_ID", "Subject", "Last_homework_Status"]);
       }
+
+      function cleanDateForCompare(dVal) {
+        if (!dVal) return "";
+        if (Object.prototype.toString.call(dVal) === '[object Date]') {
+          var y = dVal.getFullYear();
+          var m = ("0" + (dVal.getMonth() + 1)).slice(-2);
+          var d = ("0" + dVal.getDate()).slice(-2);
+          return y + "-" + m + "-" + d;
+        }
+        var s = String(dVal).trim();
+        var p = s.split(/[-/]/);
+        if (p.length === 3) {
+          if (p[2].length === 4) return p[2] + "-" + ("0" + p[1]).slice(-2) + "-" + ("0" + p[0]).slice(-2);
+          if (p[0].length === 4) return p[0] + "-" + ("0" + p[1]).slice(-2) + "-" + ("0" + p[2]).slice(-2);
+        }
+        return s;
+      }
+
       var recId = String(data.record_id || data.id || "TRK-" + Date.now()).trim();
       var sId = String(data.student_id || "").trim();
       var curDate = String(data.date || new Date().toISOString().split("T")[0]).trim();
-      var curStatus = String(data.status || "Completed").trim();
+      var compDate = cleanDateForCompare(curDate);
+      var curRawStatus = String(data.status || "Completed").trim();
+      var curStatus = /incom|pend|adhura|not/i.test(curRawStatus) ? "Incompleted" : "Completed";
       var curClass = String(data.class || "").trim();
       var curSubject = String(data.subject || "General").trim();
 
-      // Check if student record for this date & subject already exists to update in-place
+      // Find all rows matching student and date to update the primary and delete duplicates
       var rows = sheet.getDataRange().getValues();
-      var foundRow = -1;
+      var matchedRows = [];
       for (var r = 1; r < rows.length; r++) {
         var rowRecId = String(rows[r][0] || "").trim();
-        var rowDate = String(rows[r][1] || "").trim();
+        var rowDate = cleanDateForCompare(rows[r][1]);
         var rowSId = String(rows[r][3] || "").trim();
         if ((recId && rowRecId.toLowerCase() === recId.toLowerCase()) ||
-            (sId && rowSId.toLowerCase() === sId.toLowerCase() && (rowDate === curDate || !curDate))) {
-          foundRow = r + 1;
-          break;
+            (sId && rowSId.toLowerCase() === sId.toLowerCase() && (rowDate === compDate || !compDate))) {
+          matchedRows.push(r + 1);
         }
       }
 
-      if (foundRow > 0) {
-        sheet.getRange(foundRow, 6).setValue(curStatus);
-        if (curDate) sheet.getRange(foundRow, 2).setValue(curDate);
-        if (curClass) sheet.getRange(foundRow, 3).setValue(curClass);
-        if (curSubject) sheet.getRange(foundRow, 5).setValue(curSubject);
+      if (matchedRows.length > 0) {
+        var primaryRow = matchedRows[0];
+        sheet.getRange(primaryRow, 6).setValue(curStatus);
+        if (curDate) sheet.getRange(primaryRow, 2).setValue(curDate);
+        if (curClass) sheet.getRange(primaryRow, 3).setValue(curClass);
+        if (curSubject) sheet.getRange(primaryRow, 5).setValue(curSubject);
+
+        // Delete any duplicate conflicting rows (from bottom to top) so only one row exists per student
+        for (var dIdx = matchedRows.length - 1; dIdx >= 1; dIdx--) {
+          sheet.deleteRow(matchedRows[dIdx]);
+        }
       } else {
         sheet.appendRow([recId, curDate, curClass, sId, curSubject, curStatus]);
       }
 
       return ContentService.createTextOutput(JSON.stringify({
         status: "success",
-        message: "Homework Tracker Status Updated in Google Sheet!"
+        message: "Homework Tracker Status Updated in Google Sheet (Deduplicated)!"
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
@@ -901,9 +962,29 @@ function doPost(e) {
       if (sheet.getLastRow() === 0) {
         sheet.appendRow(["ID", "Date", "Class", "Student_ID", "Subject", "Last_homework_Status"]);
       }
+
+      function cleanDateForCompare(dVal) {
+        if (!dVal) return "";
+        if (Object.prototype.toString.call(dVal) === '[object Date]') {
+          var y = dVal.getFullYear();
+          var m = ("0" + (dVal.getMonth() + 1)).slice(-2);
+          var d = ("0" + dVal.getDate()).slice(-2);
+          return y + "-" + m + "-" + d;
+        }
+        var s = String(dVal).trim();
+        var p = s.split(/[-/]/);
+        if (p.length === 3) {
+          if (p[2].length === 4) return p[2] + "-" + ("0" + p[1]).slice(-2) + "-" + ("0" + p[0]).slice(-2);
+          if (p[0].length === 4) return p[0] + "-" + ("0" + p[1]).slice(-2) + "-" + ("0" + p[2]).slice(-2);
+        }
+        return s;
+      }
+
       var sIds = data.student_ids || [];
       var curDate = String(data.date || new Date().toISOString().split("T")[0]).trim();
-      var curStatus = String(data.status || "Completed").trim();
+      var compDate = cleanDateForCompare(curDate);
+      var curRawStatus = String(data.status || "Completed").trim();
+      var curStatus = /incom|pend|adhura|not/i.test(curRawStatus) ? "Incompleted" : "Completed";
       var curClass = String(data.class || "").trim();
       var curSubject = String(data.subject || "General").trim();
 
@@ -911,9 +992,11 @@ function doPost(e) {
       var sIdMap = {};
       for (var r = 1; r < rows.length; r++) {
         var rowSId = String(rows[r][3] || "").trim().toLowerCase();
-        var rowDate = String(rows[r][1] || "").trim();
-        if (rowDate === curDate || !curDate) {
-          sIdMap[rowSId] = r + 1;
+        var rowDate = cleanDateForCompare(rows[r][1]);
+        if (rowDate === compDate || !compDate) {
+          if (!sIdMap[rowSId]) {
+            sIdMap[rowSId] = r + 1;
+          }
         }
       }
 
@@ -927,6 +1010,7 @@ function doPost(e) {
         } else {
           var recId = "TRK-" + sid + "-" + curDate;
           sheet.appendRow([recId, curDate, curClass, sid, curSubject, curStatus]);
+          sIdMap[lowerSid] = sheet.getLastRow();
         }
       }
 

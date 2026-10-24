@@ -92,13 +92,50 @@ interface StudentRowState {
   showCustomNoteInput: boolean;
 }
 
+// Helper to normalize any date to YYYY-MM-DD
+const normalizeDateISO = (val: any): string => {
+  if (!val) return '';
+  const s = String(val).trim();
+  if (s.includes('Date(')) {
+    const m = s.match(/Date\((\d+),(\d+),(\d+)/);
+    if (m) {
+      const y = m[1];
+      const mo = String(Number(m[2]) + 1).padStart(2, '0');
+      const d = String(m[3]).padStart(2, '0');
+      return `${y}-${mo}-${d}`;
+    }
+  }
+  const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (dmy) {
+    const d = dmy[1].padStart(2, '0');
+    const m = dmy[2].padStart(2, '0');
+    const y = dmy[3];
+    return `${y}-${m}-${d}`;
+  }
+  const ymd = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+  if (ymd) {
+    const y = ymd[1];
+    const m = ymd[2].padStart(2, '0');
+    const d = ymd[3].padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return s;
+};
+
 // Robust helper to parse boolean / string presence from Sheet or API
 const parseIsPresent = (val: any): boolean => {
   if (val === false || val === 0) return false;
   if (val === true || val === 1) return true;
   const s = String(val ?? '').trim().toLowerCase();
   if (s === 'absent' || s === 'no' || s === 'false' || s === '0' || s === 'a' || s === 'anupasthit') return false;
+  if (s === 'present' || s === 'yes' || s === 'true' || s === '1' || s === 'p' || s === 'upasthit') return true;
   return true;
+};
+
+const isRecordPresent = (rec: any): boolean => {
+  if (!rec) return true;
+  const val = rec.Is_Present !== undefined ? rec.Is_Present : rec.is_present !== undefined ? rec.is_present : rec.attendance;
+  return parseIsPresent(val);
 };
 
 // Robust helper to parse cleanliness / fault tags
@@ -180,13 +217,14 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
     });
   }, [students, selectedClass, getClassName]);
 
-  // Saved records lookup for selectedDate
+  // Saved records lookup for selectedDate (matched with normalized ISO dates)
   const savedRecordsMap = useMemo(() => {
     const map = new Map<string, StudentBehaviorRecord>();
+    const selIso = normalizeDateISO(selectedDate);
     behaviorRecords.forEach((b) => {
       const sId = String(b.Student_ID || '').trim().toLowerCase();
-      const bDate = String(b.Date || '').trim();
-      if (sId && bDate === selectedDate) {
+      const bDateIso = normalizeDateISO(b.Date);
+      if (sId && bDateIso === selIso) {
         map.set(sId, b);
       }
     });
@@ -237,10 +275,12 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
           if (/गृहकार्य|होमवर्क/i.test(rem)) faults.add('hw');
           if (/उत्कृष्ट|शाबाश/i.test(rem)) faults.add('star');
 
+          const isPres = isRecordPresent(existing);
+
           updated[sId] = {
             studentId: sId,
-            isPresent: parseIsPresent(existing.Is_Present),
-            selectedFaults: faults,
+            isPresent: isPres,
+            selectedFaults: isPres ? faults : new Set(),
             customRemark: existing.Remark || '',
             showCustomNoteInput: !!existing.Remark && !faults.has('star'),
           };
@@ -810,7 +850,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
           className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-600 text-white font-black flex items-center gap-2 shadow-md cursor-pointer transition-all transform hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50"
         >
           <i className={`fa-solid ${isSaving ? 'fa-spinner fa-spin' : 'fa-floppy-disk'} text-amber-300`}></i>
-          <span>{isSaving ? 'सेव हो रहा है...' : `💾 क्लास हाजिरी सेव करें (${presentCount} Present)`}</span>
+          <span>{isSaving ? 'सेव हो रहा है...' : `💾 क्लास हाजिरी सेव करें (${presentCount} Present, ${absentCount} Absent)`}</span>
         </button>
       </div>
 

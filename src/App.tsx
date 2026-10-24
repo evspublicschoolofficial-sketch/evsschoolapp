@@ -135,6 +135,7 @@ export interface StudentBehaviorRecord {
   Is_Present: boolean;
   Remark: string;
   AI_Feedback?: string;
+  [key: string]: any;
 }
 
 // School User / Staff Record (from Google Sheet: Users)
@@ -167,6 +168,55 @@ export const parseAssignedClasses = (val: string | string[] | null | undefined):
   }
   const parts = s.split(/[,;|]+/).map((item) => item.trim()).filter(Boolean);
   return Array.from(new Set(parts));
+};
+
+// Helper to normalize any date into YYYY-MM-DD standard format
+export const normalizeDateISO = (val: any): string => {
+  if (!val) return '';
+  const s = String(val).trim();
+  if (s.includes('Date(')) {
+    const m = s.match(/Date\((\d+),(\d+),(\d+)/);
+    if (m) {
+      const y = m[1];
+      const mo = String(Number(m[2]) + 1).padStart(2, '0');
+      const d = String(m[3]).padStart(2, '0');
+      return `${y}-${mo}-${d}`;
+    }
+  }
+  const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (dmy) {
+    const d = dmy[1].padStart(2, '0');
+    const m = dmy[2].padStart(2, '0');
+    const y = dmy[3];
+    return `${y}-${m}-${d}`;
+  }
+  const ymd = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+  if (ymd) {
+    const y = ymd[1];
+    const m = ymd[2].padStart(2, '0');
+    const d = ymd[3].padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return s;
+};
+
+// Robust helper to check if a behavior record is Present (true) or Absent (false)
+export const isBehaviorPresent = (rec: any): boolean => {
+  if (!rec) return true;
+  const val =
+    rec.Is_Present !== undefined
+      ? rec.Is_Present
+      : rec.is_present !== undefined
+      ? rec.is_present
+      : rec.isAttendancePresent !== undefined
+      ? rec.isAttendancePresent
+      : rec.attendance;
+  if (val === false || val === 0) return false;
+  if (val === true || val === 1) return true;
+  const s = String(val ?? '').trim().toLowerCase();
+  if (s === 'absent' || s === 'no' || s === 'false' || s === '0' || s === 'a' || s === 'anupasthit') return false;
+  if (s === 'present' || s === 'yes' || s === 'true' || s === '1' || s === 'p' || s === 'upasthit') return true;
+  return true;
 };
 
 const SPREADSHEET_ID = '1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU';
@@ -1969,6 +2019,7 @@ export default function App() {
       // 4. Merge all sources, prioritizing custom records and deduplicating
       const combined = [...serverCustomHw, ...localCustomHw, ...parsed];
       const seenIds = new Set<string>();
+      const seenCompositeKeys = new Set<string>();
       const valid: Homework[] = [];
 
       for (const hw of combined) {
@@ -1976,6 +2027,7 @@ export default function App() {
         const id = String(hw.Homework_ID || '').trim();
         const detail = String(hw.Homework_Detail || '').trim();
         const subject = String(hw.Subject || '').trim();
+        const rawClass = String(hw.Class || '').trim();
 
         // Skip header row if returned by GViz
         if (
@@ -1986,33 +2038,53 @@ export default function App() {
           continue;
         }
 
-        const dedupeKey = id ? id.toLowerCase() : `${hw.Date}_${hw.Class}_${subject}_${detail}`.toLowerCase();
-        const compositeKey = `${hw.Date}_${hw.Class}_${subject}_${detail}`.toLowerCase();
+        const normDate = normalizeDateISO(hw.Date);
+        const normClass = getClassName(rawClass).toLowerCase().trim() || rawClass.toLowerCase().trim();
+        const normSubj = subject.toLowerCase().trim();
+        const normDetail = detail.toLowerCase().trim().slice(0, 45);
+
+        const compositeKey = `${normClass}_${normDate}_${normSubj}_${normDetail}`;
+        const cleanId = id.toLowerCase();
 
         // Skip if marked as deleted
-        if (id && deletedHomeworkSet.has(id.toLowerCase())) {
+        if (cleanId && deletedHomeworkSet.has(cleanId)) {
           continue;
         }
         if (deletedHomeworkSet.has(compositeKey)) {
           continue;
         }
 
-        if (dedupeKey && !seenIds.has(dedupeKey)) {
-          seenIds.add(dedupeKey);
-          valid.push(hw);
+        // Strict Deduplication: skip if ID or composite (Class + Date + Subject + Detail) already seen
+        if (cleanId && seenIds.has(cleanId)) {
+          continue;
         }
+        if (seenCompositeKeys.has(compositeKey)) {
+          continue;
+        }
+
+        if (cleanId) seenIds.add(cleanId);
+        seenCompositeKeys.add(compositeKey);
+        valid.push({
+          ...hw,
+          Date: normDate,
+        });
       }
 
       // Sort newest date first
       valid.sort((a, b) => {
-        const dateA = new Date(a.Date).getTime() || 0;
-        const dateB = new Date(b.Date).getTime() || 0;
+        const dateA = new Date(normalizeDateISO(a.Date)).getTime() || 0;
+        const dateB = new Date(normalizeDateISO(b.Date)).getTime() || 0;
         return dateB - dateA;
       });
 
       setHomeworkList(valid);
       try {
         localStorage.setItem(CACHE_KEY_HOMEWORK, JSON.stringify(valid));
+        // Clean cached custom homework as well to prevent re-infecting on next reload
+        const cleanedCustom = valid.filter((h) => (h as any)._isCustom || (h as any).isLocal);
+        if (cleanedCustom.length > 0) {
+          localStorage.setItem('evs_custom_homework', JSON.stringify(cleanedCustom));
+        }
       } catch (e) {
         console.warn('Could not cache homework in localStorage:', e);
       }
@@ -2398,7 +2470,7 @@ export default function App() {
         console.warn('Google Sheets fetchHomeworkTracker note:', sheetErr);
       }
 
-      // 2. Merge custom status overrides and newly added tracker entries from server API and localStorage
+      // 2. Load custom status overrides and newly added tracker entries from server API and localStorage
       let serverCustomTrk: HomeworkTrackerRecord[] = [];
       try {
         const sRes = await fetch(`/api/homework-tracker?${cacheBust}`);
@@ -2418,27 +2490,52 @@ export default function App() {
         console.warn('Error reading custom homework tracker records:', e);
       }
 
-      const allCustomTrk = [...serverCustomTrk, ...localCustomTrk];
-      for (const cRec of allCustomTrk) {
-        if (!cRec) continue;
-        const existingIdx = records.findIndex(
-          (r) =>
-            (r.ID && cRec.ID && r.ID === cRec.ID) ||
-            (r.Student_ID && cRec.Student_ID && r.Student_ID.toLowerCase() === cRec.Student_ID.toLowerCase() && r.Date === cRec.Date)
-        );
-        if (existingIdx >= 0) {
-          records[existingIdx].Last_homework_Status = cRec.Last_homework_Status;
-        } else {
-          records.unshift(cRec);
+      // Priority: Fresh custom entries first, then latest sheet rows (reversed so newer rows at bottom of sheet win)
+      const sheetReversed = [...records].reverse();
+      const combinedAll = [...serverCustomTrk, ...localCustomTrk, ...sheetReversed];
+
+      const deduplicatedRecords: HomeworkTrackerRecord[] = [];
+      const seenStudentDateKeys = new Set<string>();
+
+      for (const rec of combinedAll) {
+        if (!rec) continue;
+        const sId = String(rec.Student_ID || rec.ID || '').trim().toLowerCase();
+        if (!sId || sId === 'student_id' || sId === 'id') continue;
+
+        const normDate = normalizeDateISO(rec.Date) || 'today';
+        const normSubj = String(rec.Subject || 'General').trim().toLowerCase();
+        const primaryKey = `${sId}_${normDate}_${normSubj}`;
+        const studentDateKey = `${sId}_${normDate}`;
+
+        // Ensure ONLY ONE authoritative status per student per date
+        if (seenStudentDateKeys.has(primaryKey) || seenStudentDateKeys.has(studentDateKey)) {
+          continue;
         }
+
+        seenStudentDateKeys.add(primaryKey);
+        seenStudentDateKeys.add(studentDateKey);
+
+        let cleanStatus: 'Completed' | 'Incompleted' = 'Completed';
+        const rawSt = String(rec.Last_homework_Status || '').toLowerCase();
+        if (rawSt.includes('incom') || rawSt.includes('pend') || rawSt.includes('adhura') || rawSt.includes('not')) {
+          cleanStatus = 'Incompleted';
+        } else {
+          cleanStatus = 'Completed';
+        }
+
+        deduplicatedRecords.push({
+          ...rec,
+          Date: normDate,
+          Last_homework_Status: cleanStatus,
+        });
       }
 
       // 3. If tracker records are still empty, synthesize student tracker entries from student list so teachers can immediately track
-      if (records.length === 0 && students.length > 0) {
+      if (deduplicatedRecords.length === 0 && students.length > 0) {
         const todayStr = new Date().toISOString().split('T')[0];
         for (const st of students) {
           if (!st.Student_ID) continue;
-          records.push({
+          deduplicatedRecords.push({
             ID: `TRK-${st.Student_ID}-${todayStr}`,
             Date: todayStr,
             Class: st.Class || '',
@@ -2449,9 +2546,12 @@ export default function App() {
         }
       }
 
-      setHwTrackerList(records);
+      setHwTrackerList(deduplicatedRecords);
       try {
-        localStorage.setItem(CACHE_KEY_HW_TRACKER, JSON.stringify(records));
+        localStorage.setItem(CACHE_KEY_HW_TRACKER, JSON.stringify(deduplicatedRecords));
+        // Keep custom tracker store clean as well
+        const customOnly = deduplicatedRecords.filter((r) => r.ID.startsWith('TRK-') || (r as any)._isCustom);
+        localStorage.setItem('evs_custom_hw_tracker', JSON.stringify(customOnly));
       } catch {}
 
       if (showToast) {
@@ -2488,18 +2588,25 @@ export default function App() {
             const data = JSON.parse(text.slice(start, end + 1));
             const rows = data.table?.rows || [];
 
-            const parseBool = (cell: any): boolean => {
-              if (!cell) return false;
-              if (cell.v === true || cell.v === 1) return true;
-              if (typeof cell.v === 'string') {
-                const s = cell.v.trim().toLowerCase();
-                return s === 'true' || s === 'yes' || s === 'y' || s === 'haan';
-              }
-              if (typeof cell.f === 'string') {
-                const s = cell.f.trim().toLowerCase();
-                return s === 'true' || s === 'yes';
-              }
-              return false;
+            const parseCleanlinessCell = (cell: any): boolean => {
+              if (!cell) return true;
+              const val = cell.v !== undefined && cell.v !== null ? cell.v : cell.f;
+              if (val === false || val === 0) return false;
+              if (val === true || val === 1) return true;
+              const s = String(val ?? '').trim().toLowerCase();
+              if (s === 'no' || s === 'false' || s === '0' || s === 'needs improvement') return false;
+              return true;
+            };
+
+            const parseIsPresentCell = (cell: any): boolean => {
+              if (!cell) return true;
+              const val = cell.v !== undefined && cell.v !== null ? cell.v : cell.f;
+              if (val === false || val === 0) return false;
+              if (val === true || val === 1) return true;
+              const s = String(val ?? '').trim().toLowerCase();
+              if (s === 'absent' || s === 'no' || s === 'false' || s === '0' || s === 'a' || s === 'anupasthit') return false;
+              if (s === 'present' || s === 'yes' || s === 'true' || s === '1' || s === 'p' || s === 'upasthit') return true;
+              return true;
             };
 
             for (const r of rows) {
@@ -2516,23 +2623,14 @@ export default function App() {
               }
 
               const dateVal = cells[2]?.f || cells[2]?.v || '';
-              let formattedDate = String(dateVal || '');
-              if (typeof dateVal === 'string' && dateVal.includes('Date(')) {
-                const m = dateVal.match(/Date\((\d+),(\d+),(\d+)/);
-                if (m) {
-                  const y = m[1];
-                  const mo = String(Number(m[2]) + 1).padStart(2, '0');
-                  const d = String(m[3]).padStart(2, '0');
-                  formattedDate = `${d}/${mo}/${y}`;
-                }
-              }
+              const formattedDate = normalizeDateISO(dateVal);
               const cls = cells[3]?.v ? String(cells[3].v).trim() : '';
-              const isBathed = parseBool(cells[4]);
-              const nailsClean = parseBool(cells[5]);
-              const uniformClean = parseBool(cells[6]);
+              const isBathed = parseCleanlinessCell(cells[4]);
+              const nailsClean = parseCleanlinessCell(cells[5]);
+              const uniformClean = parseCleanlinessCell(cells[6]);
               const goodManners = cells[7]?.v ? String(cells[7].v).trim() : 'Good';
-              const discipline = parseBool(cells[8]);
-              const isPresent = parseBool(cells[9]);
+              const discipline = parseCleanlinessCell(cells[8]);
+              const isPresent = parseIsPresentCell(cells[9]);
               const remark = cells[10]?.v ? String(cells[10].v).trim() : 'OK';
               const aiFeedback = cells[11]?.v ? String(cells[11].v).trim() : '';
 
@@ -2542,12 +2640,13 @@ export default function App() {
                   Student_ID: sId,
                   Date: formattedDate,
                   Class: cls,
+                  Is_Present: isPresent,
+                  is_present: isPresent ? 'Present' : 'Absent',
                   Is_Bathed: isBathed,
                   Nails_Clean: nailsClean,
                   Uniform_clean: uniformClean,
                   Good_Manners: goodManners,
                   Discipline: discipline,
-                  Is_Present: isPresent,
                   Remark: remark,
                   AI_Feedback: aiFeedback,
                 });
@@ -4692,47 +4791,31 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
     const effectiveScriptUrl = getEffectiveApiUrl();
 
-    // Standardize all boolean fields to string/boolean safe values and preserve keys
+    // Standardize all fields with reliable presence detection and ISO dates
     const formattedRecords: StudentBehaviorRecord[] = records.map((rec) => {
       const sId = String(rec.Student_ID || (rec as any).student_id || '').trim();
-      const dt = rec.Date || (rec as any).date || new Date().toISOString().split('T')[0];
+      const rawDt = rec.Date || (rec as any).date || new Date().toISOString().split('T')[0];
+      const dt = normalizeDateISO(rawDt);
       const cls = rec.Class || (rec as any).class || '';
       const bId = rec.Behavior_ID || (rec as any).behavior_id || `BEH-${sId}-${dt}`;
 
-      const isPres =
-        rec.Is_Present === true ||
-        (rec as any).is_present === true ||
-        (rec.Is_Present !== false &&
-          (rec as any).is_present !== 'Absent' &&
-          String(rec.Is_Present || '').toLowerCase() !== 'absent');
+      const isPres = isBehaviorPresent(rec);
 
-      const isBathed =
-        rec.Is_Bathed === true ||
-        (rec as any).is_bathed === true ||
-        (rec.Is_Bathed !== false &&
-          (rec as any).is_bathed !== 'No' &&
-          String(rec.Is_Bathed || '').toLowerCase() !== 'no');
+      const isBathed = isPres
+        ? (rec.Is_Bathed === true || (rec as any).is_bathed === true || (rec.Is_Bathed !== false && (rec as any).is_bathed !== 'No'))
+        : false;
 
-      const nailsClean =
-        rec.Nails_Clean === true ||
-        (rec as any).nails_clean === true ||
-        (rec.Nails_Clean !== false &&
-          (rec as any).nails_clean !== 'No' &&
-          String(rec.Nails_Clean || '').toLowerCase() !== 'no');
+      const nailsClean = isPres
+        ? (rec.Nails_Clean === true || (rec as any).nails_clean === true || (rec.Nails_Clean !== false && (rec as any).nails_clean !== 'No'))
+        : false;
 
-      const uniformClean =
-        rec.Uniform_clean === true ||
-        (rec as any).uniform_clean === true ||
-        (rec.Uniform_clean !== false &&
-          (rec as any).uniform_clean !== 'No' &&
-          String(rec.Uniform_clean || '').toLowerCase() !== 'no');
+      const uniformClean = isPres
+        ? (rec.Uniform_clean === true || (rec as any).uniform_clean === true || (rec.Uniform_clean !== false && (rec as any).uniform_clean !== 'No'))
+        : false;
 
-      const disciplineGood =
-        rec.Discipline === true ||
-        (rec as any).discipline === true ||
-        (rec.Discipline !== false &&
-          (rec as any).discipline !== 'Needs Improvement' &&
-          String(rec.Discipline || '').toLowerCase() !== 'needs improvement');
+      const disciplineGood = isPres
+        ? (rec.Discipline === true || (rec as any).discipline === true || (rec.Discipline !== false && (rec as any).discipline !== 'Needs Improvement'))
+        : false;
 
       return {
         Behavior_ID: bId,
@@ -4740,11 +4823,16 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         Date: dt,
         Class: cls,
         Is_Present: isPres,
+        is_present: isPres ? 'Present' : 'Absent',
         Is_Bathed: isBathed,
+        is_bathed: isBathed ? 'Yes' : 'No',
         Nails_Clean: nailsClean,
+        nails_clean: nailsClean ? 'Yes' : 'No',
         Uniform_clean: uniformClean,
+        uniform_clean: uniformClean ? 'Yes' : 'No',
         Good_Manners: rec.Good_Manners || (isPres ? 'उत्कृष्ट (Excellent)' : 'लागू नहीं (अनुपस्थित)'),
         Discipline: disciplineGood,
+        discipline: disciplineGood ? 'Good' : 'Needs Improvement',
         Remark: rec.Remark || (isPres ? 'कक्षा में उपस्थित, स्वच्छ व अनुशासित' : 'आज छात्र विद्यालय में अनुपस्थित रहा।'),
         AI_Feedback: rec.AI_Feedback || (isPres ? 'नियमित उपस्थिति व स्वच्छता बनाए रखें।' : 'आज छात्र विद्यालय में अनुपस्थित रहा।'),
       } as StudentBehaviorRecord;
@@ -4844,7 +4932,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       }
     })();
 
-    setSyncToastMessage(`✅ ${formattedRecords.length} छात्रों की क्लास हाजिरी व आचरण सुरक्षित हो गया!`);
+    const presCount = formattedRecords.filter((r) => r.Is_Present).length;
+    const absCount = formattedRecords.length - presCount;
+    setSyncToastMessage(`✅ ${formattedRecords.length} छात्रों की हाजिरी (${presCount} उपस्थित, ${absCount} अनुपस्थित) सुरक्षित हो गई!`);
     setTimeout(() => setSyncToastMessage(null), 4000);
   };
 
@@ -4895,7 +4985,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       if (match) {
         const upd = { ...prev, Assigned_Class: cleanClass };
         try {
-          localStorage.setItem(CACHE_KEY_ACTIVE_TEACHER_USER, JSON.stringify(upd));
+          localStorage.setItem('evs_teacher_user', JSON.stringify(upd));
         } catch {}
         if (classesArray.length > 0) {
           setHwClass(classesArray[0]);
@@ -4956,34 +5046,36 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     date?: string,
     remark?: string
   ) => {
+    const sId = String(studentId || '').trim();
+    const cleanDate = normalizeDateISO(date || new Date().toISOString().split('T')[0]);
+    const recId = recordId || `TRK-${sId}-${cleanDate}`;
+    const cleanSubj = subject || 'General';
+
     setHwTrackerList((prev) => {
-      const existingIdx = prev.findIndex(
+      // Remove ANY existing conflicting record for this student on this date
+      const filtered = prev.filter(
         (rec) =>
-          rec.ID === recordId ||
-          (String(rec.Student_ID || '').toLowerCase() === String(studentId).toLowerCase() &&
-            (subject ? String(rec.Subject || '').toLowerCase() === String(subject).toLowerCase() : true))
+          !(
+            (rec.ID && rec.ID === recId) ||
+            (String(rec.Student_ID || '').toLowerCase().trim() === sId.toLowerCase() &&
+              (normalizeDateISO(rec.Date) === cleanDate || !rec.Date))
+          )
       );
 
-      let updated: HomeworkTrackerRecord[];
-      if (existingIdx >= 0) {
-        updated = prev.map((rec, idx) =>
-          idx === existingIdx ? { ...rec, Last_homework_Status: status } : rec
-        );
-      } else {
-        const studentObj = students.find(
-          (s) => String(s.Student_ID || '').toLowerCase() === String(studentId).toLowerCase()
-        );
-        const newRecord: HomeworkTrackerRecord = {
-          ID: recordId || `TRK-${Date.now()}`,
-          Date: date || new Date().toISOString().split('T')[0],
-          Class: studentObj?.Class || 'C12',
-          Student_ID: studentId,
-          Subject: subject || 'General',
-          Last_homework_Status: status,
-        };
-        updated = [newRecord, ...prev];
-      }
+      const studentObj = students.find(
+        (s) => String(s.Student_ID || '').toLowerCase() === sId.toLowerCase()
+      );
 
+      const newRecord: HomeworkTrackerRecord = {
+        ID: recId,
+        Date: cleanDate,
+        Class: studentObj?.Class || 'C12',
+        Student_ID: sId,
+        Subject: cleanSubj,
+        Last_homework_Status: status,
+      };
+
+      const updated = [newRecord, ...filtered];
       try {
         localStorage.setItem('evs_custom_hw_tracker', JSON.stringify(updated));
       } catch (e) {
@@ -4994,11 +5086,11 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
     const trkPayload = {
       action: 'updateHomeworkTracker',
-      record_id: recordId,
-      student_id: studentId,
+      record_id: recId,
+      student_id: sId,
       status: status,
-      subject: subject,
-      date: date,
+      subject: cleanSubj,
+      date: cleanDate,
       remark: remark,
     };
 
@@ -5023,26 +5115,45 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         body: JSON.stringify(trkPayload),
       }).catch(() => {});
 
-      const getUrl = `${activeScriptUrl}?action=updateHomeworkTracker&record_id=${encodeURIComponent(trkPayload.record_id)}&student_id=${encodeURIComponent(trkPayload.student_id)}&status=${encodeURIComponent(trkPayload.status)}&subject=${encodeURIComponent(trkPayload.subject || 'General')}&date=${encodeURIComponent(trkPayload.date || '')}`;
+      const getUrl = `${activeScriptUrl}?action=updateHomeworkTracker&record_id=${encodeURIComponent(trkPayload.record_id)}&student_id=${encodeURIComponent(trkPayload.student_id)}&status=${encodeURIComponent(trkPayload.status)}&subject=${encodeURIComponent(trkPayload.subject)}&date=${encodeURIComponent(trkPayload.date)}`;
       fetch(getUrl).catch(() => {});
     } catch {}
 
     // Broadcast real-time update to all tabs and devices
-    realtimeSync.broadcastUpdate('homework', 'updateHomeworkTracker', { recordId, studentId, status });
+    realtimeSync.broadcastUpdate('homework', 'updateHomeworkTracker', { recordId: recId, studentId: sId, status });
   };
 
   // One-Click Toggle Homework Tracker Status (Completed / Incompleted)
   const handleToggleHomeworkStatus = (recordId: string, currentStatus: string, studentId: string) => {
+    const sId = String(studentId || '').trim();
     const nextStatus = (currentStatus || '').toLowerCase().includes('incom') ? 'Completed' : 'Incompleted';
 
     setHwTrackerList((prev) => {
-      const updated = prev.map((rec) => {
-        if (rec.ID === recordId || (rec.Student_ID === studentId && rec.ID === recordId)) {
-          return { ...rec, Last_homework_Status: nextStatus };
-        }
-        return rec;
-      });
+      const matched = prev.find(
+        (r) => r.ID === recordId || (sId && String(r.Student_ID || '').toLowerCase() === sId.toLowerCase())
+      );
+      const cleanDate = matched ? normalizeDateISO(matched.Date) : normalizeDateISO(new Date().toISOString().split('T')[0]);
 
+      // Filter out ANY older/conflicting records for this student on this date
+      const filtered = prev.filter(
+        (rec) =>
+          !(
+            rec.ID === recordId ||
+            (sId && String(rec.Student_ID || '').toLowerCase().trim() === sId.toLowerCase().trim() &&
+              (normalizeDateISO(rec.Date) === cleanDate || !rec.Date))
+          )
+      );
+
+      const updatedRecord: HomeworkTrackerRecord = {
+        ID: recordId || `TRK-${sId}-${cleanDate}`,
+        Date: cleanDate,
+        Class: matched?.Class || '',
+        Student_ID: sId || matched?.Student_ID || '',
+        Subject: matched?.Subject || 'General',
+        Last_homework_Status: nextStatus,
+      };
+
+      const updated = [updatedRecord, ...filtered];
       try {
         localStorage.setItem('evs_custom_hw_tracker', JSON.stringify(updated));
       } catch (e) {
@@ -5055,7 +5166,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     const togglePayload = {
       action: 'updateHomeworkTracker',
       record_id: recordId,
-      student_id: studentId,
+      student_id: sId,
       status: nextStatus,
     };
 
@@ -5085,7 +5196,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     } catch {}
 
     // Broadcast real-time update to all tabs and devices
-    realtimeSync.broadcastUpdate('homework', 'toggleHomeworkStatus', { recordId, studentId, nextStatus });
+    realtimeSync.broadcastUpdate('homework', 'toggleHomeworkStatus', { recordId, studentId: sId, nextStatus });
 
     setSyncToastMessage(
       nextStatus === 'Completed'
@@ -5104,35 +5215,30 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     targetStatus: 'Completed' | 'Incompleted'
   ) => {
     const sId = String(studentId || '').trim();
-    const cleanDate = hwDate || new Date().toISOString().split('T')[0];
+    const cleanDate = normalizeDateISO(hwDate || new Date().toISOString().split('T')[0]);
     const recId = `TRK-${sId}-${cleanDate}`;
 
     setHwTrackerList((prev) => {
-      const idx = prev.findIndex(
+      // Remove any prior records for this student on this date so no dual status occurs
+      const filtered = prev.filter(
         (r) =>
-          String(r.Student_ID || r.ID || '').trim().toLowerCase() === sId.toLowerCase() &&
-          (r.Date === cleanDate || !r.Date || r.Date.replace(/-/g, '/') === cleanDate.replace(/-/g, '/'))
+          !(
+            (r.ID && r.ID === recId) ||
+            (String(r.Student_ID || r.ID || '').trim().toLowerCase() === sId.toLowerCase() &&
+              (normalizeDateISO(r.Date) === cleanDate || !r.Date))
+          )
       );
 
-      let updated: HomeworkTrackerRecord[];
-      if (idx >= 0) {
-        updated = prev.map((r, i) =>
-          i === idx
-            ? { ...r, Last_homework_Status: targetStatus, Subject: hwSubject || r.Subject || 'General' }
-            : r
-        );
-      } else {
-        const newRecord: HomeworkTrackerRecord = {
-          ID: recId,
-          Date: cleanDate,
-          Class: hwClass || '',
-          Student_ID: sId,
-          Subject: hwSubject || 'General',
-          Last_homework_Status: targetStatus,
-        };
-        updated = [newRecord, ...prev];
-      }
+      const newRecord: HomeworkTrackerRecord = {
+        ID: recId,
+        Date: cleanDate,
+        Class: hwClass || '',
+        Student_ID: sId,
+        Subject: hwSubject || 'General',
+        Last_homework_Status: targetStatus,
+      };
 
+      const updated = [newRecord, ...filtered];
       try {
         localStorage.setItem('evs_custom_hw_tracker', JSON.stringify(updated));
       } catch (e) {
@@ -5199,37 +5305,29 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     hwSubject: string,
     targetStatus: 'Completed' | 'Incompleted'
   ) => {
-    const cleanDate = hwDate || new Date().toISOString().split('T')[0];
+    const cleanDate = normalizeDateISO(hwDate || new Date().toISOString().split('T')[0]);
     const idSet = new Set(studentIds.map((id) => String(id).trim().toLowerCase()));
 
     setHwTrackerList((prev) => {
-      const updated = prev.map((r) => {
-        const rId = String(r.Student_ID || r.ID || '').trim().toLowerCase();
-        if (idSet.has(rId)) {
-          return { ...r, Last_homework_Status: targetStatus };
-        }
-        return r;
-      });
+      // Filter out existing records for all these students on this date to replace them cleanly
+      const filtered = prev.filter(
+        (r) =>
+          !(
+            idSet.has(String(r.Student_ID || r.ID || '').trim().toLowerCase()) &&
+            (normalizeDateISO(r.Date) === cleanDate || !r.Date)
+          )
+      );
 
-      // Add records for any students not yet in the tracker
-      studentIds.forEach((sId) => {
-        const has = updated.some(
-          (u) =>
-            String(u.Student_ID || u.ID || '').trim().toLowerCase() === String(sId).trim().toLowerCase() &&
-            (u.Date === cleanDate || !u.Date)
-        );
-        if (!has) {
-          updated.unshift({
-            ID: `TRK-${sId}-${cleanDate}`,
-            Date: cleanDate,
-            Class: hwClass || '',
-            Student_ID: String(sId).trim(),
-            Subject: hwSubject || 'General',
-            Last_homework_Status: targetStatus,
-          });
-        }
-      });
+      const newRecords: HomeworkTrackerRecord[] = studentIds.map((sId) => ({
+        ID: `TRK-${sId}-${cleanDate}`,
+        Date: cleanDate,
+        Class: hwClass || '',
+        Student_ID: String(sId).trim(),
+        Subject: hwSubject || 'General',
+        Last_homework_Status: targetStatus,
+      }));
 
+      const updated = [...newRecords, ...filtered];
       try {
         localStorage.setItem('evs_custom_hw_tracker', JSON.stringify(updated));
       } catch (e) {
@@ -5658,8 +5756,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     setTimeout(() => setSyncToastMessage(null), 3500);
   };
 
-  // Filtered Homework Tracker records for Teacher Dashboard
+  // Filtered Homework Tracker records for Teacher Dashboard (Strictly Deduplicated)
   const teacherFilteredTracker = useMemo(() => {
+    const seenStudentDateKeys = new Set<string>();
+
     return hwTrackerList.filter((rec) => {
       // Join student name
       const matchedStudent = students.find(
@@ -5669,36 +5769,25 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       );
       const studentName = matchedStudent?.Student_Name || '';
 
-      const teacherAssignedClasses = parseAssignedClasses(teacherUser?.Assigned_Class);
-      let matchClass = false;
+      const sId = String(rec.Student_ID || rec.ID || '').toLowerCase().trim();
+      const dt = normalizeDateISO(rec.Date) || 'today';
+      const studentDateKey = `${sId}_${dt}`;
 
-      if (teacherTrackerClassFilter === 'all') {
-        if (teacherAssignedClasses.length > 0) {
-          matchClass = teacherAssignedClasses.some(
-            (ac) =>
-              String(rec.Class || '').toLowerCase() === ac.toLowerCase() ||
-              getClassName(rec.Class).toLowerCase() === ac.toLowerCase() ||
-              getClassName(rec.Class).toLowerCase() === getClassName(ac).toLowerCase() ||
-              (Boolean(matchedStudent?.Class) && (
-                String(matchedStudent?.Class).toLowerCase() === ac.toLowerCase() ||
-                getClassName(matchedStudent?.Class).toLowerCase() === ac.toLowerCase() ||
-                getClassName(matchedStudent?.Class).toLowerCase() === getClassName(ac).toLowerCase()
-              ))
-          );
-        } else {
-          matchClass = true;
-        }
-      } else {
-        matchClass =
-          String(rec.Class || '').toLowerCase() === teacherTrackerClassFilter.toLowerCase() ||
-          getClassName(rec.Class).toLowerCase() === teacherTrackerClassFilter.toLowerCase() ||
-          getClassName(rec.Class).toLowerCase() === getClassName(teacherTrackerClassFilter).toLowerCase() ||
-          (Boolean(matchedStudent?.Class) && (
-            String(matchedStudent?.Class).toLowerCase() === teacherTrackerClassFilter.toLowerCase() ||
-            getClassName(matchedStudent?.Class).toLowerCase() === teacherTrackerClassFilter.toLowerCase() ||
-            getClassName(matchedStudent?.Class).toLowerCase() === getClassName(teacherTrackerClassFilter).toLowerCase()
-          ));
+      // Deduplicate so a student is never listed twice in the tracker
+      if (seenStudentDateKeys.has(studentDateKey)) {
+        return false;
       }
+
+      const matchClass =
+        teacherTrackerClassFilter === 'all' ||
+        String(rec.Class || '').toLowerCase() === teacherTrackerClassFilter.toLowerCase() ||
+        getClassName(rec.Class).toLowerCase() === teacherTrackerClassFilter.toLowerCase() ||
+        getClassName(rec.Class).toLowerCase() === getClassName(teacherTrackerClassFilter).toLowerCase() ||
+        (Boolean(matchedStudent?.Class) && (
+          String(matchedStudent?.Class).toLowerCase() === teacherTrackerClassFilter.toLowerCase() ||
+          getClassName(matchedStudent?.Class).toLowerCase() === teacherTrackerClassFilter.toLowerCase() ||
+          getClassName(matchedStudent?.Class).toLowerCase() === getClassName(teacherTrackerClassFilter).toLowerCase()
+        ));
 
       const matchStatus =
         teacherTrackerStatusFilter === 'all' ||
@@ -5716,7 +5805,11 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         String(rec.Subject || '').toLowerCase().includes(teacherTrackerSearch.toLowerCase()) ||
         studentName.toLowerCase().includes(teacherTrackerSearch.toLowerCase());
 
-      return matchClass && matchStatus && matchSearch;
+      const passes = matchClass && matchStatus && matchSearch;
+      if (passes) {
+        seenStudentDateKeys.add(studentDateKey);
+      }
+      return passes;
     });
   }, [hwTrackerList, teacherTrackerClassFilter, teacherTrackerStatusFilter, teacherTrackerSearch, students, classMap, teacherUser]);
 
@@ -9871,23 +9964,15 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
                         {/* Class Selection */}
                         <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center justify-between">
-                            <span>Select Class <span className="text-rose-500">*</span></span>
-                            {parseAssignedClasses(teacherUser?.Assigned_Class).length > 0 && (
-                              <span className="text-[10px] text-amber-700 font-bold bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                                <i className="fa-solid fa-lock mr-1"></i>असाइन की गई कक्षाएं ({parseAssignedClasses(teacherUser?.Assigned_Class).length})
-                              </span>
-                            )}
+                          <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                            Select Class <span className="text-rose-500">*</span>
                           </label>
                           <select
                             value={hwClass}
                             onChange={(e) => setHwClass(e.target.value)}
                             className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 focus:border-blue-800 focus:ring-2 focus:ring-blue-800/20 text-xs sm:text-sm outline-none transition-all bg-white"
                           >
-                            {(parseAssignedClasses(teacherUser?.Assigned_Class).length > 0
-                              ? parseAssignedClasses(teacherUser?.Assigned_Class)
-                              : classOptions
-                            ).map((c) => (
+                            {classOptions.map((c) => (
                               <option key={c} value={c}>
                                 Class {getClassName(c)} {c !== getClassName(c) ? `(${c})` : ''}
                               </option>
@@ -9899,15 +9984,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       {/* Quick Class Selector Chips */}
                       <div>
                         <span className="text-[11px] font-semibold text-slate-500 mb-1.5 block">
-                          {parseAssignedClasses(teacherUser?.Assigned_Class).length > 0
-                            ? 'आपकी असाइन कक्षाएं (Assigned Classes):'
-                            : 'Quick Class Chips (Class Name):'}
+                          Quick Class Chips (Class Name):
                         </span>
                         <div className="flex flex-wrap gap-1.5">
-                          {(parseAssignedClasses(teacherUser?.Assigned_Class).length > 0
-                            ? parseAssignedClasses(teacherUser?.Assigned_Class)
-                            : ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C10', 'C11', 'C12']
-                          ).map(
+                          {classOptions.slice(0, 14).map(
                             (chip) => (
                               <button
                                 key={chip}
@@ -10299,20 +10379,6 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         </button>
                       )}
                     </div>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setQrScannerTarget('teacherTracker');
-                        setQrScannerSubtitle('टीचर: छात्र का क्यूआर कोड स्कैन करें');
-                        setQrScannerOpen(true);
-                      }}
-                      className="px-3 py-2 bg-amber-400 hover:bg-amber-500 text-slate-950 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm cursor-pointer shrink-0"
-                      title="Scan QR to search student"
-                    >
-                      <i className="fa-solid fa-camera"></i>
-                      <span className="hidden sm:inline">QR Scan</span>
-                    </button>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
@@ -10322,7 +10388,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       <select
                         value={teacherTrackerClassFilter}
                         onChange={(e) => setTeacherTrackerClassFilter(e.target.value)}
-                        className="px-3 py-2 rounded-xl border border-slate-300 text-xs bg-white outline-none"
+                        className="px-3 py-2 rounded-xl border border-slate-300 text-xs bg-white outline-none font-medium"
                       >
                         <option value="all">समस्त कक्षाएं (All Classes)</option>
                         {classOptions.map((c) => (
@@ -10380,45 +10446,20 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         <th className="px-3 py-3">Date</th>
                         <th className="px-3 py-3 text-center">Homework Status</th>
                         <th className="px-3 py-3 text-center">Toggle Action</th>
-                        <th className="px-3 py-3 text-center">कल का कार्य (Check HW)</th>
                         <th className="px-3 py-3 text-center">Notify Parent</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200 bg-white">
                       {teacherFilteredTracker.length === 0 ? (
                         <tr>
-                          <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
+                          <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
                             <i className="fa-solid fa-clipboard-question text-3xl mb-2 block text-slate-300"></i>
                             <div className="font-bold text-slate-700 text-sm mb-1">
                               इस फ़िल्टर में अभी कोई होमवर्क ट्रैकर रिकॉर्ड नहीं है
                             </div>
                             <p className="text-xs text-slate-500 mb-3 max-w-md mx-auto">
-                              आप छात्र का क्यूआर कोड स्कैन करके अथवा नीचे दिए गए बटन से छात्रों की सूची लोड करके होमवर्क चेक कर सकते हैं।
+                              छात्र का क्यूआर कोड स्कैन करके अथवा दिए गए होमवर्क से 1-क्लिक चेकर द्वारा स्टेटस मार्क करें।
                             </p>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const todayStr = new Date().toISOString().split('T')[0];
-                                const targetStudents = teacherUser?.Assigned_Class
-                                  ? students.filter((s) => String(s.Class || '').toLowerCase() === String(teacherUser.Assigned_Class).toLowerCase())
-                                  : students;
-                                const newRecs: HomeworkTrackerRecord[] = (targetStudents.length > 0 ? targetStudents : students).map((s, i) => ({
-                                  ID: `TRK-${s.Student_ID}-${Date.now()}-${i}`,
-                                  Date: todayStr,
-                                  Class: s.Class || '',
-                                  Student_ID: s.Student_ID,
-                                  Subject: 'General / All Subjects',
-                                  Last_homework_Status: 'Incompleted',
-                                }));
-                                setHwTrackerList((prev) => [...newRecs, ...prev]);
-                                setSyncToastMessage('✅ छात्रों की सूची होमवर्क ट्रैकर में लोड हो गई!');
-                                setTimeout(() => setSyncToastMessage(null), 3000);
-                              }}
-                              className="px-4 py-2 bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-bold rounded-xl text-xs inline-flex items-center gap-1.5 shadow-sm cursor-pointer transition-all active:scale-95"
-                            >
-                              <i className="fa-solid fa-users-viewfinder"></i>
-                              <span>कक्षा के सभी छात्रों को ट्रैकर में लोड करें</span>
-                            </button>
                           </td>
                         </tr>
                       ) : (
@@ -10496,30 +10537,6 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                   title="क्लिक करके स्टेटस बदलें"
                                 >
                                   {isDone ? 'Mark Incomplete' : 'Mark Completed ✓'}
-                                </button>
-                              </td>
-
-                              <td className="px-3 py-3 text-center whitespace-nowrap">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const targetStudent =
-                                      matchedStudent ||
-                                      students.find(
-                                        (s) =>
-                                          String(s.Student_ID || '').toLowerCase() ===
-                                            String(rec.Student_ID || rec.ID || '').toLowerCase()
-                                      );
-                                    if (targetStudent) {
-                                      setSelectedHwTrackerStudent(targetStudent);
-                                      setHwTrackerModalOpen(true);
-                                    }
-                                  }}
-                                  className="px-2.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold text-xs flex items-center justify-center gap-1 mx-auto cursor-pointer shadow-2xs transition-all active:scale-95"
-                                  title="कल का होमवर्क ट्रैक करें"
-                                >
-                                  <i className="fa-solid fa-book-open text-xs"></i>
-                                  <span>कल का HW</span>
                                 </button>
                               </td>
 
@@ -10619,14 +10636,18 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
                 {(() => {
                   const currentTeacher = (teacherUser.Name || '').toLowerCase();
+                  const teacherAssignedClasses = parseAssignedClasses(teacherUser.Assigned_Class);
                   const displayedList =
                     teacherSubmissionsFilter === 'my'
                       ? homeworkList.filter(
                           (h) =>
                             (h.Teacher || '').toLowerCase().includes(currentTeacher) ||
-                            (teacherUser.Assigned_Class &&
-                              getClassName(h.Class).toLowerCase() ===
-                                getClassName(teacherUser.Assigned_Class).toLowerCase())
+                            (teacherAssignedClasses.length > 0 &&
+                              teacherAssignedClasses.some(
+                                (ac) =>
+                                  getClassName(h.Class).toLowerCase() === getClassName(ac).toLowerCase() ||
+                                  String(h.Class || '').toLowerCase() === ac.toLowerCase()
+                              ))
                         )
                       : homeworkList;
 
@@ -10692,15 +10713,6 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                 title="विवरण देखें"
                               >
                                 विवरण
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setHomeworkToDelete(hw)}
-                                className="px-2 py-0.5 rounded bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white font-semibold transition-all flex items-center gap-1 cursor-pointer text-[10px]"
-                                title="यह होमवर्क हटाएं"
-                              >
-                                <i className="fa-solid fa-trash-can text-[9px]"></i>
-                                <span>हटाएं</span>
                               </button>
                             </div>
                           </div>
@@ -10794,7 +10806,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 {/* VIEW A: FAST CLASSROOM BULK ATTENDANCE REGISTER */}
                 {behaviorSubTab === 'bulkRegister' && (
                   <div className="animate-fadeIn">
-                    {!teacherUser?.Assigned_Class ? (
+                    {parseAssignedClasses(teacherUser?.Assigned_Class).length === 0 ? (
                       <div className="p-8 bg-amber-50/80 border-2 border-amber-300 rounded-3xl text-center space-y-3 shadow-xs">
                         <div className="w-16 h-16 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center mx-auto text-3xl shadow-xs">
                           <i className="fa-solid fa-chalkboard-user"></i>
@@ -10803,7 +10815,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           कक्षा अभी असाइन नहीं हुई है (No Class Assigned)
                         </h3>
                         <p className="text-xs sm:text-sm text-amber-900 max-w-md mx-auto leading-relaxed">
-                          विद्यालय नियमानुसार, अध्यापक केवल स्कूल मैनेजर द्वारा असाइन की गई कक्षा की ही हाजिरी व आचरण दर्ज कर सकते हैं। कृपया स्कूल मैनेजर से अपनी कक्षा असाइन करवाएं।
+                          विद्यालय नियमानुसार, अध्यापक केवल स्कूल मैनेजर द्वारा असाइन की गई कक्षा (या कक्षाओं) की ही हाजिरी व आचरण दर्ज कर सकते हैं। कृपया स्कूल मैनेजर से अपनी कक्षा असाइन करवाएं।
                         </p>
                       </div>
                     ) : (
@@ -10811,8 +10823,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         students={students}
                         behaviorRecords={behaviorList}
                         classOptions={classOptions}
-                        initialClass={teacherUser.Assigned_Class}
-                        lockedClass={teacherUser.Assigned_Class}
+                        initialClass={parseAssignedClasses(teacherUser.Assigned_Class)[0]}
+                        allowedClasses={parseAssignedClasses(teacherUser.Assigned_Class)}
                         teacherName={teacherUser?.Name || 'Teacher'}
                         getClassName={getClassName}
                         getStudentPhoto={getStudentPhoto}
@@ -10837,21 +10849,21 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200">
                     <div className="text-[11px] text-emerald-700 font-medium">उपस्थित छात्र (Present)</div>
                     <div className="text-lg font-bold text-emerald-900 mt-0.5">
-                      {behaviorList.filter((b) => b.Is_Present).length}
+                      {behaviorList.filter((b) => isBehaviorPresent(b)).length}
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200">
+                    <div className="text-[11px] text-rose-700 font-medium">अनुपस्थित छात्र (Absent)</div>
+                    <div className="text-lg font-bold text-rose-900 mt-0.5">
+                      {behaviorList.filter((b) => !isBehaviorPresent(b)).length}
                     </div>
                   </div>
 
                   <div className="p-3.5 rounded-xl bg-blue-50 border border-blue-200">
                     <div className="text-[11px] text-blue-700 font-medium">साफ ड्रेस व स्नान (Clean & Bathed)</div>
                     <div className="text-lg font-bold text-blue-900 mt-0.5">
-                      {behaviorList.filter((b) => b.Is_Bathed && b.Uniform_clean).length}
-                    </div>
-                  </div>
-
-                  <div className="p-3.5 rounded-xl bg-indigo-50 border border-indigo-200">
-                    <div className="text-[11px] text-indigo-700 font-medium">उत्कृष्ट अनुशासन (Good Discipline)</div>
-                    <div className="text-lg font-bold text-indigo-900 mt-0.5">
-                      {behaviorList.filter((b) => b.Discipline).length}
+                      {behaviorList.filter((b) => isBehaviorPresent(b) && b.Is_Bathed && b.Uniform_clean).length}
                     </div>
                   </div>
                 </div>
@@ -10883,25 +10895,34 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     {/* Class Filter */}
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs text-slate-500">कक्षा:</span>
-                      {teacherUser?.Assigned_Class ? (
-                        <div className="px-3 py-1.5 rounded-xl bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold flex items-center gap-1.5 shadow-2xs">
-                          <i className="fa-solid fa-lock text-amber-700"></i>
-                          <span>Class {getClassName(teacherUser.Assigned_Class)}</span>
-                        </div>
-                      ) : (
-                        <select
-                          value={behaviorClassFilter}
-                          onChange={(e) => setBehaviorClassFilter(e.target.value)}
-                          className="px-3 py-2 rounded-xl border border-slate-300 text-xs bg-white outline-none"
-                        >
-                          <option value="all">समस्त कक्षाएं (All)</option>
-                          {classOptions.map((c) => (
-                            <option key={c} value={c}>
-                              Class {getClassName(c)}
+                      {(() => {
+                        const assignedList = parseAssignedClasses(teacherUser?.Assigned_Class);
+                        if (assignedList.length === 1) {
+                          return (
+                            <div className="px-3 py-1.5 rounded-xl bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold flex items-center gap-1.5 shadow-2xs">
+                              <i className="fa-solid fa-lock text-amber-700"></i>
+                              <span>Class {getClassName(assignedList[0])}</span>
+                            </div>
+                          );
+                        }
+                        const opts = assignedList.length > 1 ? assignedList : classOptions;
+                        return (
+                          <select
+                            value={behaviorClassFilter}
+                            onChange={(e) => setBehaviorClassFilter(e.target.value)}
+                            className="px-3 py-2 rounded-xl border border-slate-300 text-xs bg-white outline-none font-medium"
+                          >
+                            <option value="all">
+                              {assignedList.length > 1 ? `मेरी समस्त कक्षाएं (${assignedList.length})` : 'समस्त कक्षाएं (All)'}
                             </option>
-                          ))}
-                        </select>
-                      )}
+                            {opts.map((c) => (
+                              <option key={c} value={c}>
+                                Class {getClassName(c)}
+                              </option>
+                            ))}
+                          </select>
+                        );
+                      })()}
                     </div>
 
                     {/* Date Filter */}
@@ -10953,18 +10974,48 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             String(b.Remark || '').toLowerCase().includes(behaviorSearch.toLowerCase()) ||
                             (matchedStudent && String(matchedStudent.Student_Name || '').toLowerCase().includes(behaviorSearch.toLowerCase()));
 
-                          const teacherAssigned = teacherUser?.Assigned_Class ? teacherUser.Assigned_Class.trim().toLowerCase() : null;
-                          const effectiveClassTarget = teacherAssigned || (behaviorClassFilter !== 'all' ? behaviorClassFilter.toLowerCase() : null);
+                          const teacherAssignedList = parseAssignedClasses(teacherUser?.Assigned_Class);
+                          let classMatch = false;
 
-                          const classMatch = !effectiveClassTarget ||
-                            String(b.Class || '').toLowerCase() === effectiveClassTarget ||
-                            getClassName(b.Class).toLowerCase() === effectiveClassTarget ||
-                            getClassName(b.Class).toLowerCase() === getClassName(effectiveClassTarget).toLowerCase() ||
-                            (matchedStudent && (
-                              String(matchedStudent.Class || '').toLowerCase() === effectiveClassTarget ||
-                              getClassName(matchedStudent.Class).toLowerCase() === effectiveClassTarget ||
-                              getClassName(matchedStudent.Class).toLowerCase() === getClassName(effectiveClassTarget).toLowerCase()
-                            ));
+                          if (teacherAssignedList.length > 0) {
+                            if (behaviorClassFilter !== 'all') {
+                              const target = behaviorClassFilter.toLowerCase();
+                              classMatch =
+                                String(b.Class || '').toLowerCase() === target ||
+                                getClassName(b.Class).toLowerCase() === target ||
+                                getClassName(b.Class).toLowerCase() === getClassName(target).toLowerCase() ||
+                                (Boolean(matchedStudent) && (
+                                  String(matchedStudent?.Class || '').toLowerCase() === target ||
+                                  getClassName(matchedStudent?.Class).toLowerCase() === target ||
+                                  getClassName(matchedStudent?.Class).toLowerCase() === getClassName(target).toLowerCase()
+                                ));
+                            } else {
+                              classMatch = teacherAssignedList.some((ac) => {
+                                const target = ac.toLowerCase();
+                                return (
+                                  String(b.Class || '').toLowerCase() === target ||
+                                  getClassName(b.Class).toLowerCase() === target ||
+                                  getClassName(b.Class).toLowerCase() === getClassName(target).toLowerCase() ||
+                                  (Boolean(matchedStudent) && (
+                                    String(matchedStudent?.Class || '').toLowerCase() === target ||
+                                    getClassName(matchedStudent?.Class).toLowerCase() === target ||
+                                    getClassName(matchedStudent?.Class).toLowerCase() === getClassName(target).toLowerCase()
+                                  ))
+                                );
+                              });
+                            }
+                          } else {
+                            const effectiveClassTarget = behaviorClassFilter !== 'all' ? behaviorClassFilter.toLowerCase() : null;
+                            classMatch = !effectiveClassTarget ||
+                              String(b.Class || '').toLowerCase() === effectiveClassTarget ||
+                              getClassName(b.Class).toLowerCase() === effectiveClassTarget ||
+                              getClassName(b.Class).toLowerCase() === getClassName(effectiveClassTarget).toLowerCase() ||
+                              (Boolean(matchedStudent) && (
+                                String(matchedStudent?.Class || '').toLowerCase() === effectiveClassTarget ||
+                                getClassName(matchedStudent?.Class).toLowerCase() === effectiveClassTarget ||
+                                getClassName(matchedStudent?.Class).toLowerCase() === getClassName(effectiveClassTarget).toLowerCase()
+                              ));
+                          }
 
                           const dateMatch =
                             !behaviorDateFilter ||
@@ -11021,13 +11072,13 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                               <td className="px-3 py-3 text-center whitespace-nowrap">
                                 <span
                                   className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                                    rec.Is_Present
+                                    isBehaviorPresent(rec)
                                       ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                                       : 'bg-rose-100 text-rose-800 border border-rose-300'
                                   }`}
                                 >
-                                  <i className={`fa-solid ${rec.Is_Present ? 'fa-check' : 'fa-xmark'}`}></i>
-                                  <span>{rec.Is_Present ? 'उपस्थित (Present)' : 'अनुपस्थित (Absent)'}</span>
+                                  <i className={`fa-solid ${isBehaviorPresent(rec) ? 'fa-check' : 'fa-xmark'}`}></i>
+                                  <span>{isBehaviorPresent(rec) ? 'उपस्थित (Present)' : 'अनुपस्थित (Absent)'}</span>
                                 </span>
                               </td>
 
@@ -12578,37 +12629,113 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                               </div>
                             )}
 
-                            {/* Manager Class Assignment Control */}
-                            <div className="pt-2 border-t border-slate-100 flex flex-col gap-1.5">
-                              <div className="flex items-center justify-between text-xs font-bold text-slate-700">
-                                <span className="flex items-center gap-1">
-                                  <i className="fa-solid fa-graduation-cap text-amber-500 text-xs"></i>
-                                  <span>असाइन की गई कक्षा:</span>
-                                </span>
-                                {user.Assigned_Class ? (
-                                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
-                                    Class {getClassName(user.Assigned_Class)}
-                                  </span>
-                                ) : (
-                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">
-                                    असाइन नहीं
-                                  </span>
-                                )}
-                              </div>
-                              <select
-                                value={user.Assigned_Class || ''}
-                                onChange={(e) => handleAssignClassToUser(user.User_ID || user.Username, e.target.value, user.Name)}
-                                className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 text-xs font-bold bg-white text-slate-800 outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 shadow-2xs cursor-pointer"
-                                title="मैनेजर द्वारा अध्यापक को कक्षा असाइन करें"
-                              >
-                                <option value="">-- कोई कक्षा नहीं (No Class Assigned) --</option>
-                                {classOptions.map((c) => (
-                                  <option key={c} value={c}>
-                                    Class {getClassName(c)}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
+                            {/* Manager Class Assignment Control (Supports 1, 2, 3 or more classes) */}
+                            {(() => {
+                              const userClasses = parseAssignedClasses(user.Assigned_Class);
+                              const handleToggleClass = (cls: string) => {
+                                const exists = userClasses.some((c) => c.toLowerCase() === cls.toLowerCase());
+                                const next = exists
+                                  ? userClasses.filter((c) => c.toLowerCase() !== cls.toLowerCase())
+                                  : [...userClasses, cls];
+                                handleAssignClassToUser(user.User_ID || user.Username, next, user.Name);
+                              };
+                              const handleClearAll = () => {
+                                handleAssignClassToUser(user.User_ID || user.Username, [], user.Name);
+                              };
+
+                              return (
+                                <div className="pt-2 border-t border-slate-100 flex flex-col gap-2">
+                                  <div className="flex items-center justify-between text-xs font-bold text-slate-700">
+                                    <span className="flex items-center gap-1.5">
+                                      <i className="fa-solid fa-graduation-cap text-amber-500"></i>
+                                      <span>असाइन कक्षाएं ({userClasses.length}):</span>
+                                    </span>
+                                    {userClasses.length > 0 && (
+                                      <button
+                                        type="button"
+                                        onClick={handleClearAll}
+                                        className="text-[10px] text-rose-600 hover:text-rose-800 font-semibold cursor-pointer underline"
+                                        title="सभी असाइन कक्षाएं हटाएं"
+                                      >
+                                        सब हटाएं
+                                      </button>
+                                    )}
+                                  </div>
+
+                                  {/* Badges of assigned classes with remove buttons */}
+                                  {userClasses.length > 0 ? (
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {userClasses.map((cls) => (
+                                        <span
+                                          key={cls}
+                                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-100 text-emerald-900 border border-emerald-300 text-[11px] font-bold shadow-2xs"
+                                        >
+                                          <span>Class {getClassName(cls)}</span>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleToggleClass(cls)}
+                                            className="w-3.5 h-3.5 rounded-full hover:bg-rose-500 hover:text-white flex items-center justify-center text-[9px] text-emerald-700 transition-colors cursor-pointer"
+                                            title={`Class ${getClassName(cls)} हटाएं`}
+                                          >
+                                            ✕
+                                          </button>
+                                        </span>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <p className="text-[11px] text-slate-400 italic">कोई कक्षा असाइन नहीं है (1 या अधिक जोड़ें)</p>
+                                  )}
+
+                                  {/* Quick Click-to-Assign / Toggle Chips */}
+                                  <div className="space-y-1">
+                                    <span className="text-[10px] text-slate-500 font-semibold block">
+                                      क्लिक करके कक्षा जोड़ें या हटाएं (1, 2, 3 या अधिक):
+                                    </span>
+                                    <div className="flex flex-wrap gap-1">
+                                      {classOptions.slice(0, 10).map((c) => {
+                                        const isAssigned = userClasses.some((uc) => uc.toLowerCase() === c.toLowerCase());
+                                        return (
+                                          <button
+                                            key={c}
+                                            type="button"
+                                            onClick={() => handleToggleClass(c)}
+                                            className={`px-2 py-0.5 rounded text-[11px] font-bold transition-all cursor-pointer ${
+                                              isAssigned
+                                                ? 'bg-emerald-600 text-white shadow-xs'
+                                                : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200'
+                                            }`}
+                                            title={isAssigned ? `Class ${getClassName(c)} (क्लिक करके हटाएं)` : `Class ${getClassName(c)} (क्लिक करके जोड़ें)`}
+                                          >
+                                            {isAssigned ? '✓ ' : '+ '}Class {getClassName(c)}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+
+                                  {/* Dropdown to add from all class options */}
+                                  <select
+                                    value=""
+                                    onChange={(e) => {
+                                      if (e.target.value) {
+                                        handleToggleClass(e.target.value);
+                                        e.target.value = '';
+                                      }
+                                    }}
+                                    className="w-full px-2 py-1 rounded-lg border border-slate-300 text-[11px] font-medium bg-white text-slate-700 outline-none cursor-pointer"
+                                  >
+                                    <option value="">➕ अन्य कक्षा सूची से जोड़ें...</option>
+                                    {classOptions
+                                      .filter((c) => !userClasses.some((uc) => uc.toLowerCase() === c.toLowerCase()))
+                                      .map((c) => (
+                                        <option key={c} value={c}>
+                                          + Class {getClassName(c)}
+                                        </option>
+                                      ))}
+                                  </select>
+                                </div>
+                              );
+                            })()}
 
                             {user.Last_AI_Run && (
                               <div className="flex items-center justify-between">

@@ -567,8 +567,25 @@ async function startServer() {
     return filtered;
   };
 
+  // Helper to normalize dates into YYYY-MM-DD
+  const normalizeDateKey = (val: any): string => {
+    if (!val) return '';
+    const str = String(val).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+    const parts = str.split(/[-/]/);
+    if (parts.length === 3) {
+      if (parts[0].length === 4) {
+        return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+      }
+      if (parts[2].length === 4) {
+        return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+      }
+    }
+    return str;
+  };
+
   const saveHomeworkItem = (item: any): any[] => {
-    const list = getHomeworkList();
+    let list = getHomeworkList();
     const hwId = String(item.homework_id || item.Homework_ID || `HW-${Date.now()}`);
     const normalized = {
       Homework_ID: hwId,
@@ -579,12 +596,48 @@ async function startServer() {
       Target_Type: 'Whole Class',
       Teacher: item.teacher || item.Teacher || 'Faculty',
     };
-    const idx = list.findIndex((h) => h.Homework_ID === hwId);
-    if (idx >= 0) {
-      list[idx] = normalized;
+
+    const targetDate = normalizeDateKey(normalized.Date);
+    const targetClass = String(normalized.Class || '').toLowerCase().trim();
+    const targetSubj = String(normalized.Subject || '').toLowerCase().trim();
+    const targetDetail = String(normalized.Homework_Detail || '').toLowerCase().trim().slice(0, 40);
+
+    // Look for exact ID match or composite match (Class + Date + Subject + snippet of detail)
+    const existingIdx = list.findIndex((h) => {
+      const hId = String(h.Homework_ID || '').toLowerCase().trim();
+      if (hId && hId === hwId.toLowerCase().trim()) return true;
+      const hDate = normalizeDateKey(h.Date);
+      const hClass = String(h.Class || '').toLowerCase().trim();
+      const hSubj = String(h.Subject || '').toLowerCase().trim();
+      const hDetail = String(h.Homework_Detail || '').toLowerCase().trim().slice(0, 40);
+      return hDate === targetDate && hClass === targetClass && hSubj === targetSubj && (hDetail === targetDetail || !targetDetail);
+    });
+
+    if (existingIdx >= 0) {
+      list[existingIdx] = { ...list[existingIdx], ...normalized };
     } else {
       list.unshift(normalized);
     }
+
+    // Deduplicate entire list to eliminate any historical duplicate homework
+    const seenComp = new Set<string>();
+    const seenHwIds = new Set<string>();
+    list = list.filter((h) => {
+      const hId = String(h.Homework_ID || '').toLowerCase().trim();
+      const hDate = normalizeDateKey(h.Date);
+      const hClass = String(h.Class || '').toLowerCase().trim();
+      const hSubj = String(h.Subject || '').toLowerCase().trim();
+      const hDetail = String(h.Homework_Detail || '').toLowerCase().trim().slice(0, 40);
+      const compKey = `${hClass}_${hDate}_${hSubj}_${hDetail}`;
+
+      if (hId && seenHwIds.has(hId)) return false;
+      if (seenComp.has(compKey)) return false;
+
+      if (hId) seenHwIds.add(hId);
+      seenComp.add(compKey);
+      return true;
+    });
+
     try {
       fs.writeFileSync(HOMEWORK_FILE, JSON.stringify(list, null, 2), 'utf-8');
     } catch (e) {
@@ -663,26 +716,46 @@ async function startServer() {
   };
 
   const saveHwTrackerItem = (item: any): any[] => {
-    const list = getHwTrackerList();
+    let list = getHwTrackerList();
     const tId = String(item.record_id || item.ID || `TRK-${Date.now()}`);
-    const sId = String(item.student_id || item.Student_ID || '');
+    const sId = String(item.student_id || item.Student_ID || '').trim();
+    const dateStr = item.date || item.Date || new Date().toISOString().split('T')[0];
+    const targetDate = normalizeDateKey(dateStr);
+    const targetSubject = String(item.subject || item.Subject || 'General').toLowerCase().trim();
+
+    // Standardize status: Completed or Incompleted
+    let targetStatus = String(item.status || item.Last_homework_Status || 'Completed').trim();
+    if (/incom|pend|adhura|not/i.test(targetStatus)) {
+      targetStatus = 'Incompleted';
+    } else {
+      targetStatus = 'Completed';
+    }
+
     const normalized = {
       ID: tId,
-      Date: item.date || item.Date || new Date().toISOString().split('T')[0],
+      Date: dateStr,
       Class: item.class || item.Class || '',
       Student_ID: sId,
       Subject: item.subject || item.Subject || 'General',
-      Last_homework_Status: item.status || item.Last_homework_Status || 'Completed',
+      Last_homework_Status: targetStatus,
       Remark: item.remark || item.Remark || '',
     };
-    const idx = list.findIndex(
-      (t) => t.ID === tId || (sId && t.Student_ID && t.Student_ID.toLowerCase() === sId.toLowerCase() && t.Date === normalized.Date)
-    );
-    if (idx >= 0) {
-      list[idx] = normalized;
-    } else {
-      list.unshift(normalized);
-    }
+
+    // Filter out ANY previous record for this student on the same date/subject to eliminate conflicting dual status
+    const remaining = list.filter((t) => {
+      if (t.ID && t.ID === tId) return false;
+      if (sId && t.Student_ID && t.Student_ID.toLowerCase().trim() === sId.toLowerCase().trim()) {
+        const tDate = normalizeDateKey(t.Date);
+        const tSubj = String(t.Subject || 'General').toLowerCase().trim();
+        if (tDate === targetDate && (tSubj === targetSubject || !t.Subject || tSubj.includes('general') || targetSubject.includes('general'))) {
+          return false;
+        }
+      }
+      return true;
+    });
+
+    list = [normalized, ...remaining];
+
     try {
       fs.writeFileSync(HW_TRACKER_FILE, JSON.stringify(list, null, 2), 'utf-8');
     } catch (e) {
