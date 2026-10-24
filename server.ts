@@ -346,15 +346,33 @@ async function startServer() {
     return {};
   };
 
-  const saveTeacherClassAssignment = (userId: string, assignedClass: string): Record<string, string> => {
+  const saveTeacherClassAssignment = (
+    userId: string,
+    assignedClass: string,
+    userName?: string,
+    username?: string
+  ): Record<string, string> => {
     const assignments = getTeacherClassAssignments();
-    if (userId) {
-      assignments[userId] = assignedClass;
-      try {
-        fs.writeFileSync(TEACHER_ASSIGNMENTS_FILE, JSON.stringify(assignments, null, 2), 'utf-8');
-      } catch (e) {
-        console.warn('Error saving teacher assignments file:', e);
-      }
+    const cleanId = String(userId || '').trim();
+    const cleanClass = String(assignedClass || '').trim();
+    if (cleanId) {
+      assignments[cleanId] = cleanClass;
+      assignments[cleanId.toLowerCase()] = cleanClass;
+    }
+    if (userName) {
+      const cleanName = String(userName).trim();
+      assignments[cleanName] = cleanClass;
+      assignments[cleanName.toLowerCase()] = cleanClass;
+    }
+    if (username) {
+      const cleanUser = String(username).trim();
+      assignments[cleanUser] = cleanClass;
+      assignments[cleanUser.toLowerCase()] = cleanClass;
+    }
+    try {
+      fs.writeFileSync(TEACHER_ASSIGNMENTS_FILE, JSON.stringify(assignments, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Error saving teacher assignments file:', e);
     }
     return assignments;
   };
@@ -1029,14 +1047,35 @@ async function startServer() {
   });
 
   app.post('/api/assign-teacher-class', (req, res) => {
-    const { userId, assignedClass, appsScriptUrl } = req.body || {};
-    const updated = saveTeacherClassAssignment(String(userId || '').trim(), String(assignedClass || '').trim());
+    const { userId, assignedClass, userName, username, appsScriptUrl } = req.body || {};
+    const updated = saveTeacherClassAssignment(
+      String(userId || '').trim(),
+      String(assignedClass || '').trim(),
+      userName ? String(userName).trim() : undefined,
+      username ? String(username).trim() : undefined
+    );
+
+    // Broadcast to connected WebSocket clients for real-time live sync across portals
+    const updateBroadcast = JSON.stringify({
+      type: 'APP_DATA_UPDATED',
+      entity: 'users',
+      action: 'assignTeacherClass',
+      details: { userId, assignedClass, userName, username },
+      timestamp: Date.now(),
+    });
+    for (const client of clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(updateBroadcast);
+      }
+    }
 
     // Forward to Google Apps Script
     forwardToGoogleAppsScript({
       action: 'assignTeacherClass',
       user_id: userId,
       assigned_class: assignedClass,
+      user_name: userName,
+      username: username,
       appsScriptUrl: appsScriptUrl || req.headers['x-apps-script-url'] || currentAppsScriptUrl,
     }).catch(() => {});
 

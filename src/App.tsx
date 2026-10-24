@@ -42,6 +42,7 @@ import { computeStudentFeeMetrics, computeSchoolFeeTotals, normalizeStudentId, r
 import { realtimeSync } from './utils/realtimeSync';
 import studentFarahPhoto from './assets/images/student_farah_1789483069291.jpg';
 import studentNamraPhoto from './assets/images/student_namra_1789483091505.jpg';
+import { AppLanguage, getStoredLanguage, setStoredLanguage, TRANSLATIONS } from './utils/translations';
 
 export const DEFAULT_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwVy51K14qu6IXipAZXP4NspFcAUHpLcYv8-zjhkYnBlUI17TzGi_KaJU9TRmNT8D5vvQ/exec';
 
@@ -1243,6 +1244,17 @@ export const getSingleInitialSession = (): InitialSessionData => {
 export default function App() {
   const initialSession = useMemo(() => getSingleInitialSession(), []);
 
+  // School Language State: English as Default for English Medium School with 1-click Hindi Switcher
+  const [currentLang, setCurrentLang] = useState<AppLanguage>(() => getStoredLanguage());
+
+  const handleToggleLanguage = (lang?: AppLanguage) => {
+    const nextLang: AppLanguage = lang || (currentLang === 'en' ? 'hi' : 'en');
+    setCurrentLang(nextLang);
+    setStoredLanguage(nextLang);
+  };
+
+  const t = useMemo(() => TRANSLATIONS[currentLang], [currentLang]);
+
   const [activeTab, setActiveTab] = useState<TabType>(initialSession.initialTab);
 
   // Persist activeTab so when user re-opens the app or browser, it opens exactly where they were
@@ -1482,6 +1494,69 @@ export default function App() {
 
   // Teacher Authentication & Dashboard State (Requires login from Users sheet)
   const [teacherUser, setTeacherUser] = useState<SchoolUser | null>(initialSession.teacherUser);
+
+  // Dynamically resolved assigned class(es) for currently logged-in teacher
+  const activeTeacherAssignedClass = useMemo(() => {
+    if (!teacherUser) return '';
+    const myId = String(teacherUser.User_ID || '').trim().toLowerCase();
+    const myUsername = String(teacherUser.Username || '').trim().toLowerCase();
+    const myName = String(teacherUser.Name || '').trim().toLowerCase();
+    const myMobile = String(teacherUser.Mobile_number || '').replace(/\D/g, '');
+
+    // 1. Look up live record in usersList
+    const uMatch = usersList.find((u) => {
+      const uId = String(u.User_ID || '').trim().toLowerCase();
+      const uUser = String(u.Username || '').trim().toLowerCase();
+      const uName = String(u.Name || '').trim().toLowerCase();
+      const uMob = String(u.Mobile_number || '').replace(/\D/g, '');
+      return (
+        (myId && uId === myId) ||
+        (myUsername && uUser === myUsername) ||
+        (myName && (uName === myName || uName.includes(myName) || myName.includes(uName))) ||
+        (myMobile && myMobile.length >= 10 && uMob.endsWith(myMobile.slice(-10)))
+      );
+    });
+    if (uMatch?.Assigned_Class && String(uMatch.Assigned_Class).trim()) {
+      return String(uMatch.Assigned_Class).trim();
+    }
+
+    // 2. Direct teacherUser property
+    if (teacherUser.Assigned_Class && String(teacherUser.Assigned_Class).trim()) {
+      return String(teacherUser.Assigned_Class).trim();
+    }
+
+    // 3. Check custom assignments from localStorage
+    try {
+      const saved = localStorage.getItem('evs_custom_teacher_class_assignments');
+      if (saved) {
+        const m = JSON.parse(saved);
+        const hit =
+          m[teacherUser.User_ID] ||
+          m[myId] ||
+          m[teacherUser.Username || ''] ||
+          m[myUsername] ||
+          m[teacherUser.Name || ''] ||
+          m[myName];
+        if (hit && String(hit).trim()) return String(hit).trim();
+      }
+    } catch {}
+
+    return '';
+  }, [teacherUser, usersList]);
+
+  // Keep teacherUser state and localStorage in sync whenever assigned class changes
+  useEffect(() => {
+    if (teacherUser && activeTeacherAssignedClass && teacherUser.Assigned_Class !== activeTeacherAssignedClass) {
+      setTeacherUser((prev) => {
+        if (!prev) return prev;
+        const upd = { ...prev, Assigned_Class: activeTeacherAssignedClass };
+        try {
+          localStorage.setItem('evs_teacher_user', JSON.stringify(upd));
+        } catch {}
+        return upd;
+      });
+    }
+  }, [activeTeacherAssignedClass, teacherUser]);
 
   // Driver Authentication State (from Users sheet / Bus tracking)
   const [driverUser, setDriverUser] = useState<SchoolUser | null>(initialSession.driverUser);
@@ -3068,6 +3143,27 @@ export default function App() {
       setLoadingUsers(true);
     }
     try {
+      // 1. Read local and server overrides for teacher class assignments
+      let assignedMap: Record<string, string> = {};
+      try {
+        const saved = localStorage.getItem('evs_custom_teacher_class_assignments');
+        if (saved) assignedMap = { ...assignedMap, ...JSON.parse(saved) };
+      } catch {}
+
+      try {
+        const sRes = await fetch('/api/teacher-class-assignments');
+        if (sRes.ok) {
+          const sData = await sRes.json();
+          if (sData?.assignments && typeof sData.assignments === 'object') {
+            assignedMap = { ...assignedMap, ...sData.assignments };
+            try {
+              localStorage.setItem('evs_custom_teacher_class_assignments', JSON.stringify(assignedMap));
+            } catch {}
+          }
+        }
+      } catch {}
+
+      // 2. Fetch Users sheet from Google Sheets
       const encoded = encodeURIComponent('Users');
       const res = await fetch(
         `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}`
@@ -3080,13 +3176,6 @@ export default function App() {
       const data = JSON.parse(text.slice(start, end + 1));
       const rows = data.table?.rows || [];
       const userRecords: SchoolUser[] = [];
-
-      // Read any local/manager overrides for teacher class assignments
-      let assignedMap: Record<string, string> = {};
-      try {
-        const saved = localStorage.getItem('evs_custom_teacher_class_assignments');
-        if (saved) assignedMap = JSON.parse(saved);
-      } catch {}
 
       for (const r of rows) {
         const cells = (r.c || []).map((c: any) =>
@@ -3101,10 +3190,22 @@ export default function App() {
         let assignedClass = cells[6] ? String(cells[6]).trim() : '';
         const lastAiRun = cells[7] ? String(cells[7]).trim() : '';
 
-        // Override if manager assigned a class
-        if (uId && assignedMap[uId] !== undefined) assignedClass = assignedMap[uId];
-        else if (username && assignedMap[username] !== undefined) assignedClass = assignedMap[username];
-        else if (name && assignedMap[name] !== undefined) assignedClass = assignedMap[name];
+        // Check if override exists in assignedMap (case-insensitive keys for User_ID, Username, Name, Mobile)
+        const keysToCheck = [
+          uId,
+          uId.toLowerCase(),
+          username,
+          username.toLowerCase(),
+          name,
+          name.toLowerCase(),
+          mobile,
+        ];
+        for (const k of keysToCheck) {
+          if (k && assignedMap[k] !== undefined && String(assignedMap[k]).trim()) {
+            assignedClass = String(assignedMap[k]).trim();
+            break;
+          }
+        }
 
         if (uId || username || mobile || name) {
           userRecords.push({
@@ -3123,6 +3224,30 @@ export default function App() {
       try {
         localStorage.setItem(CACHE_KEY_USERS, JSON.stringify(userRecords));
       } catch {}
+
+      // If active teacherUser is logged in, sync their Assigned_Class immediately!
+      if (teacherUser) {
+        const myUid = String(teacherUser.User_ID || '').toLowerCase();
+        const myUname = String(teacherUser.Username || '').toLowerCase();
+        const myNm = String(teacherUser.Name || '').toLowerCase();
+        const updatedMe = userRecords.find(
+          (u) =>
+            (myUid && String(u.User_ID || '').toLowerCase() === myUid) ||
+            (myUname && String(u.Username || '').toLowerCase() === myUname) ||
+            (myNm && String(u.Name || '').toLowerCase() === myNm)
+        );
+        if (updatedMe && updatedMe.Assigned_Class) {
+          setTeacherUser((prev) => {
+            if (!prev) return prev;
+            const upd = { ...prev, Assigned_Class: updatedMe.Assigned_Class };
+            try {
+              localStorage.setItem('evs_teacher_user', JSON.stringify(upd));
+            } catch {}
+            return upd;
+          });
+        }
+      }
+
       return userRecords;
     } catch (err) {
       console.warn('Could not fetch Users sheet:', err);
@@ -3513,6 +3638,8 @@ export default function App() {
         fetchHomeworkTracker();
       } else if (event.entity === 'behavior') {
         fetchStudentBehavior();
+      } else if (event.entity === 'users') {
+        fetchUsers();
       } else {
         syncAllData(false);
       }
@@ -4603,22 +4730,44 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
     // Success
     purgeAllSessionsExcept('teacher');
-    setTeacherUser(user);
+
+    // Look for any persistent assignment from localStorage overrides
+    let effectiveAssignedClass = user.Assigned_Class || '';
+    try {
+      const saved = localStorage.getItem('evs_custom_teacher_class_assignments');
+      if (saved) {
+        const m = JSON.parse(saved);
+        const hit =
+          m[user.User_ID] ||
+          m[String(user.User_ID || '').toLowerCase()] ||
+          m[user.Username || ''] ||
+          m[String(user.Username || '').toLowerCase()] ||
+          m[user.Name || ''] ||
+          m[String(user.Name || '').toLowerCase()];
+        if (hit && String(hit).trim()) {
+          effectiveAssignedClass = String(hit).trim();
+        }
+      }
+    } catch {}
+
+    const resolvedUser: SchoolUser = { ...user, Assigned_Class: effectiveAssignedClass };
+    setTeacherUser(resolvedUser);
     setActiveTab('teacher');
     try {
-      localStorage.setItem('evs_teacher_user', JSON.stringify(user));
+      localStorage.setItem('evs_teacher_user', JSON.stringify(resolvedUser));
       localStorage.setItem('evs_active_tab', 'teacher');
     } catch (e) {
       console.warn('LocalStorage error:', e);
     }
 
-    if (user.Name) {
-      setActiveTeacherName(user.Name);
+    if (resolvedUser.Name) {
+      setActiveTeacherName(resolvedUser.Name);
     }
-    if (user.Assigned_Class) {
-      setHwClass(user.Assigned_Class);
-      setTeacherTrackerClassFilter(user.Assigned_Class);
-      setBehaviorClassFilter(user.Assigned_Class);
+    if (resolvedUser.Assigned_Class) {
+      const firstCls = parseAssignedClasses(resolvedUser.Assigned_Class)[0] || resolvedUser.Assigned_Class;
+      setHwClass(firstCls);
+      setTeacherTrackerClassFilter(firstCls);
+      setBehaviorClassFilter(firstCls);
     }
     setTeacherLoginInput('');
     setTeacherPasswordInput('');
@@ -4969,7 +5118,11 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       const saved = localStorage.getItem('evs_custom_teacher_class_assignments');
       const assignments = saved ? JSON.parse(saved) : {};
       assignments[cleanId] = cleanClass;
-      if (userName) assignments[userName] = cleanClass;
+      assignments[cleanId.toLowerCase()] = cleanClass;
+      if (userName) {
+        assignments[userName] = cleanClass;
+        assignments[userName.toLowerCase()] = cleanClass;
+      }
       localStorage.setItem('evs_custom_teacher_class_assignments', JSON.stringify(assignments));
     } catch (e) {
       console.warn('localStorage error saving assignment:', e);
@@ -5005,6 +5158,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         body: JSON.stringify({
           userId: cleanId,
           assignedClass: cleanClass,
+          userName: userName,
           appsScriptUrl: getEffectiveApiUrl(),
         }),
       });
@@ -5012,7 +5166,14 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       console.warn('Backend server assignment error:', err);
     }
 
-    // 5. Forward to Google Apps Script
+    // 5. Broadcast real-time update across all connected tabs and devices
+    realtimeSync.broadcastUpdate('users', 'assignTeacherClass', {
+      userId: cleanId,
+      assignedClass: cleanClass,
+      userName: userName,
+    });
+
+    // 6. Forward to Google Apps Script
     try {
       fetch('/api/forward-apps-script', {
         method: 'POST',
@@ -5021,6 +5182,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
           action: 'assignTeacherClass',
           user_id: cleanId,
           assigned_class: cleanClass,
+          name: userName,
           appsScriptUrl: getEffectiveApiUrl(),
         }),
       }).catch(() => {});
@@ -5921,27 +6083,59 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       <header className="bg-gradient-to-r from-[#0c2340] via-[#10316b] to-[#0c2340] text-white shadow-lg border-b-2 border-amber-400/80 sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3.5">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-            {/* Logo & School Title */}
-            <div
-              className="flex items-center gap-3.5 cursor-pointer select-none"
-              onClick={() => setActiveTab('home')}
-            >
-              {/* Crest Badge */}
-              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-400 via-amber-300 to-amber-500 flex items-center justify-center shadow-md shadow-amber-500/20 text-[#0c2340] border-2 border-amber-200 shrink-0">
-                <i className="fa-solid fa-shield-halved text-2xl"></i>
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-white flex items-center gap-2">
-                    E.V.S. Public School
-                  </h1>
-                  <span className="bg-amber-400/20 text-amber-300 border border-amber-400/40 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
-                    Official
-                  </span>
+            {/* Logo, School Title & 1-Click Language Switcher */}
+            <div className="flex items-center justify-between gap-3 flex-wrap sm:flex-nowrap">
+              <div
+                className="flex items-center gap-3.5 cursor-pointer select-none"
+                onClick={() => setActiveTab('home')}
+              >
+                {/* Crest Badge */}
+                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-400 via-amber-300 to-amber-500 flex items-center justify-center shadow-md shadow-amber-500/20 text-[#0c2340] border-2 border-amber-200 shrink-0">
+                  <i className="fa-solid fa-shield-halved text-2xl"></i>
                 </div>
-                <p className="text-xs text-amber-200/80 font-medium">
-                  Inspiring Knowledge • Building Character • Shaping Futures
-                </p>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-white flex items-center gap-2">
+                      E.V.S. Public School
+                    </h1>
+                    <span className="bg-amber-400 text-slate-950 text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider shadow-xs">
+                      {t.englishMediumBadge}
+                    </span>
+                  </div>
+                  <p className="text-xs text-amber-200/80 font-medium">
+                    {t.schoolTagline}
+                  </p>
+                </div>
+              </div>
+
+              {/* 1-Click Language Switcher: English Medium Default */}
+              <div className="flex items-center gap-1 bg-black/35 p-1 rounded-xl border border-white/20 shadow-xs ml-auto sm:ml-4 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => handleToggleLanguage('en')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
+                    currentLang === 'en'
+                      ? 'bg-amber-400 text-slate-950 shadow-md scale-102 ring-1 ring-amber-300'
+                      : 'text-slate-300 hover:text-white hover:bg-white/10'
+                  }`}
+                  title="English Medium Mode (Default)"
+                >
+                  <span className="text-sm">🇬🇧</span>
+                  <span>English</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleToggleLanguage('hi')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
+                    currentLang === 'hi'
+                      ? 'bg-amber-400 text-slate-950 shadow-md scale-102 ring-1 ring-amber-300'
+                      : 'text-slate-300 hover:text-white hover:bg-white/10'
+                  }`}
+                  title="हिन्दी मोड"
+                >
+                  <span className="text-sm">🇮🇳</span>
+                  <span>हिन्दी</span>
+                </button>
               </div>
             </div>
 
@@ -6289,17 +6483,14 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 </div>
 
                 <h1 className="text-3xl sm:text-5xl font-black tracking-tight text-white leading-tight">
-                  आप कौन हैं?
+                  {currentLang === 'en' ? 'Welcome to E.V.S. Public School' : 'आप कौन हैं?'}
                 </h1>
                 <p className="text-lg sm:text-2xl font-extrabold text-amber-300 mt-1">
-                  Select Your User Role
+                  {t.selectRole}
                 </p>
 
                 <p className="mt-3 text-sm sm:text-base text-slate-200 leading-relaxed font-normal max-w-2xl mx-auto">
-                  कृपया जारी रखने के लिए नीचे दिए गए 4 विकल्पों में से अपनी भूमिका का चयन करें।
-                  <span className="block text-xs sm:text-sm text-slate-300 mt-0.5">
-                    Please choose your role to access your designated portal.
-                  </span>
+                  {t.selectRoleDesc}
                 </p>
 
                 {/* Quick stats badge */}
@@ -6312,7 +6503,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       <div className="font-extrabold text-white text-sm">
                         {loadingStudents ? '...' : students.length}
                       </div>
-                      <div className="text-[11px] text-slate-300">Registered Students</div>
+                      <div className="text-[11px] text-slate-300">{t.registeredStudents}</div>
                     </div>
                   </div>
 
@@ -6324,7 +6515,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       <div className="font-extrabold text-white text-sm">
                         {loadingHomework ? '...' : homeworkList.length}
                       </div>
-                      <div className="text-[11px] text-slate-300">Homework Records</div>
+                      <div className="text-[11px] text-slate-300">{t.homeworkRecords}</div>
                     </div>
                   </div>
 
@@ -6334,7 +6525,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     </div>
                     <div className="text-left">
                       <div className="font-extrabold text-white text-sm">Live GPS</div>
-                      <div className="text-[11px] text-slate-300">Van Transport</div>
+                      <div className="text-[11px] text-slate-300">{t.vanTransport}</div>
                     </div>
                   </div>
                 </div>
@@ -6395,19 +6586,19 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     </div>
                     <div>
                       <span className="text-[11px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
-                        डिजिटल स्कूल पोर्टल • Quick Portal Login
+                        {t.quickPortalLogin}
                       </span>
                       <h2 className="text-xl sm:text-2xl font-black text-slate-900 mt-1">
-                        स्कूल पोर्टल लॉगिन (School Portal Login)
+                        {currentLang === 'en' ? 'School Portal Login' : 'स्कूल पोर्टल लॉगिन (School Portal Login)'}
                       </h2>
                     </div>
                   </div>
 
                   <div className="text-xs text-slate-500 font-semibold sm:text-right">
-                    <span>डिफ़ॉल्ट सिलेक्टेड: </span>
+                    <span>{t.defaultSelected}: </span>
                     <span className="text-amber-900 font-bold bg-amber-100 px-2.5 py-1 rounded-lg border border-amber-300 inline-flex items-center gap-1">
                       <i className="fa-solid fa-user-group text-amber-700"></i>
-                      अभिभावक (Parent)
+                      {currentLang === 'en' ? 'Parent / Guardian' : 'अभिभावक (Parent)'}
                     </span>
                   </div>
                 </div>
@@ -6418,10 +6609,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-2 flex items-center justify-between">
                       <span className="flex items-center gap-1.5">
                         <i className="fa-solid fa-user-gear text-amber-500 text-sm"></i>
-                        <span>अपनी भूमिका का चयन करें (Select Your Role):</span>
-                      </span>
-                      <span className="text-[11px] text-blue-900 font-bold hidden sm:inline">
-                        Dropdown से भूमिका बदलें
+                        <span>{t.chooseRoleLabel}</span>
                       </span>
                     </label>
 
@@ -6432,10 +6620,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         onChange={(e) => setHomeSelectedRole(e.target.value as any)}
                         className="w-full pl-4 pr-12 py-3.5 bg-slate-50 hover:bg-slate-100 focus:bg-white text-slate-950 font-black text-base sm:text-lg rounded-2xl border-2 border-slate-300 focus:border-amber-500 focus:ring-4 focus:ring-amber-400/20 outline-none transition-all cursor-pointer shadow-xs appearance-none"
                       >
-                        <option value="parent">👨‍👩‍👦 1. अभिभावक (Parent) — [डिफ़ॉल्ट सिलेक्टेड / Default]</option>
-                        <option value="teacher">👩‍🏫 2. शिक्षक (Teacher)</option>
-                        <option value="manager">👔 3. स्कूल प्रबंधक (Manager / Admin)</option>
-                        <option value="driver">🚐 4. वैन चालक (Van Driver)</option>
+                        <option value="parent">{t.parentRole}</option>
+                        <option value="teacher">{t.teacherRole}</option>
+                        <option value="manager">{t.managerRole}</option>
+                        <option value="driver">{t.driverRole}</option>
                       </select>
                       <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-slate-600">
                         <i className="fa-solid fa-chevron-down text-base"></i>
@@ -6445,10 +6633,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     <p className="text-[11px] sm:text-xs text-slate-500 mt-2 font-medium flex items-center gap-1.5">
                       <i className="fa-solid fa-circle-info text-amber-500"></i>
                       <span>
-                        {homeSelectedRole === 'parent' && 'अभिभावक केवल अपना रजिस्टर्ड 10-अंकीय फोन नंबर डालकर सीधे अपने बच्चे के पोर्टल में लॉगिन कर सकते हैं।'}
-                        {homeSelectedRole === 'teacher' && 'शिक्षक अपनी आईडी/मोबाइल और पासवर्ड दर्ज करके शिक्षक पोर्टल में प्रवेश करें।'}
-                        {homeSelectedRole === 'manager' && 'प्रबंधक अपना यूजरनेम और पासवर्ड दर्ज करके स्कूल एडमिनिस्ट्रेशन पोर्टल में लॉगिन करें।'}
-                        {homeSelectedRole === 'driver' && 'स्कूल वैन ड्राइवर लाइव रूट शेयरिंग व जीपीएस ट्रैकिंग पोर्टल खोलें।'}
+                        {homeSelectedRole === 'parent' && (currentLang === 'en' ? 'Parents can log in directly using their 10-digit registered mobile number to view their ward\'s portal.' : 'अभिभावक केवल अपना रजिस्टर्ड 10-अंकीय फोन नंबर डालकर सीधे अपने बच्चे के पोर्टल में लॉगिन कर सकते हैं।')}
+                        {homeSelectedRole === 'teacher' && (currentLang === 'en' ? 'Teachers enter their ID/mobile number and password to access the teacher portal.' : 'शिक्षक अपनी आईडी/मोबाइल और पासवर्ड दर्ज करके शिक्षक पोर्टल में प्रवेश करें।')}
+                        {homeSelectedRole === 'manager' && (currentLang === 'en' ? 'School managers enter username and password to access the administration portal.' : 'प्रबंधक अपना यूजरनेम और पासवर्ड दर्ज करके स्कूल एडमिनिस्ट्रेशन पोर्टल में लॉगिन करें।')}
+                        {homeSelectedRole === 'driver' && (currentLang === 'en' ? 'School van driver portal for live route sharing and GPS tracking.' : 'स्कूल वैन ड्राइवर लाइव रूट शेयरिंग व जीपीएस ट्रैकिंग पोर्टल खोलें।')}
                       </span>
                     </p>
                   </div>
@@ -6468,10 +6656,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           <label className="block text-xs font-bold text-slate-800 mb-1.5 flex items-center justify-between">
                             <span className="flex items-center gap-1.5">
                               <i className="fa-solid fa-phone text-amber-600"></i>
-                              <span>पंजीकृत मोबाइल नंबर (Registered Mobile Number):</span>
+                              <span>{t.parentMobileLabel}</span>
                             </span>
                             <span className="text-[10px] text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-md font-extrabold border border-emerald-300">
-                              केवल फोन नंबर डालें
+                              {currentLang === 'en' ? 'Direct Mobile Login' : 'केवल फोन नंबर डालें'}
                             </span>
                           </label>
 
@@ -6488,7 +6676,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                 setParentMobileInput(e.target.value);
                                 if (parentSearchAttempted) setParentSearchAttempted(false);
                               }}
-                              placeholder="10-अंकीय मोबाइल नंबर दर्ज करें (उदा. 9876543210)"
+                              placeholder={t.parentMobilePlaceholder}
                               className="w-full pl-16 pr-10 py-3.5 bg-white text-slate-950 font-black text-base sm:text-lg rounded-xl border-2 border-slate-300 focus:border-amber-500 focus:ring-4 focus:ring-amber-500/15 outline-none transition-all placeholder:text-slate-400 placeholder:font-normal shadow-2xs"
                               autoFocus
                             />
@@ -6497,7 +6685,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                 type="button"
                                 onClick={() => setParentMobileInput('')}
                                 className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
-                                title="साफ़ करें"
+                                title={t.close}
                               >
                                 ✕
                               </button>
@@ -6508,7 +6696,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             <div className="mt-2.5 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2 animate-fadeIn">
                               <i className="fa-solid fa-circle-exclamation text-rose-600 text-base shrink-0"></i>
                               <span>
-                                मोबाइल नंबर <strong>"{parentMobileInput}"</strong> से कोई छात्र नहीं मिला। कृपया स्कूल रिकॉर्ड में दर्ज 10-अंकीय नंबर डालें या छात्र आईडी (उदा. S-9031319) दर्ज करें।
+                                {currentLang === 'en'
+                                  ? <>No student found with mobile number <strong>"{parentMobileInput}"</strong>. Please verify the 10-digit registered number or enter Student ID (e.g. S-9031319).</>
+                                  : <>मोबाइल नंबर <strong>"{parentMobileInput}"</strong> से कोई छात्र नहीं मिला। कृपया स्कूल रिकॉर्ड में दर्ज 10-अंकीय नंबर डालें या छात्र आईडी दर्ज करें।</>}
                               </span>
                             </div>
                           )}
@@ -6522,12 +6712,12 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           {parentLoginSubmitting ? (
                             <>
                               <div className="w-5 h-5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin"></div>
-                              <span>लॉगिन हो रहा है (Logging in)...</span>
+                              <span>{t.parentFetchingData}</span>
                             </>
                           ) : (
                             <>
                               <i className="fa-solid fa-arrow-right-to-bracket text-slate-950 text-lg"></i>
-                              <span>अभिभावक पोर्टल में लॉगिन करें (Login as Parent) →</span>
+                              <span>{t.parentFetchDataBtn} →</span>
                             </>
                           )}
                         </button>
@@ -7372,7 +7562,11 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center justify-between gap-2 shadow-2xs">
                       <div className="flex items-center gap-2">
                         <i className="fa-solid fa-hand-pointer text-amber-600 text-sm animate-bounce"></i>
-                        <span className="font-bold">पूरा विवरण देखने के लिए नीचे दिए गए किसी भी कार्ड पर टच करें:</span>
+                        <span className="font-bold">
+                          {currentLang === 'en'
+                            ? 'Tap on any card below to view full details:'
+                            : 'पूरा विवरण देखने के लिए नीचे दिए गए किसी भी कार्ड पर टच करें:'}
+                        </span>
                       </div>
                       <button
                         type="button"
@@ -7387,7 +7581,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         title="Refresh data from Google Sheets"
                       >
                         <i className={`fa-solid fa-arrows-rotate ${loadingHomework || loadingHwTracker || loadingBehavior || loadingFees ? 'fa-spin' : ''}`}></i>
-                        <span>रिफ्रेश</span>
+                        <span>{t.refreshData}</span>
                       </button>
                     </div>
 
@@ -7407,17 +7601,17 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             <i className="fa-solid fa-book-open"></i>
                           </div>
                           <span className="text-[10px] sm:text-xs font-black px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-900 border border-blue-200">
-                            {parentHomework.length} विषय
+                            {currentLang === 'en' ? `${parentHomework.length} Subjects` : `${parentHomework.length} विषय`}
                           </span>
                         </div>
 
                         <div className="mt-3">
                           <div className="text-xs sm:text-sm font-black flex items-center justify-between">
-                            <span>1. आज का होमवर्क</span>
+                            <span>{currentLang === 'en' ? '1. Today\'s Homework' : '1. आज का होमवर्क'}</span>
                             <i className="fa-solid fa-chevron-right text-xs text-slate-300 group-hover:text-slate-500"></i>
                           </div>
                           <div className="text-[11px] mt-0.5 text-slate-500">
-                            गृहकार्य व फ़ोटो देखें
+                            {currentLang === 'en' ? 'View homework & photos' : 'गृहकार्य व फ़ोटो देखें'}
                           </div>
                         </div>
                       </button>
@@ -7441,17 +7635,19 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                               ? 'bg-rose-100 text-rose-800 border border-rose-200'
                               : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
                           }`}>
-                            {trackerStats.incompleted > 0 ? `${trackerStats.incompleted} अधूरा` : 'सब पूरा ✓'}
+                            {trackerStats.incompleted > 0
+                              ? (currentLang === 'en' ? `${trackerStats.incompleted} Incomplete` : `${trackerStats.incompleted} अधूरा`)
+                              : (currentLang === 'en' ? 'All Completed ✓' : 'सब पूरा ✓')}
                           </span>
                         </div>
 
                         <div className="mt-3">
                           <div className="text-xs sm:text-sm font-black flex items-center justify-between">
-                            <span>2. काम पूरा या अधूरा</span>
+                            <span>{currentLang === 'en' ? '2. Homework Tracker' : '2. काम पूरा या अधूरा'}</span>
                             <i className="fa-solid fa-chevron-right text-xs text-slate-300 group-hover:text-slate-500"></i>
                           </div>
                           <div className="text-[11px] mt-0.5 text-slate-500">
-                            होमवर्क स्थिति जांचें
+                            {currentLang === 'en' ? 'Check completion status' : 'होमवर्क स्थिति जांचें'}
                           </div>
                         </div>
                       </button>
@@ -7478,24 +7674,24 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                               : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
                           }`}>
                             {studentFeeSummary.hasDues
-                              ? `बकाया ₹${studentFeeSummary.balance.toLocaleString('en-IN')}`
+                              ? (currentLang === 'en' ? `Due ₹${studentFeeSummary.balance.toLocaleString('en-IN')}` : `बकाया ₹${studentFeeSummary.balance.toLocaleString('en-IN')}`)
                               : studentFeeSummary.isAdvance
-                              ? `अग्रिम -₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')}`
-                              : 'पूरी जमा ✓'}
+                              ? (currentLang === 'en' ? `Advance -₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')}` : `अग्रिम -₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')}`)
+                              : (currentLang === 'en' ? 'Paid In Full ✓' : 'पूरी जमा ✓')}
                           </span>
                         </div>
 
                         <div className="mt-3">
                           <div className="text-xs sm:text-sm font-black flex items-center justify-between">
-                            <span>3. स्कूल फीस व रसीदें</span>
+                            <span>{currentLang === 'en' ? '3. Fees & Receipts' : '3. स्कूल फीस व रसीदें'}</span>
                             <i className="fa-solid fa-chevron-right text-xs text-slate-300 group-hover:text-slate-500"></i>
                           </div>
                           <div className="text-[11px] mt-0.5 text-slate-500">
                             {studentFeeSummary.hasDues
-                              ? 'जमा विवरण देखें'
+                              ? (currentLang === 'en' ? 'View fee breakdown' : 'जमा विवरण देखें')
                               : studentFeeSummary.isAdvance
-                              ? 'अग्रिम जमा रसीदें देखें'
-                              : 'सभी रसीदें सुरक्षित'}
+                              ? (currentLang === 'en' ? 'View advance receipts' : 'अग्रिम जमा रसीदें देखें')
+                              : (currentLang === 'en' ? 'All receipts saved' : 'सभी रसीदें सुरक्षित')}
                           </div>
                         </div>
                       </button>
@@ -7523,19 +7719,19 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           }`}>
                             {latestBehaviorRecord
                               ? latestBehaviorRecord.Is_Present
-                                ? 'आज उपस्थित ✓'
-                                : 'अनुपस्थित ❌'
-                              : 'हाजिरी रिपोर्ट'}
+                                ? (currentLang === 'en' ? 'Present Today ✓' : 'आज उपस्थित ✓')
+                                : (currentLang === 'en' ? 'Absent ❌' : 'अनुपस्थित ❌')
+                              : (currentLang === 'en' ? 'Attendance Report' : 'हाजिरी रिपोर्ट')}
                           </span>
                         </div>
 
                         <div className="mt-3">
                           <div className="text-xs sm:text-sm font-black flex items-center justify-between">
-                            <span>4. हाजिरी कैलेंडर व आचरण</span>
+                            <span>{currentLang === 'en' ? '4. Attendance & Conduct' : '4. हाजिरी कैलेंडर व आचरण'}</span>
                             <i className="fa-solid fa-chevron-right text-xs text-slate-300 group-hover:text-slate-500"></i>
                           </div>
                           <div className="text-[11px] mt-0.5 text-slate-500">
-                            मासिक हाजिरी कैलेंडर, उपस्थिति व आचरण
+                            {currentLang === 'en' ? 'Monthly calendar & grooming' : 'मासिक हाजिरी कैलेंडर, उपस्थिति व आचरण'}
                           </div>
                         </div>
                       </button>
@@ -7556,8 +7752,12 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             <i className="fa-solid fa-calendar-check"></i>
                           </span>
                           <div>
-                            <span className="font-extrabold text-xs text-emerald-950 block">मासिक उपस्थिति कैलेंडर</span>
-                            <span className="text-[11px] text-emerald-700">तारीखवार उपस्थिति व अवकाश देखें</span>
+                            <span className="font-extrabold text-xs text-emerald-950 block">
+                              {currentLang === 'en' ? 'Monthly Attendance Calendar' : 'मासिक उपस्थिति कैलेंडर'}
+                            </span>
+                            <span className="text-[11px] text-emerald-700">
+                              {currentLang === 'en' ? 'View date-wise attendance & holidays' : 'तारीखवार उपस्थिति व अवकाश देखें'}
+                            </span>
                           </div>
                         </div>
                         <i className="fa-solid fa-chevron-right text-xs text-emerald-600 group-hover:translate-x-1 transition-transform"></i>
@@ -7576,8 +7776,12 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             <i className="fa-solid fa-bullhorn"></i>
                           </span>
                           <div>
-                            <span className="font-extrabold text-xs text-amber-950 block">सूचना पट्ट व स्कूल अवकाश</span>
-                            <span className="text-[11px] text-amber-800">त्योहार, छुट्टियाँ व परीक्षा तिथियाँ</span>
+                            <span className="font-extrabold text-xs text-amber-950 block">
+                              {currentLang === 'en' ? 'Notice Board & School Circulars' : 'सूचना पट्ट व स्कूल अवकाश'}
+                            </span>
+                            <span className="text-[11px] text-amber-800">
+                              {currentLang === 'en' ? 'Festivals, holidays & exam schedules' : 'त्योहार, छुट्टियाँ व परीक्षा तिथियाँ'}
+                            </span>
                           </div>
                         </div>
                         <i className="fa-solid fa-chevron-right text-xs text-amber-600 group-hover:translate-x-1 transition-transform"></i>
@@ -9710,61 +9914,12 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   <span>{isRefreshingTeacherPortal ? 'रिफ्रेश हो रहा है...' : 'डेटा रिफ्रेश करें'}</span>
                 </button>
                 <button
-                  onClick={() => setSheetSyncModalOpen(true)}
-                  className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-amber-300 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer border border-amber-400/30"
-                  title="Google Sheet Live Sync सेटिंग्स व स्टेटस देखें"
-                >
-                  <i className="fa-solid fa-table"></i>
-                  <span className="hidden sm:inline">Sheet सिंक</span>
-                </button>
-                <button
                   onClick={handleTeacherLogout}
                   className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
                   title="Logout Teacher"
                 >
                   <i className="fa-solid fa-right-from-bracket"></i>
                   <span>लॉगआउट (Logout)</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Google Sheet Live Sync & Apps Script Notice Banner */}
-            <div className="bg-gradient-to-r from-amber-500/10 via-amber-500/15 to-amber-500/10 border border-amber-500/30 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center font-bold text-lg shrink-0 shadow-xs">
-                  <i className="fa-solid fa-cloud-arrow-up"></i>
-                </div>
-                <div>
-                  <div className="font-bold text-slate-900 text-xs sm:text-sm flex items-center gap-2">
-                    <span>Google Sheet लाइव सिंक स्थिति (Live Sheet Sync)</span>
-                    <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">
-                      ऐप व सर्वर डेटाबेस सुरक्षित
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-600 mt-0.5">
-                    टीचर का होमवर्क, आचरण व ट्रैकर ऐप में तुरंत सेव और रिफ्रेश होता है। सीधे Google Sheet में ऑटो-ऐड हेतु Apps Script कोड डिप्लॉय करें।
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={handleRefreshTeacherPortal}
-                  disabled={isRefreshingTeacherPortal}
-                  className="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-50 text-slate-800 font-bold text-xs border border-slate-300 transition-all cursor-pointer shadow-2xs flex items-center gap-1.5"
-                  title="टीचर पोर्टल डेटा रिफ्रेश करें"
-                >
-                  <i className={`fa-solid fa-rotate-right ${isRefreshingTeacherPortal ? 'fa-spin text-amber-500' : ''}`}></i>
-                  <span>रिफ्रेश</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSheetSyncModalOpen(true)}
-                  className="px-3.5 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs transition-all cursor-pointer shadow-xs flex items-center gap-1.5 active:scale-95"
-                >
-                  <i className="fa-solid fa-code"></i>
-                  <span>Apps Script कोड व गाइड</span>
                 </button>
               </div>
             </div>
@@ -9780,14 +9935,14 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 }`}
               >
                 <i className="fa-solid fa-id-card-clip text-amber-400"></i>
-                <span>स्टाफ हाजिरी (Staff Attendance)</span>
+                <span>{t.tabStaffAttendance}</span>
                 {myTodayAttendanceRecord ? (
                   <span className="px-2 py-0.2 rounded-full bg-emerald-500/20 text-emerald-700 text-[11px] font-bold">
-                    ✓ उपस्थित
+                    {t.staffPresent}
                   </span>
                 ) : (
                   <span className="px-2 py-0.2 rounded-full bg-amber-500/20 text-amber-800 text-[11px] font-bold">
-                    चेक-इन
+                    {t.staffCheckInNeeded}
                   </span>
                 )}
               </button>
@@ -9801,7 +9956,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 }`}
               >
                 <i className="fa-solid fa-cloud-arrow-up text-amber-400"></i>
-                <span>होमवर्क अपलोड (Upload Homework)</span>
+                <span>{t.tabUploadHomework}</span>
               </button>
 
               <button
@@ -9813,9 +9968,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 }`}
               >
                 <i className="fa-solid fa-list-check text-emerald-400"></i>
-                <span>होमवर्क चेकर व ट्रैकर (Check HW)</span>
+                <span>{t.tabHomeworkChecker}</span>
                 <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-black">
-                  1-क्लिक चेकर
+                  1-Click
                 </span>
               </button>
 
@@ -9828,7 +9983,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 }`}
               >
                 <i className="fa-solid fa-clock-rotate-left text-blue-400"></i>
-                <span>हाल के असाइनमेंट्स (Recent Submissions)</span>
+                <span>{t.tabRecentSubmissions}</span>
                 <span className="px-2 py-0.2 rounded-full bg-blue-100 text-blue-800 text-[11px]">
                   {homeworkList.length}
                 </span>
@@ -9843,7 +9998,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 }`}
               >
                 <i className="fa-solid fa-user-check text-indigo-400"></i>
-                <span>दैनिक आचरण व अनुशासन (Daily Conduct)</span>
+                <span>{t.tabDailyConduct}</span>
                 <span className="px-2 py-0.2 rounded-full bg-indigo-100 text-indigo-800 text-[11px]">
                   {behaviorList.length}
                 </span>
@@ -9858,33 +10013,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 }`}
               >
                 <i className="fa-solid fa-bullhorn text-amber-400"></i>
-                <span>सूचना पट्ट (Notices)</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setAttendanceCalendarMode('absent_list');
-                  setIsAttendanceCalendarOpen(true);
-                }}
-                className="px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-300 transition-all cursor-pointer shadow-2xs"
-                title="आज के अनुपस्थित छात्र देखें और WhatsApp अलर्ट भेजें"
-              >
-                <i className="fa-solid fa-user-xmark text-rose-600"></i>
-                <span>अनुपस्थित छात्र (WhatsApp)</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setAttendanceCalendarMode('calendar');
-                  setIsAttendanceCalendarOpen(true);
-                }}
-                className="px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 transition-all cursor-pointer shadow-2xs"
-                title="मासिक हाजिरी कैलेंडर देखें"
-              >
-                <i className="fa-solid fa-calendar-check text-emerald-600"></i>
-                <span>हाजिरी कैलेंडर</span>
+                <span>{t.tabSchoolNotices}</span>
               </button>
 
               {/* Universal Student Finder & QR Scanner button */}
@@ -9892,14 +10021,14 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 type="button"
                 onClick={() => {
                   setQrScannerTarget(null);
-                  setQrScannerSubtitle('शिक्षक: छात्र खोजें (QR स्कैन, नाम, ID या मोबाइल द्वारा)');
+                  setQrScannerSubtitle(currentLang === 'en' ? 'Faculty: Find Student by QR scan, name, ID or mobile' : 'शिक्षक: छात्र खोजें (QR स्कैन, नाम, ID या मोबाइल द्वारा)');
                   setQrScannerOpen(true);
                 }}
                 className="px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 shadow-sm ml-auto"
               >
                 <i className="fa-solid fa-magnifying-glass"></i>
                 <i className="fa-solid fa-qrcode"></i>
-                <span>छात्र खोजें / QR स्कैनर</span>
+                <span>{t.tabFindStudent}</span>
               </button>
             </div>
 
@@ -10774,64 +10903,62 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       </span>
                     </button>
                   </div>
-
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setQrScannerTarget('teacherTracker');
-                        setQrScannerSubtitle('आचरण दर्ज करने हेतु छात्र का QR कोड स्कैन करें');
-                        setQrScannerOpen(true);
-                      }}
-                      className="px-3 py-1.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition-all active:scale-95"
-                      title="छात्र QR स्कैन करें"
-                    >
-                      <i className="fa-solid fa-qrcode"></i>
-                      <span className="hidden sm:inline">QR स्कैन</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => fetchStudentBehavior(true, true)}
-                      disabled={loadingBehavior}
-                      className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-all active:scale-95 shadow-2xs"
-                      title="आचरण डेटा ताज़ा करें"
-                    >
-                      <i className={`fa-solid fa-rotate-right ${loadingBehavior ? 'fa-spin text-indigo-600' : ''}`}></i>
-                      <span className="hidden sm:inline">{loadingBehavior ? 'रिफ्रेश...' : 'Refresh'}</span>
-                    </button>
-                  </div>
                 </div>
 
                 {/* VIEW A: FAST CLASSROOM BULK ATTENDANCE REGISTER */}
                 {behaviorSubTab === 'bulkRegister' && (
                   <div className="animate-fadeIn">
-                    {parseAssignedClasses(teacherUser?.Assigned_Class).length === 0 ? (
-                      <div className="p-8 bg-amber-50/80 border-2 border-amber-300 rounded-3xl text-center space-y-3 shadow-xs">
-                        <div className="w-16 h-16 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center mx-auto text-3xl shadow-xs">
-                          <i className="fa-solid fa-chalkboard-user"></i>
-                        </div>
-                        <h3 className="text-base font-black text-amber-950">
-                          कक्षा अभी असाइन नहीं हुई है (No Class Assigned)
-                        </h3>
-                        <p className="text-xs sm:text-sm text-amber-900 max-w-md mx-auto leading-relaxed">
-                          विद्यालय नियमानुसार, अध्यापक केवल स्कूल मैनेजर द्वारा असाइन की गई कक्षा (या कक्षाओं) की ही हाजिरी व आचरण दर्ज कर सकते हैं। कृपया स्कूल मैनेजर से अपनी कक्षा असाइन करवाएं।
-                        </p>
-                      </div>
-                    ) : (
-                      <ClassroomBulkAttendanceRegister
-                        students={students}
-                        behaviorRecords={behaviorList}
-                        classOptions={classOptions}
-                        initialClass={parseAssignedClasses(teacherUser.Assigned_Class)[0]}
-                        allowedClasses={parseAssignedClasses(teacherUser.Assigned_Class)}
-                        teacherName={teacherUser?.Name || 'Teacher'}
-                        getClassName={getClassName}
-                        getStudentPhoto={getStudentPhoto}
-                        onSaveBatch={handleSaveBatchBehavior}
-                        isEmbedded={true}
-                      />
-                    )}
+                    {(() => {
+                      const assignedRaw = activeTeacherAssignedClass || teacherUser?.Assigned_Class;
+                      const teacherClasses = parseAssignedClasses(assignedRaw);
+                      const initialCls = teacherClasses.length > 0 ? teacherClasses[0] : (classOptions[0] || '1');
+
+                      return (
+                        <>
+                          {teacherClasses.length === 0 && (
+                            <div className="mb-4 p-4 bg-amber-50 border border-amber-300 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-900 shadow-2xs">
+                              <div className="flex items-center gap-2.5">
+                                <div className="w-9 h-9 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center text-base font-bold shrink-0 shadow-2xs">
+                                  <i className="fa-solid fa-circle-info"></i>
+                                </div>
+                                <div>
+                                  <span className="font-extrabold text-sm block text-amber-950">
+                                    सूचना: अभी कोई विशिष्ट कक्षा असाइन नहीं है
+                                  </span>
+                                  <span className="text-[11px] text-amber-800">
+                                    आप ऊपर क्लास ड्रॉपडाउन से कक्षा चुनकर हाजिरी व आचरण दर्ज कर सकते हैं। स्थाई कक्षा असाइन करवाने के लिए मैनेजर से संपर्क करें।
+                                  </span>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  fetchUsers();
+                                  setSyncToastMessage('🔄 कक्षा असाइनमेंट रिफ्रेश हो रहा है...');
+                                }}
+                                className="px-3.5 py-1.5 rounded-xl bg-white hover:bg-amber-100 border border-amber-300 text-amber-950 font-bold transition-all text-xs shrink-0 cursor-pointer shadow-2xs flex items-center gap-1.5 self-start sm:self-auto"
+                              >
+                                <i className="fa-solid fa-rotate-right"></i>
+                                <span>असाइनमेंट चेक करें</span>
+                              </button>
+                            </div>
+                          )}
+
+                          <ClassroomBulkAttendanceRegister
+                            students={students}
+                            behaviorRecords={behaviorList}
+                            classOptions={classOptions}
+                            initialClass={initialCls}
+                            allowedClasses={teacherClasses.length > 0 ? teacherClasses : undefined}
+                            teacherName={teacherUser?.Name || 'Teacher'}
+                            getClassName={getClassName}
+                            getStudentPhoto={getStudentPhoto}
+                            onSaveBatch={handleSaveBatchBehavior}
+                            isEmbedded={true}
+                          />
+                        </>
+                      );
+                    })()}
                   </div>
                 )}
 
@@ -11362,46 +11489,21 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   type="button"
                   onClick={() => setActiveTab('home')}
                   className="px-3.5 py-2 bg-white/10 hover:bg-amber-400 hover:text-slate-950 text-amber-200 text-xs font-bold rounded-xl border border-amber-400/30 transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
-                  title="भूमिका बदलें (Change Role)"
+                  title="Change Role"
                 >
                   <i className="fa-solid fa-arrow-left"></i>
-                  <span>भूमिका बदलें (Roles)</span>
+                  <span>{t.changeRole}</span>
                 </button>
 
                 <button
                   onClick={handleManagerLogout}
                   className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors flex items-center gap-2 cursor-pointer"
-                  title="Log out of Manager Portal"
+                  title="Logout"
                 >
                   <i className="fa-solid fa-right-from-bracket"></i>
-                  <span>लॉगआउट (Logout)</span>
+                  <span>{t.logout}</span>
                 </button>
               </div>
-            </div>
-
-            {/* Quick Switch Card: Manager -> Parent Portal (Prevents confusion on mobile) */}
-            <div className="bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 text-slate-950 p-3.5 sm:p-4 rounded-3xl shadow-sm border border-amber-300 flex flex-col sm:flex-row items-center justify-between gap-3 font-bold text-xs sm:text-sm animate-fadeIn">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-slate-950 text-amber-300 flex items-center justify-center text-lg shrink-0 shadow-xs">
-                  <i className="fa-solid fa-user-group"></i>
-                </div>
-                <div>
-                  <div className="font-black text-slate-950 text-sm sm:text-base">
-                    अभिभावक पोर्टल (Parent Portal) खोलना चाहते हैं?
-                  </div>
-                  <div className="text-slate-800 text-xs font-semibold">
-                    आप अभी प्रबंधक मोड में हैं। अभिभावकों को अपना वार्ड व होमवर्क कैसा दिखता है, देखने हेतु यहाँ दबाएं:
-                  </div>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setActiveTab('parent')}
-                className="px-5 py-2.5 bg-slate-950 hover:bg-slate-900 text-amber-300 rounded-2xl font-black text-xs sm:text-sm flex items-center gap-2 cursor-pointer shadow-md transition-all shrink-0 active:scale-95"
-              >
-                <i className="fa-solid fa-mobile-screen"></i>
-                <span>अभिभावक पोर्टल खोलें (Parent View) →</span>
-              </button>
             </div>
 
             {/* 4 Dynamic Summary Cards & Interactive Modals (Manager Dashboard Header Overview) */}
@@ -14006,8 +14108,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         />
       )}
 
-      {/* Floating iPhone Quick Install Pill */}
-      {isIOSDevice && !isStandaloneApp && (
+      {/* Floating iPhone Quick Install Pill - Only on Home screen */}
+      {isIOSDevice && !isStandaloneApp && activeTab === 'home' && (
         <aside
           aria-label="iPhone App Install"
           onClick={() => setShowInstallModal(true)}
@@ -14021,11 +14123,13 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         </aside>
       )}
 
-      {/* Continuous Floating Social Media Bar (WhatsApp, Instagram, Facebook, Call) */}
-      <FloatingSocialBar
-        isManager={Boolean(managerUser || activeTab === 'manager')}
-        spreadsheetId={SPREADSHEET_ID}
-      />
+      {/* Continuous Floating Social Media Bar - Only on Home screen to avoid blocking work screens */}
+      {activeTab === 'home' && (
+        <FloatingSocialBar
+          isManager={false}
+          spreadsheetId={SPREADSHEET_ID}
+        />
+      )}
 
       {/* FOOTER */}
       <footer className="bg-[#0c2340] text-slate-300 border-t-2 border-amber-400 mt-auto">

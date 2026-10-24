@@ -7,7 +7,7 @@
  * 4. Background smart polling checks for updates smoothly without disturbing user input.
  */
 
-export type EntityType = 'fee' | 'student' | 'notice' | 'behavior' | 'homework' | 'all';
+export type EntityType = 'fee' | 'student' | 'notice' | 'behavior' | 'homework' | 'users' | 'all';
 
 export interface DataMutationEvent {
   type: 'APP_DATA_UPDATED';

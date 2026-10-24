@@ -138,6 +138,61 @@ const isRecordPresent = (rec: any): boolean => {
   return parseIsPresent(val);
 };
 
+// Robust bidirectional helper to match class IDs and names (e.g. "C5" <=> "1st", "1" <=> "Class 1", "UKG" <=> "C4")
+export const areClassesMatching = (
+  classA: string | null | undefined,
+  classB: string | null | undefined,
+  getClassName?: (c?: string) => string
+): boolean => {
+  if (!classA || !classB) return false;
+  const rawA = String(classA).trim().toLowerCase();
+  const rawB = String(classB).trim().toLowerCase();
+  if (rawA === rawB) return true;
+  if (rawA === 'all' || rawB === 'all') return true;
+
+  const getName = getClassName || ((c?: string) => c || '');
+  const nameA = String(getName(classA)).trim().toLowerCase();
+  const nameB = String(getName(classB)).trim().toLowerCase();
+
+  if (nameA === nameB && nameA !== 'n/a' && nameA !== '') return true;
+  if (rawA === nameB || rawB === nameA) return true;
+
+  // Clean strings by removing non-alphanumeric (e.g. "class 1" -> "class1", "1st" -> "1st")
+  const cleanA = rawA.replace(/[^a-z0-9]/g, '');
+  const cleanB = rawB.replace(/[^a-z0-9]/g, '');
+  if (cleanA === cleanB && cleanA !== '') return true;
+
+  const cleanNameA = nameA.replace(/[^a-z0-9]/g, '');
+  const cleanNameB = nameB.replace(/[^a-z0-9]/g, '');
+  if (cleanNameA === cleanNameB && cleanNameA !== 'na' && cleanNameA !== '') return true;
+  if (cleanA === cleanNameB || cleanB === cleanNameA) return true;
+
+  // Strip "class" prefix
+  const stripA = cleanA.replace(/^class/, '');
+  const stripB = cleanB.replace(/^class/, '');
+  if (stripA === stripB && stripA !== '') return true;
+
+  // Numeric equivalence for numbered classes (1st == 1 == Class 1 == C5)
+  const isPrePrimaryA = /play|nursery|lkg|ukg|m1|m2|m3/.test(rawA) || /play|nursery|lkg|ukg|m1|m2|m3/.test(nameA);
+  const isPrePrimaryB = /play|nursery|lkg|ukg|m1|m2|m3/.test(rawB) || /play|nursery|lkg|ukg|m1|m2|m3/.test(nameB);
+
+  if (!isPrePrimaryA && !isPrePrimaryB) {
+    const numA = rawA.replace(/\D/g, '') || nameA.replace(/\D/g, '');
+    const numB = rawB.replace(/\D/g, '') || nameB.replace(/\D/g, '');
+    if (numA && numB && numA === numB) return true;
+  }
+
+  // Pre-primary match
+  if (isPrePrimaryA && isPrePrimaryB) {
+    if (rawA.includes('play') && rawB.includes('play')) return true;
+    if (rawA.includes('nursery') && rawB.includes('nursery')) return true;
+    if (rawA.includes('lkg') && rawB.includes('lkg')) return true;
+    if (rawA.includes('ukg') && rawB.includes('ukg')) return true;
+  }
+
+  return false;
+};
+
 // Robust helper to parse cleanliness / fault tags
 const parseIsClean = (val: any): boolean => {
   if (val === false || val === 0) return false;
@@ -180,10 +235,13 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
     return unique.length > 0 ? unique : null;
   }, [allowedClasses, lockedClass]);
 
-  // Selected Class - strictly locked to allowed class(es) if assigned
+  // Selected Class - auto-selects initialClass or first assigned class
   const [selectedClass, setSelectedClass] = useState<string>(() => {
     if (allowedClassList && allowedClassList.length > 0) {
-      if (initialClass && allowedClassList.includes(initialClass)) return initialClass;
+      if (initialClass) {
+        const found = allowedClassList.find((c) => areClassesMatching(c, initialClass, getClassName));
+        if (found) return found;
+      }
       return allowedClassList[0];
     }
     if (initialClass && initialClass !== 'all') return initialClass;
@@ -194,11 +252,12 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
   // Ensure selectedClass is valid whenever allowedClassList changes
   useEffect(() => {
     if (allowedClassList && allowedClassList.length > 0) {
-      if (!allowedClassList.includes(selectedClass)) {
+      const isCurrentlyAllowed = allowedClassList.some((c) => areClassesMatching(c, selectedClass, getClassName));
+      if (!isCurrentlyAllowed) {
         setSelectedClass(allowedClassList[0]);
       }
     }
-  }, [allowedClassList, selectedClass]);
+  }, [allowedClassList, selectedClass, getClassName]);
 
   const [searchQuery, setSearchQuery] = useState<string>('');
   // By user request: Already recorded students are hidden for that day!
@@ -207,13 +266,12 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
 
-  // Filter students by selected class
+  // Filter students by selected class using robust bidirectional class matching
   const classStudents = useMemo(() => {
-    const clsTrim = String(selectedClass || '').trim().toLowerCase();
-    if (!clsTrim || clsTrim === 'all') return students;
+    const clsTrim = String(selectedClass || '').trim();
+    if (!clsTrim || clsTrim.toLowerCase() === 'all') return students;
     return students.filter((s) => {
-      const sCls = String(s.Class || '').trim().toLowerCase();
-      return sCls === clsTrim || getClassName(s.Class).toLowerCase() === clsTrim;
+      return areClassesMatching(s.Class, clsTrim, getClassName);
     });
   }, [students, selectedClass, getClassName]);
 
@@ -663,33 +721,63 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
               />
             </div>
 
-            {/* Class Picker: Locked badge for 1 class, restricted dropdown for multiple assigned classes, or full list for manager */}
-            {allowedClassList && allowedClassList.length === 1 ? (
-              <div className="bg-amber-400 text-slate-950 font-black px-3 py-1.5 rounded-xl text-xs flex items-center gap-1.5 shadow-sm">
-                <i className="fa-solid fa-lock text-slate-900"></i>
-                <span>कक्षा: Class {getClassName(allowedClassList[0])}</span>
-              </div>
-            ) : (
-              <div className="bg-white/10 border border-white/20 rounded-xl px-3 py-1.5 flex items-center gap-2 text-xs">
-                <i className="fa-solid fa-graduation-cap text-amber-300"></i>
-                <select
-                  value={selectedClass}
-                  onChange={(e) => setSelectedClass(e.target.value)}
-                  className="bg-transparent text-white font-bold outline-none cursor-pointer text-xs"
-                >
-                  {(allowedClassList && allowedClassList.length > 1 ? allowedClassList : classOptions).map((c) => (
-                    <option key={c} value={c} className="bg-slate-900 text-white">
-                      Class {getClassName(c)}
-                    </option>
-                  ))}
-                </select>
-                {allowedClassList && allowedClassList.length > 1 && (
-                  <span className="bg-amber-400 text-slate-950 text-[10px] font-black px-1.5 py-0.5 rounded-md">
-                    {allowedClassList.length} कक्षाएं
-                  </span>
-                )}
+            {/* Quick 1-Tap Class Switcher for Multiple Assigned Classes */}
+            {allowedClassList && allowedClassList.length > 1 && (
+              <div className="flex items-center gap-1 bg-white/10 p-1 rounded-xl border border-white/20">
+                {allowedClassList.map((c) => {
+                  const isCur = areClassesMatching(c, selectedClass, getClassName);
+                  return (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setSelectedClass(c)}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center gap-1 ${
+                        isCur
+                          ? 'bg-amber-400 text-slate-950 shadow-sm'
+                          : 'text-white/80 hover:text-white hover:bg-white/10'
+                      }`}
+                    >
+                      <i className="fa-solid fa-graduation-cap text-[10px]"></i>
+                      <span>Class {getClassName(c)}</span>
+                    </button>
+                  );
+                })}
               </div>
             )}
+
+            {/* Class Dropdown with Assigned Classes Highlighted */}
+            <div className="bg-white/10 border border-white/20 rounded-xl px-2.5 py-1.5 flex items-center gap-2 text-xs">
+              <i className="fa-solid fa-chalkboard-user text-amber-300"></i>
+              <select
+                value={selectedClass}
+                onChange={(e) => setSelectedClass(e.target.value)}
+                className="bg-transparent text-white font-bold outline-none cursor-pointer text-xs"
+              >
+                {allowedClassList && allowedClassList.length > 0 && (
+                  <optgroup label="✨ मैनेजर द्वारा असाइन की गई कक्षाएं" className="bg-slate-950 text-amber-400 font-bold">
+                    {allowedClassList.map((c) => (
+                      <option key={`assigned-${c}`} value={c} className="bg-slate-900 text-amber-300 font-bold">
+                        ★ Class {getClassName(c)} (असाइन की गई)
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                <optgroup label="अन्य सभी स्कूल कक्षाएं" className="bg-slate-950 text-slate-300 font-bold">
+                  {classOptions
+                    .filter((c) => !allowedClassList || !allowedClassList.some((ac) => areClassesMatching(ac, c, getClassName)))
+                    .map((c) => (
+                      <option key={c} value={c} className="bg-slate-900 text-white font-medium">
+                        Class {getClassName(c)}
+                      </option>
+                    ))}
+                </optgroup>
+              </select>
+              {allowedClassList && (
+                <span className="bg-amber-400 text-slate-950 text-[10px] font-black px-1.5 py-0.5 rounded-md shrink-0">
+                  {allowedClassList.length} असाइन
+                </span>
+              )}
+            </div>
 
             {onClose && (
               <button
