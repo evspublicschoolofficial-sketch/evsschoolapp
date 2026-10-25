@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Student, SchoolUser } from '../App';
 import {
   BusTrackingRecord,
@@ -11,6 +11,21 @@ import {
   subscribeToBusUpdates,
 } from '../utils/busTrackingService';
 import { GoogleSheetSyncModal } from './GoogleSheetSyncModal';
+import {
+  RouteStoppage,
+  RouteConfig,
+  GpsPoint,
+} from '../types/routeTracking';
+import {
+  DEFAULT_ROUTE_STOPPAGES,
+  DEFAULT_ROUTE_CONFIG,
+  calculateStoppageEtas,
+} from '../utils/etaEngine';
+import { InteractiveRouteMap } from './InteractiveRouteMap';
+import { StoppageTimelineSidebar } from './StoppageTimelineSidebar';
+import { StopCreationModal } from './StopCreationModal';
+
+const STORAGE_KEY_STOPPAGES = 'evs_van_route_stoppages';
 
 interface ManagerVanTrackerProps {
   students?: Student[];
@@ -30,7 +45,6 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
   const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
   const [lastSyncTime, setLastSyncTime] = useState<string>(new Date().toLocaleTimeString('hi-IN'));
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
-  const [mapType, setMapType] = useState<'google' | 'osm'>('google');
 
   // 15-second sheet sync countdown
   const [countdown, setCountdown] = useState<number>(15);
@@ -46,6 +60,51 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
   });
 
   const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
+
+  // =========================================================================
+  // ROUTE & STOPPAGES STATE (Stored & Interactive - Starts Clean for Real Route)
+  // =========================================================================
+  const [stoppages, setStoppages] = useState<RouteStoppage[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_STOPPAGES);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        // Purge old mock seed if present
+        const hasOldSeed = Array.isArray(parsed) && parsed.some((s: any) => s.id === 'stop-01' || s.id === 'stop-02' || s.id === 'stop-03');
+        if (!hasOldSeed && Array.isArray(parsed)) {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.warn('Error reading stored stoppages:', e);
+    }
+    return [];
+  });
+
+  const [routeConfig, setRouteConfig] = useState<RouteConfig>(() => ({
+    ...DEFAULT_ROUTE_CONFIG,
+    stoppages,
+  }));
+
+  // Pin-drop interactive creation states
+  const [isPinDropActive, setIsPinDropActive] = useState<boolean>(false);
+  const [tempPinCoords, setTempPinCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [isCreationModalOpen, setIsCreationModalOpen] = useState<boolean>(false);
+  const [focusedStoppage, setFocusedStoppage] = useState<RouteStoppage | null>(null);
+
+  // Persist stoppages to localStorage and update routeConfig
+  const saveStoppages = useCallback((newStoppages: RouteStoppage[]) => {
+    setStoppages(newStoppages);
+    setRouteConfig((prev) => ({
+      ...prev,
+      stoppages: newStoppages,
+    }));
+    try {
+      localStorage.setItem(STORAGE_KEY_STOPPAGES, JSON.stringify(newStoppages));
+    } catch (e) {
+      console.warn('Could not save stoppages:', e);
+    }
+  }, []);
 
   // Fetch real Google Sheet "Bus_Tracking"
   const fetchSheetData = async () => {
@@ -125,6 +184,14 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
           const parsed = JSON.parse(e.newValue);
           setLiveTelemetry((prev) => ({ ...prev, ...parsed }));
           setLastSyncTime(new Date().toLocaleTimeString('hi-IN'));
+        } catch {}
+      }
+      if (e.key === STORAGE_KEY_STOPPAGES && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            setStoppages(parsed);
+          }
         } catch {}
       }
     };
@@ -231,6 +298,33 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
     };
   }, [activeBus, liveTelemetry, users]);
 
+  // Current GPS point for the ETA engine
+  const currentGpsPoint: GpsPoint = useMemo(
+    () => ({
+      lat: activeTelemetry.latitude,
+      lng: activeTelemetry.longitude,
+      speed: activeTelemetry.speed,
+      heading: activeTelemetry.heading,
+      accuracy: activeTelemetry.accuracy,
+      timestamp: activeTelemetry.lastUpdated,
+    }),
+    [activeTelemetry]
+  );
+
+  // =========================================================================
+  // DYNAMIC ETA ENGINE EXECUTION
+  // =========================================================================
+  const etaCalculation = useMemo(() => {
+    return calculateStoppageEtas(
+      currentGpsPoint,
+      {
+        ...routeConfig,
+        stoppages,
+      },
+      new Date()
+    );
+  }, [currentGpsPoint, routeConfig, stoppages]);
+
   // Distance from school campus
   const distanceFromSchool = useMemo(() => {
     return calculateDistanceKm(
@@ -249,21 +343,102 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
     setTimeout(() => setCopiedLink(false), 2500);
   };
 
-  // Google Maps and OSM Embed URLs
-  const googleMapEmbedUrl = `https://maps.google.com/maps?q=${activeTelemetry.latitude},${activeTelemetry.longitude}&hl=hi&z=16&output=embed`;
-  const delta = 0.012;
-  const osmEmbedUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${activeTelemetry.longitude - delta}%2C${activeTelemetry.latitude - delta}%2C${activeTelemetry.longitude + delta}%2C${activeTelemetry.latitude + delta}&layer=mapnik&marker=${activeTelemetry.latitude}%2C${activeTelemetry.longitude}`;
+  // =========================================================================
+  // STOPPAGE MODIFICATION HANDLERS (Pin-drop, Drag, Delete, Reset)
+  // =========================================================================
+  const handleTogglePinDrop = useCallback(() => {
+    setIsPinDropActive((prev) => !prev);
+  }, []);
+
+  const handleMapClickDropPin = useCallback((lat: number, lng: number) => {
+    setTempPinCoords({ lat, lng });
+    setIsCreationModalOpen(true);
+  }, []);
+
+  const handleSaveNewStop = useCallback(
+    (newStopData: Omit<RouteStoppage, 'id'>) => {
+      const newStop: RouteStoppage = {
+        ...newStopData,
+        id: `stop-${Date.now().toString().slice(-6)}`,
+        sequence: stoppages.length + 1,
+      };
+      const updated = [...stoppages, newStop];
+      saveStoppages(updated);
+      setIsPinDropActive(false);
+      setTempPinCoords(null);
+    },
+    [stoppages, saveStoppages]
+  );
+
+  const handleUpdateStoppageCoords = useCallback(
+    (stopId: string, lat: number, lng: number) => {
+      const updated = stoppages.map((s) =>
+        s.id === stopId ? { ...s, lat, lng } : s
+      );
+      saveStoppages(updated);
+    },
+    [stoppages, saveStoppages]
+  );
+
+  const handleDeleteStoppage = useCallback(
+    (stopId: string) => {
+      const filtered = stoppages.filter((s) => s.id !== stopId);
+      // Re-sequence 1, 2, 3...
+      const resequenced = filtered.map((s, idx) => ({
+        ...s,
+        sequence: idx + 1,
+      }));
+      saveStoppages(resequenced);
+      if (focusedStoppage?.id === stopId) {
+        setFocusedStoppage(null);
+      }
+    },
+    [stoppages, saveStoppages, focusedStoppage]
+  );
+
+  // One-click: capture vehicle's current GPS location to add a new stoppage
+  const handleAddStopAtCurrentGps = useCallback(() => {
+    setTempPinCoords({
+      lat: activeTelemetry.latitude,
+      lng: activeTelemetry.longitude,
+    });
+    setIsCreationModalOpen(true);
+  }, [activeTelemetry.latitude, activeTelemetry.longitude]);
+
+  // Clear all stoppages for starting completely fresh
+  const handleClearAllStoppages = useCallback(() => {
+    if (window.confirm('क्या आप सभी स्टॉपेज हटाकर नया खाली रूट शुरू करना चाहते हैं?')) {
+      saveStoppages([]);
+      setFocusedStoppage(null);
+      setIsPinDropActive(false);
+    }
+  }, [saveStoppages]);
+
+  const handleResetToDefault = useCallback(() => {
+    handleClearAllStoppages();
+  }, [handleClearAllStoppages]);
+
+  // Next upcoming or active stoppage
+  const upcomingStoppage = useMemo(() => {
+    return (
+      etaCalculation.stoppages.find(
+        (s) => s.status === 'at_stop' || s.status === 'approaching'
+      ) ||
+      etaCalculation.stoppages.find((s) => s.status === 'upcoming') ||
+      etaCalculation.stoppages[0]
+    );
+  }, [etaCalculation.stoppages]);
 
   return (
-    <div className="space-y-6 max-w-6xl mx-auto pb-12">
-      {/* HEADER BANNER */}
-      <div className="bg-gradient-to-r from-[#0c2340] via-[#1a3a60] to-teal-950 rounded-3xl p-6 sm:p-7 text-white shadow-xl relative overflow-hidden">
+    <div className="space-y-6 max-w-7xl mx-auto pb-12 animate-fadeIn">
+      {/* 1. HEADER BANNER */}
+      <div className="bg-gradient-to-r from-[#0c2340] via-[#10316b] to-teal-950 rounded-3xl p-6 sm:p-7 text-white shadow-xl relative overflow-hidden">
         <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="space-y-1.5">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-black tracking-wide uppercase border border-emerald-400/30 flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                <span>गूगल शीट लाइव वैन ट्रैकिंग</span>
+                <span>लाइव GPS रूट व स्टॉपेज ट्रैकर (Leaflet OSM)</span>
               </span>
               <span className="text-xs text-amber-300 font-bold bg-amber-400/20 border border-amber-400/30 px-2.5 py-0.5 rounded-full">
                 ⏱️ हर 15 सेकंड में ऑटो-रिफ्रेश
@@ -271,19 +446,45 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
             </div>
             <h1 className="text-2xl sm:text-3xl font-black tracking-tight flex items-center gap-2.5">
               <i className="fa-solid fa-van-shuttle text-amber-400"></i>
-              <span>स्कूल बस / वैन लाइव लोकेशन</span>
+              <span>स्कूल बस / वैन लाइव रूट व ETA</span>
             </h1>
             <p className="text-xs sm:text-sm text-slate-300 max-w-2xl">
-              ड्राइवर: <strong>{activeTelemetry.driverName}</strong> (मोबाइल: {activeTelemetry.driverPhone}) • शीट: <strong>Bus_Tracking</strong> से सीधे लाइव लोकेशन
+              चालक: <strong>{activeTelemetry.driverName}</strong> (फ़ोन: {activeTelemetry.driverPhone}) • 
+              क्रमबद्ध स्टॉपेज, पॉलीलाइन रूट और वास्तविक समय पर पहुंचने का समय (ETA)
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+            {/* ONE-TAP: ADD STOP AT CURRENT VEHICLE GPS */}
+            <button
+              type="button"
+              onClick={handleAddStopAtCurrentGps}
+              className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white text-xs font-black transition-all flex items-center gap-1.5 shadow-md cursor-pointer border border-emerald-400 active:scale-95"
+              title="जहाँ ऑटो खड़ा है, उसी स्थान को स्टॉपेज के रूप में जोड़ें"
+            >
+              <i className="fa-solid fa-location-crosshairs text-amber-300"></i>
+              <span>📍 वाहन की लोकेशन पर स्टॉप जोड़ें</span>
+            </button>
+
+            {/* PIN DROP QUICK ACTION BUTTON */}
+            <button
+              type="button"
+              onClick={handleTogglePinDrop}
+              className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 shadow-md cursor-pointer ${
+                isPinDropActive
+                  ? 'bg-rose-500 text-white animate-pulse ring-4 ring-rose-400/40'
+                  : 'bg-amber-400 hover:bg-amber-300 text-slate-950'
+              }`}
+            >
+              <i className={`fa-solid ${isPinDropActive ? 'fa-xmark' : 'fa-map-pin'}`}></i>
+              <span>{isPinDropActive ? 'पिन रद्द करें' : '📌 नया स्टॉप पिन गिराएं'}</span>
+            </button>
+
             {/* Google Sheet Apps Script Setup Button */}
             <button
               type="button"
               onClick={() => setShowScriptModal(true)}
-              className="px-3.5 py-2 rounded-xl bg-amber-400/20 hover:bg-amber-400/30 text-amber-300 text-xs font-bold transition-all border border-amber-400/40 flex items-center gap-1.5 cursor-pointer backdrop-blur-sm shadow-xs"
+              className="px-3.5 py-2 rounded-xl bg-amber-400/20 hover:bg-amber-400/30 text-amber-300 text-xs font-bold transition-all border border-amber-400/40 flex items-center gap-1.5 cursor-pointer backdrop-blur-xs shadow-xs"
               title="गूगल शीट 'Bus_Tracking' में लोकेशन ऑटो-अपडेट करने हेतु Apps Script कोड"
             >
               <i className="fa-solid fa-code"></i>
@@ -297,7 +498,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
                 fetchSheetData();
                 setCountdown(15);
               }}
-              className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition-all border border-white/20 flex items-center gap-1.5 cursor-pointer backdrop-blur-sm shadow-xs"
+              className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition-all border border-white/20 flex items-center gap-1.5 cursor-pointer backdrop-blur-xs shadow-xs"
               title="अभी तुरंत गूगल शीट से लोकेशन प्राप्त करें"
             >
               <i className={`fa-solid fa-rotate ${loadingSheet ? 'animate-spin' : ''}`}></i>
@@ -319,7 +520,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
         </div>
       </div>
 
-      {/* EMERGENCY SOS ALERT BANNER (If Active) */}
+      {/* 2. EMERGENCY SOS ALERT BANNER (If Active) */}
       {activeTelemetry.sosAlert && (
         <div className="p-4 bg-red-600 text-white rounded-3xl shadow-xl flex items-center justify-between gap-4 animate-pulse">
           <div className="flex items-center gap-3">
@@ -345,16 +546,16 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
         </div>
       )}
 
-      {/* TOP CONTROL: VEHICLE SELECTION & LIVE TELEMETRY BAR */}
+      {/* 3. CONTROL PANEL & LIVE ROUTE METRICS */}
       <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 sm:p-6 space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-blue-900 text-white flex items-center justify-center text-xl font-bold shadow-md shadow-blue-900/20">
+            <div className="w-12 h-12 rounded-2xl bg-[#0c2340] text-amber-300 flex items-center justify-center text-xl font-bold shadow-md shadow-blue-900/20">
               <i className="fa-solid fa-location-crosshairs"></i>
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-slate-500">गाड़ी ID:</span>
+                <span className="text-xs font-bold text-slate-500">वाहन ID:</span>
                 <select
                   value={selectedBusId}
                   onChange={(e) => setSelectedBusId(e.target.value)}
@@ -371,7 +572,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-600 mt-1">
-                चालक: <strong className="text-slate-900">{activeTelemetry.driverName}</strong> • फोन: <strong className="text-slate-900">{activeTelemetry.driverPhone}</strong>
+                चालक: <strong className="text-slate-900">{activeTelemetry.driverName}</strong> • फ़ोन: <strong className="text-slate-900">{activeTelemetry.driverPhone}</strong>
               </p>
             </div>
           </div>
@@ -392,7 +593,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
               )}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm"
+              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs"
             >
               <i className="fa-brands fa-whatsapp text-sm"></i>
               <span>WhatsApp</span>
@@ -401,7 +602,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
             <button
               type="button"
               onClick={handleCopyTrackingLink}
-              className="px-3.5 py-2 rounded-xl bg-blue-900 hover:bg-blue-950 text-white text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm cursor-pointer"
+              className="px-3.5 py-2 rounded-xl bg-[#0c2340] hover:bg-slate-900 text-amber-300 text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs cursor-pointer"
               title="अभिभावकों के साथ लोकेशन लिंक शेयर करें"
             >
               <i className={`fa-solid ${copiedLink ? 'fa-check' : 'fa-share-nodes'}`}></i>
@@ -410,161 +611,152 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
           </div>
         </div>
 
-        {/* 4 TELEMETRY TILES: Direct vehicle live status */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
-          <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200">
-            <span className="text-[10px] font-bold text-slate-400 uppercase block">वर्तमान स्थिति</span>
-            <span
-              className={`text-xs font-black inline-flex items-center gap-1.5 mt-1 ${
-                activeTelemetry.status === 'running' ? 'text-emerald-700' : 'text-slate-700'
-              }`}
-            >
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  activeTelemetry.status === 'running' ? 'bg-emerald-500 animate-ping' : 'bg-slate-400'
-                }`}
-              ></span>
-              <span>{activeTelemetry.status === 'running' ? 'गतिमान (सक्रिय)' : 'रुकी हुई'}</span>
-            </span>
+        {/* 4 DYNAMIC ETA & TELEMETRY CARDS */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-center">
+          {/* Card 1: Next Stoppage & ETA */}
+          <div className="p-3.5 bg-gradient-to-br from-amber-50 to-amber-100/60 rounded-2xl border border-amber-300 text-left">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-black text-amber-800 uppercase">
+                अगला स्टॉपेज (Next Stop)
+              </span>
+              <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>
+            </div>
+            <div className="text-xs font-black text-slate-950 mt-1 truncate">
+              {upcomingStoppage ? `#${upcomingStoppage.sequence}. ${upcomingStoppage.name}` : 'कैंपस वापसी'}
+            </div>
+            <div className="text-sm font-extrabold text-amber-900 mt-0.5">
+              ETA: {upcomingStoppage?.etaFormatted || 'पहुँच रही है'}
+            </div>
           </div>
 
-          <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200">
-            <span className="text-[10px] font-bold text-slate-400 uppercase block">गति (Speed)</span>
-            <span className="text-sm font-black text-slate-900 mt-1 block">
-              {activeTelemetry.speed ? `${activeTelemetry.speed} km/h` : '0 km/h'}
+          {/* Card 2: Speed & Bearing */}
+          <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 text-left">
+            <span className="text-[10px] font-bold text-slate-400 uppercase block">
+              गति व दिशा (Speed & Heading)
             </span>
+            <div className="text-sm font-black text-slate-900 mt-1 flex items-center gap-2">
+              <span>{activeTelemetry.speed ? `${Math.round(activeTelemetry.speed)} km/h` : '0 km/h'}</span>
+              <span className="text-xs font-bold text-slate-500">
+                • {activeTelemetry.heading !== null ? `${Math.round(activeTelemetry.heading)}°` : '0°'}
+              </span>
+            </div>
+            <div className="text-[11px] text-emerald-700 font-bold mt-0.5">
+              औसत रूट गति: {etaCalculation.effectiveSpeedKmH} km/h
+            </div>
           </div>
 
-          <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200">
-            <span className="text-[10px] font-bold text-slate-400 uppercase block">स्कूल से दूरी</span>
-            <span className="text-sm font-black text-blue-900 mt-1 block">
+          {/* Card 3: School Distance & Remaining Route */}
+          <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 text-left">
+            <span className="text-[10px] font-bold text-slate-400 uppercase block">
+              स्कूल से दूरी / शेष रूट
+            </span>
+            <div className="text-sm font-black text-[#0c2340] mt-1">
               {distanceFromSchool} किमी
-            </span>
+            </div>
+            <div className="text-[11px] text-slate-600 font-bold mt-0.5">
+              शेष रूट: ~{etaCalculation.totalRemainingDistanceKm} km (~{etaCalculation.totalRemainingMinutes} min)
+            </div>
           </div>
 
-          <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200">
-            <span className="text-[10px] font-bold text-slate-400 uppercase block">अंतिम लोकेशन अपडेट</span>
-            <span className="text-xs font-black text-slate-900 mt-1 block font-mono">
+          {/* Card 4: GPS Health & Last Sync */}
+          <div className={`p-3.5 rounded-2xl border text-left ${
+            etaCalculation.isStaleSignal
+              ? 'bg-rose-50 border-rose-300'
+              : 'bg-emerald-50/70 border-emerald-200'
+          }`}>
+            <span className={`text-[10px] font-black uppercase block ${
+              etaCalculation.isStaleSignal ? 'text-rose-700' : 'text-emerald-700'
+            }`}>
+              {etaCalculation.isStaleSignal ? '⚠️ विलंबित सिग्नल' : '✓ जीपीएस सिग्नल सक्रिय'}
+            </span>
+            <div className={`text-sm font-black mt-1 font-mono ${
+              etaCalculation.isStaleSignal ? 'text-rose-900' : 'text-emerald-950'
+            }`}>
               {activeTelemetry.lastUpdated ? activeTelemetry.lastUpdated.split(' ')[1] || activeTelemetry.lastUpdated : lastSyncTime}
-            </span>
-          </div>
-        </div>
-
-        {/* EXACT GPS COORDINATES STRIP */}
-        <div className="p-4 bg-emerald-50/60 border border-emerald-200 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold">
-              <i className="fa-solid fa-map-pin"></i>
             </div>
-            <div>
-              <span className="text-slate-500 font-bold block text-[10px] uppercase">
-                गाड़ी की वर्तमान GPS लोकेशन (Google Sheet & Phone):
-              </span>
-              <span className="font-mono text-slate-900 font-black text-sm">
-                {activeTelemetry.latitude.toFixed(6)}, {activeTelemetry.longitude.toFixed(6)}
-              </span>
+            <div className={`text-[11px] font-bold mt-0.5 ${
+              etaCalculation.isStaleSignal ? 'text-rose-600' : 'text-emerald-700'
+            }`}>
+              {etaCalculation.isStaleSignal
+                ? `${etaCalculation.staleSeconds}s पूर्व अपडेट`
+                : 'रीयल-टाइम कनेक्टेड'}
             </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <a
-              href={`https://www.google.com/maps?q=${activeTelemetry.latitude},${activeTelemetry.longitude}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-3.5 py-2 rounded-xl bg-white border border-slate-300 text-blue-900 font-extrabold text-xs hover:bg-slate-100 transition-colors flex items-center gap-1.5 shadow-2xs"
-            >
-              <i className="fa-solid fa-arrow-up-right-from-square text-[11px]"></i>
-              <span>Google Maps में खोलें</span>
-            </a>
-
-            <a
-              href={`https://www.google.com/maps/dir/?api=1&destination=${activeTelemetry.latitude},${activeTelemetry.longitude}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs transition-colors flex items-center gap-1.5 shadow-2xs"
-            >
-              <i className="fa-solid fa-diamond-turn-right text-[11px]"></i>
-              <span>गाड़ी तक दिशा-निर्देश (Navigation)</span>
-            </a>
           </div>
         </div>
       </div>
 
-      {/* LIVE MAP CONTAINER (Pure live location of bus) */}
-      <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 sm:p-6 space-y-3">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <h3 className="text-base font-black text-slate-900 flex items-center gap-2">
-              <i className="fa-solid fa-map-location-dot text-emerald-600"></i>
-              <span>लाइव मैप: गाड़ी कहाँ है (Live Location Map)</span>
-            </h3>
-            <p className="text-xs text-slate-500 mt-0.5">
-              गूगल मैप पर लाल पिन ठीक उसी स्थान पर है जहां वैन वर्तमान में मौजूद है।
-            </p>
-          </div>
+      {/* 4. MAIN INTERACTIVE MAP & TIMELINE SIDEBAR GRID */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+        {/* MAP COLUMN (2 Cols on lg) */}
+        <div className="lg:col-span-2 space-y-4">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-4 sm:p-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3.5">
+              <div>
+                <h3 className="text-base font-black text-slate-900 flex items-center gap-2">
+                  <i className="fa-solid fa-map-location-dot text-blue-900"></i>
+                  <span>इंटरैक्टिव रूट मैप (OpenStreetMap + Leaflet)</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  क्रमबद्ध स्टॉपेज (#), गतिशील वैन मार्कर, और रूट पॉलीलाइन। किसी भी स्टॉप को खींचकर स्थान बदलें।
+                </p>
+              </div>
 
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs font-bold">
-              <button
-                type="button"
-                onClick={() => setMapType('google')}
-                className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
-                  mapType === 'google' ? 'bg-white text-blue-900 shadow-xs' : 'text-slate-600'
-                }`}
-              >
-                Google Maps
-              </button>
-              <button
-                type="button"
-                onClick={() => setMapType('osm')}
-                className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
-                  mapType === 'osm' ? 'bg-white text-blue-900 shadow-xs' : 'text-slate-600'
-                }`}
-              >
-                OpenStreetMap
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAutoRefresh(!autoRefresh)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
+                    autoRefresh
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                      : 'bg-slate-100 text-slate-600 border-slate-200'
+                  }`}
+                >
+                  {autoRefresh ? '🟢 15s ऑटो-रिफ्रेश On' : '⚪ ऑटो-रिफ्रेश Off'}
+                </button>
+              </div>
             </div>
 
-            <button
-              type="button"
-              onClick={() => setAutoRefresh(!autoRefresh)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
-                autoRefresh
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
-                  : 'bg-slate-100 text-slate-600 border-slate-200'
-              }`}
-            >
-              {autoRefresh ? '🟢 15s ऑटो-रिफ्रेश On' : '⚪ ऑटो-रिफ्रेश Off'}
-            </button>
+            {/* Interactive Leaflet Map Component */}
+            <InteractiveRouteMap
+              currentGps={currentGpsPoint}
+              routeConfig={routeConfig}
+              stoppages={etaCalculation.stoppages}
+              isStaleSignal={etaCalculation.isStaleSignal}
+              staleSeconds={etaCalculation.staleSeconds}
+              isPinDropActive={isPinDropActive}
+              onTogglePinDrop={handleTogglePinDrop}
+              onMapClickDropPin={handleMapClickDropPin}
+              onAddStopAtCurrentGps={handleAddStopAtCurrentGps}
+              onUpdateStoppageCoords={handleUpdateStoppageCoords}
+              onDeleteStoppage={handleDeleteStoppage}
+              focusedStoppage={focusedStoppage}
+              driverName={activeTelemetry.driverName}
+              driverPhone={activeTelemetry.driverPhone}
+            />
           </div>
         </div>
 
-        {/* Map iframe */}
-        <div className="relative w-full h-96 sm:h-[480px] bg-slate-100 rounded-2xl overflow-hidden border border-slate-200 shadow-inner">
-          <iframe
-            title="School Van Live Location"
-            src={mapType === 'google' ? googleMapEmbedUrl : osmEmbedUrl}
-            className="w-full h-full border-0"
-            loading="lazy"
+        {/* TIMELINE SIDEBAR COLUMN (1 Col on lg) */}
+        <div className="lg:col-span-1">
+          <StoppageTimelineSidebar
+            routeConfig={routeConfig}
+            stoppages={etaCalculation.stoppages}
+            passedCount={etaCalculation.passedCount}
+            totalStudents={etaCalculation.totalStudents}
+            isPinDropActive={isPinDropActive}
+            onTogglePinDrop={handleTogglePinDrop}
+            onResetToDefault={handleResetToDefault}
+            onClearAllStoppages={handleClearAllStoppages}
+            onAddStopAtCurrentGps={handleAddStopAtCurrentGps}
+            onSelectStoppage={(stoppage) => setFocusedStoppage(stoppage)}
+            onDeleteStoppage={handleDeleteStoppage}
+            activeStoppageId={focusedStoppage?.id}
+            selectedBusName={`वैन ${selectedBusId} (${activeTelemetry.driverName})`}
           />
-
-          {/* Floating On-Screen Quick Pin Info */}
-          <div className="absolute top-3 left-3 bg-white/95 backdrop-blur-md px-3.5 py-2.5 rounded-2xl shadow-lg border border-slate-200 text-xs space-y-1 pointer-events-none max-w-xs">
-            <div className="flex items-center gap-1.5 text-slate-900 font-extrabold">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span>वैन {selectedBusId} ({activeTelemetry.driverName})</span>
-            </div>
-            <div className="text-[11px] text-slate-600 font-mono">
-              {activeTelemetry.latitude.toFixed(6)}, {activeTelemetry.longitude.toFixed(6)}
-            </div>
-            <div className="text-[10px] text-slate-500 font-medium">
-              स्कूल से: <strong>{distanceFromSchool} किमी</strong> • स्पीड: <strong>{activeTelemetry.speed || 0} km/h</strong>
-            </div>
-          </div>
         </div>
       </div>
 
-      {/* GOOGLE SHEET "BUS_TRACKING" VERIFICATION TABLE */}
+      {/* 5. GOOGLE SHEET "BUS_TRACKING" VERIFICATION TABLE (Preserved 100%) */}
       <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 sm:p-6 space-y-4">
         <div className="flex items-center justify-between">
           <div>
@@ -650,6 +842,23 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
           </table>
         </div>
       </div>
+
+      {/* STOP CREATION MODAL */}
+      {tempPinCoords && (
+        <StopCreationModal
+          isOpen={isCreationModalOpen}
+          onClose={() => {
+            setIsCreationModalOpen(false);
+            setTempPinCoords(null);
+            setIsPinDropActive(false);
+          }}
+          lat={tempPinCoords.lat}
+          lng={tempPinCoords.lng}
+          suggestedSequence={stoppages.length + 1}
+          onSaveStop={handleSaveNewStop}
+        />
+      )}
+
       {/* GOOGLE APPS SCRIPT SETUP MODAL */}
       <GoogleSheetSyncModal
         isOpen={showScriptModal}

@@ -9425,7 +9425,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                 <th className="px-3.5 py-3 font-semibold">माध्यम (Mode)</th>
                                 <th className="px-3.5 py-3 font-semibold text-right">जमा राशि (Amount)</th>
                                 <th className="px-3.5 py-3 font-semibold">प्राप्तकर्ता (Collector)</th>
-                                <th className="px-3.5 py-3 font-semibold text-center">कार्रवाई (Action)</th>
+                                <th className="px-3.5 py-3 font-semibold text-center">{currentLang === 'en' ? 'Status' : 'स्थिति (Status)'}</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-200 bg-white">
@@ -9481,29 +9481,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                       {collector}
                                     </td>
                                     <td className="px-3.5 py-3 text-center whitespace-nowrap">
-                                      <div className="flex items-center justify-center gap-1.5">
-                                        <button
-                                          type="button"
-                                          onClick={() => setActiveReceiptModalData({ student: selectedStudent, fee })}
-                                          className="px-2.5 py-1 bg-blue-900 hover:bg-blue-800 text-amber-300 rounded-lg text-[11px] font-bold transition-all cursor-pointer inline-flex items-center gap-1 shadow-2xs"
-                                          title="आधिकारिक रसीद प्रिंट या PDF में डाउनलोड करें"
-                                        >
-                                          <i className="fa-solid fa-print text-xs"></i>
-                                          <span>रसीद प्रिंट</span>
-                                        </button>
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            const text = `*E.V.S. Public School - Fee Receipt*\nStudent: ${selectedStudent.Student_Name} (Roll No: ${selectedStudent.Roll_Number || '1'})\nReceipt No: #${receiptId}\nDate: ${dateStr}\nAmount Paid: ₹${amt}\nMode: ${mode}\nReceived By: ${collector}`;
-                                            window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
-                                          }}
-                                          className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-600 hover:text-white text-emerald-800 border border-emerald-200 rounded-lg text-[11px] font-bold transition-all cursor-pointer inline-flex items-center gap-1"
-                                          title="WhatsApp पर रसीद शेयर करें"
-                                        >
-                                          <i className="fa-brands fa-whatsapp text-emerald-600"></i>
-                                          <span>शेयर</span>
-                                        </button>
-                                      </div>
+                                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-bold shadow-2xs">
+                                        <i className="fa-solid fa-circle-check text-emerald-600 text-xs"></i>
+                                        <span>{currentLang === 'en' ? 'Verified / Paid' : 'सत्यापित / जमा'}</span>
+                                      </span>
                                     </td>
                                   </tr>
                                 );
