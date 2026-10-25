@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { RouteStoppage } from '../types/routeTracking';
+import { RouteStoppage, RouteShift } from '../types/routeTracking';
 
 interface StopCreationModalProps {
   isOpen: boolean;
@@ -7,6 +7,7 @@ interface StopCreationModalProps {
   lat: number;
   lng: number;
   suggestedSequence: number;
+  activeShift?: RouteShift;
   onSaveStop: (newStop: Omit<RouteStoppage, 'id'>) => void;
 }
 
@@ -28,10 +29,14 @@ export const StopCreationModal: React.FC<StopCreationModalProps> = ({
   lat,
   lng,
   suggestedSequence,
+  activeShift = 'morning',
   onSaveStop,
 }) => {
+  const isMorning = activeShift === 'morning';
+
   const [name, setName] = useState<string>('');
-  const [scheduledTime, setScheduledTime] = useState<string>(() => getCurrentFormattedTime());
+  const [morningTime, setMorningTime] = useState<string>('07:30 AM');
+  const [eveningTime, setEveningTime] = useState<string>('02:30 PM');
   const [studentCount, setStudentCount] = useState<number>(5);
   const [landmark, setLandmark] = useState<string>('');
 
@@ -41,12 +46,18 @@ export const StopCreationModal: React.FC<StopCreationModalProps> = ({
     e.preventDefault();
     if (!name.trim()) return;
 
+    const mTime = morningTime.trim() || '07:30 AM';
+    const eTime = eveningTime.trim() || '02:30 PM';
+    const activeScheduled = isMorning ? mTime : eTime;
+
     onSaveStop({
       sequence: suggestedSequence,
       name: name.trim(),
       lat,
       lng,
-      scheduledTime: scheduledTime.trim() || '07:30 AM',
+      scheduledTime: activeScheduled,
+      morningTime: mTime,
+      eveningTime: eTime,
       studentCount: Number(studentCount) || 1,
       landmark: landmark.trim() || undefined,
     });
@@ -71,6 +82,9 @@ export const StopCreationModal: React.FC<StopCreationModalProps> = ({
                 <span className="text-[10px] font-black uppercase tracking-wider bg-amber-400/20 text-amber-300 px-2 py-0.5 rounded-full border border-amber-400/30">
                   नया स्टॉप #{suggestedSequence}
                 </span>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white/20 text-white">
+                  {isMorning ? '🌅 सुबह पिकअप' : '🌇 शाम ड्रॉप'}
+                </span>
               </div>
               <h3 className="text-base font-black">रूट पर नया स्टॉपेज जोड़ें</h3>
             </div>
@@ -88,7 +102,7 @@ export const StopCreationModal: React.FC<StopCreationModalProps> = ({
         <div className="bg-slate-50 px-5 py-2.5 border-b border-slate-200 flex items-center justify-between text-xs text-slate-600 font-mono">
           <span className="flex items-center gap-1.5 font-bold text-slate-500">
             <i className="fa-solid fa-crosshairs text-blue-900"></i>
-            चयनित निर्देशांक (GPS):
+            चयनित सड़क निर्देशांक (GPS):
           </span>
           <span className="font-black text-slate-900">
             {lat.toFixed(6)}, {lng.toFixed(6)}
@@ -112,23 +126,41 @@ export const StopCreationModal: React.FC<StopCreationModalProps> = ({
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          {/* Morning & Evening Shift Times */}
+          <div className="grid grid-cols-2 gap-3 p-3 bg-amber-50/60 rounded-2xl border border-amber-200">
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                निर्धारित समय (Time):
+              <label className="block text-[11px] font-bold text-amber-950 mb-1 flex items-center gap-1">
+                <span>🌅 सुबह लाने का समय:</span>
               </label>
               <input
                 type="text"
-                value={scheduledTime}
-                onChange={(e) => setScheduledTime(e.target.value)}
-                placeholder="07:35 AM"
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-semibold focus:border-blue-900 focus:ring-2 focus:ring-blue-900/20 outline-none"
+                value={morningTime}
+                onChange={(e) => setMorningTime(e.target.value)}
+                placeholder="07:30 AM"
+                className="w-full px-3 py-2 rounded-xl bg-white border border-amber-300 text-xs font-bold focus:border-blue-900 focus:ring-2 focus:ring-blue-900/20 outline-none"
               />
+              <span className="text-[10px] text-amber-800 font-medium">घर से स्कूल लाते समय</span>
             </div>
 
             <div>
+              <label className="block text-[11px] font-bold text-amber-950 mb-1 flex items-center gap-1">
+                <span>🌇 शाम छोड़ने का समय:</span>
+              </label>
+              <input
+                type="text"
+                value={eveningTime}
+                onChange={(e) => setEveningTime(e.target.value)}
+                placeholder="02:30 PM"
+                className="w-full px-3 py-2 rounded-xl bg-white border border-amber-300 text-xs font-bold focus:border-blue-900 focus:ring-2 focus:ring-blue-900/20 outline-none"
+              />
+              <span className="text-[10px] text-amber-800 font-medium">स्कूल से घर छोड़ते समय</span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">
-                छात्रों की संख्या (Students):
+                विद्यार्थी संख्या (Students):
               </label>
               <input
                 type="number"
@@ -139,25 +171,25 @@ export const StopCreationModal: React.FC<StopCreationModalProps> = ({
                 className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-semibold focus:border-blue-900 focus:ring-2 focus:ring-blue-900/20 outline-none"
               />
             </div>
-          </div>
 
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">
-              लैंडमार्क / पहचान चिन्ह (Optional Notes):
-            </label>
-            <input
-              type="text"
-              value={landmark}
-              onChange={(e) => setLandmark(e.target.value)}
-              placeholder="उदा. प्राथमिक स्कूल के पास / शिव मंदिर तिराहा"
-              className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-medium focus:border-blue-900 focus:ring-2 focus:ring-blue-900/20 outline-none"
-            />
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                लैंडमार्क / पहचान (Optional):
+              </label>
+              <input
+                type="text"
+                value={landmark}
+                onChange={(e) => setLandmark(e.target.value)}
+                placeholder="उदा. प्राथमिक स्कूल के पास"
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-medium focus:border-blue-900 focus:ring-2 focus:ring-blue-900/20 outline-none"
+              />
+            </div>
           </div>
 
           <div className="p-3 bg-blue-50 border border-blue-200 rounded-2xl text-[11px] text-blue-900 flex items-start gap-2">
-            <i className="fa-solid fa-circle-info text-blue-600 mt-0.5 shrink-0"></i>
+            <i className="fa-solid fa-road text-blue-600 mt-0.5 shrink-0"></i>
             <p>
-              स्टॉप सहेजते ही रूट लाइन स्वतः बढ़ जाएगी और गाड़ी की वर्तमान गति के अनुसार लाइव ETA की गणना शुरू हो जाएगी।
+              स्टॉप सहेजते ही नीली रूट लाइन सीधे <strong>सड़क के मोड़ों व रास्तों पर (Road Snapping)</strong> स्वतः खिंच जाएगी।
             </p>
           </div>
 
@@ -175,7 +207,7 @@ export const StopCreationModal: React.FC<StopCreationModalProps> = ({
               className="px-5 py-2.5 rounded-xl bg-blue-900 hover:bg-blue-950 text-amber-300 text-xs font-black transition shadow-md flex items-center gap-1.5 cursor-pointer active:scale-95"
             >
               <i className="fa-solid fa-check"></i>
-              <span>स्टॉप जोड़ें (# {suggestedSequence})</span>
+              <span>स्टॉप जोड़ें (#{suggestedSequence})</span>
             </button>
           </div>
         </form>

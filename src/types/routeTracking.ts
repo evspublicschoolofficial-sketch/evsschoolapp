@@ -1,4 +1,6 @@
-// Stoppage and Route Tracking Types for EVS Public School Van Tracker
+// Stoppage, Shift, and Route Tracking Types for EVS Public School Van Tracker
+
+export type RouteShift = 'morning' | 'evening';
 
 export interface RouteStoppage {
   id: string;
@@ -6,7 +8,9 @@ export interface RouteStoppage {
   name: string; // e.g. "रामपुर मनिहारन मोड़"
   lat: number;
   lng: number;
-  scheduledTime: string; // e.g. "07:35 AM"
+  scheduledTime: string; // Active shift time (e.g. "07:35 AM" or "02:30 PM")
+  morningTime?: string; // Morning pickup time e.g. "07:35 AM"
+  eveningTime?: string; // Evening drop time e.g. "02:30 PM"
   studentCount: number; // e.g. 5
   landmark?: string; // Optional landmark/notes
   // Dynamic calculation fields computed by ETA engine
@@ -14,13 +18,16 @@ export interface RouteStoppage {
   etaMinutes?: number;
   etaFormatted?: string; // "Arriving now", "4m 20s", "14 mins"
   projectedArrival?: string; // "07:38 AM"
-  distanceFromVanKm?: number; // Distance from van along path
+  distanceFromVanKm?: number; // Distance from van along road path
   straightLineDistanceKm?: number;
 }
 
 export interface RouteConfig {
-  routeId: string;
-  routeName: string;
+  routeId: string; // 'route-1' or 'route-2'
+  routeName: string; // e.g. 'रूट #1: रामपुर - चिलकाना मार्ग'
+  assignedBusId: string; // e.g. 'ecad7ddc' or '756cedc0'
+  assignedDriver: string; // e.g. 'Amjad'
+  shift: RouteShift; // 'morning' | 'evening'
   schoolOrigin: {
     lat: number;
     lng: number;
@@ -28,8 +35,11 @@ export interface RouteConfig {
     address?: string;
   };
   stoppages: RouteStoppage[];
-  averageSpeedKmH: number; // Default transit speed for blending (e.g. 28 km/h)
+  averageSpeedKmH: number; // Default transit speed for blending (e.g. 26 km/h)
   dwellTimePerStopSec: number; // Boarding dwell time (e.g. 60 seconds)
+  roadCoordinates?: [number, number][]; // High-precision road-snapped polyline coordinates
+  totalRoadDistanceKm?: number;
+  estimatedDriveMinutes?: number;
 }
 
 export interface GpsPoint {
@@ -51,4 +61,5 @@ export interface EtaCalculationResult {
   isStaleSignal: boolean;
   staleSeconds: number;
   effectiveSpeedKmH: number;
+  roadPathCoordinates?: [number, number][]; // Actual road polyline
 }

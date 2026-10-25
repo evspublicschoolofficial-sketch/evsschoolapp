@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { RouteStoppage, RouteConfig, GpsPoint } from '../types/routeTracking';
+import { fetchRoadSnappingRoute } from '../utils/roadRoutingService';
 
 interface InteractiveRouteMapProps {
   currentGps: GpsPoint;
@@ -47,6 +48,12 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
 
   const [followVan, setFollowVan] = useState<boolean>(true);
   const [mapInitialized, setMapInitialized] = useState<boolean>(false);
+
+  // Real road snapping metrics
+  const [isRoadSnapped, setIsRoadSnapped] = useState<boolean>(true);
+  const [roadDistanceKm, setRoadDistanceKm] = useState<number>(0);
+  const [roadDurationMin, setRoadDurationMin] = useState<number>(0);
+  const [isRoutingLoading, setIsRoutingLoading] = useState<boolean>(false);
 
   // Initialize Leaflet Map with robust container cleanup
   useEffect(() => {
@@ -279,68 +286,97 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
     }
   }, [currentGps, isStaleSignal, staleSeconds, driverName, driverPhone, followVan, mapInitialized]);
 
-  // Update Planned Route Polyline
+  // =========================================================================
+  // UPDATE REAL ROAD-SNAPPED ROUTE POLYLINE (Follows Actual Streets & Highways)
+  // =========================================================================
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
 
-    // Remove existing polylines
-    if (routeHaloPolylineRef.current) {
-      routeHaloPolylineRef.current.remove();
-      routeHaloPolylineRef.current = null;
-    }
-    if (routePolylineRef.current) {
-      routePolylineRef.current.remove();
-      routePolylineRef.current = null;
-    }
+    let isSubscribed = true;
 
-    const sortedStops = [...stoppages].sort((a, b) => a.sequence - b.sequence);
+    const buildRoadPolyline = async () => {
+      setIsRoutingLoading(true);
 
-    // CASE 1: When no stoppages are saved yet, draw a direct live line from school to vehicle
-    if (sortedStops.length === 0) {
-      const liveVectorCoords: [number, number][] = [
-        [routeConfig.schoolOrigin.lat, routeConfig.schoolOrigin.lng],
-        [currentGps.lat, currentGps.lng],
+      // Remove existing polylines
+      if (routeHaloPolylineRef.current) {
+        routeHaloPolylineRef.current.remove();
+        routeHaloPolylineRef.current = null;
+      }
+      if (routePolylineRef.current) {
+        routePolylineRef.current.remove();
+        routePolylineRef.current = null;
+      }
+
+      const sortedStops = [...stoppages].sort((a, b) => a.sequence - b.sequence);
+
+      // CASE 1: When no stoppages are saved yet, draw road from School to Vehicle!
+      if (sortedStops.length === 0) {
+        const liveWaypoints = [
+          { lat: routeConfig.schoolOrigin.lat, lng: routeConfig.schoolOrigin.lng },
+          { lat: currentGps.lat, lng: currentGps.lng },
+        ];
+        const roadResult = await fetchRoadSnappingRoute(liveWaypoints);
+        if (!isSubscribed) return;
+
+        setIsRoadSnapped(roadResult.isSnappedToRoad);
+        setRoadDistanceKm(roadResult.distanceKm);
+        setRoadDurationMin(roadResult.durationMinutes);
+        setIsRoutingLoading(false);
+
+        const liveLine = L.polyline(roadResult.roadCoordinates, {
+          color: '#10b981', // Emerald-500
+          weight: 4,
+          opacity: 0.9,
+          dashArray: '6, 8',
+          lineCap: 'round',
+        }).addTo(map);
+        routePolylineRef.current = liveLine;
+        return;
+      }
+
+      // CASE 2: Build sequential road path: School -> Stop 1 -> Stop 2 -> ... -> Stop N -> School
+      const sequentialWaypoints: Array<{ lat: number; lng: number }> = [
+        { lat: routeConfig.schoolOrigin.lat, lng: routeConfig.schoolOrigin.lng },
+        ...sortedStops.map((s) => ({ lat: s.lat, lng: s.lng })),
+        { lat: routeConfig.schoolOrigin.lat, lng: routeConfig.schoolOrigin.lng },
       ];
-      const liveLine = L.polyline(liveVectorCoords, {
-        color: '#10b981', // Emerald-500
-        weight: 3.5,
-        opacity: 0.85,
-        dashArray: '6, 8',
+
+      const roadResult = await fetchRoadSnappingRoute(sequentialWaypoints);
+      if (!isSubscribed) return;
+
+      setIsRoadSnapped(roadResult.isSnappedToRoad);
+      setRoadDistanceKm(roadResult.distanceKm);
+      setRoadDurationMin(roadResult.durationMinutes);
+      setIsRoutingLoading(false);
+
+      // 1. Dark navy outer glow / halo line for high road contrast
+      const halo = L.polyline(roadResult.roadCoordinates, {
+        color: '#0c2340',
+        weight: 9,
+        opacity: 0.35,
         lineCap: 'round',
+        lineJoin: 'round',
       }).addTo(map);
-      routePolylineRef.current = liveLine;
-      return;
-    }
+      routeHaloPolylineRef.current = halo;
 
-    // CASE 2: Build sequential ordered path: School -> Stop 1 -> Stop 2 -> ... -> Stop N -> School
-    const polylineCoords: [number, number][] = [
-      [routeConfig.schoolOrigin.lat, routeConfig.schoolOrigin.lng],
-      ...sortedStops.map((s) => [s.lat, s.lng] as [number, number]),
-      [routeConfig.schoolOrigin.lat, routeConfig.schoolOrigin.lng],
-    ];
+      // 2. Main high-visibility vibrant blue road navigation line
+      const line = L.polyline(roadResult.roadCoordinates, {
+        color: '#2563eb', // Blue-600
+        weight: 5,
+        opacity: 0.95,
+        lineCap: 'round',
+        lineJoin: 'round',
+      }).addTo(map);
+      routePolylineRef.current = line;
+    };
 
-    // Outer glow / halo line for high contrast
-    const halo = L.polyline(polylineCoords, {
-      color: '#0c2340',
-      weight: 8,
-      opacity: 0.25,
-      lineCap: 'round',
-      lineJoin: 'round',
-    }).addTo(map);
-    routeHaloPolylineRef.current = halo;
+    buildRoadPolyline();
 
-    // Main vibrant route line
-    const line = L.polyline(polylineCoords, {
-      color: '#2563eb', // Blue-600
-      weight: 4,
-      opacity: 0.95,
-      dashArray: '8, 6',
-      lineCap: 'round',
-      lineJoin: 'round',
-    }).addTo(map);
-    routePolylineRef.current = line;
-  }, [stoppages, routeConfig.schoolOrigin, currentGps, mapInitialized]);
+    return () => {
+      isSubscribed = false;
+    };
+  }, [stoppages, routeConfig.schoolOrigin, routeConfig.routeId, routeConfig.shift, currentGps.lat, currentGps.lng, mapInitialized]);
 
   // Update Ordered Stoppage Markers with Dynamic States (Passed, Approaching, At Stop, Upcoming)
   useEffect(() => {
@@ -409,6 +445,8 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
           <strong style="color: #0c2340; font-size: 14px; display: block; margin-bottom: 2px;">${stop.name}</strong>
           <div style="color: #475569; font-size: 11px; margin-top: 4px;">
             <div>🕒 निर्धारित समय: <strong>${stop.scheduledTime}</strong></div>
+            ${stop.morningTime ? `<div>🌅 सुबह पिकअप: <strong>${stop.morningTime}</strong></div>` : ''}
+            ${stop.eveningTime ? `<div>🌇 शाम ड्रॉप: <strong>${stop.eveningTime}</strong></div>` : ''}
             <div>⏱️ लाइव ETA: <strong style="color: #b45309;">${stop.etaFormatted || 'गणना हो रही है'}</strong> ${stop.projectedArrival ? `(~${stop.projectedArrival})` : ''}</div>
             <div>👥 छात्र संख्या: <strong>${stop.studentCount} विद्यार्थी</strong></div>
             ${stop.landmark ? `<div>📍 पहचान: <em>${stop.landmark}</em></div>` : ''}
@@ -502,7 +540,7 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
   }, [routeConfig.schoolOrigin, currentGps, stoppages]);
 
   return (
-    <div className="relative w-full h-[540px] rounded-3xl overflow-hidden border-2 border-slate-200 shadow-md">
+    <div className="relative w-full h-[560px] rounded-3xl overflow-hidden border-2 border-slate-200 shadow-md">
       {/* MAP CANVAS */}
       <div ref={mapContainerRef} className="w-full h-full z-0" />
 
@@ -536,10 +574,10 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
             type="button"
             onClick={onAddStopAtCurrentGps}
             className="px-3.5 py-2 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white text-xs font-black flex items-center gap-2 shadow-lg cursor-pointer border border-emerald-400 active:scale-95 transition"
-            title="वाहन वर्तमान में जहाँ खड़ा है, ठीक उसी स्थान को स्टॉपेज के रूप में जोड़ें"
+            title="वाहन वर्तमान में जहाँ खड़ा है, ठीक उसी स्थान को सड़क पर स्टॉपेज के रूप में जोड़ें"
           >
             <i className="fa-solid fa-location-crosshairs text-amber-300"></i>
-            <span>📍 वाहन की वर्तमान लोकेशन पर स्टॉप बनाएं</span>
+            <span>📍 वाहन की लोकेशन पर स्टॉप बनाएं</span>
           </button>
         )}
 
@@ -583,6 +621,20 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
           <i className="fa-solid fa-arrows-to-eye text-blue-900 text-xs"></i>
           <span>पूरा रूट देखें (Fit Route)</span>
         </button>
+
+        {/* REAL ROAD SNAPPING STATUS BADGE */}
+        <div className="ml-auto hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-2xl bg-[#0c2340]/90 text-white text-[11px] font-bold border border-blue-400/40 backdrop-blur-md shadow-md">
+          <i className="fa-solid fa-road text-amber-400"></i>
+          <span>{isRoadSnapped ? '🛣️ सड़क पर वास्तविक रूट' : 'सड़क रूट'}</span>
+          {roadDistanceKm > 0 && (
+            <span className="text-amber-300 font-mono ml-1">
+              ({roadDistanceKm} km)
+            </span>
+          )}
+          {isRoutingLoading && (
+            <i className="fa-solid fa-spinner fa-spin text-xs text-amber-300 ml-1"></i>
+          )}
+        </div>
       </div>
 
       {/* PIN DROP ACTIVE HINT BANNER */}
@@ -600,9 +652,11 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
             <i className="fa-solid fa-route"></i>
           </span>
           <div className="text-left">
-            <div className="font-extrabold text-amber-300">अभी कोई पुराना स्टॉपेज नहीं है (Clean Route)</div>
+            <div className="font-extrabold text-amber-300">
+              {routeConfig.routeName}: अभी कोई स्टॉपेज दर्ज नहीं है
+            </div>
             <p className="text-[11px] text-slate-200 mt-0.5">
-              कल ऑटो जहाँ रुकेगा, ऊपर <strong>"📍 वाहन की वर्तमान लोकेशन पर स्टॉप बनाएं"</strong> दबाकर नया स्टॉप सहेजें।
+              वाहन जहाँ रुकेगा, ऊपर <strong>"📍 वाहन की लोकेशन पर स्टॉप बनाएं"</strong> दबाकर नया स्टॉपेज जोड़ें। नीली लाइन स्वतः सड़क पर बनेगी।
             </p>
           </div>
         </div>
@@ -610,8 +664,11 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
 
       {/* MAP LEGEND BADGE (Bottom Left) */}
       <div className="absolute bottom-3 left-3 z-[800] bg-white/95 backdrop-blur-xs p-2.5 rounded-2xl border border-slate-200 shadow-md text-[10px] space-y-1 hidden sm:block">
-        <div className="font-extrabold text-slate-800 border-b border-slate-100 pb-1 mb-1">
-          रूट संकेत (Map Legend):
+        <div className="font-extrabold text-slate-800 border-b border-slate-100 pb-1 mb-1 flex items-center justify-between gap-2">
+          <span>रूट संकेत (Map Legend)</span>
+          <span className="text-[9px] px-1.5 py-0.2 rounded bg-blue-100 text-blue-900 font-mono">
+            {routeConfig.shift === 'morning' ? '🌅 सुबह' : '🌇 शाम'}
+          </span>
         </div>
         <div className="flex items-center gap-2 text-slate-600">
           <span className="w-2.5 h-2.5 rounded-full bg-slate-400"></span>

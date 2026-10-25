@@ -15,17 +15,37 @@ import {
   RouteStoppage,
   RouteConfig,
   GpsPoint,
+  RouteShift,
 } from '../types/routeTracking';
 import {
   DEFAULT_ROUTE_STOPPAGES,
   DEFAULT_ROUTE_CONFIG,
   calculateStoppageEtas,
 } from '../utils/etaEngine';
+import {
+  SCHOOL_ROUTES_CONFIG,
+  getRouteStorageKey,
+} from '../utils/roadRoutingService';
 import { InteractiveRouteMap } from './InteractiveRouteMap';
 import { StoppageTimelineSidebar } from './StoppageTimelineSidebar';
 import { StopCreationModal } from './StopCreationModal';
 
-const STORAGE_KEY_STOPPAGES = 'evs_van_route_stoppages';
+const loadStoppagesForRoute = (routeId: string): RouteStoppage[] => {
+  try {
+    const saved = localStorage.getItem(getRouteStorageKey(routeId));
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      // Purge old mock seed if present
+      const hasOldSeed = Array.isArray(parsed) && parsed.some((s: any) => s.id === 'stop-01' || s.id === 'stop-02' || s.id === 'stop-03');
+      if (!hasOldSeed && Array.isArray(parsed)) {
+        return parsed;
+      }
+    }
+  } catch (e) {
+    console.warn('Error reading stored stoppages:', e);
+  }
+  return [];
+};
 
 interface ManagerVanTrackerProps {
   students?: Student[];
@@ -50,6 +70,25 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
   const [countdown, setCountdown] = useState<number>(15);
   const [showScriptModal, setShowScriptModal] = useState<boolean>(false);
 
+  // =========================================================================
+  // 2 INDEPENDENT ROUTES & SHIFT (MORNING PICKUP / EVENING DROP) STATE
+  // =========================================================================
+  const [activeRouteId, setActiveRouteId] = useState<string>(() => {
+    try {
+      return localStorage.getItem('evs_active_route_id') || 'route-1';
+    } catch {
+      return 'route-1';
+    }
+  });
+
+  const [activeShift, setActiveShift] = useState<RouteShift>(() => {
+    try {
+      const saved = localStorage.getItem('evs_active_shift');
+      if (saved === 'morning' || saved === 'evening') return saved;
+    } catch {}
+    return 'morning';
+  });
+
   // Live telemetry map received from Driver Portal broadcasts, server API & localStorage
   const [liveTelemetry, setLiveTelemetry] = useState<Record<string, VanTelemetry>>(() => {
     try {
@@ -61,30 +100,19 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
 
   const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
 
-  // =========================================================================
-  // ROUTE & STOPPAGES STATE (Stored & Interactive - Starts Clean for Real Route)
-  // =========================================================================
+  // Stoppages for active route (Starts clean for live GPS road recording)
   const [stoppages, setStoppages] = useState<RouteStoppage[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_STOPPAGES);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        // Purge old mock seed if present
-        const hasOldSeed = Array.isArray(parsed) && parsed.some((s: any) => s.id === 'stop-01' || s.id === 'stop-02' || s.id === 'stop-03');
-        if (!hasOldSeed && Array.isArray(parsed)) {
-          return parsed;
-        }
-      }
-    } catch (e) {
-      console.warn('Error reading stored stoppages:', e);
-    }
-    return [];
+    return loadStoppagesForRoute(activeRouteId);
   });
 
-  const [routeConfig, setRouteConfig] = useState<RouteConfig>(() => ({
-    ...DEFAULT_ROUTE_CONFIG,
-    stoppages,
-  }));
+  const routeConfig = useMemo<RouteConfig>(() => {
+    const base = SCHOOL_ROUTES_CONFIG[activeRouteId] || SCHOOL_ROUTES_CONFIG['route-1'];
+    return {
+      ...base,
+      shift: activeShift,
+      stoppages,
+    };
+  }, [activeRouteId, activeShift, stoppages]);
 
   // Pin-drop interactive creation states
   const [isPinDropActive, setIsPinDropActive] = useState<boolean>(false);
@@ -92,18 +120,40 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
   const [isCreationModalOpen, setIsCreationModalOpen] = useState<boolean>(false);
   const [focusedStoppage, setFocusedStoppage] = useState<RouteStoppage | null>(null);
 
-  // Persist stoppages to localStorage and update routeConfig
+  // Persist stoppages to localStorage per route
   const saveStoppages = useCallback((newStoppages: RouteStoppage[]) => {
     setStoppages(newStoppages);
-    setRouteConfig((prev) => ({
-      ...prev,
-      stoppages: newStoppages,
-    }));
     try {
-      localStorage.setItem(STORAGE_KEY_STOPPAGES, JSON.stringify(newStoppages));
+      localStorage.setItem(getRouteStorageKey(activeRouteId), JSON.stringify(newStoppages));
     } catch (e) {
-      console.warn('Could not save stoppages:', e);
+      console.warn('Could not save stoppages for', activeRouteId, e);
     }
+  }, [activeRouteId]);
+
+  // Route selector switch handler
+  const handleSelectRoute = useCallback((routeId: string) => {
+    setActiveRouteId(routeId);
+    try {
+      localStorage.setItem('evs_active_route_id', routeId);
+    } catch {}
+    const loaded = loadStoppagesForRoute(routeId);
+    setStoppages(loaded);
+    setFocusedStoppage(null);
+    setIsPinDropActive(false);
+
+    // Auto-select corresponding bus ID
+    const assignedBus = SCHOOL_ROUTES_CONFIG[routeId]?.assignedBusId;
+    if (assignedBus) {
+      setSelectedBusId(assignedBus);
+    }
+  }, []);
+
+  // Shift selector switch handler (Morning Pickup vs Evening Drop)
+  const handleSelectShift = useCallback((shift: RouteShift) => {
+    setActiveShift(shift);
+    try {
+      localStorage.setItem('evs_active_shift', shift);
+    } catch {}
   }, []);
 
   // Fetch real Google Sheet "Bus_Tracking"
@@ -186,13 +236,15 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
           setLastSyncTime(new Date().toLocaleTimeString('hi-IN'));
         } catch {}
       }
-      if (e.key === STORAGE_KEY_STOPPAGES && e.newValue) {
-        try {
-          const parsed = JSON.parse(e.newValue);
-          if (Array.isArray(parsed)) {
-            setStoppages(parsed);
-          }
-        } catch {}
+      if (e.key && e.key.startsWith('evs_van_route_stoppages_') && e.newValue) {
+        if (e.key === getRouteStorageKey(activeRouteId)) {
+          try {
+            const parsed = JSON.parse(e.newValue);
+            if (Array.isArray(parsed)) {
+              setStoppages(parsed);
+            }
+          } catch {}
+        }
       }
     };
     window.addEventListener('storage', handleStorageChange);
@@ -546,6 +598,109 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
         </div>
       )}
 
+      {/* 2.5 MASTER ROUTE & SHIFT SWITCHER BAR */}
+      <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        {/* Route Selector (Route 1 vs Route 2) */}
+        <div className="space-y-1.5 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-black uppercase tracking-wider text-slate-500">
+              रूट चयन (Select Route):
+            </span>
+            <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-900 text-[10px] font-extrabold">
+              {activeRouteId === 'route-1' ? 'रूट #1' : 'रूट #2'}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-2 max-w-md">
+            <button
+              type="button"
+              onClick={() => handleSelectRoute('route-1')}
+              className={`p-2.5 rounded-2xl text-left border transition-all cursor-pointer ${
+                activeRouteId === 'route-1'
+                  ? 'bg-[#0c2340] text-white border-blue-900 shadow-md ring-2 ring-blue-900/30'
+                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black">🚐 रूट #1</span>
+                {activeRouteId === 'route-1' && <span className="text-[10px] text-amber-300 font-bold">✓ सक्रिय</span>}
+              </div>
+              <p className={`text-[11px] mt-0.5 truncate ${activeRouteId === 'route-1' ? 'text-slate-300' : 'text-slate-500'}`}>
+                चिलकाना - सुल्तानपुर - रामपुर
+              </p>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleSelectRoute('route-2')}
+              className={`p-2.5 rounded-2xl text-left border transition-all cursor-pointer ${
+                activeRouteId === 'route-2'
+                  ? 'bg-[#0c2340] text-white border-blue-900 shadow-md ring-2 ring-blue-900/30'
+                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black">🚐 रूट #2</span>
+                {activeRouteId === 'route-2' && <span className="text-[10px] text-amber-300 font-bold">✓ सक्रिय</span>}
+              </div>
+              <p className={`text-[11px] mt-0.5 truncate ${activeRouteId === 'route-2' ? 'text-slate-300' : 'text-slate-500'}`}>
+                पटनी - दुमझेड़ा - देहात
+              </p>
+            </button>
+          </div>
+        </div>
+
+        {/* Shift Selector (Morning Pickup vs Evening Drop) */}
+        <div className="space-y-1.5 md:border-l md:border-slate-200 md:pl-5">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-black uppercase tracking-wider text-slate-500">
+              दैनिक शिफ्ट (Daily Shift):
+            </span>
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+              activeShift === 'morning' ? 'bg-emerald-100 text-emerald-800' : 'bg-orange-100 text-orange-800'
+            }`}>
+              {activeShift === 'morning' ? '🌅 सुबह पिकअप' : '🌇 शाम ड्रॉप'}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => handleSelectShift('morning')}
+              className={`px-3.5 py-2 rounded-2xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer border ${
+                activeShift === 'morning'
+                  ? 'bg-emerald-600 text-white border-emerald-500 shadow-md ring-2 ring-emerald-500/30'
+                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+              }`}
+            >
+              <span className="text-sm">🌅</span>
+              <div className="text-left">
+                <div className="leading-tight">सुबह पिकअप</div>
+                <div className={`text-[10px] ${activeShift === 'morning' ? 'text-emerald-100' : 'text-slate-400'}`}>
+                  घर से स्कूल
+                </div>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleSelectShift('evening')}
+              className={`px-3.5 py-2 rounded-2xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer border ${
+                activeShift === 'evening'
+                  ? 'bg-orange-600 text-white border-orange-500 shadow-md ring-2 ring-orange-500/30'
+                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+              }`}
+            >
+              <span className="text-sm">🌇</span>
+              <div className="text-left">
+                <div className="leading-tight">शाम ड्रॉप</div>
+                <div className={`text-[10px] ${activeShift === 'evening' ? 'text-orange-100' : 'text-slate-400'}`}>
+                  स्कूल से घर
+                </div>
+              </div>
+            </button>
+          </div>
+        </div>
+      </div>
+
       {/* 3. CONTROL PANEL & LIVE ROUTE METRICS */}
       <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 sm:p-6 space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
@@ -752,6 +907,10 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
             onDeleteStoppage={handleDeleteStoppage}
             activeStoppageId={focusedStoppage?.id}
             selectedBusName={`वैन ${selectedBusId} (${activeTelemetry.driverName})`}
+            activeRouteId={activeRouteId}
+            onSelectRoute={handleSelectRoute}
+            activeShift={activeShift}
+            onSelectShift={handleSelectShift}
           />
         </div>
       </div>
@@ -855,6 +1014,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
           lat={tempPinCoords.lat}
           lng={tempPinCoords.lng}
           suggestedSequence={stoppages.length + 1}
+          activeShift={activeShift}
           onSaveStop={handleSaveNewStop}
         />
       )}

@@ -11,8 +11,11 @@ import { DEFAULT_SCHOOL_COORDS } from './busTrackingService';
 export const DEFAULT_ROUTE_STOPPAGES: RouteStoppage[] = [];
 
 export const DEFAULT_ROUTE_CONFIG: RouteConfig = {
-  routeId: 'route-amjad-01',
-  routeName: 'चिलकाना - सुल्तानपुर - पटनी - रामपुर रूट (Route #1)',
+  routeId: 'route-1',
+  routeName: 'रूट #1: चिलकाना - सुल्तानपुर - रामपुर मार्ग',
+  assignedBusId: 'ecad7ddc',
+  assignedDriver: 'Amjad (अमजद)',
+  shift: 'morning',
   schoolOrigin: {
     lat: DEFAULT_SCHOOL_COORDS.lat,
     lng: DEFAULT_SCHOOL_COORDS.lng,

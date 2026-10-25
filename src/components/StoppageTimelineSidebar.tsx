@@ -1,5 +1,5 @@
 import React from 'react';
-import { RouteStoppage, RouteConfig } from '../types/routeTracking';
+import { RouteStoppage, RouteConfig, RouteShift } from '../types/routeTracking';
 
 interface StoppageTimelineSidebarProps {
   routeConfig: RouteConfig;
@@ -15,6 +15,10 @@ interface StoppageTimelineSidebarProps {
   onDeleteStoppage: (stoppageId: string) => void;
   activeStoppageId?: string;
   selectedBusName?: string;
+  activeRouteId?: string;
+  onSelectRoute?: (routeId: string) => void;
+  activeShift?: RouteShift;
+  onSelectShift?: (shift: RouteShift) => void;
 }
 
 export const StoppageTimelineSidebar: React.FC<StoppageTimelineSidebarProps> = ({
@@ -31,23 +35,101 @@ export const StoppageTimelineSidebar: React.FC<StoppageTimelineSidebarProps> = (
   onDeleteStoppage,
   activeStoppageId,
   selectedBusName = 'वैन (Amjad)',
+  activeRouteId = 'route-1',
+  onSelectRoute,
+  activeShift = 'morning',
+  onSelectShift,
 }) => {
   const totalStops = stoppages.length;
+  const isMorning = activeShift === 'morning';
 
   return (
     <div className="bg-white rounded-3xl border border-slate-200 shadow-sm flex flex-col h-full overflow-hidden">
       {/* SIDEBAR HEADER & SUMMARY COUNTERS */}
       <div className="p-4 sm:p-5 bg-gradient-to-r from-[#0c2340] to-[#163660] text-white">
+        {/* ROUTE 1 VS ROUTE 2 SELECTOR PILLS */}
+        {onSelectRoute && (
+          <div className="mb-3">
+            <span className="text-[10px] font-bold text-slate-300 block mb-1.5 uppercase tracking-wider">
+              रूट चुनें (Select Route):
+            </span>
+            <div className="grid grid-cols-2 gap-1.5 bg-black/25 p-1 rounded-2xl border border-white/10">
+              <button
+                type="button"
+                onClick={() => onSelectRoute('route-1')}
+                className={`py-1.5 px-2 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                  activeRouteId === 'route-1'
+                    ? 'bg-amber-400 text-slate-950 shadow-sm'
+                    : 'text-slate-200 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                <i className="fa-solid fa-route text-[11px]"></i>
+                <span>रूट #1</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onSelectRoute('route-2')}
+                className={`py-1.5 px-2 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                  activeRouteId === 'route-2'
+                    ? 'bg-amber-400 text-slate-950 shadow-sm'
+                    : 'text-slate-200 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                <i className="fa-solid fa-route text-[11px]"></i>
+                <span>रूट #2</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* SHIFT SELECTOR: MORNING PICKUP VS EVENING DROP */}
+        {onSelectShift && (
+          <div className="mb-3">
+            <span className="text-[10px] font-bold text-slate-300 block mb-1.5 uppercase tracking-wider">
+              शिफ्ट चुनें (Shift):
+            </span>
+            <div className="grid grid-cols-2 gap-1.5 bg-black/25 p-1 rounded-2xl border border-white/10">
+              <button
+                type="button"
+                onClick={() => onSelectShift('morning')}
+                className={`py-1.5 px-2 rounded-xl text-[11px] font-black transition-all cursor-pointer flex items-center justify-center gap-1 ${
+                  isMorning
+                    ? 'bg-emerald-500 text-white shadow-sm'
+                    : 'text-slate-200 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                <span>🌅 सुबह पिकअप</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onSelectShift('evening')}
+                className={`py-1.5 px-2 rounded-xl text-[11px] font-black transition-all cursor-pointer flex items-center justify-center gap-1 ${
+                  !isMorning
+                    ? 'bg-orange-500 text-white shadow-sm'
+                    : 'text-slate-200 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                <span>🌇 शाम ड्रॉप</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="flex items-center justify-between gap-2 mb-3">
           <div>
-            <span className="text-[10px] font-black uppercase tracking-wider text-amber-300 bg-amber-400/20 px-2 py-0.5 rounded-full border border-amber-400/30">
-              रूट टाइमलाइन व स्टॉपेज
-            </span>
-            <h3 className="text-base font-black text-white mt-1">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] font-black uppercase tracking-wider text-amber-300 bg-amber-400/20 px-2 py-0.5 rounded-full border border-amber-400/30">
+                {activeRouteId === 'route-1' ? 'रूट #1' : 'रूट #2'}
+              </span>
+              <span className="text-[10px] font-bold text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded-full border border-emerald-400/30">
+                {isMorning ? 'सुबह घर ➔ स्कूल' : 'शाम स्कूल ➔ घर'}
+              </span>
+            </div>
+            <h3 className="text-sm font-black text-white mt-1 line-clamp-1">
               {routeConfig.routeName}
             </h3>
           </div>
-          <span className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center text-amber-400 text-sm">
+          <span className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center text-amber-400 text-sm shrink-0">
             <i className="fa-solid fa-timeline"></i>
           </span>
         </div>
@@ -68,7 +150,7 @@ export const StoppageTimelineSidebar: React.FC<StoppageTimelineSidebarProps> = (
               कुल छात्र (Students)
             </span>
             <span className="text-base font-black text-emerald-300 mt-0.5 block">
-              {totalStudents} छात्र सवार/प्रतीक्षारत
+              {totalStudents} छात्र
             </span>
           </div>
         </div>
@@ -218,14 +300,30 @@ export const StoppageTimelineSidebar: React.FC<StoppageTimelineSidebarProps> = (
                         >
                           {statusLabel}
                         </span>
-                        <span className="text-[10px] font-bold text-slate-500">
-                          निर्धारित: {stop.scheduledTime}
+                        <span className="text-[10px] font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md flex items-center gap-1">
+                          {isMorning ? '🌅' : '🌇'} निर्धारित: 
+                          <span className="font-black text-slate-900">
+                            {isMorning ? (stop.morningTime || stop.scheduledTime) : (stop.eveningTime || stop.scheduledTime)}
+                          </span>
                         </span>
                       </div>
 
                       <h4 className="text-xs font-black text-slate-900 mt-1">
                         #{stop.sequence}. {stop.name}
                       </h4>
+                      {/* Secondary Shift Info if available */}
+                      <div className="flex items-center gap-2 text-[10px] text-slate-500 mt-0.5">
+                        {stop.morningTime && (
+                          <span className={isMorning ? 'text-emerald-700 font-semibold' : ''}>
+                            सुबह: {stop.morningTime}
+                          </span>
+                        )}
+                        {stop.eveningTime && (
+                          <span className={!isMorning ? 'text-orange-700 font-semibold' : ''}>
+                            • शाम: {stop.eveningTime}
+                          </span>
+                        )}
+                      </div>
                     </div>
 
                     {/* Delete button */}
