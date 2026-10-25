@@ -15,72 +15,91 @@ export interface ClassroomBulkAttendanceProps {
   onSaveBatch: (records: Partial<StudentBehaviorRecord>[]) => Promise<void> | void;
   onClose?: () => void;
   isEmbedded?: boolean;
+  lang?: 'en' | 'hi';
 }
 
 // Quick 1-tap Fault Tags
 interface FaultTagDef {
   id: string;
   label: string;
+  labelEn: string;
   icon: string;
   field?: 'isBathed' | 'nailsClean' | 'uniformClean' | 'discipline';
   faultValue?: boolean;
   remarkText: string;
+  remarkTextEn: string;
 }
 
 const FAULT_TAGS: FaultTagDef[] = [
   {
     id: 'unbathed',
     label: 'नहा कर नहीं आया',
+    labelEn: 'Not Bathed',
     icon: 'fa-soap',
     field: 'isBathed',
     faultValue: false,
     remarkText: 'नहा कर नहीं आया',
+    remarkTextEn: 'Not bathed / unwashed',
   },
   {
     id: 'hair',
     label: 'बाल नहीं कटे',
+    labelEn: 'Uncut Hair',
     icon: 'fa-scissors',
     remarkText: 'बाल बड़े हैं, कटवाने की आवश्यकता है',
+    remarkTextEn: 'Hair is untidy / needs haircut',
   },
   {
     id: 'nails',
     label: 'नाखून गंदे / बड़े',
+    labelEn: 'Dirty Nails',
     icon: 'fa-hand',
     field: 'nailsClean',
     faultValue: false,
     remarkText: 'नाखून गंदे व बड़े हैं',
+    remarkTextEn: 'Nails are untidy / overgrown',
   },
   {
     id: 'uniform',
     label: 'ड्रेस गंदी / अधूरी',
+    labelEn: 'Improper Uniform',
     icon: 'fa-shirt',
     field: 'uniformClean',
     faultValue: false,
     remarkText: 'यूनिफॉर्म स्वच्छ नहीं है',
+    remarkTextEn: 'Uniform is untidy / incomplete',
   },
   {
     id: 'shoes',
     label: 'जूते-मोजे नहीं',
+    labelEn: 'No Shoes/Socks',
     icon: 'fa-shoe-prints',
     remarkText: 'उचित जूते व मोजे नहीं पहने',
+    remarkTextEn: 'Proper shoes / socks not worn',
   },
   {
     id: 'hw',
     label: 'होमवर्क अधूरा',
+    labelEn: 'Incomplete HW',
     icon: 'fa-book-open',
     remarkText: 'गृहकार्य अधूरा / नहीं लाया',
+    remarkTextEn: 'Homework incomplete / not brought',
   },
   {
     id: 'late',
     label: 'देर से आया',
+    labelEn: 'Came Late',
     icon: 'fa-clock',
     remarkText: 'कक्षा में विलम्ब (लेट) से आया',
+    remarkTextEn: 'Arrived late to class',
   },
   {
     id: 'star',
     label: '🌟 उत्कृष्ट',
+    labelEn: '🌟 Star Student',
     icon: 'fa-star',
     remarkText: 'कक्षा में बहुत अच्छा आचरण व अनुशासन रहा',
+    remarkTextEn: 'Outstanding conduct and discipline',
   },
 ];
 
@@ -215,7 +234,9 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
   onSaveBatch,
   onClose,
   isEmbedded = false,
+  lang = 'en',
 }) => {
+  const isEn = lang === 'en';
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
 
@@ -585,14 +606,14 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
             nails_clean: 'No',
             Uniform_clean: false,
             uniform_clean: 'No',
-            Good_Manners: 'लागू नहीं (अनुपस्थित)',
-            good_manners: 'लागू नहीं (अनुपस्थित)',
+            Good_Manners: isEn ? 'N/A (Absent)' : 'लागू नहीं (अनुपस्थित)',
+            good_manners: isEn ? 'N/A (Absent)' : 'लागू नहीं (अनुपस्थित)',
             Discipline: false,
             discipline: 'Needs Improvement',
-            Remark: 'आज छात्र विद्यालय में अनुपस्थित रहा।',
-            remark: 'आज छात्र विद्यालय में अनुपस्थित रहा।',
-            AI_Feedback: 'आज छात्र विद्यालय में अनुपस्थित रहा।',
-            ai_feedback: 'आज छात्र विद्यालय में अनुपस्थित रहा।',
+            Remark: isEn ? 'Student is absent today.' : 'आज छात्र विद्यालय में अनुपस्थित रहा।',
+            remark: isEn ? 'Student is absent today.' : 'आज छात्र विद्यालय में अनुपस्थित रहा।',
+            AI_Feedback: isEn ? 'Student is absent today.' : 'आज छात्र विद्यालय में अनुपस्थित रहा।',
+            ai_feedback: isEn ? 'Student is absent today.' : 'आज छात्र विद्यालय में अनुपस्थित रहा।',
           };
         }
 
@@ -606,7 +627,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
         const remarkParts: string[] = [];
         state.selectedFaults.forEach((fId) => {
           const def = FAULT_TAGS.find((t) => t.id === fId);
-          if (def) remarkParts.push(def.remarkText);
+          if (def) remarkParts.push(isEn ? (def.remarkTextEn || def.remarkText) : def.remarkText);
         });
 
         if (state.customRemark.trim()) {
@@ -616,6 +637,8 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
         const finalRemark =
           remarkParts.length > 0
             ? remarkParts.join(' • ')
+            : isEn
+            ? 'Present in class, neat and disciplined'
             : 'कक्षा में उपस्थित, स्वच्छ व अनुशासित';
 
         return {
@@ -649,26 +672,28 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
           Remark: finalRemark,
           remark: finalRemark,
           AI_Feedback: isStar
-            ? 'उत्कृष्ट आचरण व अनुशासन हेतु शाबाश!'
+            ? (isEn ? 'Kudos for outstanding conduct and discipline!' : 'उत्कृष्ट आचरण व अनुशासन हेतु शाबाश!')
             : remarkParts.length > 0
-            ? 'अभिभावक कृपया बच्चे की स्वच्छता व समय की पाबंदी पर ध्यान दें।'
-            : 'नियमित उपस्थिति व स्वच्छता बनाए रखें।',
+            ? (isEn ? 'Parents are requested to pay attention to child hygiene and punctuality.' : 'अभिभावक कृपया बच्चे की स्वच्छता व समय की पाबंदी पर ध्यान दें।')
+            : (isEn ? 'Keep up regular attendance and cleanliness.' : 'नियमित उपस्थिति व स्वच्छता बनाए रखें।'),
           ai_feedback: isStar
-            ? 'उत्कृष्ट आचरण व अनुशासन हेतु शाबाश!'
+            ? (isEn ? 'Kudos for outstanding conduct and discipline!' : 'उत्कृष्ट आचरण व अनुशासन हेतु शाबाश!')
             : remarkParts.length > 0
-            ? 'अभिभावक कृपया बच्चे की स्वच्छता व समय की पाबंदी पर ध्यान दें।'
-            : 'नियमित उपस्थिति व स्वच्छता बनाए रखें।',
+            ? (isEn ? 'Parents are requested to pay attention to child hygiene and punctuality.' : 'अभिभावक कृपया बच्चे की स्वच्छता व समय की पाबंदी पर ध्यान दें।')
+            : (isEn ? 'Keep up regular attendance and cleanliness.' : 'नियमित उपस्थिति व स्वच्छता बनाए रखें।'),
         };
       });
 
       await onSaveBatch(recordsToSave);
 
       touchedStudentsRef.current.clear();
-      const msg = `🎉 क्लास ${getClassName(selectedClass)} के ${recordsToSave.length} छात्रों का डेटा सुरक्षित हो गया और वे सूची से हाइड हो गए!`;
+      const msg = isEn
+        ? `🎉 Successfully saved attendance for ${recordsToSave.length} students of Class ${getClassName(selectedClass)}!`
+        : `🎉 क्लास ${getClassName(selectedClass)} के ${recordsToSave.length} छात्रों का डेटा सुरक्षित हो गया और वे सूची से हाइड हो गए!`;
       setSaveSuccessMsg(msg);
       setTimeout(() => setSaveSuccessMsg(null), 6000);
     } catch (err: any) {
-      alert(`हाजिरी सुरक्षित करने में त्रुटि: ${err?.message || 'अज्ञात त्रुटि'}`);
+      alert(isEn ? `Error saving attendance: ${err?.message || 'Unknown error'}` : `हाजिरी सुरक्षित करने में त्रुटि: ${err?.message || 'अज्ञात त्रुटि'}`);
     } finally {
       setIsSaving(false);
     }
@@ -682,10 +707,10 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
           <div>
             <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-amber-400 text-slate-950 font-black text-[11px] mb-1.5 uppercase">
               <i className="fa-solid fa-users-viewfinder"></i>
-              <span>संपूर्ण क्लास दैनिक हाजिरी व आचरण रजिस्टर</span>
+              <span>{isEn ? 'Classroom Daily Attendance & Conduct Register' : 'संपूर्ण क्लास दैनिक हाजिरी व आचरण रजिस्टर'}</span>
             </div>
             <h2 className="text-lg sm:text-xl font-black text-white flex items-center gap-2">
-              <span>कक्षा उपस्थिति एवं स्वच्छता जांच</span>
+              <span>{isEn ? 'Class Attendance & Hygiene Check' : 'कक्षा उपस्थिति एवं स्वच्छता जांच'}</span>
               <span className="text-amber-300 text-sm font-semibold">
                 (Class {getClassName(selectedClass)})
               </span>
@@ -695,16 +720,22 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
                 allowedClassList.length === 1 ? (
                   <span className="text-amber-200 font-semibold">
                     <i className="fa-solid fa-lock mr-1"></i>
-                    आपको स्कूल मैनेजर द्वारा निर्धारित कक्षा (Class {getClassName(allowedClassList[0])}) असाइन की गई है।
+                    {isEn
+                      ? `You are assigned Class ${getClassName(allowedClassList[0])} by School Manager.`
+                      : `आपको स्कूल मैनेजर द्वारा निर्धारित कक्षा (Class ${getClassName(allowedClassList[0])}) असाइन की गई है।`}
                   </span>
                 ) : (
                   <span className="text-amber-200 font-semibold">
                     <i className="fa-solid fa-layer-group mr-1"></i>
-                    आपको स्कूल मैनेजर द्वारा {allowedClassList.length} कक्षाएं ({allowedClassList.map((c) => `Class ${getClassName(c)}`).join(', ')}) असाइन की गई हैं। ऊपर से कक्षा बदलें।
+                    {isEn
+                      ? `You are assigned ${allowedClassList.length} classes (${allowedClassList.map((c) => `Class ${getClassName(c)}`).join(', ')}). Switch class above.`
+                      : `आपको स्कूल मैनेजर द्वारा ${allowedClassList.length} कक्षाएं (${allowedClassList.map((c) => `Class ${getClassName(c)}`).join(', ')}) असाइन की गई हैं। ऊपर से कक्षा बदलें।`}
                   </span>
                 )
               ) : (
-                'छात्रों को मार्क करें और सेव करें। सुरक्षित होने के बाद छात्र सूची से स्वतः छुप जाएंगे।'
+                isEn
+                  ? 'Mark students and save. Recorded students are automatically hidden from the active list.'
+                  : 'छात्रों को मार्क करें और सेव करें। सुरक्षित होने के बाद छात्र सूची से स्वतः छुप जाएंगे।'
               )}
             </p>
           </div>
@@ -754,15 +785,15 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
                 className="bg-transparent text-white font-bold outline-none cursor-pointer text-xs"
               >
                 {allowedClassList && allowedClassList.length > 0 && (
-                  <optgroup label="✨ मैनेजर द्वारा असाइन की गई कक्षाएं" className="bg-slate-950 text-amber-400 font-bold">
+                  <optgroup label={isEn ? "✨ Assigned Classes" : "✨ मैनेजर द्वारा असाइन की गई कक्षाएं"} className="bg-slate-950 text-amber-400 font-bold">
                     {allowedClassList.map((c) => (
                       <option key={`assigned-${c}`} value={c} className="bg-slate-900 text-amber-300 font-bold">
-                        ★ Class {getClassName(c)} (असाइन की गई)
+                        ★ Class {getClassName(c)} {isEn ? '(Assigned)' : '(असाइन की गई)'}
                       </option>
                     ))}
                   </optgroup>
                 )}
-                <optgroup label="अन्य सभी स्कूल कक्षाएं" className="bg-slate-950 text-slate-300 font-bold">
+                <optgroup label={isEn ? "Other Classes" : "अन्य सभी स्कूल कक्षाएं"} className="bg-slate-950 text-slate-300 font-bold">
                   {classOptions
                     .filter((c) => !allowedClassList || !allowedClassList.some((ac) => areClassesMatching(ac, c, getClassName)))
                     .map((c) => (
@@ -774,7 +805,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
               </select>
               {allowedClassList && (
                 <span className="bg-amber-400 text-slate-950 text-[10px] font-black px-1.5 py-0.5 rounded-md shrink-0">
-                  {allowedClassList.length} असाइन
+                  {allowedClassList.length} {isEn ? 'Assigned' : 'असाइन'}
                 </span>
               )}
             </div>
@@ -784,7 +815,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
                 type="button"
                 onClick={onClose}
                 className="p-2 rounded-xl bg-white/10 hover:bg-rose-600 text-white transition-colors cursor-pointer"
-                title="बंद करें"
+                title={isEn ? "Close" : "बंद करें"}
               >
                 <i className="fa-solid fa-xmark text-sm"></i>
               </button>
@@ -814,7 +845,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
         <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between">
           <div>
-            <div className="text-[11px] font-bold text-slate-500">कुल छात्र (Total)</div>
+            <div className="text-[11px] font-bold text-slate-500">{isEn ? 'Total Students' : 'कुल छात्र (Total)'}</div>
             <div className="text-xl font-black text-slate-900">{totalCount}</div>
           </div>
           <div className="w-9 h-9 rounded-xl bg-slate-200 text-slate-700 flex items-center justify-center font-bold">
@@ -824,7 +855,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
 
         <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-between">
           <div>
-            <div className="text-[11px] font-bold text-amber-800">बाकी छात्र (Pending)</div>
+            <div className="text-[11px] font-bold text-amber-800">{isEn ? 'Pending Students' : 'बाकी छात्र (Pending)'}</div>
             <div className="text-xl font-black text-amber-900">{pendingCount}</div>
           </div>
           <div className="w-9 h-9 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center font-bold shadow-xs">
@@ -834,7 +865,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
 
         <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-between">
           <div>
-            <div className="text-[11px] font-bold text-emerald-700">आज दर्ज (Recorded)</div>
+            <div className="text-[11px] font-bold text-emerald-700">{isEn ? 'Recorded Today' : 'आज दर्ज (Recorded)'}</div>
             <div className="text-xl font-black text-emerald-900">{savedCount}</div>
           </div>
           <div className="w-9 h-9 rounded-xl bg-emerald-500 text-white flex items-center justify-center font-bold shadow-xs">
@@ -844,7 +875,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
 
         <div className="p-3 rounded-2xl bg-rose-50 border border-rose-200 flex items-center justify-between">
           <div>
-            <div className="text-[11px] font-bold text-rose-700">गैरहाजिर (Absent)</div>
+            <div className="text-[11px] font-bold text-rose-700">{isEn ? 'Absent Students' : 'गैरहाजिर (Absent)'}</div>
             <div className="text-xl font-black text-rose-900">{absentCount}</div>
           </div>
           <div className="w-9 h-9 rounded-xl bg-rose-500 text-white flex items-center justify-center font-bold shadow-xs">
@@ -853,14 +884,14 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
         </div>
       </div>
 
-      {/* STATUS BAR WITH HIDE/UNHIDE TOGGLE (नो बैज - सिर्फ स्वच्छ जानकारी व हाइड टॉगल) */}
+      {/* STATUS BAR WITH HIDE/UNHIDE TOGGLE */}
       <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3 flex flex-wrap items-center justify-between gap-3 text-xs">
         <div className="flex items-center gap-2">
           <span className="text-slate-600 font-medium">
-            कक्षा कुल: <strong className="text-slate-900">{totalCount}</strong> | 
-            बाकी छात्र: <strong className="text-amber-800 font-bold">{pendingCount}</strong>
+            {isEn ? 'Class Total: ' : 'कक्षा कुल: '}<strong className="text-slate-900">{totalCount}</strong> | 
+            {' '}{isEn ? 'Pending: ' : 'बाकी छात्र: '}<strong className="text-amber-800 font-bold">{pendingCount}</strong>
             {savedCount > 0 && (
-              <span> | आज दर्ज हो चुके: <strong className="text-emerald-700 font-bold">{savedCount}</strong> ({showRecorded ? 'दिख रहे हैं' : 'छिपे हुए हैं'})</span>
+              <span> | {isEn ? 'Recorded: ' : 'आज दर्ज हो चुके: '}<strong className="text-emerald-700 font-bold">{savedCount}</strong> ({showRecorded ? (isEn ? 'Visible' : 'दिख रहे हैं') : (isEn ? 'Hidden' : 'छिपे हुए हैं')})</span>
             )}
           </span>
         </div>
@@ -876,7 +907,11 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
             }`}
           >
             <i className={`fa-solid ${showRecorded ? 'fa-eye-slash text-amber-700' : 'fa-eye text-blue-600'}`}></i>
-            <span>{showRecorded ? 'दर्ज छात्र पुनः छुपाएं (Hide)' : `आज दर्ज हो चुके छात्र देखें (${savedCount})`}</span>
+            <span>
+              {showRecorded
+                ? (isEn ? 'Hide Recorded Students' : 'दर्ज छात्र पुनः छुपाएं (Hide)')
+                : (isEn ? `View Recorded Students (${savedCount})` : `आज दर्ज हो चुके छात्र देखें (${savedCount})`)}
+            </span>
           </button>
         )}
       </div>
@@ -889,10 +924,10 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
             onClick={handleMarkAllPresent}
             disabled={displayedStudents.length === 0}
             className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center gap-1.5 shadow-xs cursor-pointer transition-all active:scale-95 disabled:opacity-50"
-            title="दिख रहे छात्रों को Present मार्क करें"
+            title={isEn ? "Mark displayed students Present" : "दिख रहे छात्रों को Present मार्क करें"}
           >
             <i className="fa-solid fa-check-double text-amber-300"></i>
-            <span>सबको Present करें</span>
+            <span>{isEn ? 'Mark All Present' : 'सबको Present करें'}</span>
           </button>
 
           <button
@@ -900,10 +935,10 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
             onClick={handleMarkAllAbsent}
             disabled={displayedStudents.length === 0}
             className="px-3 py-2 rounded-xl bg-white hover:bg-rose-50 text-rose-700 border border-rose-300 font-bold flex items-center gap-1.5 cursor-pointer transition-all active:scale-95 disabled:opacity-50"
-            title="दिख रहे छात्रों को Absent मार्क करें"
+            title={isEn ? "Mark displayed students Absent" : "दिख रहे छात्रों को Absent मार्क करें"}
           >
             <i className="fa-solid fa-rotate-left text-rose-500"></i>
-            <span>सबको Absent करें</span>
+            <span>{isEn ? 'Mark All Absent' : 'सबको Absent करें'}</span>
           </button>
 
           <span className="text-slate-400 hidden sm:inline">|</span>
@@ -915,7 +950,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="छात्र या रोल नं. खोजें..."
+              placeholder={isEn ? "Search student or roll no..." : "छात्र या रोल नं. खोजें..."}
               className="pl-8 pr-7 py-1.5 rounded-xl border border-slate-300 bg-white text-xs outline-none focus:border-blue-800 w-44 sm:w-56"
             />
             {searchQuery && (
@@ -938,7 +973,13 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
           className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-600 text-white font-black flex items-center gap-2 shadow-md cursor-pointer transition-all transform hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50"
         >
           <i className={`fa-solid ${isSaving ? 'fa-spinner fa-spin' : 'fa-floppy-disk'} text-amber-300`}></i>
-          <span>{isSaving ? 'सेव हो रहा है...' : `💾 क्लास हाजिरी सेव करें (${presentCount} Present, ${absentCount} Absent)`}</span>
+          <span>
+            {isSaving
+              ? (isEn ? 'Saving...' : 'सेव हो रहा है...')
+              : isEn
+              ? `💾 Save Register (${presentCount} Present, ${absentCount} Absent)`
+              : `💾 क्लास हाजिरी सेव करें (${presentCount} Present, ${absentCount} Absent)`}
+          </span>
         </button>
       </div>
 
@@ -952,10 +993,14 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
                   <i className="fa-solid fa-circle-check"></i>
                 </div>
                 <h3 className="text-base font-black text-emerald-900">
-                  शानदार! क्लास {getClassName(selectedClass)} के सभी छात्रों की हाजिरी व आचरण आज दर्ज हो चुका है!
+                  {isEn
+                    ? `Awesome! Today's attendance & conduct for Class ${getClassName(selectedClass)} is recorded!`
+                    : `शानदार! क्लास ${getClassName(selectedClass)} के सभी छात्रों की हाजिरी व आचरण आज दर्ज हो चुका है!`}
                 </h3>
                 <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
-                  सभी {savedCount} छात्रों का डेटा सुरक्षित है और नियमानुसार सूची से छुपा दिया गया है।
+                  {isEn
+                    ? `All ${savedCount} student records are safe and hidden according to rules.`
+                    : `सभी ${savedCount} छात्रों का डेटा सुरक्षित है और नियमानुसार सूची से छुपा दिया गया है।`}
                 </p>
                 <button
                   type="button"
@@ -963,14 +1008,20 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
                   className="mt-4 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs inline-flex items-center gap-2 cursor-pointer transition-all active:scale-95 shadow-sm"
                 >
                   <i className="fa-solid fa-eye"></i>
-                  <span>दर्ज हो चुके छात्र देखें / पुनः संपादित करें ({savedCount})</span>
+                  <span>
+                    {isEn
+                      ? `View / Edit Recorded Students (${savedCount})`
+                      : `दर्ज हो चुके छात्र देखें / पुनः संपादित करें (${savedCount})`}
+                  </span>
                 </button>
               </div>
             ) : (
               <div>
                 <i className="fa-solid fa-user-slash text-2xl text-slate-400 mb-2"></i>
-                <p className="font-bold">कोई छात्र नहीं मिले।</p>
-                <p className="text-[11px] text-slate-400 mt-0.5">कृपया खोज शब्द हटाएं या ऊपर से कक्षा बदलें।</p>
+                <p className="font-bold">{isEn ? 'No students found.' : 'कोई छात्र नहीं मिले।'}</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  {isEn ? 'Please clear your search query or switch class above.' : 'कृपया खोज शब्द हटाएं या ऊपर से कक्षा बदलें।'}
+                </p>
               </div>
             )}
           </div>
@@ -1003,7 +1054,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
                 }`}
               >
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-                  {/* Student Identity (Clean, NO BADGES as requested) */}
+                  {/* Student Identity */}
                   <div className="flex items-center gap-3 min-w-[220px]">
                     <div className="relative shrink-0">
                       <StudentAvatar
@@ -1027,14 +1078,14 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
                         </span>
                         {student.Roll_Number && (
                           <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-md bg-slate-100 text-slate-600 border border-slate-200">
-                            रोल #{student.Roll_Number}
+                            {isEn ? 'Roll #' : 'रोल #'}{student.Roll_Number}
                           </span>
                         )}
                       </div>
 
                       <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-2">
                         <span>ID: <strong className="text-slate-700">{sId}</strong></span>
-                        <span>• पिता: {student.Father_Name || 'N/A'}</span>
+                        <span>• {isEn ? 'Father:' : 'पिता:'} {student.Father_Name || 'N/A'}</span>
                         {student.Village && (
                           <span className="text-slate-400">• {student.Village}</span>
                         )}
@@ -1042,7 +1093,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
                     </div>
                   </div>
 
-                  {/* Attendance Toggle Button (BIG, TOUCH FRIENDLY) */}
+                  {/* Attendance Toggle Button */}
                   <div className="shrink-0 flex items-center gap-2">
                     <button
                       type="button"
@@ -1052,10 +1103,14 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
                           ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-500/20'
                           : 'bg-rose-600 hover:bg-rose-700 text-white shadow-rose-500/20'
                       }`}
-                      title={isPres ? 'क्लिक करके अनुपस्थित (Absent) मार्क करें' : 'क्लिक करके उपस्थित (Present) मार्क करें'}
+                      title={
+                        isPres
+                          ? (isEn ? 'Click to mark Absent' : 'क्लिक करके अनुपस्थित (Absent) मार्क करें')
+                          : (isEn ? 'Click to mark Present' : 'क्लिक करके उपस्थित (Present) मार्क करें')
+                      }
                     >
                       <i className={`fa-solid ${isPres ? 'fa-check' : 'fa-xmark'} text-base`}></i>
-                      <span>{isPres ? 'उपस्थित (Present)' : 'अनुपस्थित (Absent)'}</span>
+                      <span>{isPres ? (isEn ? 'Present' : 'उपस्थित (Present)') : (isEn ? 'Absent' : 'अनुपस्थित (Absent)')}</span>
                     </button>
                   </div>
                 </div>
@@ -1064,14 +1119,18 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
                 {!isPres ? (
                   <div className="mt-2.5 pt-2 border-t border-rose-200/80 flex items-center gap-2 text-xs text-rose-800 font-medium">
                     <i className="fa-solid fa-ban text-rose-500"></i>
-                    <span>छात्र आज अनुपस्थित है — आचरण व स्वच्छता रिकॉर्ड लागू नहीं है।</span>
+                    <span>
+                      {isEn
+                        ? 'Student is absent today — conduct & grooming not applicable.'
+                        : 'छात्र आज अनुपस्थित है — आचरण व स्वच्छता रिकॉर्ड लागू नहीं है।'}
+                    </span>
                   </div>
                 ) : (
                   <div className="mt-3 pt-2.5 border-t border-slate-100">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="text-[11px] font-bold text-slate-500 mr-1 flex items-center gap-1">
                         <i className="fa-solid fa-sparkles text-amber-500"></i>
-                        <span>जांच टैग:</span>
+                        <span>{isEn ? 'Tags:' : 'जांच टैग:'}</span>
                       </span>
 
                       {/* 1-Tap Quick Fault Badges */}
@@ -1093,7 +1152,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
                             }`}
                           >
                             <i className={`fa-solid ${tag.icon} ${isSelected ? (isStarTag ? 'text-slate-950' : 'text-amber-200') : 'text-slate-400'} text-[10px]`}></i>
-                            <span>{tag.label}</span>
+                            <span>{isEn ? (tag.labelEn || tag.label) : tag.label}</span>
                           </button>
                         );
                       })}
@@ -1107,10 +1166,14 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
                             ? 'bg-indigo-600 text-white font-black'
                             : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200/90'
                         }`}
-                        title="अतिरिक्त विशेष रिमार्क लिखें"
+                        title={isEn ? "Add special remark" : "अतिरिक्त विशेष रिमार्क लिखें"}
                       >
                         <i className="fa-solid fa-pen text-[10px]"></i>
-                        <span>{state.customRemark ? 'रिमार्क दर्ज' : '+ रिमार्क'}</span>
+                        <span>
+                          {state.customRemark
+                            ? (isEn ? 'Note Added' : 'रिमार्क दर्ज')
+                            : (isEn ? '+ Note' : '+ रिमार्क')}
+                        </span>
                       </button>
                     </div>
 
@@ -1121,7 +1184,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
                           type="text"
                           value={state.customRemark}
                           onChange={(e) => handleRemarkChange(sId, e.target.value)}
-                          placeholder="विशेष रिमार्क (उदा. कॉपी घर भूल आया, तबीयत ढीली है)..."
+                          placeholder={isEn ? "Special remark (e.g. forgot notebook, feeling unwell)..." : "विशेष रिमार्क (उदा. कॉपी घर भूल आया, तबीयत ढीली है)..."}
                           className="flex-1 px-3 py-1.5 rounded-lg border border-slate-300 text-xs bg-white outline-none focus:border-indigo-600"
                         />
                         {state.customRemark && (
@@ -1152,16 +1215,16 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
             </div>
             <div>
               <div className="font-bold text-white">
-                कक्षा {getClassName(selectedClass)} • {selectedDate}
+                {isEn ? 'Class' : 'कक्षा'} {getClassName(selectedClass)} • {selectedDate}
               </div>
               <div className="text-[11px] text-slate-300">
-                बाकी छात्र: <strong className="text-amber-300">{pendingCount}</strong> | उपस्थित:{' '}
-                <strong className="text-emerald-400">{presentCount}</strong> | अनुपस्थित:{' '}
+                {isEn ? 'Pending: ' : 'बाकी छात्र: '}<strong className="text-amber-300">{pendingCount}</strong> | {isEn ? 'Present: ' : 'उपस्थित: '}
+                <strong className="text-emerald-400">{presentCount}</strong> | {isEn ? 'Absent: ' : 'अनुपस्थित: '}
                 <strong className="text-rose-400">{absentCount}</strong>
                 {faultCount > 0 && (
                   <span>
                     {' '}
-                    | फॉल्ट:{' '}
+                    | {isEn ? 'Faults: ' : 'फॉल्ट: '}
                     <strong className="text-amber-400">{faultCount}</strong>
                   </span>
                 )}
@@ -1177,7 +1240,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
               className="w-full sm:w-auto px-6 py-3 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-black text-xs sm:text-sm shadow-lg hover:shadow-amber-400/30 flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-95 disabled:opacity-50"
             >
               <i className={`fa-solid ${isSaving ? 'fa-spinner fa-spin' : 'fa-check-double'} text-base`}></i>
-              <span>{isSaving ? 'सेव हो रहा है...' : '💾 बाकी छात्रों की हाजिरी सेव करें'}</span>
+              <span>{isSaving ? (isEn ? 'Saving...' : 'सेव हो रहा है...') : (isEn ? '💾 Save Remaining Students' : '💾 बाकी छात्रों की हाजिरी सेव करें')}</span>
             </button>
           </div>
         </div>

@@ -11,6 +11,7 @@ import {
 } from '../utils/feeMaster';
 import { getAppsScriptUrl } from '../utils/busTrackingService';
 import { realtimeSync } from '../utils/realtimeSync';
+import { showDeviceNotification } from '../utils/notificationService';
 
 interface SchoolNoticeBoardProps {
   isManager?: boolean;
@@ -288,6 +289,15 @@ export const SchoolNoticeBoard: React.FC<SchoolNoticeBoardProps> = ({
 
     // Broadcast real-time update to all tabs and devices
     realtimeSync.broadcastUpdate('notice', 'addNotice', notice);
+
+    // Trigger lock-screen / status-bar notification for this device immediately
+    showDeviceNotification({
+      title: notice.isEmergency ? `🚨 अति आवश्यक: ${notice.title}` : `📢 नया स्कूल नोटिस: ${notice.title}`,
+      body: notice.description.slice(0, 140),
+      tag: notice.id,
+      requireInteraction: !!notice.isEmergency,
+      data: { url: '/', noticeId: notice.id },
+    }).catch(() => {});
   };
 
   const handleDeleteNotice = (id: string) => {

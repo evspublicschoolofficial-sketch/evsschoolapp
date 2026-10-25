@@ -12,12 +12,14 @@ interface EmergencyAlertBannerProps {
   notices: SchoolNotice[];
   schoolName?: string;
   isParentView?: boolean;
+  lang?: 'en' | 'hi';
 }
 
 export const EmergencyAlertBanner: React.FC<EmergencyAlertBannerProps> = ({
   notices,
   schoolName = 'E.V.S. PUBLIC SCHOOL',
   isParentView = false,
+  lang = 'en',
 }) => {
   const [activeEmergency, setActiveEmergency] = useState<SchoolNotice | null>(null);
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
@@ -139,7 +141,7 @@ export const EmergencyAlertBanner: React.FC<EmergencyAlertBannerProps> = ({
             </span>
             <span className="px-2 py-0.5 rounded-md bg-amber-400 text-slate-950 font-black text-[10px] tracking-wider uppercase shrink-0 shadow-2xs flex items-center gap-1">
               <i className="fa-solid fa-bullhorn text-[11px]"></i>
-              स्कूल उद्घोषणा
+              {lang === 'hi' ? 'स्कूल उद्घोषणा' : 'School Announcement'}
             </span>
             <span className="font-extrabold truncate text-xs sm:text-sm text-white">
               {activeEmergency.title}
@@ -155,14 +157,14 @@ export const EmergencyAlertBanner: React.FC<EmergencyAlertBannerProps> = ({
                   ? 'bg-amber-400 text-slate-950 animate-pulse'
                   : 'bg-white/20 hover:bg-white/30 text-white border border-white/30'
               }`}
-              title={isSirenActive ? 'अनाउंसमेंट म्यूट करें' : 'अनाउंसमेंट ध्वनि सुनें'}
+              title={isSirenActive ? (lang === 'hi' ? 'अनाउंसमेंट म्यूट करें' : 'Mute Announcement') : (lang === 'hi' ? 'अनाउंसमेंट ध्वनि सुनें' : 'Listen Announcement')}
             >
               <i
                 className={`fa-solid ${
                   isSirenActive ? 'fa-volume-high text-blue-900' : 'fa-volume-xmark text-slate-300'
                 }`}
               ></i>
-              <span>{isSirenActive ? 'म्यूट करें' : '📢 अनाउंसमेंट सुनें'}</span>
+              <span>{isSirenActive ? (lang === 'hi' ? 'म्यूट करें' : 'Mute') : (lang === 'hi' ? '📢 अनाउंसमेंट सुनें' : '📢 Listen Announcement')}</span>
             </button>
 
             <button
@@ -170,7 +172,7 @@ export const EmergencyAlertBanner: React.FC<EmergencyAlertBannerProps> = ({
               onClick={() => setIsModalOpen(true)}
               className="px-3 py-1 bg-white hover:bg-amber-100 text-blue-950 rounded-xl text-xs font-black shadow-xs cursor-pointer transition-all"
             >
-              <span>पूरी सूचना देखें →</span>
+              <span>{lang === 'hi' ? 'पूरी सूचना देखें →' : 'View Full Notice →'}</span>
             </button>
           </div>
         </div>
@@ -196,7 +198,7 @@ export const EmergencyAlertBanner: React.FC<EmergencyAlertBannerProps> = ({
                     </span>
                   </div>
                   <h3 className="text-base sm:text-xl font-black text-white mt-0.5">
-                    📢 महत्वपूर्ण स्कूल उद्घोषणा
+                    {lang === 'hi' ? '📢 महत्वपूर्ण स्कूल उद्घोषणा' : '📢 Important School Announcement'}
                   </h3>
                 </div>
               </div>
@@ -205,7 +207,7 @@ export const EmergencyAlertBanner: React.FC<EmergencyAlertBannerProps> = ({
                 type="button"
                 onClick={handleAcknowledge}
                 className="w-8 h-8 rounded-xl bg-white/20 hover:bg-white/30 text-white flex items-center justify-center cursor-pointer transition-colors"
-                title="बंद करें"
+                title={lang === 'hi' ? 'बंद करें' : 'Close'}
               >
                 ✕
               </button>
@@ -216,7 +218,11 @@ export const EmergencyAlertBanner: React.FC<EmergencyAlertBannerProps> = ({
               <div className="flex flex-wrap items-center justify-between gap-2.5">
                 <div className="flex items-center gap-2 text-blue-950 text-xs font-bold">
                   <i className={`fa-solid ${isSirenActive ? 'fa-bullhorn animate-bounce text-blue-700' : 'fa-bell text-slate-400'}`}></i>
-                  <span>{isSirenActive ? '📢 स्कूल उद्घोषणा चालू है (Playing Voice)' : 'अनाउंसमेंट ध्वनि बंद है'}</span>
+                  <span>
+                    {isSirenActive
+                      ? (lang === 'hi' ? '📢 स्कूल उद्घोषणा चालू है (Playing Voice)' : '📢 Playing Voice Announcement')
+                      : (lang === 'hi' ? 'अनाउंसमेंट ध्वनि बंद है' : 'Announcement Audio Muted')}
+                  </span>
                 </div>
 
                 <div className="flex items-center gap-2 flex-wrap">
@@ -234,7 +240,7 @@ export const EmergencyAlertBanner: React.FC<EmergencyAlertBannerProps> = ({
                     title="हिंदी में घोषणा सुनें"
                   >
                     <i className="fa-solid fa-volume-high"></i>
-                    <span>📢 सुनें (Hindi)</span>
+                    <span>📢 {lang === 'hi' ? 'सुनें (Hindi)' : 'Listen (Hindi)'}</span>
                   </button>
 
                   <button
@@ -261,7 +267,7 @@ export const EmergencyAlertBanner: React.FC<EmergencyAlertBannerProps> = ({
                       className="px-3 py-1.5 rounded-xl text-xs font-black bg-rose-600 hover:bg-rose-700 text-white flex items-center gap-1 cursor-pointer shadow-xs transition-transform active:scale-95"
                     >
                       <i className="fa-solid fa-volume-xmark"></i>
-                      <span>म्यूट करें</span>
+                      <span>{lang === 'hi' ? 'म्यूट करें' : 'Mute'}</span>
                     </button>
                   )}
                 </div>
@@ -272,7 +278,10 @@ export const EmergencyAlertBanner: React.FC<EmergencyAlertBannerProps> = ({
                 <div className="bg-amber-100/80 border border-amber-300 rounded-lg px-2.5 py-1.5 text-[11px] text-amber-900 flex items-center gap-1.5 font-medium">
                   <i className="fa-solid fa-circle-exclamation text-amber-600 shrink-0"></i>
                   <span>
-                    <strong>iPhone यूज़र्स:</strong> आवाज़ सुनने हेतु कृपया iPhone के बाईं ओर का <strong>Silent Mode (Mute Switch)</strong> बंद करें व वॉल्यूम बढ़ाएं।
+                    <strong>{lang === 'hi' ? 'iPhone यूज़र्स:' : 'iPhone Users:'}</strong>{' '}
+                    {lang === 'hi'
+                      ? 'आवाज़ सुनने हेतु कृपया iPhone के बाईं ओर का Silent Mode (Mute Switch) बंद करें व वॉल्यूम बढ़ाएं।'
+                      : 'Please turn off the silent switch on the side of your iPhone and raise the volume to hear announcement audio.'}
                   </span>
                 </div>
               )}
@@ -287,15 +296,15 @@ export const EmergencyAlertBanner: React.FC<EmergencyAlertBannerProps> = ({
                 <div className="flex flex-wrap items-center gap-2.5 text-xs text-slate-500 mt-2 pb-3 border-b border-slate-100">
                   <span className="flex items-center gap-1 font-semibold text-blue-800 bg-blue-100/70 px-2 py-0.5 rounded-md">
                     <i className="fa-solid fa-calendar-day"></i>
-                    दिनांक: {activeEmergency.date}
+                    {lang === 'hi' ? 'दिनांक:' : 'Date:'} {activeEmergency.date}
                   </span>
                   <span className="flex items-center gap-1 font-semibold text-blue-900 bg-blue-50 px-2 py-0.5 rounded-md">
                     <i className="fa-solid fa-school"></i>
-                    कक्षा: {activeEmergency.targetClass || 'सभी कक्षाएं (All)'}
+                    {lang === 'hi' ? 'कक्षा:' : 'Class:'} {activeEmergency.targetClass || (lang === 'hi' ? 'सभी कक्षाएं (All)' : 'All Classes')}
                   </span>
                   {activeEmergency.issuedBy && (
                     <span className="text-slate-500">
-                      जारीकर्ता: <strong>{activeEmergency.issuedBy}</strong>
+                      {lang === 'hi' ? 'जारीकर्ता:' : 'Issued By:'} <strong>{activeEmergency.issuedBy}</strong>
                     </span>
                   )}
                 </div>
@@ -309,7 +318,9 @@ export const EmergencyAlertBanner: React.FC<EmergencyAlertBannerProps> = ({
               <div className="p-3 bg-slate-100 rounded-xl text-[11px] text-slate-600 flex items-start gap-2">
                 <i className="fa-solid fa-circle-info text-blue-900 mt-0.5 text-xs shrink-0"></i>
                 <span>
-                  यह सूचना विद्यालय द्वारा प्राथमिकता (School Notice Announcement) के अंतर्गत प्रसारित की गई है। कृपया निर्देशानुसार संज्ञान लें।
+                  {lang === 'hi'
+                    ? 'यह सूचना विद्यालय द्वारा प्राथमिकता (School Notice Announcement) के अंतर्गत प्रसारित की गई है। कृपया निर्देशानुसार संज्ञान लें।'
+                    : 'This high-priority notice is broadcasted by school administration. Please take action accordingly.'}
                 </span>
               </div>
             </div>
@@ -322,7 +333,7 @@ export const EmergencyAlertBanner: React.FC<EmergencyAlertBannerProps> = ({
                 className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-xs flex items-center gap-2 shadow-sm cursor-pointer transition-transform active:scale-95"
               >
                 <i className="fa-brands fa-whatsapp text-sm"></i>
-                <span>WhatsApp पर शेयर करें</span>
+                <span>{lang === 'hi' ? 'WhatsApp पर शेयर करें' : 'Share on WhatsApp'}</span>
               </button>
 
               <button
@@ -331,7 +342,7 @@ export const EmergencyAlertBanner: React.FC<EmergencyAlertBannerProps> = ({
                 className="px-6 py-2.5 bg-gradient-to-r from-blue-700 to-indigo-800 hover:from-blue-800 hover:to-indigo-900 text-white rounded-xl font-black text-xs sm:text-sm shadow-md cursor-pointer transition-transform active:scale-95 flex items-center gap-2 ml-auto"
               >
                 <i className="fa-solid fa-check-double"></i>
-                <span>मैंने पढ़ लिया है / बंद करें (Acknowledge & Close)</span>
+                <span>{lang === 'hi' ? 'मैंने पढ़ लिया है / बंद करें (Acknowledge & Close)' : 'Acknowledge & Close'}</span>
               </button>
             </div>
           </div>

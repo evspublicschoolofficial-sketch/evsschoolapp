@@ -43,6 +43,8 @@ import { realtimeSync } from './utils/realtimeSync';
 import studentFarahPhoto from './assets/images/student_farah_1789483069291.jpg';
 import studentNamraPhoto from './assets/images/student_namra_1789483091505.jpg';
 import { AppLanguage, getStoredLanguage, setStoredLanguage, TRANSLATIONS } from './utils/translations';
+import { NotificationPermissionBanner } from './components/NotificationPermissionBanner';
+import { checkAndNotifyNewNotices } from './utils/notificationService';
 
 export const DEFAULT_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwVy51K14qu6IXipAZXP4NspFcAUHpLcYv8-zjhkYnBlUI17TzGi_KaJU9TRmNT8D5vvQ/exec';
 
@@ -1740,6 +1742,13 @@ export default function App() {
       localStorage.setItem('evs_school_notices', JSON.stringify(updatedNotices));
     } catch (e) {}
   };
+
+  // Background lock-screen / status-bar push notifications for parents & staff when school notices are published
+  useEffect(() => {
+    if (schoolNotices && schoolNotices.length > 0) {
+      checkAndNotifyNewNotices(schoolNotices, currentLang);
+    }
+  }, [schoolNotices, currentLang]);
 
   // Selected Student for Manager Fee Explorer (Manager Portal)
   const [managerSelectedFeeStudent, setManagerSelectedFeeStudent] = useState<Student | null>(null);
@@ -6305,7 +6314,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
                     <span className="font-extrabold text-white">👩‍🏫 {teacherUser.Name}</span>
                     <span className="text-[10px] bg-blue-400/30 text-blue-200 border border-blue-400/40 px-2 py-0.5 rounded font-bold">
-                      अध्यापक
+                      {currentLang === 'en' ? 'Teacher' : 'अध्यापक'}
                     </span>
                   </div>
 
@@ -6315,30 +6324,30 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       type="button"
                       onClick={() => setActiveTab('teacher')}
                       className="px-2.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 transition-all text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs shrink-0"
-                      title="शिक्षक पोर्टल पर वापस जाएं"
+                      title={currentLang === 'en' ? 'Back to Teacher Portal' : 'शिक्षक पोर्टल पर वापस जाएं'}
                     >
                       <i className="fa-solid fa-chalkboard-user text-xs"></i>
-                      <span>शिक्षक पोर्टल</span>
+                      <span>{currentLang === 'en' ? 'Teacher Portal' : 'शिक्षक पोर्टल'}</span>
                     </button>
                   ) : (
                     <button
                       type="button"
                       onClick={() => setActiveTab('parent')}
                       className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-amber-400 hover:text-slate-950 text-amber-200 transition-all text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs shrink-0"
-                      title="अभिभावक पोर्टल देखें (View Parent Portal)"
+                      title={currentLang === 'en' ? 'View Parent Portal' : 'अभिभावक पोर्टल देखें (View Parent Portal)'}
                     >
                       <i className="fa-solid fa-user-group text-xs text-amber-300"></i>
-                      <span className="hidden sm:inline">अभिभावक पोर्टल</span>
+                      <span className="hidden sm:inline">{currentLang === 'en' ? 'Parent Portal' : 'अभिभावक पोर्टल'}</span>
                     </button>
                   )}
 
                   <button
                     onClick={handleTeacherLogout}
                     className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
-                    title="टीचर लॉगआउट"
+                    title={t.logout}
                   >
                     <i className="fa-solid fa-right-from-bracket"></i>
-                    <span>लॉगआउट (Logout)</span>
+                    <span>{t.logout}</span>
                   </button>
                 </div>
               )}
@@ -6349,21 +6358,21 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   <button
                     onClick={() => setActiveTab('home')}
                     className="px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-amber-400 hover:text-slate-950 text-amber-200 text-xs font-bold transition-all border border-amber-400/30 flex items-center gap-1.5 cursor-pointer shadow-xs"
-                    title="भूमिका चयन पर वापस जाएं"
+                    title={currentLang === 'en' ? 'Back to Role Selection' : 'भूमिका चयन पर वापस जाएं'}
                   >
                     <i className="fa-solid fa-arrow-left"></i>
-                    <span>← भूमिका चयन (Roles)</span>
+                    <span>← {currentLang === 'en' ? 'Role Selection' : 'भूमिका चयन (Roles)'}</span>
                   </button>
                   <span className="text-xs text-amber-300 bg-amber-400/20 px-2.5 py-1 rounded-lg border border-amber-400/40 font-bold hidden sm:inline-flex items-center gap-1.5">
                     <i className="fa-solid fa-lock text-[10px]"></i>
                     <span>
                       {activeTab === 'parent'
-                        ? 'अभिभावक सत्यापन'
+                        ? (currentLang === 'en' ? 'Parent Verification' : 'अभिभावक सत्यापन')
                         : activeTab === 'manager'
-                        ? 'प्रबंधक लॉगिन'
+                        ? (currentLang === 'en' ? 'Manager Login' : 'प्रबंधक लॉगिन')
                         : activeTab === 'teacher'
-                        ? 'शिक्षक लॉगिन'
-                        : 'ड्राइवर लॉगिन'}
+                        ? (currentLang === 'en' ? 'Teacher Login' : 'शिक्षक लॉगिन')
+                        : (currentLang === 'en' ? 'Driver Login' : 'ड्राइवर लॉगिन')}
                     </span>
                   </span>
                 </div>
@@ -6386,8 +6395,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   )}
                   <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/40 text-xs font-bold shadow-xs">
                     <i className="fa-solid fa-shield-halved text-amber-400"></i>
-                    <span className="hidden sm:inline">सुरक्षित डिजिटल पोर्टल (लॉगिन आवश्यक)</span>
-                    <span className="sm:hidden">सुरक्षित पोर्टल</span>
+                    <span className="hidden sm:inline">{currentLang === 'en' ? 'Secure Digital Portal' : 'सुरक्षित डिजिटल पोर्टल (लॉगिन आवश्यक)'}</span>
+                    <span className="sm:hidden">{currentLang === 'en' ? 'Secure Portal' : 'सुरक्षित पोर्टल'}</span>
                   </span>
                 </div>
               )}
@@ -6401,6 +6410,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         notices={schoolNotices}
         schoolName="E.V.S. PUBLIC SCHOOL"
         isParentView={activeTab === 'parent'}
+        lang={currentLang}
       />
 
       {/* Subtle Background Sync Bar at Top */}
@@ -6570,6 +6580,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 </button>
               </div>
             </div>
+
+            {/* Device Lock-Screen Push Notification Opt-in Banner */}
+            <NotificationPermissionBanner lang={currentLang} />
 
             {/* ========================================================================= */}
             {/* SCHOOL PORTAL ROLE LOGIN BANNER (With Role Dropdown & Parent as Default) */}
@@ -7198,6 +7211,11 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       </div>
                     </div>
                   )}
+
+                  {/* Device Push Notification Opt-in for Parents */}
+                  <div className="mt-4 pt-4 border-t border-slate-100">
+                    <NotificationPermissionBanner lang={currentLang} />
+                  </div>
                 </div>
               </div>
             ) : (
@@ -7211,6 +7229,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   onChange={handlePhotoFileChange}
                   className="hidden"
                 />
+
+                {/* Device Push Notification Opt-in for Parents */}
+                <NotificationPermissionBanner lang={currentLang} />
 
                 {/* SIBLINGS / MULTI-CHILD SELECTION TOOLBAR (Clean, Compact, Uncluttered) */}
                 {parentChildren.length > 1 && (
@@ -9831,16 +9852,16 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       {teacherUser.Name}
                     </h3>
                     <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold border border-emerald-400/30">
-                      {teacherUser.Designation || 'अध्यापक / Teacher'}
+                      {teacherUser.Designation || (currentLang === 'en' ? 'Faculty / Teacher' : 'अध्यापक / Teacher')}
                     </span>
                   </div>
                   <p className="text-xs text-slate-300 mt-0.5">
-                    यूजर आईडी: <span className="font-mono text-amber-300">{teacherUser.User_ID || teacherUser.Username}</span>
+                    {currentLang === 'en' ? 'User ID: ' : 'यूजर आईडी: '}<span className="font-mono text-amber-300">{teacherUser.User_ID || teacherUser.Username}</span>
                     {teacherUser.Assigned_Class && (
                       <span className="ml-2 bg-blue-900/60 px-2 py-0.5 rounded text-[11px] border border-blue-400/30">
                         {parseAssignedClasses(teacherUser.Assigned_Class).length > 1
-                          ? `कक्षाएं: ${parseAssignedClasses(teacherUser.Assigned_Class).map((c) => `Class ${getClassName(c)}`).join(', ')}`
-                          : `कक्षा: Class ${getClassName(teacherUser.Assigned_Class)}`}
+                          ? `${currentLang === 'en' ? 'Classes: ' : 'कक्षाएं: '}${parseAssignedClasses(teacherUser.Assigned_Class).map((c) => `Class ${getClassName(c)}`).join(', ')}`
+                          : `${currentLang === 'en' ? 'Class: ' : 'कक्षा: '}Class ${getClassName(teacherUser.Assigned_Class)}`}
                       </span>
                     )}
                   </p>
@@ -9855,10 +9876,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       type="button"
                       onClick={() => handleSelectTeacherTab('staff_attendance')}
                       className="px-3.5 py-1.5 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/40 text-emerald-300 text-xs font-bold flex items-center gap-1.5 border border-emerald-400/40 cursor-pointer shadow-xs"
-                      title="आज की उपस्थिति पूर्ण: चेक-इन व चेक-आउट दर्ज हैं"
+                      title={currentLang === 'en' ? "Today's attendance completed: check-in and check-out recorded" : "आज की उपस्थिति पूर्ण: चेक-इन व चेक-आउट दर्ज हैं"}
                     >
                       <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                      <span>पूर्ण (In: {myTodayAttendanceRecord.check_in_time} • Out: {myTodayAttendanceRecord.check_out_time})</span>
+                      <span>{currentLang === 'en' ? 'Completed' : 'पूर्ण'} (In: {myTodayAttendanceRecord.check_in_time} • Out: {myTodayAttendanceRecord.check_out_time})</span>
                     </button>
                   ) : (
                     <>
@@ -9866,19 +9887,19 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         type="button"
                         onClick={() => setIsStaffAttendanceScannerOpen(true)}
                         className="px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-md active:scale-95 cursor-pointer"
-                        title="दोबारा स्कूल QR स्कैन करके चेक-आउट दर्ज करें"
+                        title={currentLang === 'en' ? "Scan QR again to check-out" : "दोबारा स्कूल QR स्कैन करके चेक-आउट दर्ज करें"}
                       >
                         <i className="fa-solid fa-arrow-right-from-bracket"></i>
-                        <span>🚪 स्कूल चेक-आउट</span>
+                        <span>{currentLang === 'en' ? '🚪 School Check-Out' : '🚪 स्कूल चेक-आउट'}</span>
                       </button>
                       <button
                         type="button"
                         onClick={() => handleSelectTeacherTab('staff_attendance')}
                         className="px-3 py-1.5 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/40 text-emerald-300 text-xs font-bold flex items-center gap-1.5 border border-emerald-400/40 cursor-pointer shadow-xs"
-                        title="आपकी उपस्थिति दर्ज है - विवरण देखें"
+                        title={currentLang === 'en' ? "Your attendance is recorded - view details" : "आपकी उपस्थिति दर्ज है - विवरण देखें"}
                       >
                         <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                        <span>इन: {myTodayAttendanceRecord.check_in_time}</span>
+                        <span>{currentLang === 'en' ? 'In: ' : 'इन: '}{myTodayAttendanceRecord.check_in_time}</span>
                       </button>
                     </>
                   )
@@ -9887,10 +9908,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     type="button"
                     onClick={() => setIsStaffAttendanceScannerOpen(true)}
                     className="px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-md active:scale-95 cursor-pointer animate-pulse"
-                    title="स्कूल गेट QR कोड स्कैन करके आज की हाजिरी लगाएं"
+                    title={currentLang === 'en' ? "Scan School QR to mark attendance" : "स्कूल गेट QR कोड स्कैन करके आज की हाजिरी लगाएं"}
                   >
                     <i className="fa-solid fa-camera"></i>
-                    <span>📷 स्कूल QR हाजिरी</span>
+                    <span>{currentLang === 'en' ? '📷 Scan School QR' : '📷 स्कूल QR हाजिरी'}</span>
                   </button>
                 )}
 
@@ -9898,28 +9919,28 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   type="button"
                   onClick={() => setIsSchoolQrModalOpen(true)}
                   className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-amber-300 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer border border-white/20"
-                  title="स्कूल उपस्थिति QR कोड पोस्टर देखें व प्रिंट करें"
+                  title={currentLang === 'en' ? "View and print School QR Poster" : "स्कूल उपस्थिति QR कोड पोस्टर देखें व प्रिंट करें"}
                 >
                   <i className="fa-solid fa-qrcode"></i>
-                  <span className="hidden md:inline">स्कूल QR पोस्टर</span>
+                  <span className="hidden md:inline">{currentLang === 'en' ? 'School QR Poster' : 'स्कूल QR पोस्टर'}</span>
                 </button>
 
                 <button
                   onClick={handleRefreshTeacherPortal}
                   disabled={isRefreshingTeacherPortal}
                   className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm active:scale-95 disabled:opacity-50"
-                  title="टीचर पोर्टल का पूरा डेटा (होमवर्क, ट्रैकर, आचरण, छात्र व उपस्थिति) ताज़ा करें"
+                  title={currentLang === 'en' ? "Refresh all teacher portal data" : "टीचर पोर्टल का पूरा डेटा (होमवर्क, ट्रैकर, आचरण, छात्र व उपस्थिति) ताज़ा करें"}
                 >
                   <i className={`fa-solid fa-rotate-right ${isRefreshingTeacherPortal ? 'fa-spin text-amber-300' : ''}`}></i>
-                  <span>{isRefreshingTeacherPortal ? 'रिफ्रेश हो रहा है...' : 'डेटा रिफ्रेश करें'}</span>
+                  <span>{isRefreshingTeacherPortal ? (currentLang === 'en' ? 'Refreshing...' : 'रिफ्रेश हो रहा है...') : (currentLang === 'en' ? 'Refresh Live Data' : 'डेटा रिफ्रेश करें')}</span>
                 </button>
                 <button
                   onClick={handleTeacherLogout}
                   className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
-                  title="Logout Teacher"
+                  title={t.logout}
                 >
                   <i className="fa-solid fa-right-from-bracket"></i>
-                  <span>लॉगआउट (Logout)</span>
+                  <span>{t.logout}</span>
                 </button>
               </div>
             </div>
@@ -10881,7 +10902,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       }`}
                     >
                       <i className="fa-solid fa-users-viewfinder text-amber-400"></i>
-                      <span>📋 पूरी क्लास का हाजिरी व आचरण रजिस्टर</span>
+                      <span>{currentLang === 'en' ? '📋 Class Attendance & Conduct Register' : '📋 पूरी क्लास का हाजिरी व आचरण रजिस्टर'}</span>
                       <span className="px-2 py-0.2 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black uppercase">
                         Fast
                       </span>
@@ -10897,7 +10918,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       }`}
                     >
                       <i className="fa-solid fa-clock-rotate-left text-blue-400"></i>
-                      <span>📜 दर्ज रिकॉर्ड्स सूची (History)</span>
+                      <span>{currentLang === 'en' ? '📜 Recorded History' : '📜 दर्ज रिकॉर्ड्स सूची (History)'}</span>
                       <span className="px-2 py-0.2 rounded-full bg-slate-200 text-slate-800 text-[11px] font-bold">
                         {behaviorList.length}
                       </span>
@@ -10923,10 +10944,12 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                 </div>
                                 <div>
                                   <span className="font-extrabold text-sm block text-amber-950">
-                                    सूचना: अभी कोई विशिष्ट कक्षा असाइन नहीं है
+                                    {currentLang === 'en' ? 'Notice: No Specific Class Assigned Yet' : 'सूचना: अभी कोई विशिष्ट कक्षा असाइन नहीं है'}
                                   </span>
                                   <span className="text-[11px] text-amber-800">
-                                    आप ऊपर क्लास ड्रॉपडाउन से कक्षा चुनकर हाजिरी व आचरण दर्ज कर सकते हैं। स्थाई कक्षा असाइन करवाने के लिए मैनेजर से संपर्क करें।
+                                    {currentLang === 'en'
+                                      ? 'You can select a class from the dropdown above to mark attendance and conduct. Contact manager for permanent class assignment.'
+                                      : 'आप ऊपर क्लास ड्रॉपडाउन से कक्षा चुनकर हाजिरी व आचरण दर्ज कर सकते हैं। स्थाई कक्षा असाइन करवाने के लिए मैनेजर से संपर्क करें।'}
                                   </span>
                                 </div>
                               </div>
@@ -10934,12 +10957,12 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                 type="button"
                                 onClick={() => {
                                   fetchUsers();
-                                  setSyncToastMessage('🔄 कक्षा असाइनमेंट रिफ्रेश हो रहा है...');
+                                  setSyncToastMessage(currentLang === 'en' ? '🔄 Refreshing class assignment...' : '🔄 कक्षा असाइनमेंट रिफ्रेश हो रहा है...');
                                 }}
                                 className="px-3.5 py-1.5 rounded-xl bg-white hover:bg-amber-100 border border-amber-300 text-amber-950 font-bold transition-all text-xs shrink-0 cursor-pointer shadow-2xs flex items-center gap-1.5 self-start sm:self-auto"
                               >
                                 <i className="fa-solid fa-rotate-right"></i>
-                                <span>असाइनमेंट चेक करें</span>
+                                <span>{currentLang === 'en' ? 'Check Assignment' : 'असाइनमेंट चेक करें'}</span>
                               </button>
                             </div>
                           )}
@@ -10955,6 +10978,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             getStudentPhoto={getStudentPhoto}
                             onSaveBatch={handleSaveBatchBehavior}
                             isEmbedded={true}
+                            lang={currentLang}
                           />
                         </>
                       );
