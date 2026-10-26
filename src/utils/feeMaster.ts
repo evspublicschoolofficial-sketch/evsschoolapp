@@ -128,6 +128,11 @@ export const getActiveFeeMasterConfig = (): Record<string, ClassFeeConfig> => {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed && typeof parsed === 'object') {
+          // If corrupted with the old 1234 Users password glitch, purge it!
+          if (parsed['nursery']?.admissionFee === 1234 || parsed['4th']?.admissionFee === 1234) {
+            localStorage.removeItem('evs_fee_master_config');
+            return FEE_MASTER_CONFIG;
+          }
           return { ...FEE_MASTER_CONFIG, ...parsed };
         }
       }
@@ -235,7 +240,7 @@ export const fetchFeeMasterFromGoogleSheet = async (
 export const fetchFeeMasterDirectGViz = async (
   spreadsheetId: string = '1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU'
 ): Promise<Record<string, ClassFeeConfig> | null> => {
-  const tabCandidates = ['Fee_Maseter', 'Fee_Master', 'FeeMaster', 'Fee Master'];
+  const tabCandidates = ['Fee_Master', 'FeeMaster', 'Fee Master'];
   for (const sheetName of tabCandidates) {
     try {
       const encoded = encodeURIComponent(sheetName);
@@ -269,6 +274,11 @@ export const fetchFeeMasterDirectGViz = async (
           }
         }
       }
+
+      // Reject if this is not a fee sheet (e.g. Google Sheets served Users sheet fallback with password/user_id)
+      if (headerList.some((c) => c.includes('password') || c.includes('user_id'))) continue;
+      const hasRealFeeCol = headerList.some((c) => c.includes('admission') || c.includes('tution') || c.includes('tuition'));
+      if (!hasRealFeeCol) continue;
 
       const classIdx = headerList.findIndex((c: string) => c.includes('class') && !c.includes('name'));
       const admIdx = headerList.findIndex((c: string) => c.includes('admission'));
