@@ -246,36 +246,61 @@ export const fetchFeeMasterDirectGViz = async (
       const end = text.lastIndexOf('}');
       if (start === -1 || end === -1) continue;
       const data = JSON.parse(text.slice(start, end + 1));
-      const cols = (data.table?.cols || []).map((c: any) => String(c?.label || c?.id || '').trim().toLowerCase());
+      const rawCols = (data.table?.cols || []).map((c: any) => String(c?.label || '').trim().toLowerCase());
+      const rawRows = data.table?.rows || [];
+      if (rawRows.length === 0) continue;
 
-      const hasFeeCol = cols.some((c: string) => c.includes('class') || c.includes('admission') || c.includes('tution') || c.includes('tuition') || c.includes('fee'));
-      if (!hasFeeCol) continue;
+      // Determine where the headers are located (in table cols or in first row cells)
+      let headerList = rawCols;
+      let startRowIdx = 0;
 
-      const rows = data.table?.rows || [];
-      const classIdx = cols.findIndex((c: string) => c.includes('class'));
-      const admIdx = cols.findIndex((c: string) => c.includes('admission'));
-      const tutionIdx = cols.findIndex((c: string) => c.includes('tution') || c.includes('tuition'));
-      const examIdx = cols.findIndex((c: string) => c.includes('exam'));
-      const booksIdx = cols.findIndex((c: string) => c.includes('book'));
+      const firstRowCells = (rawRows[0]?.c || []).map((cell: any) => String(cell?.v || '').trim().toLowerCase());
+      const colsHasHeaders = headerList.some((c) => c.includes('class') || c.includes('admission') || c.includes('tution') || c.includes('tuition') || c.includes('fee'));
+      const rowHasHeaders = firstRowCells.some((c: string) => c.includes('class') || c.includes('admission') || c.includes('tution') || c.includes('tuition') || c.includes('fee'));
+
+      if (!colsHasHeaders && rowHasHeaders) {
+        headerList = firstRowCells;
+        startRowIdx = 1;
+      } else if (colsHasHeaders && rowHasHeaders) {
+        // If cols has headers AND row 0 also repeats the header row
+        if (firstRowCells[0] && (firstRowCells[0] === 'class' || firstRowCells[0] === 'c1' || firstRowCells[0].includes('class'))) {
+          if (firstRowCells[0] === 'class') {
+            startRowIdx = 1;
+          }
+        }
+      }
+
+      const classIdx = headerList.findIndex((c: string) => c.includes('class') && !c.includes('name'));
+      const admIdx = headerList.findIndex((c: string) => c.includes('admission'));
+      const tutionIdx = headerList.findIndex((c: string) => c.includes('tution') || c.includes('tuition') || c.includes('monthly'));
+      const examIdx = headerList.findIndex((c: string) => c.includes('exam'));
+      const booksIdx = headerList.findIndex((c: string) => c.includes('book'));
+
+      // If headers not detected at all, default indices based on standard sheet layout
+      const effectiveClassIdx = classIdx !== -1 ? classIdx : 0;
+      const effectiveAdmIdx = admIdx !== -1 ? admIdx : 3; // Col D is usually admission in user's sheet
+      const effectiveTutIdx = tutionIdx !== -1 ? tutionIdx : 2; // Col C is usually tuition in user's sheet
+      const effectiveExamIdx = examIdx !== -1 ? examIdx : 4; // Col E is usually exam in user's sheet
+      const effectiveBooksIdx = booksIdx !== -1 ? booksIdx : (headerList.length > 7 ? 7 : 5); // Col H or Col F
 
       const result: Record<string, ClassFeeConfig> = {};
-      for (const r of rows) {
-        const cells = (r.c || []).map((c: any) => c?.v);
-        const rawClass = String(cells[classIdx !== -1 ? classIdx : 0] || '').trim();
+      for (let r = startRowIdx; r < rawRows.length; r++) {
+        const cells = (rawRows[r].c || []).map((c: any) => c?.v);
+        const rawClass = String(cells[effectiveClassIdx] || '').trim();
         if (!rawClass || rawClass.toLowerCase() === 'class') continue;
 
         const classKey = normalizeClassKey(rawClass);
-        const rawAdm = Number(cells[admIdx !== -1 ? admIdx : 1]);
-        const rawTut = Number(cells[tutionIdx !== -1 ? tutionIdx : 2]);
-        const rawExam = Number(cells[examIdx !== -1 ? examIdx : 3]);
-        const rawBooks = Number(cells[booksIdx !== -1 ? booksIdx : 4]);
+        const rawAdm = Number(cells[effectiveAdmIdx]);
+        const rawTut = Number(cells[effectiveTutIdx]);
+        const rawExam = Number(cells[effectiveExamIdx]);
+        const rawBooks = Number(cells[effectiveBooksIdx]);
 
         const defaultClassCfg = FEE_MASTER_CONFIG[classKey] || DEFAULT_FEE_CONFIG;
         result[classKey] = {
-          admissionFee: !isNaN(rawAdm) && rawAdm > 0 ? rawAdm : defaultClassCfg.admissionFee,
-          monthlyTuition: !isNaN(rawTut) && rawTut > 0 ? rawTut : defaultClassCfg.monthlyTuition,
-          examFee: !isNaN(rawExam) && rawExam > 0 ? rawExam : defaultClassCfg.examFee,
-          booksFee: !isNaN(rawBooks) && rawBooks > 0 ? rawBooks : defaultClassCfg.booksFee,
+          admissionFee: !isNaN(rawAdm) && rawAdm >= 0 ? rawAdm : defaultClassCfg.admissionFee,
+          monthlyTuition: !isNaN(rawTut) && rawTut >= 0 ? rawTut : defaultClassCfg.monthlyTuition,
+          examFee: !isNaN(rawExam) && rawExam >= 0 ? rawExam : defaultClassCfg.examFee,
+          booksFee: !isNaN(rawBooks) && rawBooks >= 0 ? rawBooks : defaultClassCfg.booksFee,
         };
       }
 

@@ -8,6 +8,7 @@ import {
   syncFeeMasterToGoogleSheet,
   fetchFeeMasterDirectGViz,
 } from '../utils/feeMaster';
+import { GOOGLE_APPS_SCRIPT_CODE } from '../utils/busTrackingService';
 
 interface FeeMasterModalProps {
   isOpen: boolean;
@@ -26,6 +27,7 @@ export const FeeMasterModal: React.FC<FeeMasterModalProps> = ({
   const [activeGroup, setActiveGroup] = useState<'All' | 'Pre-Primary' | 'Primary' | 'Middle'>('All');
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
+  const [copiedCode, setCopiedCode] = useState<boolean>(false);
 
   // Sync directly from Google Sheet when modal opens
   useEffect(() => {
@@ -56,6 +58,20 @@ export const FeeMasterModal: React.FC<FeeMasterModalProps> = ({
     });
   };
 
+  const handleCopyCode = async () => {
+    try {
+      await navigator.clipboard.writeText(GOOGLE_APPS_SCRIPT_CODE);
+      setCopiedCode(true);
+      setSaveSuccessMsg('📋 अपडेटेड Apps Script कोड कॉपी हो गया! अपनी Google Sheet में Extensions > Apps Script में पेस्ट करके Save दबाएं।');
+      setTimeout(() => {
+        setCopiedCode(false);
+        setSaveSuccessMsg(null);
+      }, 5000);
+    } catch {
+      alert('क्लिपबोर्ड पर कॉपी नहीं हो सका।');
+    }
+  };
+
   const handleSave = async () => {
     setIsSaving(true);
     setSaveSuccessMsg(null);
@@ -69,7 +85,7 @@ export const FeeMasterModal: React.FC<FeeMasterModalProps> = ({
         console.log('Fee Master Sheet sync result:', syncRes);
       }
 
-      setSaveSuccessMsg('✅ स्कूल फीस मास्टर (4 फीस: एडमिशन, ट्यूशन, एग्जाम, बुक्स) सफलतापूर्वक सुरक्षित हो गया!');
+      setSaveSuccessMsg('✅ स्कूल फीस मास्टर (केवल 4 फीस: एडमिशन, ट्यूशन, एग्जाम, बुक्स) सफलतापूर्वक सुरक्षित हो गया!');
       if (onFeeMasterUpdated) {
         onFeeMasterUpdated();
       }
@@ -115,7 +131,7 @@ export const FeeMasterModal: React.FC<FeeMasterModalProps> = ({
                 </span>
               </div>
               <p className="text-[11px] text-blue-200">
-                1. एडमिशन फीस • 2. ट्यूशन फीस • 3. एग्जाम फीस • 4. बुक्स/किताबें फीस (ऑटो फीस रूट अनुसार अलग है)
+                1. एडमिशन फीस • 2. ट्यूशन फीस • 3. एग्जाम फीस • 4. बुक्स/किताबें फीस (ऑटो/वाहन फीस रूट अनुसार अलग है)
               </p>
             </div>
           </div>
@@ -129,20 +145,30 @@ export const FeeMasterModal: React.FC<FeeMasterModalProps> = ({
         </div>
 
         {/* Info Banner */}
-        <div className="bg-amber-50/80 px-5 py-2.5 border-b border-amber-200 flex items-center justify-between gap-3 text-xs shrink-0">
+        <div className="bg-amber-50/80 px-5 py-2.5 border-b border-amber-200 flex flex-wrap items-center justify-between gap-3 text-xs shrink-0">
           <div className="flex items-center gap-2 text-amber-950 font-semibold">
             <i className="fa-solid fa-circle-info text-amber-600"></i>
             <span>
-              <strong>नोट:</strong> आपकी मांग के अनुसार फीस मास्टर में सिर्फ <strong>4 प्रकार की फीस</strong> रखी गई हैं। ऑटो/वाहन की फीस गांव व रूट के हिसाब से अलग ऑटो सिस्टम में है।
+              <strong>स्पष्टीकरण:</strong> स्कूल में सिर्फ <strong>4 फीस हेड</strong> हैं। M1 (नर्सरी) और 4th का एडमिशन शुल्क डिफ़ॉल्ट ₹1000 है (आप इसे बदल भी सकते हैं)। गूगल शीट में 500 (Annual_Fee) और 1200 पुराने टेम्पलेट के अतिरिक्त कॉलम थे, जिन्हें अब हटा दिया गया है।
             </span>
           </div>
-          <button
-            type="button"
-            onClick={handleResetDefaults}
-            className="px-3 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-semibold cursor-pointer shrink-0 transition-colors"
-          >
-            डिफ़ॉल्ट लोड करें
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={handleCopyCode}
+              className="px-3 py-1 bg-amber-200 hover:bg-amber-300 text-amber-950 rounded-lg text-xs font-bold cursor-pointer transition-colors flex items-center gap-1.5 shadow-2xs"
+            >
+              <i className={`fa-solid ${copiedCode ? 'fa-check text-emerald-700' : 'fa-code'}`}></i>
+              <span>{copiedCode ? 'कोड कॉपी हो गया!' : 'Apps Script कोड कॉपी करें'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleResetDefaults}
+              className="px-3 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+            >
+              डिफ़ॉल्ट लोड करें
+            </button>
+          </div>
         </div>
 
         {/* Toolbar & Filters */}
@@ -261,10 +287,10 @@ export const FeeMasterModal: React.FC<FeeMasterModalProps> = ({
               <span>Google Sheet में 'Fee_Master' टैब कैसे बनाएं (या ऑटो-सिंक करें):</span>
             </div>
             <p className="text-[11px] text-blue-900 leading-relaxed">
-              अगर आप Google Sheet में खुद मैन्युअल टैब बनाना चाहते हैं, तो अपनी शीट में <strong>+ (Add Sheet)</strong> दबाएं और उसका नाम <strong>'Fee_Master'</strong> रखें। पहली पंक्ति (Row 1 Header) में यह 5 कॉलम लिख दें:
+              अगर आप Google Sheet में खुद मैन्युअल टैब बनाना चाहते हैं, तो अपनी शीट में <strong>+ (Add Sheet)</strong> दबाएं और उसका नाम <strong>'Fee_Master'</strong> रखें। पहली पंक्ति (Row 1 Header) में यह 6 कॉलम लिख दें:
             </p>
             <div className="bg-white p-2.5 rounded-xl border border-blue-200 font-mono text-[11px] text-slate-800 overflow-x-auto font-bold select-all">
-              Class | Admission_Fee | Tuition_Fee | Exam_Fee | Books_Fee
+              Class | Class-Name | Admission_Fee | Tuition_Fee | Exam_Fee | Books_Fee
             </div>
             <p className="text-[11px] text-slate-600">
               या फिर नीचे दिए गए हरे बटन <strong>"फीस स्ट्रक्चर सहेजें (Save & Sync)"</strong> पर क्लिक करें, यह स्वतः Google Sheet में सुरक्षित हो जाएगा।

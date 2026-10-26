@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { RouteStoppage, RouteShift } from '../types/routeTracking';
 
 interface StopCreationModalProps {
@@ -8,20 +8,11 @@ interface StopCreationModalProps {
   lng: number;
   suggestedSequence: number;
   activeShift?: RouteShift;
+  editingStop?: RouteStoppage | null;
+  totalStoppagesCount?: number;
   onSaveStop: (newStop: Omit<RouteStoppage, 'id'>) => void;
+  onUpdateStop?: (stopId: string, updatedFields: Partial<RouteStoppage>) => void;
 }
-
-const getCurrentFormattedTime = (): string => {
-  const d = new Date();
-  let hours = d.getHours();
-  const minutes = d.getMinutes();
-  const ampm = hours >= 12 ? 'PM' : 'AM';
-  hours = hours % 12;
-  hours = hours ? hours : 12;
-  const minStr = minutes < 10 ? `0${minutes}` : `${minutes}`;
-  const hrStr = hours < 10 ? `0${hours}` : `${hours}`;
-  return `${hrStr}:${minStr} ${ampm}`;
-};
 
 export const StopCreationModal: React.FC<StopCreationModalProps> = ({
   isOpen,
@@ -30,15 +21,45 @@ export const StopCreationModal: React.FC<StopCreationModalProps> = ({
   lng,
   suggestedSequence,
   activeShift = 'morning',
+  editingStop,
+  totalStoppagesCount = 1,
   onSaveStop,
+  onUpdateStop,
 }) => {
+  const isEditing = !!editingStop;
   const isMorning = activeShift === 'morning';
 
   const [name, setName] = useState<string>('');
+  const [sequence, setSequence] = useState<number>(suggestedSequence);
   const [morningTime, setMorningTime] = useState<string>('07:30 AM');
   const [eveningTime, setEveningTime] = useState<string>('02:30 PM');
   const [studentCount, setStudentCount] = useState<number>(5);
   const [landmark, setLandmark] = useState<string>('');
+  const [customLat, setCustomLat] = useState<number>(lat);
+  const [customLng, setCustomLng] = useState<number>(lng);
+
+  // Sync state whenever modal opens or editingStop changes
+  useEffect(() => {
+    if (editingStop) {
+      setName(editingStop.name || '');
+      setSequence(editingStop.sequence || suggestedSequence);
+      setMorningTime(editingStop.morningTime || editingStop.scheduledTime || '07:30 AM');
+      setEveningTime(editingStop.eveningTime || '02:30 PM');
+      setStudentCount(editingStop.studentCount || 5);
+      setLandmark(editingStop.landmark || '');
+      setCustomLat(editingStop.lat);
+      setCustomLng(editingStop.lng);
+    } else {
+      setName('');
+      setSequence(suggestedSequence);
+      setMorningTime('07:30 AM');
+      setEveningTime('02:30 PM');
+      setStudentCount(5);
+      setLandmark('');
+      setCustomLat(lat);
+      setCustomLng(lng);
+    }
+  }, [editingStop, suggestedSequence, lat, lng, isOpen]);
 
   if (!isOpen) return null;
 
@@ -50,21 +71,32 @@ export const StopCreationModal: React.FC<StopCreationModalProps> = ({
     const eTime = eveningTime.trim() || '02:30 PM';
     const activeScheduled = isMorning ? mTime : eTime;
 
-    onSaveStop({
-      sequence: suggestedSequence,
-      name: name.trim(),
-      lat,
-      lng,
-      scheduledTime: activeScheduled,
-      morningTime: mTime,
-      eveningTime: eTime,
-      studentCount: Number(studentCount) || 1,
-      landmark: landmark.trim() || undefined,
-    });
+    if (isEditing && editingStop && onUpdateStop) {
+      onUpdateStop(editingStop.id, {
+        name: name.trim(),
+        sequence: Number(sequence) || editingStop.sequence,
+        scheduledTime: activeScheduled,
+        morningTime: mTime,
+        eveningTime: eTime,
+        studentCount: Number(studentCount) || 1,
+        landmark: landmark.trim() || undefined,
+        lat: customLat,
+        lng: customLng,
+      });
+    } else {
+      onSaveStop({
+        sequence: Number(sequence) || suggestedSequence,
+        name: name.trim(),
+        lat: customLat,
+        lng: customLng,
+        scheduledTime: activeScheduled,
+        morningTime: mTime,
+        eveningTime: eTime,
+        studentCount: Number(studentCount) || 1,
+        landmark: landmark.trim() || undefined,
+      });
+    }
 
-    setName('');
-    setLandmark('');
-    setStudentCount(5);
     onClose();
   };
 
@@ -72,21 +104,29 @@ export const StopCreationModal: React.FC<StopCreationModalProps> = ({
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fadeIn">
       <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden">
         {/* Header */}
-        <div className="bg-gradient-to-r from-[#0c2340] to-blue-900 text-white p-5 flex items-center justify-between">
+        <div className={`p-5 flex items-center justify-between text-white ${
+          isEditing
+            ? 'bg-gradient-to-r from-[#0c2340] via-amber-900 to-[#163660]'
+            : 'bg-gradient-to-r from-[#0c2340] to-blue-900'
+        }`}>
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center text-lg font-black shadow-md">
-              <i className="fa-solid fa-map-pin"></i>
+            <div className={`w-10 h-10 rounded-2xl flex items-center justify-center text-lg font-black shadow-md ${
+              isEditing ? 'bg-amber-400 text-slate-950' : 'bg-emerald-400 text-slate-950'
+            }`}>
+              <i className={`fa-solid ${isEditing ? 'fa-pen-to-square' : 'fa-map-pin'}`}></i>
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-[10px] font-black uppercase tracking-wider bg-amber-400/20 text-amber-300 px-2 py-0.5 rounded-full border border-amber-400/30">
-                  नया स्टॉप #{suggestedSequence}
+                <span className="text-[10px] font-black uppercase tracking-wider bg-white/20 text-white px-2 py-0.5 rounded-full border border-white/20">
+                  {isEditing ? `स्टॉप #${editingStop?.sequence} संपादन` : `नया स्टॉप #${suggestedSequence}`}
                 </span>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white/20 text-white">
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30">
                   {isMorning ? '🌅 सुबह पिकअप' : '🌇 शाम ड्रॉप'}
                 </span>
               </div>
-              <h3 className="text-base font-black">रूट पर नया स्टॉपेज जोड़ें</h3>
+              <h3 className="text-base font-black">
+                {isEditing ? 'स्टॉपेज विवरण संशोधित करें' : 'रूट पर नया स्टॉपेज जोड़ें'}
+              </h3>
             </div>
           </div>
           <button
@@ -98,36 +138,54 @@ export const StopCreationModal: React.FC<StopCreationModalProps> = ({
           </button>
         </div>
 
-        {/* Pin Location Coordinates Pill */}
+        {/* GPS Coordinates & Sequence Bar */}
         <div className="bg-slate-50 px-5 py-2.5 border-b border-slate-200 flex items-center justify-between text-xs text-slate-600 font-mono">
           <span className="flex items-center gap-1.5 font-bold text-slate-500">
             <i className="fa-solid fa-crosshairs text-blue-900"></i>
-            चयनित सड़क निर्देशांक (GPS):
+            सड़क GPS:
           </span>
           <span className="font-black text-slate-900">
-            {lat.toFixed(6)}, {lng.toFixed(6)}
+            {customLat.toFixed(5)}, {customLng.toFixed(5)}
           </span>
         </div>
 
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">
-              स्टॉप का नाम (Stop Name) <span className="text-rose-600">*</span>:
-            </label>
-            <input
-              type="text"
-              required
-              autoFocus
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="उदा. रामपुर मनिहारन मोड़ / चिलकाना चौराहा"
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-semibold focus:border-blue-900 focus:ring-2 focus:ring-blue-900/20 outline-none"
-            />
+          <div className="grid grid-cols-4 gap-3">
+            {/* Sequence Order */}
+            <div className="col-span-1">
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                क्रम (#):
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={Math.max(totalStoppagesCount + 1, 30)}
+                value={sequence}
+                onChange={(e) => setSequence(parseInt(e.target.value, 10) || 1)}
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-sm font-black text-center focus:border-blue-900 focus:ring-2 focus:ring-blue-900/20 outline-none"
+              />
+            </div>
+
+            {/* Stop Name */}
+            <div className="col-span-3">
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                स्टॉप का नाम (Stop Name) <span className="text-rose-600">*</span>:
+              </label>
+              <input
+                type="text"
+                required
+                autoFocus
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="उदा. रामपुर मनिहारन मोड़ / चिलकाना बस स्टैंड"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-semibold focus:border-blue-900 focus:ring-2 focus:ring-blue-900/20 outline-none"
+              />
+            </div>
           </div>
 
           {/* Morning & Evening Shift Times */}
-          <div className="grid grid-cols-2 gap-3 p-3 bg-amber-50/60 rounded-2xl border border-amber-200">
+          <div className="grid grid-cols-2 gap-3 p-3 bg-amber-50/70 rounded-2xl border border-amber-200">
             <div>
               <label className="block text-[11px] font-bold text-amber-950 mb-1 flex items-center gap-1">
                 <span>🌅 सुबह लाने का समय:</span>
@@ -174,7 +232,7 @@ export const StopCreationModal: React.FC<StopCreationModalProps> = ({
 
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">
-                लैंडमार्क / पहचान (Optional):
+                पहचान / लैंडमार्क (Optional):
               </label>
               <input
                 type="text"
@@ -189,7 +247,9 @@ export const StopCreationModal: React.FC<StopCreationModalProps> = ({
           <div className="p-3 bg-blue-50 border border-blue-200 rounded-2xl text-[11px] text-blue-900 flex items-start gap-2">
             <i className="fa-solid fa-road text-blue-600 mt-0.5 shrink-0"></i>
             <p>
-              स्टॉप सहेजते ही नीली रूट लाइन सीधे <strong>सड़क के मोड़ों व रास्तों पर (Road Snapping)</strong> स्वतः खिंच जाएगी।
+              {isEditing
+                ? 'विवरण सहेजते ही रूट लाइन और ETA तुरंत अपडेट हो जाएंगे।'
+                : 'स्टॉप सहेजते ही नीली रूट लाइन सीधे सड़क के मोड़ों व रास्तों पर (Road Snapping) स्वतः खिंच जाएगी।'}
             </p>
           </div>
 
@@ -204,10 +264,14 @@ export const StopCreationModal: React.FC<StopCreationModalProps> = ({
             </button>
             <button
               type="submit"
-              className="px-5 py-2.5 rounded-xl bg-blue-900 hover:bg-blue-950 text-amber-300 text-xs font-black transition shadow-md flex items-center gap-1.5 cursor-pointer active:scale-95"
+              className={`px-5 py-2.5 rounded-xl text-xs font-black transition shadow-md flex items-center gap-1.5 cursor-pointer active:scale-95 ${
+                isEditing
+                  ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 font-black'
+                  : 'bg-blue-900 hover:bg-blue-950 text-amber-300 font-black'
+              }`}
             >
-              <i className="fa-solid fa-check"></i>
-              <span>स्टॉप जोड़ें (#{suggestedSequence})</span>
+              <i className={`fa-solid ${isEditing ? 'fa-check-double' : 'fa-check'}`}></i>
+              <span>{isEditing ? 'बदलाव सहेजें (Update)' : `स्टॉप जोड़ें (#${sequence})`}</span>
             </button>
           </div>
         </form>

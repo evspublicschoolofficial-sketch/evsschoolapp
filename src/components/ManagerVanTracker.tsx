@@ -114,10 +114,11 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
     };
   }, [activeRouteId, activeShift, stoppages]);
 
-  // Pin-drop interactive creation states
+  // Pin-drop interactive creation & edit states
   const [isPinDropActive, setIsPinDropActive] = useState<boolean>(false);
   const [tempPinCoords, setTempPinCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [isCreationModalOpen, setIsCreationModalOpen] = useState<boolean>(false);
+  const [editingStoppage, setEditingStoppage] = useState<RouteStoppage | null>(null);
   const [focusedStoppage, setFocusedStoppage] = useState<RouteStoppage | null>(null);
 
   // Persist stoppages to localStorage per route
@@ -403,6 +404,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
   }, []);
 
   const handleMapClickDropPin = useCallback((lat: number, lng: number) => {
+    setEditingStoppage(null);
     setTempPinCoords({ lat, lng });
     setIsCreationModalOpen(true);
   }, []);
@@ -418,8 +420,57 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
       saveStoppages(updated);
       setIsPinDropActive(false);
       setTempPinCoords(null);
+      setEditingStoppage(null);
     },
     [stoppages, saveStoppages]
+  );
+
+  // Open modal in edit mode for an existing stoppage
+  const handleOpenEditStop = useCallback((stop: RouteStoppage) => {
+    setEditingStoppage(stop);
+    setTempPinCoords({ lat: stop.lat, lng: stop.lng });
+    setIsCreationModalOpen(true);
+  }, []);
+
+  // Update details of an existing stoppage (including sequence reordering)
+  const handleUpdateStopDetails = useCallback(
+    (stopId: string, updatedFields: Partial<RouteStoppage>) => {
+      let updated = stoppages.map((s) => {
+        if (s.id === stopId) {
+          const morningTime = updatedFields.morningTime ?? s.morningTime ?? s.scheduledTime;
+          const eveningTime = updatedFields.eveningTime ?? s.eveningTime ?? s.scheduledTime;
+          const scheduledTime = activeShift === 'morning' ? morningTime : eveningTime;
+          return {
+            ...s,
+            ...updatedFields,
+            morningTime,
+            eveningTime,
+            scheduledTime,
+          };
+        }
+        return s;
+      });
+
+      // Handle sequence re-ordering if sequence changed
+      if (updatedFields.sequence !== undefined) {
+        const targetStop = updated.find((s) => s.id === stopId);
+        if (targetStop) {
+          const withoutTarget = updated.filter((s) => s.id !== stopId);
+          const targetSeq = Math.max(1, Math.min(updatedFields.sequence, updated.length));
+          withoutTarget.splice(targetSeq - 1, 0, targetStop);
+          updated = withoutTarget.map((s, idx) => ({
+            ...s,
+            sequence: idx + 1,
+          }));
+        }
+      }
+
+      saveStoppages(updated);
+      setEditingStoppage(null);
+      setIsCreationModalOpen(false);
+      setTempPinCoords(null);
+    },
+    [stoppages, activeShift, saveStoppages]
   );
 
   const handleUpdateStoppageCoords = useCallback(
@@ -444,12 +495,17 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
       if (focusedStoppage?.id === stopId) {
         setFocusedStoppage(null);
       }
+      if (editingStoppage?.id === stopId) {
+        setEditingStoppage(null);
+        setIsCreationModalOpen(false);
+      }
     },
-    [stoppages, saveStoppages, focusedStoppage]
+    [stoppages, saveStoppages, focusedStoppage, editingStoppage]
   );
 
   // One-click: capture vehicle's current GPS location to add a new stoppage
   const handleAddStopAtCurrentGps = useCallback(() => {
+    setEditingStoppage(null);
     setTempPinCoords({
       lat: activeTelemetry.latitude,
       lng: activeTelemetry.longitude,
@@ -883,6 +939,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
               onMapClickDropPin={handleMapClickDropPin}
               onAddStopAtCurrentGps={handleAddStopAtCurrentGps}
               onUpdateStoppageCoords={handleUpdateStoppageCoords}
+              onEditStoppage={handleOpenEditStop}
               onDeleteStoppage={handleDeleteStoppage}
               focusedStoppage={focusedStoppage}
               driverName={activeTelemetry.driverName}
@@ -904,6 +961,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
             onClearAllStoppages={handleClearAllStoppages}
             onAddStopAtCurrentGps={handleAddStopAtCurrentGps}
             onSelectStoppage={(stoppage) => setFocusedStoppage(stoppage)}
+            onEditStoppage={handleOpenEditStop}
             onDeleteStoppage={handleDeleteStoppage}
             activeStoppageId={focusedStoppage?.id}
             selectedBusName={`वैन ${selectedBusId} (${activeTelemetry.driverName})`}
@@ -1002,7 +1060,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
         </div>
       </div>
 
-      {/* STOP CREATION MODAL */}
+      {/* STOP CREATION & EDIT MODAL */}
       {tempPinCoords && (
         <StopCreationModal
           isOpen={isCreationModalOpen}
@@ -1010,12 +1068,16 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
             setIsCreationModalOpen(false);
             setTempPinCoords(null);
             setIsPinDropActive(false);
+            setEditingStoppage(null);
           }}
           lat={tempPinCoords.lat}
           lng={tempPinCoords.lng}
-          suggestedSequence={stoppages.length + 1}
+          suggestedSequence={editingStoppage ? editingStoppage.sequence : stoppages.length + 1}
           activeShift={activeShift}
+          editingStop={editingStoppage}
+          totalStoppagesCount={stoppages.length}
           onSaveStop={handleSaveNewStop}
+          onUpdateStop={handleUpdateStopDetails}
         />
       )}
 

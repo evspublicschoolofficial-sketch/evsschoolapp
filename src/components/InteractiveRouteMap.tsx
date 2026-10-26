@@ -15,6 +15,7 @@ interface InteractiveRouteMapProps {
   onMapClickDropPin: (lat: number, lng: number) => void;
   onAddStopAtCurrentGps?: () => void;
   onUpdateStoppageCoords: (stopId: string, lat: number, lng: number) => void;
+  onEditStoppage?: (stoppage: RouteStoppage) => void;
   onDeleteStoppage: (stopId: string) => void;
   focusedStoppage?: RouteStoppage | null;
   driverName?: string;
@@ -32,6 +33,7 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
   onMapClickDropPin,
   onAddStopAtCurrentGps,
   onUpdateStoppageCoords,
+  onEditStoppage,
   onDeleteStoppage,
   focusedStoppage,
   driverName = 'Amjad',
@@ -452,9 +454,12 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
             ${stop.landmark ? `<div>📍 पहचान: <em>${stop.landmark}</em></div>` : ''}
             <div style="margin-top: 3px; font-size: 10px; color: #94a3b8;">निर्देशांक: ${stop.lat.toFixed(5)}, ${stop.lng.toFixed(5)} (खींचकर बदलें)</div>
           </div>
-          <div style="margin-top: 8px; padding-top: 6px; border-top: 1px solid #e2e8f0; display: flex; justify-content: flex-end;">
+          <div style="margin-top: 8px; padding-top: 6px; border-top: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: flex-end; gap: 6px;">
+            <button id="edit-btn-${stop.id}" style="background: #fef3c7; color: #92400e; border: 1px solid #fde68a; border-radius: 6px; padding: 4px 10px; font-size: 11px; font-weight: 700; cursor: pointer;">
+              ✏️ संपादित करें (Edit)
+            </button>
             <button id="del-btn-${stop.id}" style="background: #fee2e2; color: #dc2626; border: 1px solid #fecaca; border-radius: 6px; padding: 4px 10px; font-size: 11px; font-weight: 700; cursor: pointer;">
-              🗑️ स्टॉप हटाएं (Delete)
+              🗑️ हटाएं
             </button>
           </div>
         </div>
@@ -475,11 +480,17 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
           onUpdateStoppageCoords(stop.id, newPos.lat, newPos.lng);
         });
 
-        // Delete button listener in popup
+        // Popup buttons listener
         marker.on('popupopen', () => {
-          const btn = document.getElementById(`del-btn-${stop.id}`);
-          if (btn) {
-            btn.onclick = () => {
+          const editBtn = document.getElementById(`edit-btn-${stop.id}`);
+          if (editBtn && onEditStoppage) {
+            editBtn.onclick = () => {
+              onEditStoppage(stop);
+            };
+          }
+          const delBtn = document.getElementById(`del-btn-${stop.id}`);
+          if (delBtn) {
+            delBtn.onclick = () => {
               if (window.confirm(`क्या आप स्टॉप #${stop.sequence} (${stop.name}) हटाना चाहते हैं?`)) {
                 onDeleteStoppage(stop.id);
               }
@@ -492,6 +503,24 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
         marker.setLatLng([stop.lat, stop.lng]);
         marker.setIcon(stopIcon);
         marker.setPopupContent(popupContent);
+        // Re-bind popupopen to capture latest stop data
+        marker.off('popupopen');
+        marker.on('popupopen', () => {
+          const editBtn = document.getElementById(`edit-btn-${stop.id}`);
+          if (editBtn && onEditStoppage) {
+            editBtn.onclick = () => {
+              onEditStoppage(stop);
+            };
+          }
+          const delBtn = document.getElementById(`del-btn-${stop.id}`);
+          if (delBtn) {
+            delBtn.onclick = () => {
+              if (window.confirm(`क्या आप स्टॉप #${stop.sequence} (${stop.name}) हटाना चाहते हैं?`)) {
+                onDeleteStoppage(stop.id);
+              }
+            };
+          }
+        });
       }
     });
 
@@ -502,7 +531,7 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
         currentMarkersMap.delete(id);
       }
     });
-  }, [stoppages, onUpdateStoppageCoords, onDeleteStoppage, mapInitialized]);
+  }, [stoppages, onUpdateStoppageCoords, onEditStoppage, onDeleteStoppage, mapInitialized]);
 
   // Handle focusing a specific stoppage when clicked from sidebar
   useEffect(() => {

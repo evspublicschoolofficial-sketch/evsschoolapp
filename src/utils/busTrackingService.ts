@@ -1822,59 +1822,64 @@ function installMonthlyFeeTrigger() {
 }
 
 /**
- * OPTION B: GET FEE MASTER (Auto-Creates Fee_Master sheet if not present)
+ * OPTION B: GET FEE MASTER (Strictly 4 Fees: Admission, Tuition, Exam, Books)
  */
 function handleGetFeeMaster(ss) {
-  var sheet = ss.getSheetByName("Fee_Master");
+  var sheet = ss.getSheetByName("Fee_Master") || ss.getSheetByName("FeeMaster") || ss.getSheetByName("Fee Master");
   var defaultClasses = [
-    { key: "play", name: "Play Group (प्ले ग्रुप)", monthlyTuition: 500, admissionFee: 1500, examFee: 300, transportFee: 500, annualFee: 1000, booksFee: 800, uniformFee: 800, lateFine: 50 },
-    { key: "nursery", name: "Nursery (नर्सरी)", monthlyTuition: 600, admissionFee: 1500, examFee: 300, transportFee: 500, annualFee: 1000, booksFee: 1000, uniformFee: 800, lateFine: 50 },
-    { key: "lkg", name: "L.K.G. (एल.के.जी.)", monthlyTuition: 600, admissionFee: 1500, examFee: 300, transportFee: 500, annualFee: 1000, booksFee: 1000, uniformFee: 800, lateFine: 50 },
-    { key: "ukg", name: "U.K.G. (यू.के.जी.)", monthlyTuition: 600, admissionFee: 1500, examFee: 300, transportFee: 500, annualFee: 1000, booksFee: 1000, uniformFee: 800, lateFine: 50 },
-    { key: "1st", name: "Class 1st (कक्षा 1)", monthlyTuition: 650, admissionFee: 2000, examFee: 350, transportFee: 500, annualFee: 1200, booksFee: 1200, uniformFee: 800, lateFine: 50 },
-    { key: "2nd", name: "Class 2nd (कक्षा 2)", monthlyTuition: 650, admissionFee: 2000, examFee: 350, transportFee: 500, annualFee: 1200, booksFee: 1200, uniformFee: 800, lateFine: 50 },
-    { key: "3rd", name: "Class 3rd (कक्षा 3)", monthlyTuition: 650, admissionFee: 2000, examFee: 350, transportFee: 500, annualFee: 1200, booksFee: 1200, uniformFee: 800, lateFine: 50 },
-    { key: "4th", name: "Class 4th (कक्षा 4)", monthlyTuition: 700, admissionFee: 2000, examFee: 400, transportFee: 500, annualFee: 1200, booksFee: 1400, uniformFee: 800, lateFine: 50 },
-    { key: "5th", name: "Class 5th (कक्षा 5)", monthlyTuition: 700, admissionFee: 2000, examFee: 400, transportFee: 500, annualFee: 1200, booksFee: 1400, uniformFee: 800, lateFine: 50 },
-    { key: "6th", name: "Class 6th (कक्षा 6)", monthlyTuition: 800, admissionFee: 2500, examFee: 450, transportFee: 600, annualFee: 1500, booksFee: 1600, uniformFee: 900, lateFine: 50 },
-    { key: "7th", name: "Class 7th (कक्षा 7)", monthlyTuition: 800, admissionFee: 2500, examFee: 450, transportFee: 600, annualFee: 1500, booksFee: 1600, uniformFee: 900, lateFine: 50 },
-    { key: "8th", name: "Class 8th (कक्षा 8)", monthlyTuition: 850, admissionFee: 2500, examFee: 500, transportFee: 600, annualFee: 1500, booksFee: 1800, uniformFee: 900, lateFine: 50 }
+    { key: "play", name: "Play Group", tuition: 350, admission: 1000, exam: 150, books: 1140 },
+    { key: "nursery", name: "Nursery (M1)", tuition: 350, admission: 1000, exam: 150, books: 1195 },
+    { key: "lkg", name: "L.K.G. (M2)", tuition: 350, admission: 1000, exam: 150, books: 1245 },
+    { key: "ukg", name: "U.K.G. (M3)", tuition: 350, admission: 1000, exam: 150, books: 1345 },
+    { key: "1st", name: "Class 1st", tuition: 400, admission: 1000, exam: 200, books: 2345 },
+    { key: "2nd", name: "Class 2nd", tuition: 400, admission: 1000, exam: 200, books: 2530 },
+    { key: "3rd", name: "Class 3rd", tuition: 400, admission: 1000, exam: 200, books: 2705 },
+    { key: "4th", name: "Class 4th", tuition: 450, admission: 1000, exam: 200, books: 2880 },
+    { key: "5th", name: "Class 5th", tuition: 450, admission: 1000, exam: 200, books: 3050 },
+    { key: "6th", name: "Class 6th", tuition: 500, admission: 1000, exam: 250, books: 3000 },
+    { key: "7th", name: "Class 7th", tuition: 500, admission: 1000, exam: 250, books: 3100 },
+    { key: "8th", name: "Class 8th", tuition: 500, admission: 1000, exam: 250, books: 3230 }
   ];
 
   if (!sheet) {
     sheet = ss.insertSheet("Fee_Master");
-    sheet.appendRow([
-      "Class_Key", "Class_Name", "Monthly_Tuition", "Admission_Fee", "Exam_Fee",
-      "Transport_Auto_Fee", "Annual_Fee", "Books_Fee", "Uniform_Fee", "Late_Fine", "Last_Updated"
-    ]);
-    var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "dd/MM/yyyy HH:mm");
+    sheet.appendRow(["Class", "Class-Name", "Admission_Fee", "Tuition_Fee", "Exam_Fee", "Books_Fee"]);
     for (var i = 0; i < defaultClasses.length; i++) {
       var d = defaultClasses[i];
-      sheet.appendRow([
-        d.key, d.name, d.monthlyTuition, d.admissionFee, d.examFee,
-        d.transportFee, d.annualFee, d.booksFee, d.uniformFee, d.lateFine, nowStr
-      ]);
+      sheet.appendRow([d.key, d.name, d.admission, d.tuition, d.exam, d.books]);
     }
   }
 
-  var rows = sheet.getDataRange().getValues();
+  var range = sheet.getDataRange();
+  var values = range.getValues();
+  if (values.length < 2) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", configs: {} })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  var headers = values[0].map(function(h) { return String(h || "").toLowerCase().trim(); });
+  var classIdx = -1, admIdx = -1, tutIdx = -1, examIdx = -1, booksIdx = -1;
+  for (var hi = 0; hi < headers.length; hi++) {
+    var hName = headers[hi];
+    if (hName.indexOf("class") !== -1 && hName.indexOf("name") === -1 && classIdx === -1) classIdx = hi;
+    if (hName.indexOf("admission") !== -1 && admIdx === -1) admIdx = hi;
+    if ((hName.indexOf("tuition") !== -1 || hName.indexOf("tution") !== -1 || hName.indexOf("monthly") !== -1) && tutIdx === -1) tutIdx = hi;
+    if (hName.indexOf("exam") !== -1 && examIdx === -1) examIdx = hi;
+    if (hName.indexOf("book") !== -1 && booksIdx === -1) booksIdx = hi;
+  }
+  if (classIdx === -1) classIdx = 0;
+
   var result = {};
-  if (rows.length > 1) {
-    for (var r = 1; r < rows.length; r++) {
-      var row = rows[r];
-      var key = String(row[0] || "").toLowerCase().trim();
-      if (!key) continue;
-      result[key] = {
-        monthlyTuition: Number(row[2]) || 600,
-        admissionFee: Number(row[3]) || 2000,
-        examFee: Number(row[4]) || 400,
-        transportFee: Number(row[5]) || 500,
-        annualFee: Number(row[6]) || 1200,
-        booksFee: Number(row[7]) || 1000,
-        uniformFee: Number(row[8]) || 800,
-        lateFine: Number(row[9]) || 50
-      };
-    }
+  for (var r = 1; r < values.length; r++) {
+    var row = values[r];
+    var rawKey = String(row[classIdx] || "").toLowerCase().trim();
+    if (!rawKey || rawKey === "class") continue;
+    var normK = normalizeFeeClassKey(rawKey);
+    result[normK] = {
+      admissionFee: admIdx !== -1 ? Number(row[admIdx]) || 1000 : 1000,
+      monthlyTuition: tutIdx !== -1 ? Number(row[tutIdx]) || 450 : 450,
+      examFee: examIdx !== -1 ? Number(row[examIdx]) || 200 : 200,
+      booksFee: booksIdx !== -1 ? Number(row[booksIdx]) || 2500 : 2500
+    };
   }
 
   return ContentService.createTextOutput(JSON.stringify({
@@ -1885,7 +1890,7 @@ function handleGetFeeMaster(ss) {
 }
 
 /**
- * OPTION B: SAVE/UPDATE FEE MASTER SHEET
+ * OPTION B: SAVE/UPDATE FEE MASTER SHEET (Strictly 4 Fees: Admission, Tuition, Exam, Books)
  */
 function handleSaveFeeMaster(ss, configs) {
   if (!configs || typeof configs !== "object") {
@@ -1895,22 +1900,62 @@ function handleSaveFeeMaster(ss, configs) {
     })).setMimeType(ContentService.MimeType.JSON);
   }
 
-  var sheet = ss.getSheetByName("Fee_Master");
+  var sheet = ss.getSheetByName("Fee_Master") || ss.getSheetByName("FeeMaster") || ss.getSheetByName("Fee Master");
+  var standardHeaders = ["Class", "Class-Name", "Admission_Fee", "Tuition_Fee", "Exam_Fee", "Books_Fee"];
+  
   if (!sheet) {
     sheet = ss.insertSheet("Fee_Master");
-    sheet.appendRow([
-      "Class_Key", "Class_Name", "Monthly_Tuition", "Admission_Fee", "Exam_Fee",
-      "Transport_Auto_Fee", "Annual_Fee", "Books_Fee", "Uniform_Fee", "Late_Fine", "Last_Updated"
-    ]);
+    sheet.appendRow(standardHeaders);
   }
 
-  var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "dd/MM/yyyy HH:mm:ss");
+  // Inspect existing headers
+  var lastCol = Math.max(sheet.getLastColumn(), 6);
+  var headerValues = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  var headers = headerValues.map(function(h) { return String(h || "").toLowerCase().trim(); });
+
+  var classIdx = -1, nameIdx = -1, admIdx = -1, tutIdx = -1, examIdx = -1, booksIdx = -1;
+  for (var si = 0; si < headers.length; si++) {
+    var sH = headers[si];
+    if (sH.indexOf("class") !== -1 && sH.indexOf("name") === -1 && classIdx === -1) classIdx = si;
+    if (sH.indexOf("name") !== -1 && nameIdx === -1) nameIdx = si;
+    if (sH.indexOf("admission") !== -1 && admIdx === -1) admIdx = si;
+    if ((sH.indexOf("tuition") !== -1 || sH.indexOf("tution") !== -1 || sH.indexOf("monthly") !== -1) && tutIdx === -1) tutIdx = si;
+    if (sH.indexOf("exam") !== -1 && examIdx === -1) examIdx = si;
+    if (sH.indexOf("book") !== -1 && booksIdx === -1) booksIdx = si;
+  }
+
+  // If sheet had broken 11-column template with dummy Annual_Fee / Transport columns, clean it up!
+  var hasJunkCols = lastCol > 6 && (headers.indexOf("annual_fee") !== -1 || headers.indexOf("transport_auto_fee") !== -1 || headers.indexOf("uniform_fee") !== -1 || headers[5] === "" || headers[6] === "");
+  if (hasJunkCols || admIdx === -1 || tutIdx === -1) {
+    sheet.getRange(1, 1, 1, 6).setValues([standardHeaders]);
+    if (lastCol > 6) {
+      sheet.getRange(1, 7, sheet.getMaxRows(), lastCol - 6).clearContent();
+    }
+    classIdx = 0;
+    nameIdx = 1;
+    admIdx = 2;
+    tutIdx = 3;
+    examIdx = 4;
+    booksIdx = 5;
+    lastCol = 6;
+  }
+
   var existingRows = sheet.getDataRange().getValues();
   var keyToRow = {};
   for (var r = 1; r < existingRows.length; r++) {
-    var k = String(existingRows[r][0] || "").toLowerCase().trim();
-    if (k) keyToRow[k] = r + 1;
+    var rawK = String(existingRows[r][classIdx !== -1 ? classIdx : 0] || "").toLowerCase().trim();
+    if (rawK) {
+      var normK = normalizeFeeClassKey(rawK);
+      keyToRow[normK] = r + 1;
+      keyToRow[rawK] = r + 1;
+    }
   }
+
+  var classNames = {
+    'play': 'PLAY', 'nursery': 'NURSERY (M1)', 'lkg': 'LKG (M2)', 'ukg': 'UKG (M3)',
+    '1st': '1ST', '2nd': '2ND', '3rd': '3RD', '4th': '4TH',
+    '5th': '5TH', '6th': '6TH', '7th': '7TH', '8th': '8TH'
+  };
 
   var updatedCount = 0;
   var insertedCount = 0;
@@ -1918,34 +1963,68 @@ function handleSaveFeeMaster(ss, configs) {
   for (var classKey in configs) {
     var conf = configs[classKey];
     if (!conf || typeof conf !== "object") continue;
-    var rowData = [
-      classKey.toLowerCase(),
-      String(conf.name || classKey.toUpperCase()),
-      Number(conf.monthlyTuition !== undefined ? conf.monthlyTuition : 600),
-      Number(conf.admissionFee !== undefined ? conf.admissionFee : 2000),
-      Number(conf.examFee !== undefined ? conf.examFee : 400),
-      Number(conf.transportFee !== undefined ? conf.transportFee : 500),
-      Number(conf.annualFee !== undefined ? conf.annualFee : 1200),
-      Number(conf.booksFee !== undefined ? conf.booksFee : 1000),
-      Number(conf.uniformFee !== undefined ? conf.uniformFee : 800),
-      Number(conf.lateFine !== undefined ? conf.lateFine : 50),
-      nowStr
-    ];
+    var normKey = normalizeFeeClassKey(classKey);
+    var cName = conf.name || classNames[normKey] || classKey.toUpperCase();
+    var admVal = Number(conf.admissionFee !== undefined ? conf.admissionFee : 1000);
+    var tutVal = Number(conf.monthlyTuition !== undefined ? conf.monthlyTuition : 450);
+    var examVal = Number(conf.examFee !== undefined ? conf.examFee : 200);
+    var booksVal = Number(conf.booksFee !== undefined ? conf.booksFee : 2500);
 
-    if (keyToRow[classKey.toLowerCase()]) {
-      sheet.getRange(keyToRow[classKey.toLowerCase()], 1, 1, rowData.length).setValues([rowData]);
+    var targetRow = keyToRow[normKey] || keyToRow[classKey.toLowerCase()];
+
+    if (targetRow) {
+      // Write specifically into the matched columns
+      if (classIdx !== -1) sheet.getRange(targetRow, classIdx + 1).setValue(normKey);
+      if (nameIdx !== -1) sheet.getRange(targetRow, nameIdx + 1).setValue(cName);
+      if (admIdx !== -1) sheet.getRange(targetRow, admIdx + 1).setValue(admVal);
+      if (tutIdx !== -1) sheet.getRange(targetRow, tutIdx + 1).setValue(tutVal);
+      if (examIdx !== -1) sheet.getRange(targetRow, examIdx + 1).setValue(examVal);
+      if (booksIdx !== -1) sheet.getRange(targetRow, booksIdx + 1).setValue(booksVal);
       updatedCount++;
     } else {
-      sheet.appendRow(rowData);
+      var newRow = [];
+      for (var c = 0; c < lastCol; c++) {
+        if (c === classIdx) newRow.push(normKey);
+        else if (c === nameIdx) newRow.push(cName);
+        else if (c === admIdx) newRow.push(admVal);
+        else if (c === tutIdx) newRow.push(tutVal);
+        else if (c === examIdx) newRow.push(examVal);
+        else if (c === booksIdx) newRow.push(booksVal);
+        else newRow.push("");
+      }
+      sheet.appendRow(newRow);
       insertedCount++;
     }
   }
 
+  // Clear any extra columns beyond column 6 (cleans up stray Annual_Fee, 500, 1200, 800, 50)
+  var totalCols = sheet.getLastColumn();
+  if (totalCols > 6) {
+    sheet.getRange(1, 7, sheet.getMaxRows(), totalCols - 6).clearContent();
+  }
+
   return ContentService.createTextOutput(JSON.stringify({
     status: "success",
-    message: "Fee_Master sheet updated successfully! (" + updatedCount + " updated, " + insertedCount + " added)",
-    updatedAt: nowStr
+    message: "Fee_Master sheet updated cleanly! (Only 4 fees: Admission, Tuition, Exam, Books • " + updatedCount + " updated, " + insertedCount + " added)"
   })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function normalizeFeeClassKey(s) {
+  if (!s) return "";
+  var str = String(s).toLowerCase().trim();
+  if (str.indexOf("play") !== -1 || str === "c1") return "play";
+  if (str.indexOf("nursery") !== -1 || str.indexOf("m1") !== -1 || str === "c2") return "nursery";
+  if (str.indexOf("lkg") !== -1 || str.indexOf("m2") !== -1 || str === "c3") return "lkg";
+  if (str.indexOf("ukg") !== -1 || str.indexOf("m3") !== -1 || str === "c4") return "ukg";
+  if (str.indexOf("1st") !== -1 || str === "1" || str === "c5") return "1st";
+  if (str.indexOf("2nd") !== -1 || str === "2" || str === "c6") return "2nd";
+  if (str.indexOf("3rd") !== -1 || str === "3" || str === "c7") return "3rd";
+  if (str.indexOf("4th") !== -1 || str === "4" || str === "c8") return "4th";
+  if (str.indexOf("5th") !== -1 || str === "5" || str === "c9") return "5th";
+  if (str.indexOf("6th") !== -1 || str === "6" || str === "c10") return "6th";
+  if (str.indexOf("7th") !== -1 || str === "7" || str === "c11") return "7th";
+  if (str.indexOf("8th") !== -1 || str === "8" || str === "c12") return "8th";
+  return str;
 }
 
 /**

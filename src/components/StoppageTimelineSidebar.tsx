@@ -12,6 +12,7 @@ interface StoppageTimelineSidebarProps {
   onClearAllStoppages?: () => void;
   onAddStopAtCurrentGps?: () => void;
   onSelectStoppage: (stoppage: RouteStoppage) => void;
+  onEditStoppage?: (stoppage: RouteStoppage) => void;
   onDeleteStoppage: (stoppageId: string) => void;
   activeStoppageId?: string;
   selectedBusName?: string;
@@ -32,6 +33,7 @@ export const StoppageTimelineSidebar: React.FC<StoppageTimelineSidebarProps> = (
   onClearAllStoppages,
   onAddStopAtCurrentGps,
   onSelectStoppage,
+  onEditStoppage,
   onDeleteStoppage,
   activeStoppageId,
   selectedBusName = 'वैन (Amjad)',
@@ -326,20 +328,36 @@ export const StoppageTimelineSidebar: React.FC<StoppageTimelineSidebarProps> = (
                       </div>
                     </div>
 
-                    {/* Delete button */}
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (window.confirm(`क्या आप स्टॉप #${stop.sequence} (${stop.name}) हटाना चाहते हैं?`)) {
-                          onDeleteStoppage(stop.id);
-                        }
-                      }}
-                      className="w-6 h-6 rounded-lg bg-slate-100 hover:bg-rose-100 text-slate-400 hover:text-rose-600 flex items-center justify-center text-[10px] transition-colors cursor-pointer"
-                      title="स्टॉपेज हटाएं"
-                    >
-                      <i className="fa-solid fa-trash-can"></i>
-                    </button>
+                    {/* Action buttons: Edit & Delete */}
+                    <div className="flex items-center gap-1 shrink-0">
+                      {onEditStoppage && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onEditStoppage(stop);
+                          }}
+                          className="w-7 h-7 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-700 hover:text-amber-900 border border-amber-200 flex items-center justify-center text-xs transition-colors cursor-pointer shadow-2xs"
+                          title="स्टॉपेज संपादित करें (Edit Stoppage)"
+                        >
+                          <i className="fa-solid fa-pen-to-square"></i>
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (window.confirm(`क्या आप स्टॉप #${stop.sequence} (${stop.name}) हटाना चाहते हैं?`)) {
+                            onDeleteStoppage(stop.id);
+                          }
+                        }}
+                        className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-rose-100 text-slate-400 hover:text-rose-600 flex items-center justify-center text-xs transition-colors cursor-pointer"
+                        title="स्टॉपेज हटाएं (Delete Stop)"
+                      >
+                        <i className="fa-solid fa-trash-can"></i>
+                      </button>
+                    </div>
                   </div>
 
                   {/* Dynamic Live ETA & Student count pill */}
