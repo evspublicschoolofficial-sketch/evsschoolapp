@@ -313,10 +313,11 @@ export const calculateStudentSummary = (
   const reconciled = reconcileFeeRecords(rawStudentReceipts);
 
   // 3. Monthly tuition fee (from profile, existing receipts, or class master)
+  // Per School Rule: 100% waiver applies ONLY to monthly tuition fee (0). Admission, Books & Exam fees are charged from them!
   const monthlyTuition = isExempt ? 0 : getStudentMonthlyTuition(studentProfile, reconciled);
 
   // 4. Admission Fee (if applicable)
-  // Check student custom profile first; if not explicitly specified, retrieve from Fee Master for this class (standard ₹1,000)
+  // Admission fee is charged from ALL students (including tuition-waived students)
   let defaultAdmissionFee = 1000;
   try {
     const feeConfig = getActiveFeeMasterConfig();
@@ -326,14 +327,12 @@ export const calculateStudentSummary = (
     }
   } catch {}
 
-  const admissionFee = (!isExempt)
-    ? (studentProfile?.Admission_Fee !== undefined && studentProfile?.Admission_Fee !== null && studentProfile?.Admission_Fee !== ''
-        ? (Number(studentProfile.Admission_Fee) || 0)
-        : defaultAdmissionFee)
-    : 0;
+  const admissionFee = studentProfile?.Admission_Fee !== undefined && studentProfile?.Admission_Fee !== null && studentProfile?.Admission_Fee !== ''
+    ? (Number(studentProfile.Admission_Fee) || 0)
+    : defaultAdmissionFee;
 
   // 4b. Other Billed Fees (Books & Stationery, Exam Fee, Uniform, Annual Fee, etc.)
-  // Detects any fees explicitly billed or recorded as due/paid under non-tuition, non-admission heads
+  // Charged from ALL students including tuition-waived students
   const nonTuitionRecords = reconciled.filter((r) => {
     const type = String(r.Fee_Type || '').trim();
     const isTuition = /(monthly|tuition|मासिक|ट्यूशन|multi-month)/i.test(type);
@@ -351,32 +350,30 @@ export const calculateStudentSummary = (
   let otherBilledFees = 0;
   const itemizedOtherFees: Array<{ type: string; amount: number; paid: number; balance: number }> = [];
 
-  if (!isExempt) {
-    nonTuitionGroups.forEach((recs) => {
-      const origType = recs[0].Fee_Type || 'Other Fee';
-      // The billed amount is max of Total_Amount or sum of paid + balance
-      const billed = Math.max(
-        ...recs.map((r) => Number(r.Total_Amount) || 0),
-        recs.reduce((sum, r) => sum + (Number(r.Amount_Paid) || 0) + (Number(r.Balance_Amount) || 0), 0)
-      );
-      const paid = recs.reduce((sum, r) => sum + (Number(r.Amount_Paid) || 0), 0);
-      const disc = recs.reduce(
-        (sum, r) => sum + (Number((r as any).Discount_Amount || (r as any).Discount || 0) || 0),
-        0
-      );
-      const balance = Math.max(0, billed - paid - disc);
+  nonTuitionGroups.forEach((recs) => {
+    const origType = recs[0].Fee_Type || 'Other Fee';
+    // The billed amount is max of Total_Amount or sum of paid + balance
+    const billed = Math.max(
+      ...recs.map((r) => Number(r.Total_Amount) || 0),
+      recs.reduce((sum, r) => sum + (Number(r.Amount_Paid) || 0) + (Number(r.Balance_Amount) || 0), 0)
+    );
+    const paid = recs.reduce((sum, r) => sum + (Number(r.Amount_Paid) || 0), 0);
+    const disc = recs.reduce(
+      (sum, r) => sum + (Number((r as any).Discount_Amount || (r as any).Discount || 0) || 0),
+      0
+    );
+    const balance = Math.max(0, billed - paid - disc);
 
-      if (billed > 0) {
-        otherBilledFees += billed;
-        itemizedOtherFees.push({
-          type: origType,
-          amount: billed,
-          paid,
-          balance,
-        });
-      }
-    });
-  }
+    if (billed > 0) {
+      otherBilledFees += billed;
+      itemizedOtherFees.push({
+        type: origType,
+        amount: billed,
+        paid,
+        balance,
+      });
+    }
+  });
 
   // 5. Total Billed Session Fee = (Monthly Tuition Fee * Elapsed Months) + Admission Fee + Other Billed Fees (Books, Exam, etc.)
   // Strictly capped at current running month (prevents over-billing for future unarrived months!)
@@ -410,7 +407,7 @@ export const calculateStudentSummary = (
     (sum, r) => sum + (Number((r as any).Discount_Amount || (r as any).Discount || 0) || 0),
     0
   );
-  const admissionDue = isExempt ? 0 : Math.max(0, admissionFee - admissionPaid - admissionDiscount);
+  const admissionDue = Math.max(0, admissionFee - admissionPaid - admissionDiscount);
 
   const tuitionRecords = reconciled.filter((r) => isTuitionFeeRecord(r.Fee_Type));
   const tuitionBilled = isExempt ? 0 : monthlyTuition * elapsedMonths;
@@ -423,7 +420,8 @@ export const calculateStudentSummary = (
   const tuitionDue = isExempt ? 0 : Math.max(0, tuitionBilled - tuitionPaid - tuitionDiscount);
 
   // 8. Current Dues (DUE) = Math.max(0, Total Billed Session Fee - Total Fees Paid - Total Discount)
-  const netBalance = isExempt ? 0 : (totalBilledSessionFee - totalPaid - totalDiscount);
+  // For tuition-waived students, dues reflect unpaid Admission, Books, or Exam fees!
+  const netBalance = totalBilledSessionFee - totalPaid - totalDiscount;
   const currentDues = Math.max(0, netBalance);
   const isAdvance = netBalance < 0;
   const advanceAmount = isAdvance ? Math.abs(netBalance) : 0;

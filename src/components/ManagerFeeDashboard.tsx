@@ -3007,7 +3007,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                     <span>100% फीस माफी छात्र सुरक्षा</span>
                   </div>
                   <p className="text-[11px] text-emerald-900 leading-relaxed">
-                    जिन छात्रों पर 'Fee_Waiver' या '100% Free Student' या 'RTE' टैग है, उनके खाते में कोई मासिक बिल नहीं जुड़ेगा।
+                    जिन छात्रों पर 'Fee_Waiver' या '100% Free Student' या 'RTE' टैग है, उनकी <strong>केवल मासिक ट्यूशन फीस माफ</strong> है। एडमिशन, बुक्स व एग्जाम फीस सामान्य रूप से देय रहेगी।
                   </p>
                 </div>
               </div>

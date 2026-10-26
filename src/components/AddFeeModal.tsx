@@ -193,13 +193,16 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
     return 0;
   }, [selectedStudent, studentMetrics, feeBalances]);
 
+  // Tuition Mode check (One-time fees like Admission, Books, Exam are NOT tuition)
+  const isTuitionMode = useMemo(() => isTuitionFeeRecord(feeType), [feeType]);
+
   // Standard fee lookup for current student and fee type
   const detectedStandardFee = useMemo(() => {
     if (!selectedStudent) return 600;
-    if (freeStudentInfo.isFree) return 0;
+    if (freeStudentInfo.isFree && isTuitionMode) return 0;
     if (isAdvanceMode) return 0;
     return getStandardFeeAmount(selectedStudent.Class, feeType, selectedStudent as any);
-  }, [selectedStudent, feeType, freeStudentInfo.isFree, isAdvanceMode]);
+  }, [selectedStudent, feeType, freeStudentInfo.isFree, isTuitionMode, isAdvanceMode]);
 
   // Multi-Month Pending Queue (Admission -> April -> May -> June...)
   const pendingDuesQueue = useMemo(() => {
@@ -336,11 +339,11 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
     if (isAdvanceMode) {
       return -numPaidAmount;
     }
-    if (freeStudentInfo.isFree) {
+    if (freeStudentInfo.isFree && isTuitionMode) {
       return 0;
     }
     return netPayable - numPaidAmount;
-  }, [isAdvanceMode, freeStudentInfo.isFree, netPayable, numPaidAmount]);
+  }, [isAdvanceMode, freeStudentInfo.isFree, isTuitionMode, netPayable, numPaidAmount]);
 
   // Multi-Month Auto-Distribution Simulation
   const multiMonthResult = useMemo(() => {
@@ -351,7 +354,7 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
   // Auto-fill standard fee when student or feeType changes
   useEffect(() => {
     if (selectedStudent) {
-      if (freeStudentInfo.isFree) {
+      if (freeStudentInfo.isFree && isTuitionMode) {
         setTotalAmount('0');
         setDiscountAmount('0');
         if (!userManuallyEditedPaid) setAmountPaid('0');
@@ -381,19 +384,22 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
     selectedStudent,
     feeType,
     freeStudentInfo.isFree,
+    isTuitionMode,
     isAdvanceMode,
     isMultiMonthMode,
     detectedStandardFee,
     totalPendingQueueAmount,
+    numDiscountAmount,
+    userManuallyEditedPaid,
   ]);
 
   // Update Net Payable whenever totalAmount or discountAmount changes
   useEffect(() => {
-    if (!userManuallyEditedPaid && !isAdvanceMode && !freeStudentInfo.isFree) {
+    if (!userManuallyEditedPaid && !isAdvanceMode && !(freeStudentInfo.isFree && isTuitionMode)) {
       const net = Math.max(0, numTotalAmount - numDiscountAmount);
       setAmountPaid(String(net));
     }
-  }, [numTotalAmount, numDiscountAmount, isAdvanceMode, freeStudentInfo.isFree, userManuallyEditedPaid]);
+  }, [numTotalAmount, numDiscountAmount, isAdvanceMode, freeStudentInfo.isFree, isTuitionMode, userManuallyEditedPaid]);
 
   // Filter students based on search input
   const filteredStudents = useMemo(() => {
@@ -513,7 +519,7 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
         Payment_Mode: finalPaymentMode,
         Received_By: receivedBy.trim(),
         Allocations_Summary: multiMonthResult ? multiMonthResult.coveredMonthsSummary : undefined,
-        Notes: multiMonthResult?.partialMonthNote || remarks || (numPaidAmount === 0 ? `${cleanFeeType} Due (बकाया)` : (freeStudentInfo.isFree ? '100% Fee Waived' : undefined)),
+        Notes: multiMonthResult?.partialMonthNote || remarks || (numPaidAmount === 0 ? `${cleanFeeType} Due (बकाया)` : (freeStudentInfo.isFree && isTuitionMode ? '100% Tuition Waived' : undefined)),
       };
 
       await onFeeAdded(newRec, sendWhatsAppImmediate);
@@ -707,13 +713,13 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
                   </div>
                   <div>
                     <div className="text-xs font-black text-emerald-950 flex items-center gap-1.5">
-                      <span>✨ 100% Fee Waived (फीस माफ है)</span>
+                      <span>✨ केवल ट्यूशन फीस 100% माफ (Tuition Waived)</span>
                       <span className="px-1.5 py-0.2 rounded bg-emerald-200 text-emerald-900 text-[10px] font-bold">
-                        FREE STUDENT
+                        FREE TUITION
                       </span>
                     </div>
                     <p className="text-[11px] text-emerald-900 mt-0.5">
-                      {freeStudentInfo.reason} • देय मानक शुल्क स्वतः <strong>₹0</strong> निर्धारित है।
+                      {freeStudentInfo.reason} • <strong>केवल मासिक ट्यूशन फीस ₹0 है।</strong> एडमिशन, बुक्स और एग्जाम फीस सामान्य दर पर ली जाएगी।
                     </p>
                   </div>
                 </div>

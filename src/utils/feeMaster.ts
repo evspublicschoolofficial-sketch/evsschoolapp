@@ -425,12 +425,14 @@ export const getStandardFeeAmount = (
   feeType?: string | null,
   student?: Student | null
 ): number => {
-  // If student is 100% fee waived, payable amount is strictly 0
-  if (student && isFreeStudent(student).isFree) {
+  const normType = String(feeType || '').toLowerCase().trim();
+
+  // If student is 100% fee waived, ONLY monthly tuition fee is 0. Admission, Books & Exam are charged!
+  const isFree = student ? isFreeStudent(student).isFree : false;
+  const isTuition = normType.includes('tuition') || normType.includes('शिक्षण') || normType.includes('monthly') || normType === '';
+  if (isFree && isTuition) {
     return 0;
   }
-
-  const normType = String(feeType || '').toLowerCase().trim();
 
   // If advance deposit, no standard billed amount
   if (normType.includes('advance') || normType.includes('अग्रिम')) {

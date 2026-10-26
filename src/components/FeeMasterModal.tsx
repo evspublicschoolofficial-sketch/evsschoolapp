@@ -29,6 +29,8 @@ export const FeeMasterModal: React.FC<FeeMasterModalProps> = ({
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
 
+  const [showDeployGuide, setShowDeployGuide] = useState<boolean>(false);
+
   // Sync directly from Google Sheet when modal opens
   useEffect(() => {
     if (isOpen) {
@@ -62,10 +64,10 @@ export const FeeMasterModal: React.FC<FeeMasterModalProps> = ({
     try {
       await navigator.clipboard.writeText(GOOGLE_APPS_SCRIPT_CODE);
       setCopiedCode(true);
-      setSaveSuccessMsg('📋 अपडेटेड Apps Script कोड कॉपी हो गया! अपनी Google Sheet में Extensions > Apps Script में पेस्ट करके Save दबाएं।');
+      setShowDeployGuide(true);
+      setSaveSuccessMsg('📋 नया Apps Script कोड क्लिपबोर्ड पर कॉपी हो गया! नीचे दिए गए 4 स्टेप्स को देखकर Google Sheet में Deploy करें।');
       setTimeout(() => {
         setCopiedCode(false);
-        setSaveSuccessMsg(null);
       }, 5000);
     } catch {
       alert('क्लिपबोर्ड पर कॉपी नहीं हो सका।');
@@ -83,16 +85,22 @@ export const FeeMasterModal: React.FC<FeeMasterModalProps> = ({
       if (apiUrl) {
         const syncRes = await syncFeeMasterToGoogleSheet(configMap, apiUrl);
         console.log('Fee Master Sheet sync result:', syncRes);
+        if (syncRes.message) {
+          setSaveSuccessMsg(`✅ ${syncRes.message}`);
+        } else {
+          setSaveSuccessMsg('✅ स्कूल फीस मास्टर (केवल 4 फीस: एडमिशन, ट्यूशन, एग्जाम, बुक्स) Google Sheet में सुरक्षित हो गया!');
+        }
+      } else {
+        setSaveSuccessMsg('✅ स्कूल फीस मास्टर स्थानीय रूप से सुरक्षित हो गया!');
       }
 
-      setSaveSuccessMsg('✅ स्कूल फीस मास्टर (केवल 4 फीस: एडमिशन, ट्यूशन, एग्जाम, बुक्स) सफलतापूर्वक सुरक्षित हो गया!');
       if (onFeeMasterUpdated) {
         onFeeMasterUpdated();
       }
-      setTimeout(() => setSaveSuccessMsg(null), 4000);
+      setTimeout(() => setSaveSuccessMsg(null), 5000);
     } catch (e: any) {
       setSaveSuccessMsg(`⚠️ स्थानीय रूप से सुरक्षित हो गया! (${e.message || 'Sheet sync note'})`);
-      setTimeout(() => setSaveSuccessMsg(null), 4000);
+      setTimeout(() => setSaveSuccessMsg(null), 5000);
     } finally {
       setIsSaving(false);
     }
@@ -149,7 +157,7 @@ export const FeeMasterModal: React.FC<FeeMasterModalProps> = ({
           <div className="flex items-center gap-2 text-amber-950 font-semibold">
             <i className="fa-solid fa-circle-info text-amber-600"></i>
             <span>
-              <strong>स्पष्टीकरण:</strong> स्कूल में सिर्फ <strong>4 फीस हेड</strong> हैं। M1 (नर्सरी) और 4th का एडमिशन शुल्क डिफ़ॉल्ट ₹1000 है (आप इसे बदल भी सकते हैं)। गूगल शीट में 500 (Annual_Fee) और 1200 पुराने टेम्पलेट के अतिरिक्त कॉलम थे, जिन्हें अब हटा दिया गया है।
+              <strong>स्पष्टीकरण:</strong> स्कूल में सिर्फ <strong>4 फीस हेड</strong> हैं। M1 (नर्सरी) और 4th का एडमिशन शुल्क डिफ़ॉल्ट ₹1000 है (आप इसे यहाँ कोई भी मान देकर बदल सकते हैं)।
             </span>
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -163,6 +171,14 @@ export const FeeMasterModal: React.FC<FeeMasterModalProps> = ({
             </button>
             <button
               type="button"
+              onClick={() => setShowDeployGuide(!showDeployGuide)}
+              className="px-2.5 py-1 bg-blue-100 hover:bg-blue-200 text-blue-900 rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+            >
+              <i className="fa-solid fa-book-open mr-1"></i>
+              {showDeployGuide ? 'गाइड छिपाएं' : 'डिप्लॉय कैसे करें?'}
+            </button>
+            <button
+              type="button"
               onClick={handleResetDefaults}
               className="px-3 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-semibold cursor-pointer transition-colors"
             >
@@ -170,6 +186,42 @@ export const FeeMasterModal: React.FC<FeeMasterModalProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Expandable Deploy Steps Guide */}
+        {showDeployGuide && (
+          <div className="bg-gradient-to-r from-blue-900 to-indigo-950 text-white p-4 border-b border-blue-800 text-xs shrink-0 animate-fadeIn space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-amber-300 flex items-center gap-2">
+                <i className="fa-solid fa-circle-question"></i>
+                Google Apps Script में पुराना हटाकर नया कोड कैसे डिप्लॉय करें? (4 आवश्यक स्टेप्स):
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowDeployGuide(false)}
+                className="text-white/60 hover:text-white cursor-pointer text-xs"
+              >
+                ✕ बंद करें
+              </button>
+            </div>
+            <ol className="list-decimal list-inside space-y-1.5 text-blue-100 text-[11px] leading-relaxed">
+              <li>
+                अपनी Google Sheet खोलें और ऊपर मेनू में <strong>Extensions (एक्सटेंशन) &gt; Apps Script</strong> पर क्लिक करें।
+              </li>
+              <li>
+                `Code.gs` में जाकर <strong>Ctrl + A</strong> दबाएं और पूरा पुराना कोड <strong>Delete</strong> कर दें।
+              </li>
+              <li>
+                यहाँ ऊपर दिए <strong>"Apps Script कोड कॉपी करें"</strong> बटन से कॉपी किया गया नया कोड <strong>Ctrl + V</strong> करके पेस्ट करें और 💾 <strong>Save (Ctrl + S)</strong> दबाएं।
+              </li>
+              <li className="text-amber-200 font-bold bg-white/10 p-1.5 rounded-lg border border-amber-400/30">
+                ⭐ सबसे महत्वपूर्ण: ऊपर दाएँ नीले बटन <strong>Deploy (डिप्लॉय) &gt; Manage deployments (डिप्लॉयमेंट प्रबंधित करें)</strong> पर जाएँ ➔ पेंसिल ✏️ (Edit) दबाएँ ➔ <strong>Version</strong> में <strong>"New version" (नया संस्करण)</strong> चुनें ➔ फिर <strong>Deploy</strong> दबाएँ!
+              </li>
+            </ol>
+            <p className="text-[10px] text-emerald-300 font-medium">
+              ✓ न्यू वर्शन डिप्लॉय होते ही आप ऐप में जिस भी कक्षा की एडमिशन फीस बदलेंगे, वह गूगल शीट में तुरंत सेव हो जाएगी और फालतू कॉलम भी नहीं बनेंगे।
+            </p>
+          </div>
+        )}
 
         {/* Toolbar & Filters */}
         <div className="px-5 py-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 shrink-0">
