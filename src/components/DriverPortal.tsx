@@ -187,28 +187,85 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
   const audioOscillatorRef = useRef<OscillatorNode | null>(null);
   const trackingWorkerRef = useRef<Worker | null>(null);
   const audioKeepAliveIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const noSleepVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  // Screen Wake Active indicator state
+  const [isScreenWakeActive, setIsScreenWakeActive] = useState<boolean>(false);
+
+  // HTML5 Inline Loop Video (NoSleep Polyfill):
+  // Keeps Android Chrome / iOS Safari active without screen lock even on older devices
+  const startNoSleepVideo = () => {
+    try {
+      if (!noSleepVideoRef.current && typeof document !== 'undefined') {
+        const v = document.createElement('video');
+        v.setAttribute('playsinline', '');
+        v.setAttribute('webkit-playsinline', '');
+        v.setAttribute('muted', '');
+        v.muted = true;
+        v.loop = true;
+        v.playsInline = true;
+        // 1x1 blank base64 video
+        v.src = 'data:video/mp4;base64,AAAAHGZ0eXBtcDQyAAAAAG1wNDJpc29tYXZjMQAAADpmcmVlAAAALm1kYXQAAAAAAAABAAAAAgAAAAEAAAAAAQAAAAEAAAAAAAABAAAAAQAAAAAAAABtb292AAAAbG12aGQAAAAAAAAAAAAAAAAAAAPoAAAAAAABAAABAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAQAAABHB0cmFrAAAAXHRraGQAAAAHAAAAAAAAAAAAAAAAAQAAAAAAAPoAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAQAAACWRpbmYAAAAUaGZ0eXAAAAA=';
+        v.style.position = 'fixed';
+        v.style.bottom = '0';
+        v.style.right = '0';
+        v.style.width = '1px';
+        v.style.height = '1px';
+        v.style.opacity = '0.01';
+        v.style.pointerEvents = 'none';
+        v.style.zIndex = '-9999';
+        document.body.appendChild(v);
+        noSleepVideoRef.current = v;
+      }
+      if (noSleepVideoRef.current) {
+        noSleepVideoRef.current.play().catch(() => {});
+      }
+    } catch (e) {
+      console.warn('NoSleep video error:', e);
+    }
+  };
+
+  const stopNoSleepVideo = () => {
+    try {
+      if (noSleepVideoRef.current) {
+        noSleepVideoRef.current.pause();
+        if (noSleepVideoRef.current.parentNode) {
+          noSleepVideoRef.current.parentNode.removeChild(noSleepVideoRef.current);
+        }
+        noSleepVideoRef.current = null;
+      }
+    } catch {}
+  };
 
   // Acquire Screen Wake Lock so screen doesn't automatically sleep while tracking is active
   const requestWakeLock = async () => {
+    startNoSleepVideo();
     if (typeof navigator !== 'undefined' && 'wakeLock' in navigator) {
       try {
         wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
+        setIsScreenWakeActive(true);
         wakeLockRef.current.addEventListener('release', () => {
           wakeLockRef.current = null;
+          setIsScreenWakeActive(false);
         });
       } catch (e) {
         console.warn('Wake Lock request failed:', e);
+        setIsScreenWakeActive(true); // Video keep-alive is active
       }
+    } else {
+      setIsScreenWakeActive(true); // Video keep-alive is active
     }
   };
 
   const releaseWakeLock = () => {
+    stopNoSleepVideo();
     if (wakeLockRef.current) {
       try {
         wakeLockRef.current.release();
       } catch {}
       wakeLockRef.current = null;
     }
+    setIsScreenWakeActive(false);
   };
 
   // WhatsApp-style Background Keep-Alive Audio:
@@ -1082,25 +1139,78 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
               )}
             </div>
 
-            {/* SCREEN-OFF & BACKGROUND KEEP-ALIVE TIP */}
-            {isTracking && (
-              <div className="p-4 bg-emerald-50/90 border-2 border-emerald-300 rounded-2xl flex items-start gap-3 text-xs text-emerald-950 shadow-xs">
-                <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center text-sm shrink-0 shadow-xs">
-                  <i className="fa-solid fa-satellite-dish animate-pulse"></i>
+            {/* SCREEN-OFF & BACKGROUND ANTI-SLEEP BANNER */}
+            <div className={`p-4 rounded-2xl border-2 shadow-xs transition-all ${
+              isScreenWakeActive || isTracking
+                ? 'bg-amber-50/90 border-amber-300 text-amber-950'
+                : 'bg-slate-50 border-slate-200 text-slate-800'
+            }`}>
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-base shrink-0 shadow-xs ${
+                    isScreenWakeActive || isTracking ? 'bg-amber-500 text-slate-950 animate-pulse' : 'bg-slate-200 text-slate-600'
+                  }`}>
+                    <i className="fa-solid fa-sun"></i>
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-extrabold text-sm text-slate-900">
+                        🔆 स्क्रीन ऑलवेज-ऑन (Anti-Sleep Mode):
+                      </span>
+                      <span className={`text-[11px] font-black px-2.5 py-0.5 rounded-full ${
+                        isScreenWakeActive || isTracking
+                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                          : 'bg-slate-200 text-slate-700'
+                      }`}>
+                        {isScreenWakeActive || isTracking ? '● सक्रिय (स्क्रीन बंद नहीं होगी)' : '○ बंद'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-700 mt-1 leading-relaxed">
+                      गाड़ी चलाते समय फोन की स्क्रीन अपने-आप बंद (Sleep) नहीं होगी, जिससे GPS लगातार सटीक लोकेशन भेजता रहेगा।
+                    </p>
+                  </div>
                 </div>
-                <div className="space-y-1">
-                  <span className="font-extrabold block text-emerald-950 text-sm">
-                    ⚡ WhatsApp जैसी बैकग्राउंड लाइव ट्रैकिंग सक्रिय है (Service Worker + WebSocket):
-                  </span>
-                  <p className="text-emerald-900 leading-relaxed text-xs">
-                    अब फोन की <strong>स्क्रीन लॉक या बंद (Screen Off)</strong> होने पर भी ट्रैकिंग बंद नहीं होगी! ऐप में <strong>Service Worker</strong>, <strong>पर्सिस्टेंट WebSocket कनेक्शन</strong>, <strong>Web Worker बैकग्राउंड थ्रेड</strong> और <strong>कीप-अलाइव ऑडियो</strong> चालू हैं, जो स्क्रीन बंद रहने पर भी रियल-टाइम में सर्वर और Google Sheet पर लोकेशन भेजते रहेंगे।
-                  </p>
-                  <p className="text-[11px] text-emerald-800 font-semibold mt-1">
-                    📱 <em>नोट: फोन को लॉक करने से पहले बस "लाइव ट्रैकिंग शुरू करें" बटन ऑन रहना चाहिए। ऐप को फोन के रीसेंट ऐप्स (Recent Apps) से स्वाइप/बंद न करें।</em>
-                  </p>
-                </div>
+
+                {/* Manual toggle if driver wants to force screen wake lock */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isScreenWakeActive) {
+                      releaseWakeLock();
+                    } else {
+                      requestWakeLock();
+                    }
+                  }}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold shrink-0 flex items-center gap-1.5 transition-all cursor-pointer ${
+                    isScreenWakeActive
+                      ? 'bg-amber-200 hover:bg-amber-300 text-amber-950'
+                      : 'bg-slate-200 hover:bg-slate-300 text-slate-800'
+                  }`}
+                >
+                  <i className={`fa-solid ${isScreenWakeActive ? 'fa-toggle-on text-amber-700 text-base' : 'fa-toggle-off text-slate-500 text-base'}`}></i>
+                  <span>{isScreenWakeActive ? 'स्क्रीन लॉक रोकें (ON)' : 'स्क्रीन चालू रखें'}</span>
+                </button>
               </div>
-            )}
+
+              {/* Driver Important Instructions Box */}
+              <div className="mt-3 pt-3 border-t border-amber-200/80 bg-white/70 p-3 rounded-xl space-y-1.5 text-xs text-slate-800">
+                <div className="font-extrabold text-amber-900 flex items-center gap-1.5">
+                  <i className="fa-solid fa-triangle-exclamation text-amber-600"></i>
+                  <span>ड्राइवर भाई के लिए ज़रूरी निर्देश (फोन स्लीप न होने दें):</span>
+                </div>
+                <ul className="space-y-1 list-disc list-inside text-[11px] text-slate-700 leading-normal pl-1">
+                  <li>
+                    <strong>पावर बटन दबाकर फोन लॉक (बंद) न करें:</strong> स्क्रीन खुद बंद नहीं होगी। फोन को वैन के डैशबोर्ड या मोबाइल होल्डर में खुला रखें।
+                  </li>
+                  <li>
+                    <strong>ऐप को बैकग्राउंड में न छोड़ें:</strong> अगर कोई कॉल या WhatsApp आए, तो बात करने के बाद तुरंत वापस इसी ऐप को स्क्रीन पर खोल लें।
+                  </li>
+                  <li>
+                    <strong>बैटरी सेवर सेटिंग:</strong> फ़ोन सेटिंग्स &gt; Apps &gt; Chrome (या ब्राउज़र) &gt; Battery में जाकर <em>"Unrestricted / अप्रतिबंधित"</em> सेट करें।
+                  </li>
+                </ul>
+              </div>
+            </div>
 
             {/* GPS Telemetry HUD */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">

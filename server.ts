@@ -893,52 +893,63 @@ async function startServer() {
       ? item.records
       : [item];
 
-    // 1. Send as batchAddBehavior so Apps Script processes all at once
-    forwardToGoogleAppsScript({
-      action: 'batchAddBehavior',
-      records: items,
-      appsScriptUrl: targetScriptUrl,
-    }).catch(() => {});
-
-    // 2. Also forward individual records sequentially to ensure 100% sheet sync without lock contention
-    (async () => {
-      for (const rec of items) {
-        if (!rec) continue;
-        const sid = rec.student_id || rec.Student_ID;
-        if (!sid) continue;
-
-        const isPresStr = (rec.is_present === false || rec.Is_Present === false || String(rec.is_present || '').toLowerCase() === 'absent') ? 'Absent' : 'Present';
-        const isBathedStr = (rec.is_bathed === false || rec.Is_Bathed === false || String(rec.is_bathed || '').toLowerCase() === 'no') ? 'No' : 'Yes';
-        const nailsCleanStr = (rec.nails_clean === false || rec.Nails_Clean === false || String(rec.nails_clean || '').toLowerCase() === 'no') ? 'No' : 'Yes';
-        const uniformCleanStr = (rec.uniform_clean === false || rec.Uniform_clean === false || String(rec.uniform_clean || '').toLowerCase() === 'no') ? 'No' : 'Yes';
-        const disciplineStr = (rec.discipline === false || rec.Discipline === false || String(rec.discipline || '').toLowerCase() === 'needs improvement') ? 'Needs Improvement' : 'Good';
-
-        try {
-          await forwardToGoogleAppsScript({
-            action: 'addBehavior',
-            behavior_id: rec.behavior_id || rec.Behavior_ID || `BEH-${sid}-${rec.date || rec.Date}`,
-            student_id: sid,
-            date: rec.date || rec.Date,
-            class: rec.class || rec.Class,
-            is_bathed: isBathedStr,
-            nails_clean: nailsCleanStr,
-            uniform_clean: uniformCleanStr,
-            good_manners: rec.good_manners || rec.Good_Manners || (isPresStr === 'Absent' ? 'लागू नहीं (अनुपस्थित)' : 'उत्कृष्ट (Excellent)'),
-            discipline: disciplineStr,
-            is_present: isPresStr,
-            remark: rec.remark || rec.Remark || '',
-            ai_feedback: rec.ai_feedback || rec.AI_Feedback || '',
-            appsScriptUrl: targetScriptUrl,
-          });
-          // Small delay to prevent Apps Script spreadsheet lock timeout
-          await new Promise((r) => setTimeout(r, 120));
-        } catch (fErr) {
-          console.warn(`[AppsScriptForwarder] Error forwarding behavior for ${sid}:`, fErr);
-        }
+    // 1. Send as batchAddBehavior so Google Apps Script processes all records in 1 atomic write
+    let batchSucceeded = false;
+    try {
+      const batchRes = await forwardToGoogleAppsScript({
+        action: 'batchAddBehavior',
+        records: items,
+        appsScriptUrl: targetScriptUrl,
+      });
+      const respStr = String(batchRes?.response || '');
+      if (batchRes?.ok && !respStr.includes('error') && !respStr.includes('Invalid action')) {
+        batchSucceeded = true;
+        console.log(`[server] ✅ Successfully synced batch of ${items.length} behavior records to Google Sheet!`);
       }
-    })();
+    } catch (bErr) {
+      console.warn('[server] batchAddBehavior error:', bErr);
+    }
 
-    res.json({ success: true, behavior: list });
+    // 2. Only if batchAddBehavior failed or was rejected by older Apps Script, fall back to sequential individual requests
+    if (!batchSucceeded) {
+      console.log(`[server] ⚠️ batchAddBehavior not acknowledged, falling back to sequential writes for ${items.length} records...`);
+      (async () => {
+        for (const rec of items) {
+          if (!rec) continue;
+          const sid = rec.student_id || rec.Student_ID;
+          if (!sid) continue;
+          const isPresStr = (rec.is_present === false || rec.Is_Present === false || String(rec.is_present || '').toLowerCase() === 'absent') ? 'Absent' : 'Present';
+          const isBathedStr = (rec.is_bathed === false || rec.Is_Bathed === false || String(rec.is_bathed || '').toLowerCase() === 'no') ? 'No' : 'Yes';
+          const nailsCleanStr = (rec.nails_clean === false || rec.Nails_Clean === false || String(rec.nails_clean || '').toLowerCase() === 'no') ? 'No' : 'Yes';
+          const uniformCleanStr = (rec.uniform_clean === false || rec.Uniform_clean === false || String(rec.uniform_clean || '').toLowerCase() === 'no') ? 'No' : 'Yes';
+          const disciplineStr = (rec.discipline === false || rec.Discipline === false || String(rec.discipline || '').toLowerCase() === 'needs improvement') ? 'Needs Improvement' : 'Good';
+          try {
+            await forwardToGoogleAppsScript({
+              action: 'addBehavior',
+              behavior_id: rec.behavior_id || rec.Behavior_ID || `BEH-${sid}-${rec.date || rec.Date}`,
+              student_id: sid,
+              date: rec.date || rec.Date,
+              class: rec.class || rec.Class,
+              is_bathed: isBathedStr,
+              nails_clean: nailsCleanStr,
+              uniform_clean: uniformCleanStr,
+              good_manners: rec.good_manners || rec.Good_Manners || (isPresStr === 'Absent' ? 'लागू नहीं (अनुपस्थित)' : 'उत्कृष्ट (Excellent)'),
+              discipline: disciplineStr,
+              is_present: isPresStr,
+              remark: rec.remark || rec.Remark || '',
+              ai_feedback: rec.ai_feedback || rec.AI_Feedback || '',
+              appsScriptUrl: targetScriptUrl,
+            });
+            // Small delay to prevent Apps Script spreadsheet lock timeout
+            await new Promise((r) => setTimeout(r, 200));
+          } catch (fErr) {
+            console.warn(`[AppsScriptForwarder] Error forwarding behavior for ${sid}:`, fErr);
+          }
+        }
+      })();
+    }
+
+    res.json({ success: true, behavior: list, remoteSynced: batchSucceeded });
   });
 
   app.get('/api/homework-tracker', (_req, res) => {

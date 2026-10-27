@@ -5041,9 +5041,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       console.warn('localStorage batch save error:', e);
     }
 
-    // 3. Send batch to server API (server persists locally and forwards to Google Apps Script sequentially)
+    // 3. Send batch to server API (server persists locally and forwards to Google Apps Script atomically)
     try {
-      await fetch('/api/behavior', {
+      const apiRes = await fetch('/api/behavior', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -5051,44 +5051,35 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
           appsScriptUrl: effectiveScriptUrl,
         }),
       });
+      if (!apiRes.ok && effectiveScriptUrl) {
+        // Direct browser fallback to Google Apps Script if server was offline
+        fetch(effectiveScriptUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({
+            action: 'batchAddBehavior',
+            records: formattedRecords,
+          }),
+        }).catch(() => {});
+      }
     } catch (apiErr) {
       console.warn('Server batch behavior error:', apiErr);
+      if (effectiveScriptUrl) {
+        fetch(effectiveScriptUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({
+            action: 'batchAddBehavior',
+            records: formattedRecords,
+          }),
+        }).catch(() => {});
+      }
     }
 
-    // 4. Background forward directly to Google Apps Script with sequential delay
-    (async () => {
-      for (const rec of formattedRecords) {
-        try {
-          const isPres = rec.Is_Present;
-          const behPayload = {
-            action: 'addBehavior',
-            behavior_id: rec.Behavior_ID,
-            student_id: rec.Student_ID,
-            date: rec.Date,
-            class: rec.Class,
-            is_bathed: rec.Is_Bathed ? 'Yes' : 'No',
-            nails_clean: rec.Nails_Clean ? 'Yes' : 'No',
-            uniform_clean: rec.Uniform_clean ? 'Yes' : 'No',
-            good_manners: rec.Good_Manners,
-            discipline: rec.Discipline ? 'Good' : 'Needs Improvement',
-            is_present: isPres ? 'Present' : 'Absent',
-            remark: rec.Remark,
-            ai_feedback: rec.AI_Feedback,
-            teacher: teacherUser?.Name || managerUser?.Name || 'Teacher',
-            appsScriptUrl: effectiveScriptUrl,
-          };
-
-          fetch('/api/forward-apps-script', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(behPayload),
-          }).catch(() => {});
-
-          // Small delay to ensure smooth lock acquisition
-          await new Promise((r) => setTimeout(r, 120));
-        } catch {}
-      }
-    })();
+    // 4. Trigger background sheet refresh after 1.5 seconds so UI has latest data
+    setTimeout(() => {
+      fetchStudentBehavior(false);
+    }, 1500);
 
     const presCount = formattedRecords.filter((r) => r.Is_Present).length;
     const absCount = formattedRecords.length - presCount;

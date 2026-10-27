@@ -549,6 +549,44 @@ function doGet(e) {
     return handleGetNotices(ss);
   }
 
+  // 8B. GET STUDENT BEHAVIOR & ATTENDANCE
+  if (action === "getBehavior" || action === "getStudentBehavior") {
+    var bSheet = ss.getSheetByName("Student_Behavior");
+    if (!bSheet) {
+      return ContentService.createTextOutput(JSON.stringify({ status: "success", behavior: [] })).setMimeType(ContentService.MimeType.JSON);
+    }
+    var bVals = bSheet.getDataRange().getValues();
+    var bList = [];
+    for (var bi = 1; bi < bVals.length; bi++) {
+      var bRow = bVals[bi];
+      if (!bRow[0] && !bRow[1]) continue;
+      var rDt = bRow[2];
+      var rDtStr = "";
+      if (rDt) {
+        if (Object.prototype.toString.call(rDt) === '[object Date]') {
+          rDtStr = Utilities.formatDate(rDt, Session.getScriptTimeZone() || "Asia/Kolkata", "yyyy-MM-dd");
+        } else {
+          rDtStr = String(rDt).trim().slice(0, 10);
+        }
+      }
+      bList.push({
+        Behavior_ID: String(bRow[0] || ""),
+        Student_ID: String(bRow[1] || ""),
+        Date: rDtStr,
+        Class: String(bRow[3] || ""),
+        Is_Bathed: String(bRow[4] || "").toLowerCase() === "yes",
+        Nails_Clean: String(bRow[5] || "").toLowerCase() === "yes",
+        Uniform_clean: String(bRow[6] || "").toLowerCase() === "yes",
+        Good_Manners: String(bRow[7] || "Good"),
+        Discipline: String(bRow[8] || "").toLowerCase() === "good",
+        Is_Present: String(bRow[9] || "").toLowerCase() === "present",
+        Remark: String(bRow[10] || ""),
+        AI_Feedback: String(bRow[11] || "")
+      });
+    }
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", behavior: bList })).setMimeType(ContentService.MimeType.JSON);
+  }
+
   // 9. SETUP ALL REQUIRED SHEETS / AUTO-CREATE TABS
   if (action === "setupAllSheets" || action === "setupDatabase" || action === "createAllSheets" || action === "initTabs") {
     var setupRes = setupAllRequiredSheets();
