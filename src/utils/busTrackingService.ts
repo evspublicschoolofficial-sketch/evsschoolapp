@@ -1268,9 +1268,9 @@ function handleUpdateBusTracking(ss, data) {
 }
 
 function handleRecordStaffAttendance(ss, data) {
-  var sheet = ss.getSheetByName("Staff_Attendance") || ss.getSheetByName("Staff_Attendance ") || ss.getSheetByName("Staff Attendance");
+  var sheet = ss.getSheetByName("Staff_Attendance ") || ss.getSheetByName("Staff_Attendance") || ss.getSheetByName("Staff Attendance");
   if (!sheet) {
-    sheet = ss.insertSheet("Staff_Attendance");
+    sheet = ss.insertSheet("Staff_Attendance ");
   }
 
   // Ensure header row exists
