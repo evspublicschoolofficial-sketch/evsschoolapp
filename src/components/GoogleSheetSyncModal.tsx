@@ -414,7 +414,7 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
         {/* Modal Footer */}
         <div className="p-3.5 sm:p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
           <span className="text-[11px] text-slate-500">
-            टैब: Bus_Tracking • स्प्रेडशीट ID: 1AHQowKTK_...
+            टैब: Bus_Tracking, Route_Stops • स्प्रेडशीट ID: 1AHQowKTK_...
           </span>
           <button
             type="button"

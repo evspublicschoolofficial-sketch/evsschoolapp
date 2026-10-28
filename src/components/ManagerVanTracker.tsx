@@ -9,6 +9,8 @@ import {
   calculateDistanceKm,
   fetchTelemetryFromSharedApi,
   subscribeToBusUpdates,
+  fetchRouteStopsFromApi,
+  saveRouteStopsToApi,
 } from '../utils/busTrackingService';
 import { GoogleSheetSyncModal } from './GoogleSheetSyncModal';
 import {
@@ -25,6 +27,8 @@ import {
 import {
   SCHOOL_ROUTES_CONFIG,
   getRouteStorageKey,
+  DEFAULT_ROUTE_1_STOPPAGES,
+  DEFAULT_ROUTE_2_STOPPAGES,
 } from '../utils/roadRoutingService';
 import { InteractiveRouteMap } from './InteractiveRouteMap';
 import { StoppageTimelineSidebar } from './StoppageTimelineSidebar';
@@ -37,14 +41,14 @@ const loadStoppagesForRoute = (routeId: string): RouteStoppage[] => {
       const parsed = JSON.parse(saved);
       // Purge old mock seed if present
       const hasOldSeed = Array.isArray(parsed) && parsed.some((s: any) => s.id === 'stop-01' || s.id === 'stop-02' || s.id === 'stop-03');
-      if (!hasOldSeed && Array.isArray(parsed)) {
+      if (!hasOldSeed && Array.isArray(parsed) && parsed.length > 0) {
         return parsed;
       }
     }
   } catch (e) {
     console.warn('Error reading stored stoppages:', e);
   }
-  return [];
+  return routeId === 'route-2' ? DEFAULT_ROUTE_2_STOPPAGES : DEFAULT_ROUTE_1_STOPPAGES;
 };
 
 interface ManagerVanTrackerProps {
@@ -61,13 +65,13 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
   // Real Bus_Tracking sheet records
   const [sheetBuses, setSheetBuses] = useState<BusTrackingRecord[]>([]);
   const [loadingSheet, setLoadingSheet] = useState<boolean>(true);
-  const [selectedBusId, setSelectedBusId] = useState<string>('ecad7ddc');
+  const [selectedBusId, setSelectedBusId] = useState<string>('121212');
   const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
   const [lastSyncTime, setLastSyncTime] = useState<string>(new Date().toLocaleTimeString('hi-IN'));
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
 
-  // 15-second sheet sync countdown
-  const [countdown, setCountdown] = useState<number>(15);
+  // 6-second fast sheet sync countdown
+  const [countdown, setCountdown] = useState<number>(6);
   const [showScriptModal, setShowScriptModal] = useState<boolean>(false);
 
   // =========================================================================
@@ -89,6 +93,90 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
     return 'morning';
   });
 
+  // Metro-style Voice & Audio Announcement State
+  const [voiceAnnouncementEnabled, setVoiceAnnouncementEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('evs_metro_voice_enabled') !== 'false';
+    } catch {
+      return true;
+    }
+  });
+  const [sheetSyncingStops, setSheetSyncingStops] = useState<boolean>(false);
+  const [sheetStopsSyncSuccess, setSheetStopsSyncSuccess] = useState<boolean>(false);
+  const lastAnnouncedStopKeyRef = useRef<string | null>(null);
+
+  // Play authentic 2-tone Delhi Metro arrival chime using Web Audio API
+  const playMetroChime = useCallback(() => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const now = ctx.currentTime;
+
+      // Tone 1: E5 (659 Hz)
+      const osc1 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+      osc1.type = 'sine';
+      osc1.frequency.setValueAtTime(659.25, now);
+      gain1.gain.setValueAtTime(0.18, now);
+      gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+      osc1.connect(gain1);
+      gain1.connect(ctx.destination);
+      osc1.start(now);
+      osc1.stop(now + 0.3);
+
+      // Tone 2: C5 (523 Hz)
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.type = 'sine';
+      osc2.frequency.setValueAtTime(523.25, now + 0.22);
+      gain2.gain.setValueAtTime(0.22, now + 0.22);
+      gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+      osc2.connect(gain2);
+      gain2.connect(ctx.destination);
+      osc2.start(now + 0.22);
+      osc2.stop(now + 0.6);
+    } catch (e) {
+      console.warn('Could not play metro chime:', e);
+    }
+  }, []);
+
+  // Announce next station / arrival using Web Speech API in Hindi + English
+  const announceStationVoice = useCallback(
+    (stopName: string, isAtStop: boolean = false) => {
+      if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+      try {
+        playMetroChime();
+        window.speechSynthesis.cancel();
+
+        const cleanName = stopName.split('(')[0].trim();
+        const textToSpeak = isAtStop
+          ? `वाहन ${cleanName} स्टॉप पर पहुंच गया है। Arrived at ${cleanName}.`
+          : `अगला स्टॉप ${cleanName} है। Next stop is ${cleanName}.`;
+
+        const utterance = new SpeechSynthesisUtterance(textToSpeak);
+        utterance.rate = 0.92;
+        utterance.pitch = 1.05;
+
+        const voices = window.speechSynthesis.getVoices();
+        const preferredVoice =
+          voices.find((v) => v.lang.includes('hi') || v.lang.includes('HI')) ||
+          voices.find((v) => v.lang.includes('en-IN') || v.name.includes('India')) ||
+          voices[0];
+        if (preferredVoice) {
+          utterance.voice = preferredVoice;
+        }
+
+        setTimeout(() => {
+          window.speechSynthesis.speak(utterance);
+        }, 380);
+      } catch (e) {
+        console.warn('Speech synthesis error:', e);
+      }
+    },
+    [playMetroChime]
+  );
+
   // Live telemetry map received from Driver Portal broadcasts, server API & localStorage
   const [liveTelemetry, setLiveTelemetry] = useState<Record<string, VanTelemetry>>(() => {
     try {
@@ -100,7 +188,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
 
   const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
 
-  // Stoppages for active route (Starts clean for live GPS road recording)
+  // Stoppages for active route
   const [stoppages, setStoppages] = useState<RouteStoppage[]>(() => {
     return loadStoppagesForRoute(activeRouteId);
   });
@@ -121,15 +209,28 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
   const [editingStoppage, setEditingStoppage] = useState<RouteStoppage | null>(null);
   const [focusedStoppage, setFocusedStoppage] = useState<RouteStoppage | null>(null);
 
-  // Persist stoppages to localStorage per route
-  const saveStoppages = useCallback((newStoppages: RouteStoppage[]) => {
-    setStoppages(newStoppages);
+  // Persist stoppages to localStorage & Server / Google Sheet
+  const saveStoppages = useCallback(
+    (newStoppages: RouteStoppage[]) => {
+      setStoppages(newStoppages);
+      saveRouteStopsToApi(activeRouteId, newStoppages);
+    },
+    [activeRouteId]
+  );
+
+  // Sync stoppages to Google Sheets button handler
+  const handleSyncStoppagesToSheet = async () => {
+    setSheetSyncingStops(true);
     try {
-      localStorage.setItem(getRouteStorageKey(activeRouteId), JSON.stringify(newStoppages));
+      await saveRouteStopsToApi(activeRouteId, stoppages);
+      setSheetStopsSyncSuccess(true);
+      setTimeout(() => setSheetStopsSyncSuccess(false), 3500);
     } catch (e) {
-      console.warn('Could not save stoppages for', activeRouteId, e);
+      console.warn('Error syncing stoppages to sheet:', e);
+    } finally {
+      setSheetSyncingStops(false);
     }
-  }, [activeRouteId]);
+  };
 
   // Route selector switch handler
   const handleSelectRoute = useCallback((routeId: string) => {
@@ -147,6 +248,13 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
     if (assignedBus) {
       setSelectedBusId(assignedBus);
     }
+
+    // Refresh route stops from server API
+    fetchRouteStopsFromApi(routeId).then((serverStops) => {
+      if (serverStops && serverStops.length > 0) {
+        setStoppages(serverStops);
+      }
+    });
   }, []);
 
   // Shift selector switch handler (Morning Pickup vs Evening Drop)
@@ -164,23 +272,28 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
     if (records.length > 0) {
       setSheetBuses(records);
       const amjadBus = records.find(
-        (b) => String(b.Driver_Name || '').toLowerCase() === 'amjad'
+        (b) => String(b.Driver_Name || '').toLowerCase().includes('amjad')
       );
-      if (amjadBus && !selectedBusId) {
-        setSelectedBusId(amjadBus.Bus_ID);
+      // If current selected bus is not present in records, select Amjad's bus or first row
+      if (!records.some((r) => r.Bus_ID === selectedBusId)) {
+        if (amjadBus) {
+          setSelectedBusId(amjadBus.Bus_ID);
+        } else if (records[0]) {
+          setSelectedBusId(records[0].Bus_ID);
+        }
       }
     } else {
       setSheetBuses([
         {
-          Bus_ID: 'ecad7ddc',
+          Bus_ID: '121212',
           Driver_Name: 'Amjad',
-          Current_Location: '30.056038, 77.419096',
+          Current_Location: '30.078676, 77.469929',
           Last_Updated: new Date().toLocaleString('hi-IN'),
         },
         {
-          Bus_ID: '756cedc0',
-          Driver_Name: 'Amjad',
-          Current_Location: '30.056038, 77.419096',
+          Bus_ID: '123556',
+          Driver_Name: 'Mh salik',
+          Current_Location: '30.071803, 77.473013',
           Last_Updated: new Date().toLocaleString('hi-IN'),
         },
       ]);
@@ -192,6 +305,13 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
   // Sync with Google Sheets, BroadcastChannel and server API on mount
   useEffect(() => {
     fetchSheetData();
+
+    // Fetch initial route stops from server
+    fetchRouteStopsFromApi(activeRouteId).then((serverStops) => {
+      if (serverStops && serverStops.length > 0) {
+        setStoppages(serverStops);
+      }
+    });
 
     // Real-time WebSocket subscription for instant location updates
     const unsubscribeWs = subscribeToBusUpdates((msg) => {
@@ -207,6 +327,10 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
           ...prev,
           ...msg.data,
         }));
+      } else if (msg.type === 'APP_DATA_UPDATED' && msg.entity === 'route_stops') {
+        fetchRouteStopsFromApi(activeRouteId).then((stops) => {
+          if (stops && stops.length > 0) setStoppages(stops);
+        });
       }
     });
 
@@ -257,23 +381,21 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
       }
       window.removeEventListener('storage', handleStorageChange);
     };
-  }, []);
+  }, [activeRouteId]);
 
-  // 15-Second Google Sheet & Telemetry refresh loop with countdown
+  // Fast 6-Second Google Sheet & 2.5-Second Telemetry refresh loop
   useEffect(() => {
     if (!autoRefresh) return;
 
-    // 1-second interval to update countdown
     const countdownInterval = setInterval(() => {
       setCountdown((prev) => {
         if (prev <= 1) {
-          return 15;
+          return 6;
         }
         return prev - 1;
       });
     }, 1000);
 
-    // Fast 3-second poll for cross-device live telemetry from server API
     const fastApiPoll = setInterval(async () => {
       try {
         const serverData = await fetchTelemetryFromSharedApi();
@@ -288,13 +410,12 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
           setLiveTelemetry((prev) => ({ ...prev, ...JSON.parse(saved) }));
         }
       } catch {}
-    }, 3000);
+    }, 2500);
 
-    // 15-second Google Sheet re-fetch
     const sheetSyncTimer = setInterval(() => {
       fetchSheetData();
-      setCountdown(15);
-    }, 15000);
+      setCountdown(6);
+    }, 6000);
 
     return () => {
       clearInterval(countdownInterval);
@@ -319,18 +440,32 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
 
   // Active bus record from sheet
   const activeBus = useMemo(() => {
-    return sheetBuses.find((b) => b.Bus_ID === selectedBusId) || sheetBuses[0];
+    return (
+      sheetBuses.find((b) => b.Bus_ID === selectedBusId) ||
+      sheetBuses.find((b) => String(b.Driver_Name || '').toLowerCase().includes('amjad')) ||
+      sheetBuses[0]
+    );
   }, [sheetBuses, selectedBusId]);
 
-  // Active live telemetry from driver or sheet
+  // Active live telemetry from driver or sheet (flexible lookup)
   const activeTelemetry: VanTelemetry = useMemo(() => {
-    const busId = activeBus?.Bus_ID || 'ecad7ddc';
+    const busId = activeBus?.Bus_ID || selectedBusId || '121212';
     const driverName = activeBus?.Driver_Name || 'Amjad';
     const driverPhone = getDriverPhone(driverName);
 
-    // 1. Check if driver actively pushed telemetry
-    if (liveTelemetry[busId]) {
-      return liveTelemetry[busId];
+    // 1. Flexible lookup in live telemetry (by exact id, string id, or driver name)
+    const live =
+      liveTelemetry[busId] ||
+      liveTelemetry[String(busId)] ||
+      (Object.values(liveTelemetry) as VanTelemetry[]).find(
+        (t: VanTelemetry) =>
+          t.busId === busId ||
+          String(t.busId) === String(busId) ||
+          (t.driverName && driverName && t.driverName.toLowerCase().includes(driverName.toLowerCase()))
+      );
+
+    if (live) {
+      return live;
     }
 
     // 2. Otherwise parse from Google Sheet "Current_Location"
@@ -339,7 +474,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
       busId,
       driverName,
       driverPhone,
-      currentLocationStr: activeBus?.Current_Location || '30.056038, 77.419096',
+      currentLocationStr: activeBus?.Current_Location || '30.078676, 77.469929',
       latitude: parsed.lat,
       longitude: parsed.lng,
       accuracy: 8,
@@ -349,7 +484,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
       status: 'running',
       isLiveFromSheet: true,
     };
-  }, [activeBus, liveTelemetry, users]);
+  }, [activeBus, selectedBusId, liveTelemetry, users]);
 
   // Current GPS point for the ETA engine
   const currentGpsPoint: GpsPoint = useMemo(
@@ -536,6 +671,46 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
       etaCalculation.stoppages[0]
     );
   }, [etaCalculation.stoppages]);
+
+  // Distance in meters to upcoming/active stoppage
+  const activeDistanceMeters = useMemo(() => {
+    if (!upcomingStoppage) return 0;
+    if (typeof upcomingStoppage.distanceFromVanKm === 'number' && upcomingStoppage.distanceFromVanKm > 0) {
+      return Math.round(upcomingStoppage.distanceFromVanKm * 1000);
+    }
+    if (typeof upcomingStoppage.straightLineDistanceKm === 'number') {
+      return Math.round(upcomingStoppage.straightLineDistanceKm * 1000);
+    }
+    return 0;
+  }, [upcomingStoppage]);
+
+  // Automatic Delhi-Metro style voice and chime announcement effect
+  useEffect(() => {
+    if (!voiceAnnouncementEnabled || !upcomingStoppage) return;
+    const status = upcomingStoppage.status;
+    const stopKey = `${upcomingStoppage.id}_${status}`;
+
+    // Announce when approaching or when arriving at a stop
+    if ((status === 'approaching' || status === 'at_stop') && lastAnnouncedStopKeyRef.current !== stopKey) {
+      lastAnnouncedStopKeyRef.current = stopKey;
+      announceStationVoice(upcomingStoppage.name, status === 'at_stop');
+    }
+  }, [upcomingStoppage, voiceAnnouncementEnabled, announceStationVoice]);
+
+  const handleTestAnnouncement = () => {
+    const name = upcomingStoppage?.name || 'कतला खुर्द (Katla Khurd)';
+    announceStationVoice(name, upcomingStoppage?.status === 'at_stop');
+  };
+
+  const handleToggleVoice = () => {
+    setVoiceAnnouncementEnabled((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('evs_metro_voice_enabled', String(next));
+      } catch {}
+      return next;
+    });
+  };
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12 animate-fadeIn">
@@ -753,6 +928,268 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
                 </div>
               </div>
             </button>
+          </div>
+        </div>
+      </div>
+
+      {/* 2.8 DELHI-METRO STYLE TRANSIT ANNOUNCEMENT HUD & LIVE STATION STRIP */}
+      <div className="bg-gradient-to-br from-slate-950 via-[#071527] to-slate-900 text-white rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-800 space-y-5 relative overflow-hidden">
+        {/* Subtle Metro train car ambient top strip */}
+        <div className={`absolute top-0 left-0 right-0 h-1.5 ${activeRouteId === 'route-1' ? 'bg-amber-400' : 'bg-blue-500'}`}></div>
+
+        {/* HUD Top Control Bar */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-4">
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <span className={`px-3 py-1 rounded-full text-xs font-black tracking-wider uppercase flex items-center gap-1.5 shadow-sm ${
+              activeRouteId === 'route-1'
+                ? 'bg-amber-400 text-slate-950 font-black'
+                : 'bg-blue-500 text-white font-black'
+            }`}>
+              <i className="fa-solid fa-train-subway"></i>
+              <span>{activeRouteId === 'route-1' ? 'येलो लाइन (रूट #1: चिलकाना - सुल्तानपुर)' : 'ब्लू लाइन (रूट #2: पटनी - देहात)'}</span>
+            </span>
+
+            <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[11px] font-bold border border-emerald-500/30 flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+              <span>लाइव जीपीएस सक्रिय</span>
+            </span>
+
+            <span className="text-slate-400 text-xs font-medium hidden sm:inline">
+              गति: <strong className="text-white">{activeTelemetry.speed ? `${Math.round(activeTelemetry.speed)} km/h` : '0 km/h'}</strong>
+            </span>
+          </div>
+
+          {/* Voice Toggle, Test Audio & Sheet Sync Buttons */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Voice Announcement Toggle */}
+            <button
+              type="button"
+              onClick={handleToggleVoice}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer border ${
+                voiceAnnouncementEnabled
+                  ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 border-emerald-400 shadow-md font-black'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
+              }`}
+              title="मेट्रो जैसी ऑडियो उद्घोषणा चालू या बंद करें"
+            >
+              <i className={`fa-solid ${voiceAnnouncementEnabled ? 'fa-volume-high' : 'fa-volume-xmark'}`}></i>
+              <span>{voiceAnnouncementEnabled ? '🔊 मेट्रो उद्घोषणा ON' : '🔇 म्यूट'}</span>
+            </button>
+
+            {/* Test Voice Chime Button */}
+            <button
+              type="button"
+              onClick={handleTestAnnouncement}
+              className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-all flex items-center gap-1.5 border border-slate-700 cursor-pointer active:scale-95"
+              title="मेट्रो घंटी व आवाज़ टेस्ट करें"
+            >
+              <i className="fa-solid fa-bullhorn text-amber-400"></i>
+              <span>टेस्ट वॉइस</span>
+            </button>
+
+            {/* Sync Route_Stops to Google Sheets button */}
+            <button
+              type="button"
+              onClick={handleSyncStoppagesToSheet}
+              disabled={sheetSyncingStops}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border cursor-pointer active:scale-95 ${
+                sheetStopsSyncSuccess
+                  ? 'bg-emerald-600 text-white border-emerald-500 font-black'
+                  : 'bg-[#0c2340] hover:bg-slate-800 text-amber-300 border-amber-400/40'
+              }`}
+              title="गूगल शीट 'Route_Stops' टैब में सभी स्टॉपेज सुरक्षित करें"
+            >
+              <i className={`fa-solid ${sheetSyncingStops ? 'fa-spinner fa-spin' : sheetStopsSyncSuccess ? 'fa-check' : 'fa-cloud-arrow-up'}`}></i>
+              <span>{sheetSyncingStops ? 'शीट में सिंक हो रहा...' : sheetStopsSyncSuccess ? 'शीट में सुरक्षित!' : "शीट 'Route_Stops' सिंक"}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Central Metro High-Visibility Digital Display Board */}
+        <div className={`p-4 sm:p-5 rounded-2xl border transition-all ${
+          upcomingStoppage?.status === 'at_stop'
+            ? 'bg-gradient-to-r from-emerald-950 via-emerald-900 to-teal-950 border-emerald-400/60 shadow-lg shadow-emerald-950/50'
+            : upcomingStoppage?.status === 'approaching'
+            ? 'bg-gradient-to-r from-amber-950 via-amber-900/90 to-yellow-950 border-amber-400/70 shadow-lg shadow-amber-950/50 animate-pulse'
+            : 'bg-slate-900/90 border-slate-700/80'
+        }`}>
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                {upcomingStoppage?.status === 'at_stop' ? (
+                  <span className="px-2.5 py-0.5 rounded-full bg-emerald-500 text-slate-950 font-black text-[11px] tracking-wide uppercase flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-white animate-ping"></span>
+                    <span>🟢 स्टॉपेज पर मौजूद (At Station)</span>
+                  </span>
+                ) : upcomingStoppage?.status === 'approaching' ? (
+                  <span className="px-2.5 py-0.5 rounded-full bg-amber-400 text-slate-950 font-black text-[11px] tracking-wide uppercase flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-slate-950 animate-bounce"></span>
+                    <span>📢 अगला स्टॉप निकट है (&lt; 500m)</span>
+                  </span>
+                ) : (
+                  <span className="px-2.5 py-0.5 rounded-full bg-blue-500/30 text-blue-300 font-bold text-[11px] tracking-wide uppercase border border-blue-400/30 flex items-center gap-1.5">
+                    <i className="fa-solid fa-angles-right text-xs"></i>
+                    <span>🚆 अगला स्टेशन / स्टॉपेज (Next Stop)</span>
+                  </span>
+                )}
+                <span className="text-slate-400 text-xs font-medium">
+                  {activeShift === 'morning' ? 'पिकअप समय:' : 'ड्रॉप समय:'} <strong className="text-white">{upcomingStoppage?.scheduledTime || '07:30 AM'}</strong>
+                </span>
+              </div>
+
+              {/* Station Name Heading */}
+              <h2 className="text-xl sm:text-2xl font-black tracking-tight text-white flex items-center gap-2.5 pt-1">
+                <span className="text-amber-400">#{upcomingStoppage?.sequence || 1}.</span>
+                <span>{upcomingStoppage?.name || 'ई.वी.एस. पब्लिक स्कूल'}</span>
+              </h2>
+
+              <p className="text-xs sm:text-sm text-slate-300 font-medium">
+                {upcomingStoppage?.status === 'at_stop' ? (
+                  <span>विद्यार्थी वाहन में चढ़/उतर रहे हैं • अनुमानित ठहराव: <strong>60 सेकंड</strong></span>
+                ) : (
+                  <span>
+                    वाहन से दूरी: <strong className="text-amber-300">{activeDistanceMeters > 1000 ? `${(activeDistanceMeters / 1000).toFixed(1)} km` : `${activeDistanceMeters} मीटर`}</strong>
+                    {' '}• अनुमानित आगमन: <strong className="text-emerald-300">{upcomingStoppage?.etaFormatted || 'पहुँच रही है'}</strong>
+                    {upcomingStoppage?.studentCount ? ` • 🎒 ${upcomingStoppage.studentCount} छात्र` : ''}
+                  </span>
+                )}
+              </p>
+            </div>
+
+            {/* Quick action buttons for this stoppage */}
+            <div className="flex items-center gap-2 shrink-0 self-start md:self-center">
+              {upcomingStoppage && (
+                <button
+                  type="button"
+                  onClick={() => setFocusedStoppage(upcomingStoppage)}
+                  className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition-all border border-white/20 flex items-center gap-1.5 cursor-pointer"
+                  title="मैप को इस स्टॉप पर फोकस करें"
+                >
+                  <i className="fa-solid fa-crosshairs text-amber-400"></i>
+                  <span>मैप पर देखें</span>
+                </button>
+              )}
+
+              <a
+                href={`tel:${activeTelemetry.driverPhone}`}
+                className="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black transition-all flex items-center gap-1.5 shadow-md"
+              >
+                <i className="fa-solid fa-phone"></i>
+                <span>ड्राइवर कॉल</span>
+              </a>
+            </div>
+          </div>
+        </div>
+
+        {/* DELHI METRO TRAIN-CAR HORIZONTAL STATION TIMELINE STRIP */}
+        <div className="bg-black/40 rounded-2xl p-4 border border-white/10 space-y-2">
+          <div className="flex items-center justify-between text-xs font-bold text-slate-300 px-1">
+            <span className="flex items-center gap-2">
+              <i className="fa-solid fa-route text-amber-400"></i>
+              <span>मेट्रो स्टेशन लाइन (Station Route Map - किसी भी स्टॉप पर क्लिक करें):</span>
+            </span>
+            <span className="text-[11px] text-slate-400">
+              कुल {stoppages.length} स्टॉप • {etaCalculation.passedCount} पूरे
+            </span>
+          </div>
+
+          <div className="overflow-x-auto pb-3 pt-2 scrollbar-thin">
+            <div className="flex items-center min-w-max px-2">
+              {etaCalculation.stoppages.map((stop, idx) => {
+                const isPassed = stop.status === 'passed';
+                const isAt = stop.status === 'at_stop';
+                const isApproaching = stop.status === 'approaching';
+                const isFocused = focusedStoppage?.id === stop.id;
+                const isLast = idx === etaCalculation.stoppages.length - 1;
+
+                return (
+                  <React.Fragment key={stop.id}>
+                    {/* Station Node Box */}
+                    <div
+                      onClick={() => setFocusedStoppage(stop)}
+                      className={`flex flex-col items-center cursor-pointer group transition-all p-2 rounded-xl ${
+                        isFocused
+                          ? 'bg-white/15 ring-2 ring-amber-400'
+                          : isAt
+                          ? 'bg-emerald-950/60 ring-2 ring-emerald-400'
+                          : isApproaching
+                          ? 'bg-amber-950/60 ring-2 ring-amber-400'
+                          : 'hover:bg-white/5'
+                      }`}
+                      style={{ minWidth: '120px', maxWidth: '150px' }}
+                    >
+                      {/* Top Label Tag */}
+                      <div className="h-5 flex items-center justify-center">
+                        {isAt ? (
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-500 text-slate-950 text-[9px] font-black uppercase tracking-wider animate-pulse">
+                            स्टॉप पर
+                          </span>
+                        ) : isApproaching ? (
+                          <span className="px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 text-[9px] font-black uppercase tracking-wider animate-bounce">
+                            अगला स्टॉप
+                          </span>
+                        ) : isPassed ? (
+                          <span className="text-[10px] text-emerald-400 font-bold">✓ निकला</span>
+                        ) : (
+                          <span className="text-[10px] text-slate-400 font-bold">#{stop.sequence}</span>
+                        )}
+                      </div>
+
+                      {/* Station Circular Icon Indicator */}
+                      <div className="my-1.5 relative">
+                        <div
+                          className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-black transition-all shadow-md ${
+                            isAt
+                              ? 'bg-emerald-500 text-slate-950 ring-4 ring-emerald-400/40 animate-pulse scale-110'
+                              : isApproaching
+                              ? 'bg-amber-400 text-slate-950 ring-4 ring-amber-300/40 animate-pulse scale-110'
+                              : isPassed
+                              ? 'bg-emerald-700 text-white ring-2 ring-emerald-500/50'
+                              : 'bg-slate-800 text-slate-300 border-2 border-slate-600'
+                          }`}
+                        >
+                          {isAt ? (
+                            <i className="fa-solid fa-van-shuttle"></i>
+                          ) : isApproaching ? (
+                            <i className="fa-solid fa-bullhorn text-xs"></i>
+                          ) : isPassed ? (
+                            <i className="fa-solid fa-check"></i>
+                          ) : (
+                            stop.sequence
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Station Name */}
+                      <div className="text-center w-full">
+                        <div className={`text-xs font-black truncate leading-tight ${
+                          isAt ? 'text-emerald-300' : isApproaching ? 'text-amber-300' : isPassed ? 'text-slate-300' : 'text-white'
+                        }`} title={stop.name}>
+                          {stop.name.split('(')[0].trim()}
+                        </div>
+                        <div className="text-[10px] text-slate-400 font-medium truncate mt-0.5">
+                          {stop.scheduledTime || stop.morningTime || '07:30 AM'}
+                          {stop.studentCount ? ` • 🎒${stop.studentCount}` : ''}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Connecting Route Track Line */}
+                    {!isLast && (
+                      <div className="w-8 sm:w-12 h-1 relative self-center mb-6">
+                        <div className={`h-full w-full rounded-full ${
+                          isPassed
+                            ? 'bg-emerald-500'
+                            : isApproaching || isAt
+                            ? 'bg-gradient-to-r from-emerald-500 to-amber-400'
+                            : 'bg-slate-700'
+                        }`}></div>
+                      </div>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </div>
           </div>
         </div>
       </div>

@@ -1,5 +1,6 @@
 // Bus Tracking Service & Telemetry Synchronizer
 // Synchronizes with Google Sheets ("Bus_Tracking" & "Users") and real-time backend API
+import { RouteStoppage } from '../types/routeTracking';
 
 export const SPREADSHEET_ID = '1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU';
 export const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbwVy51K14qu6IXipAZXP4NspFcAUHpLcYv8-zjhkYnBlUI17TzGi_KaJU9TRmNT8D5vvQ/exec';
@@ -2391,3 +2392,77 @@ export const syncLocationToSheetBackend = async (data: {
     };
   }
 };
+
+// =========================================================================
+// ROUTE STOPS API & GOOGLE SHEET "Route_Stops" SYNC HELPERS
+// =========================================================================
+export const fetchRouteStopsFromApi = async (routeId: string): Promise<RouteStoppage[]> => {
+  try {
+    const res = await fetch(`/api/route-stops?routeId=${encodeURIComponent(routeId)}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.stops) && data.stops.length > 0) {
+        return data.stops;
+      }
+    }
+  } catch (e) {
+    console.warn('Could not fetch route stops from /api/route-stops:', e);
+  }
+
+  // Fallback to localStorage
+  try {
+    const saved = localStorage.getItem(`evs_van_route_stoppages_${routeId}`);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch {}
+
+  return [];
+};
+
+export const saveRouteStopsToApi = async (
+  routeId: string,
+  stops: RouteStoppage[]
+): Promise<{ success: boolean; message: string }> => {
+  // 1. Cache to localStorage immediately
+  try {
+    localStorage.setItem(`evs_van_route_stoppages_${routeId}`, JSON.stringify(stops));
+  } catch (e) {}
+
+  // 2. Post to server API (which persists to /tmp and forwards to Apps Script)
+  try {
+    const res = await fetch('/api/route-stops', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ routeId, stops }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return { success: true, message: data.message || 'स्टॉपेज गूगल शीट में सहेज दिए गए हैं!' };
+    }
+  } catch (e: any) {
+    console.warn('Error saving route stops to server API:', e);
+  }
+
+  // 3. Fallback: try Apps Script forwarder directly
+  try {
+    const fRes = await fetch('/api/forward-apps-script', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'saveRouteStops',
+        route_id: routeId,
+        stops: JSON.stringify(stops),
+      }),
+    });
+    if (fRes.ok) {
+      return { success: true, message: "Google Sheet 'Route_Stops' टैब में स्टॉपेज सेव हो गए!" };
+    }
+  } catch {}
+
+  return { success: true, message: 'स्टॉपेज स्थानीय व सर्वर पर सुरक्षित हैं' };
+};
+

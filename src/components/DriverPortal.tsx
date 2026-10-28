@@ -70,7 +70,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
 
   // Sheet Bus_Tracking records
   const [sheetBuses, setSheetBuses] = useState<BusTrackingRecord[]>([]);
-  const [selectedBusId, setSelectedBusId] = useState<string>('ecad7ddc');
+  const [selectedBusId, setSelectedBusId] = useState<string>('121212');
   const [loadingSheet, setLoadingSheet] = useState<boolean>(true);
   const [showScriptModal, setShowScriptModal] = useState<boolean>(false);
   const [sheetSyncState, setSheetSyncState] = useState<'idle' | 'success' | 'needs_setup'>('idle');
@@ -82,7 +82,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
     if (records.length > 0) {
       setSheetBuses(records);
       const amjadBus = records.find(
-        (b) => String(b.Driver_Name || '').toLowerCase() === 'amjad'
+        (b) => String(b.Driver_Name || '').toLowerCase().includes('amjad')
       );
       if (amjadBus && (!selectedBusId || !records.some(r => r.Bus_ID === selectedBusId))) {
         setSelectedBusId(amjadBus.Bus_ID);
@@ -92,15 +92,15 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
     } else {
       setSheetBuses([
         {
-          Bus_ID: 'ecad7ddc',
+          Bus_ID: '121212',
           Driver_Name: 'Amjad',
-          Current_Location: '30.056038, 77.419096',
+          Current_Location: '30.078676, 77.469929',
           Last_Updated: new Date().toLocaleString('hi-IN'),
         },
         {
-          Bus_ID: '756cedc0',
-          Driver_Name: 'Amjad',
-          Current_Location: '30.056038, 77.419096',
+          Bus_ID: '123556',
+          Driver_Name: 'Mh salik',
+          Current_Location: '30.071803, 77.473013',
           Last_Updated: new Date().toLocaleString('hi-IN'),
         },
       ]);
