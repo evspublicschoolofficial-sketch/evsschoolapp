@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
 import { Student } from '../App';
+import { formatStudentPhotoUrl } from './StudentAvatar';
 
 export interface NewStudentData {
   Student_ID: string;
@@ -67,6 +68,55 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
   const [feeDiscount, setFeeDiscount] = useState<string>('0');
   const [sessionStartMonth, setSessionStartMonth] = useState<string>('April');
   const [studentPhotoUrl, setStudentPhotoUrl] = useState<string>('');
+  const [photoCompressing, setPhotoCompressing] = useState<boolean>(false);
+  const photoFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handlePhotoFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPhotoCompressing(true);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          const maxDim = 360;
+          let width = img.width;
+          let height = img.height;
+          if (width > height) {
+            if (width > maxDim) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            }
+          } else {
+            if (height > maxDim) {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            const compressed = canvas.toDataURL('image/jpeg', 0.82);
+            setStudentPhotoUrl(compressed);
+          }
+        } catch (err) {
+          console.warn('Canvas compression error:', err);
+          setStudentPhotoUrl(reader.result as string);
+        } finally {
+          setPhotoCompressing(false);
+        }
+      };
+      img.onerror = () => setPhotoCompressing(false);
+      img.src = reader.result as string;
+    };
+    reader.onerror = () => setPhotoCompressing(false);
+    reader.readAsDataURL(file);
+  };
+
   const [sendWelcomeWhatsApp, setSendWelcomeWhatsApp] = useState<boolean>(true);
 
   const [qrPreviewUrl, setQrPreviewUrl] = useState<string>('');
@@ -252,12 +302,19 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
       return;
     }
 
-    // Check ID duplicate in current memory
-    const isDuplicate = existingStudents.some(
-      (s) => String(s.Student_ID || '').toLowerCase().trim() === sId.toLowerCase()
-    );
+    // Check ID duplicate in current memory (skip if editing this exact student)
+    const isDuplicate = existingStudents.some((s) => {
+      if (studentToEdit) {
+        const editId = String(studentToEdit.Student_ID || '').toLowerCase().trim();
+        const currentCheckId = String(s.Student_ID || '').toLowerCase().trim();
+        if (editId && currentCheckId === editId) {
+          return false;
+        }
+      }
+      return String(s.Student_ID || '').toLowerCase().trim() === sId.toLowerCase();
+    });
     if (isDuplicate) {
-      setErrorMsg(`Student ID "${sId}" पहले से किसी छात्र के पास है। कृपया दूसरा ID दें।`);
+      setErrorMsg(`Student ID "${sId}" पहले से किसी अन्य छात्र के पास है। कृपया दूसरा ID दें।`);
       return;
     }
 
@@ -445,16 +502,27 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
             <div className="flex-1 w-full space-y-2">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                    Student ID <span className="text-rose-500">*</span>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1 flex items-center justify-between">
+                    <span>Student ID <span className="text-rose-500">*</span></span>
+                    {Boolean(studentToEdit) && (
+                      <span className="text-[9px] text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded font-bold border border-blue-200">
+                        🔒 सुरक्षित (Locked)
+                      </span>
+                    )}
                   </label>
                   <input
                     type="text"
                     value={studentId}
                     onChange={(e) => setStudentId(e.target.value)}
                     required
+                    readOnly={Boolean(studentToEdit)}
                     placeholder="उदा. S-1083"
-                    className="w-full px-3 py-2 text-xs font-mono font-bold rounded-lg border border-slate-300 focus:border-blue-900 bg-white"
+                    className={`w-full px-3 py-2 text-xs font-mono font-bold rounded-lg border ${
+                      studentToEdit
+                        ? 'border-slate-300 bg-slate-100 text-slate-700 cursor-not-allowed select-none'
+                        : 'border-slate-300 focus:border-blue-900 bg-white'
+                    }`}
+                    title={studentToEdit ? 'छात्र की आईडी उसी पंक्ति (Row) में अपडेट करने के लिए सुरक्षित रखी गई है।' : undefined}
                   />
                 </div>
                 <div>
@@ -663,16 +731,76 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
               </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                छात्र फोटो लिंक (Photo URL)
-              </label>
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-bold text-slate-700">
+                  छात्र फोटो (Photo URL / Camera)
+                </label>
+                {Boolean(studentPhotoUrl && studentPhotoUrl.trim()) && (
+                  <button
+                    type="button"
+                    onClick={() => setStudentPhotoUrl('')}
+                    className="text-[10px] text-rose-600 hover:text-rose-700 font-bold flex items-center gap-0.5 cursor-pointer"
+                  >
+                    <i className="fa-solid fa-trash-can"></i>
+                    <span>हटाएं</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Live Photo Preview + Upload Controls */}
+              <div className="flex items-center gap-3 p-2 rounded-xl bg-slate-50 border border-slate-200">
+                <div className="w-12 h-12 rounded-xl overflow-hidden border border-slate-300 bg-white flex items-center justify-center shrink-0 shadow-2xs">
+                  {Boolean(studentPhotoUrl && studentPhotoUrl.trim()) ? (
+                    <img
+                      src={formatStudentPhotoUrl(studentPhotoUrl)}
+                      alt="Student"
+                      className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = 'none';
+                      }}
+                    />
+                  ) : (
+                    <i className="fa-solid fa-user-graduate text-slate-400 text-lg"></i>
+                  )}
+                </div>
+
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => photoFileInputRef.current?.click()}
+                      disabled={photoCompressing}
+                      className="px-2.5 py-1 bg-[#0c2340] hover:bg-[#10316b] text-amber-300 rounded-lg text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
+                    >
+                      <i className={`fa-solid ${photoCompressing ? 'fa-spinner fa-spin' : 'fa-camera'}`}></i>
+                      <span>{photoCompressing ? 'प्रोसेसिंग...' : '📸 फ़ोटो अपलोड'}</span>
+                    </button>
+                    <span className="text-[10px] text-slate-400">या नीचे लिंक पेस्ट करें</span>
+                  </div>
+                  <input
+                    ref={photoFileInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handlePhotoFileSelect}
+                    className="hidden"
+                  />
+                  {studentPhotoUrl && studentPhotoUrl.includes('drive.google.com') && (
+                    <div className="text-[10px] text-emerald-700 font-bold mt-1 flex items-center gap-1">
+                      <i className="fa-solid fa-circle-check"></i>
+                      <span>Google Drive लिंक मान्य है</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
               <input
-                type="url"
+                type="text"
                 value={studentPhotoUrl}
                 onChange={(e) => setStudentPhotoUrl(e.target.value)}
-                placeholder="https://... या फोटो लिंक"
-                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:border-blue-900 text-xs"
+                placeholder="Google Drive लिंक या फोटो URL पेस्ट करें"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 focus:border-blue-900 text-xs font-mono"
               />
             </div>
           </div>

@@ -3482,18 +3482,32 @@ export default function App() {
       console.warn('Error saving custom students list:', e);
     }
 
-    // 3. Optimistically update local students state and CACHE_KEY_STUDENTS
+    // 3. Optimistically update local students state and CACHE_KEY_STUDENTS (in-place if updating)
     setStudents((prev) => {
-      const filtered = prev.filter(
-        (s) => String(s.Student_ID).toLowerCase().trim() !== String(newStudent.Student_ID).toLowerCase().trim()
+      const existsIndex = prev.findIndex(
+        (s) => String(s.Student_ID).toLowerCase().trim() === String(newStudent.Student_ID).toLowerCase().trim()
       );
-      const updated = [customStudent, ...filtered];
+      let updated: Student[];
+      if (existsIndex >= 0) {
+        updated = [...prev];
+        updated[existsIndex] = { ...prev[existsIndex], ...customStudent };
+      } else {
+        updated = [customStudent, ...prev];
+      }
       try {
         localStorage.setItem(CACHE_KEY_STUDENTS, JSON.stringify(updated));
       } catch (e) {
         console.warn('Error saving added student to cache:', e);
       }
       return updated;
+    });
+
+    // Also update selectedStudentDetail if open so photo is immediately updated
+    setSelectedStudentDetail((prev) => {
+      if (prev && String(prev.Student_ID).toLowerCase().trim() === String(newStudent.Student_ID).toLowerCase().trim()) {
+        return { ...prev, ...customStudent };
+      }
+      return prev;
     });
 
     setStudentNotificationSuccess(`छात्र ${newStudent.Student_Name} (${newStudent.Admission_Number || newStudent.Student_ID}) पोर्टल में सुरक्षित हो गया है! Google Sheet में सिंक किया जा रहा है...`);
