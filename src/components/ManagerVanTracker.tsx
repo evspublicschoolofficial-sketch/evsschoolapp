@@ -12,6 +12,10 @@ import {
   fetchRouteStopsFromApi,
   saveRouteStopsToApi,
 } from '../utils/busTrackingService';
+import {
+  getActiveSchoolLocation,
+  updateSchoolLocation,
+} from '../utils/schoolLocationService';
 import { GoogleSheetSyncModal } from './GoogleSheetSyncModal';
 import {
   RouteStoppage,
@@ -200,14 +204,55 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
     return loadStoppagesForRoute(activeRouteId);
   });
 
+  // Dynamic School Location State (Verified EVS Campus Coordinates)
+  const [schoolCoords, setSchoolCoords] = useState<{ lat: number; lng: number }>(() => {
+    const active = getActiveSchoolLocation();
+    return { lat: active.lat, lng: active.lng };
+  });
+  const [isSchoolPinMode, setIsSchoolPinMode] = useState<boolean>(false);
+  const [schoolPinSuccess, setSchoolPinSuccess] = useState<boolean>(false);
+
+  const handleUpdateSchoolLocation = async (lat: number, lng: number) => {
+    setSchoolCoords({ lat, lng });
+    try {
+      await updateSchoolLocation({
+        lat,
+        lng,
+        name: 'EVS PUBLIC SCHOOL (Chilkana Sultanpur)',
+      });
+      setSchoolPinSuccess(true);
+      setTimeout(() => setSchoolPinSuccess(false), 3500);
+    } catch (e) {
+      console.warn('Error updating school location:', e);
+    }
+  };
+
+  const handleSetCurrentGpsAsSchool = () => {
+    if (currentGpsPoint.lat && currentGpsPoint.lng) {
+      handleUpdateSchoolLocation(currentGpsPoint.lat, currentGpsPoint.lng);
+      setIsSchoolPinMode(false);
+    }
+  };
+
+  const handleResetSchoolToDefault = () => {
+    handleUpdateSchoolLocation(DEFAULT_SCHOOL_COORDS.lat, DEFAULT_SCHOOL_COORDS.lng);
+    setIsSchoolPinMode(false);
+  };
+
   const routeConfig = useMemo<RouteConfig>(() => {
     const base = SCHOOL_ROUTES_CONFIG[activeRouteId] || SCHOOL_ROUTES_CONFIG['route-1'];
     return {
       ...base,
+      schoolOrigin: {
+        lat: schoolCoords.lat,
+        lng: schoolCoords.lng,
+        name: 'ई.वी.एस. पब्लिक स्कूल (E.V.S. Campus)',
+        address: DEFAULT_SCHOOL_COORDS.address,
+      },
       shift: activeShift,
       stoppages,
     };
-  }, [activeRouteId, activeShift, stoppages]);
+  }, [activeRouteId, activeShift, stoppages, schoolCoords]);
 
   // Pin-drop interactive creation & edit states
   const [isPinDropActive, setIsPinDropActive] = useState<boolean>(false);
@@ -717,223 +762,255 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12 animate-fadeIn">
-      {/* 1. HEADER BANNER */}
-      <div className="bg-gradient-to-r from-[#0c2340] via-[#10316b] to-teal-950 rounded-3xl p-6 sm:p-7 text-white shadow-xl relative overflow-hidden">
-        <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="space-y-1.5">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-black tracking-wide uppercase border border-emerald-400/30 flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                <span>लाइव GPS रूट व स्टॉपेज ट्रैकर (Leaflet OSM)</span>
-              </span>
-              <span className="text-xs text-amber-300 font-bold bg-amber-400/20 border border-amber-400/30 px-2.5 py-0.5 rounded-full">
-                ⏱️ हर 15 सेकंड में ऑटो-रिफ्रेश
-              </span>
+      {/* 1. CLEAN MODERN HEADER & CONTROLS */}
+      <div className="bg-[#0c2340] rounded-2xl p-4 sm:p-5 text-white shadow-lg space-y-4">
+        {/* Top Line: Title & Quick Driver Status */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center text-lg font-black shrink-0 shadow-md">
+              <i className="fa-solid fa-van-shuttle"></i>
             </div>
-            <h1 className="text-2xl sm:text-3xl font-black tracking-tight flex items-center gap-2.5">
-              <i className="fa-solid fa-van-shuttle text-amber-400"></i>
-              <span>स्कूल बस / वैन लाइव रूट व ETA</span>
-            </h1>
-            <p className="text-xs sm:text-sm text-slate-300 max-w-2xl">
-              चालक: <strong>{activeTelemetry.driverName}</strong> (फ़ोन: {activeTelemetry.driverPhone}) • 
-              क्रमबद्ध स्टॉपेज, पॉलीलाइन रूट और वास्तविक समय पर पहुंचने का समय (ETA)
-            </p>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-lg sm:text-xl font-black tracking-tight text-white">
+                  स्कूल वैन लाइव GPS ट्रैकर
+                </h1>
+                <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[11px] font-bold border border-emerald-400/30 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
+                  <span>लाइव</span>
+                </span>
+              </div>
+              <p className="text-xs text-slate-300">
+                चालक: <strong className="text-white">{activeTelemetry.driverName}</strong> ({activeTelemetry.driverPhone})
+                {' '}• गति: <strong className="text-amber-300">{activeTelemetry.speed ? `${Math.round(activeTelemetry.speed)} km/h` : '0 km/h'}</strong>
+              </p>
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-            {/* ONE-TAP: ADD STOP AT CURRENT VEHICLE GPS */}
+          {/* Quick Contact & Driver Portal */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <a
+              href={`tel:${activeTelemetry.driverPhone}`}
+              className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-all flex items-center gap-1.5 border border-slate-700 cursor-pointer"
+            >
+              <i className="fa-solid fa-phone text-emerald-400"></i>
+              <span>कॉल</span>
+            </a>
+
+            <a
+              href={`https://wa.me/91${activeTelemetry.driverPhone}?text=${encodeURIComponent(
+                `नमस्ते अमजद जी, EVS स्कूल वैन (${selectedBusId}) की लोकेशन चाहिए।`
+              )}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3 py-1.5 rounded-xl bg-emerald-600/90 hover:bg-emerald-600 text-white text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs"
+            >
+              <i className="fa-brands fa-whatsapp"></i>
+              <span>WhatsApp</span>
+            </a>
+
             <button
               type="button"
-              onClick={handleAddStopAtCurrentGps}
-              className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white text-xs font-black transition-all flex items-center gap-1.5 shadow-md cursor-pointer border border-emerald-400 active:scale-95"
-              title="जहाँ ऑटो खड़ा है, उसी स्थान को स्टॉपेज के रूप में जोड़ें"
+              onClick={handleCopyTrackingLink}
+              className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 text-xs font-bold transition-all flex items-center gap-1.5 border border-slate-700 cursor-pointer"
+              title="अभिभावकों के साथ लाइव लिंक शेयर करें"
             >
-              <i className="fa-solid fa-location-crosshairs text-amber-300"></i>
-              <span>📍 वाहन की लोकेशन पर स्टॉप जोड़ें</span>
+              <i className={`fa-solid ${copiedLink ? 'fa-check' : 'fa-share-nodes'}`}></i>
+              <span>{copiedLink ? 'कॉपी हुआ!' : 'शेयर लिंक'}</span>
             </button>
 
-            {/* PIN DROP QUICK ACTION BUTTON */}
-            <button
-              type="button"
-              onClick={handleTogglePinDrop}
-              className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 shadow-md cursor-pointer ${
-                isPinDropActive
-                  ? 'bg-rose-500 text-white animate-pulse ring-4 ring-rose-400/40'
-                  : 'bg-amber-400 hover:bg-amber-300 text-slate-950'
-              }`}
-            >
-              <i className={`fa-solid ${isPinDropActive ? 'fa-xmark' : 'fa-map-pin'}`}></i>
-              <span>{isPinDropActive ? 'पिन रद्द करें' : '📌 नया स्टॉप पिन गिराएं'}</span>
-            </button>
-
-            {/* Google Sheet Apps Script Setup Button */}
-            <button
-              type="button"
-              onClick={() => setShowScriptModal(true)}
-              className="px-3.5 py-2 rounded-xl bg-amber-400/20 hover:bg-amber-400/30 text-amber-300 text-xs font-bold transition-all border border-amber-400/40 flex items-center gap-1.5 cursor-pointer backdrop-blur-xs shadow-xs"
-              title="गूगल शीट 'Bus_Tracking' में लोकेशन ऑटो-अपडेट करने हेतु Apps Script कोड"
-            >
-              <i className="fa-solid fa-code"></i>
-              <span>शीट सिंक कोड</span>
-            </button>
-
-            {/* Countdown badge & manual sync button */}
-            <button
-              type="button"
-              onClick={() => {
-                fetchSheetData();
-                setCountdown(15);
-              }}
-              className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition-all border border-white/20 flex items-center gap-1.5 cursor-pointer backdrop-blur-xs shadow-xs"
-              title="अभी तुरंत गूगल शीट से लोकेशन प्राप्त करें"
-            >
-              <i className={`fa-solid fa-rotate ${loadingSheet ? 'animate-spin' : ''}`}></i>
-              <span>रिफ्रेश ({countdown}s)</span>
-            </button>
-
-            {/* Link to Driver Portal */}
             {onOpenDriverPortal && (
               <button
                 type="button"
                 onClick={onOpenDriverPortal}
-                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black transition-all shadow-md flex items-center gap-2 cursor-pointer active:scale-95"
+                className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
               >
                 <i className="fa-solid fa-satellite-dish"></i>
-                <span>ड्राइवर GPS खोलें</span>
+                <span>ड्राइवर GPS</span>
               </button>
             )}
           </div>
         </div>
+
+        {/* Middle Line: Route & Shift Selector Pills + Action Buttons */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pt-3 border-t border-white/10">
+          {/* Route & Shift Pills */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="bg-slate-900/90 p-1 rounded-xl border border-slate-700 flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => handleSelectRoute('route-1')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  activeRouteId === 'route-1'
+                    ? 'bg-amber-400 text-slate-950 font-black shadow-xs'
+                    : 'text-slate-300 hover:text-white'
+                }`}
+              >
+                🚐 रूट #1 (चिलकाना)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSelectRoute('route-2')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  activeRouteId === 'route-2'
+                    ? 'bg-blue-500 text-white font-black shadow-xs'
+                    : 'text-slate-300 hover:text-white'
+                }`}
+              >
+                🚐 रूट #2 (पटनी)
+              </button>
+            </div>
+
+            <div className="bg-slate-900/90 p-1 rounded-xl border border-slate-700 flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => handleSelectShift('morning')}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  activeShift === 'morning'
+                    ? 'bg-emerald-600 text-white font-black shadow-xs'
+                    : 'text-slate-300 hover:text-white'
+                }`}
+              >
+                🌅 सुबह
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSelectShift('evening')}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  activeShift === 'evening'
+                    ? 'bg-orange-600 text-white font-black shadow-xs'
+                    : 'text-slate-300 hover:text-white'
+                }`}
+              >
+                🌇 शाम
+              </button>
+            </div>
+          </div>
+
+          {/* Action Buttons: Add Stop, Drop Pin, School Pin, Sheet Sync */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={handleAddStopAtCurrentGps}
+              className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs active:scale-95"
+              title="वर्तमान में जहां वाहन खड़ा है, वहां नया स्टॉपेज बनाएं"
+            >
+              <i className="fa-solid fa-location-crosshairs text-amber-300"></i>
+              <span>📍 वाहन लोकेशन स्टॉप</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleTogglePinDrop}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs ${
+                isPinDropActive
+                  ? 'bg-rose-500 text-white animate-pulse ring-2 ring-rose-400'
+                  : 'bg-amber-400 hover:bg-amber-300 text-slate-950 font-black'
+              }`}
+            >
+              <i className={`fa-solid ${isPinDropActive ? 'fa-xmark' : 'fa-map-pin'}`}></i>
+              <span>{isPinDropActive ? 'रद्द करें' : '📌 स्टॉप पिन'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsSchoolPinMode(!isSchoolPinMode)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border cursor-pointer ${
+                isSchoolPinMode
+                  ? 'bg-indigo-600 text-white border-indigo-400 ring-2 ring-indigo-400 font-black'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+              }`}
+              title="स्कूल का सही स्थान नक्शे पर सेट करें"
+            >
+              <i className="fa-solid fa-school text-amber-300"></i>
+              <span>{isSchoolPinMode ? '🏫 स्कूल मोड ON' : '🏫 स्कूल पिन बदलें'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleSyncStoppagesToSheet}
+              disabled={sheetSyncingStops}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border cursor-pointer active:scale-95 ${
+                sheetStopsSyncSuccess
+                  ? 'bg-emerald-600 text-white border-emerald-500 font-black'
+                  : 'bg-slate-800 hover:bg-slate-700 text-amber-300 border-slate-700'
+              }`}
+              title="Google Sheet के 'Route_Stops' टैब में सभी स्टॉपेज सुरक्षित करें"
+            >
+              <i className={`fa-solid ${sheetSyncingStops ? 'fa-spinner fa-spin' : sheetStopsSyncSuccess ? 'fa-check' : 'fa-cloud-arrow-up'}`}></i>
+              <span>{sheetSyncingStops ? 'सिंक हो रहा...' : sheetStopsSyncSuccess ? 'शीट में सुरक्षित!' : "💾 'Route_Stops' सिंक"}</span>
+            </button>
+          </div>
+        </div>
       </div>
 
-      {/* 2. EMERGENCY SOS ALERT BANNER (If Active) */}
+      {/* SOS Alert (Only if active) */}
       {activeTelemetry.sosAlert && (
-        <div className="p-4 bg-red-600 text-white rounded-3xl shadow-xl flex items-center justify-between gap-4 animate-pulse">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-white text-red-600 flex items-center justify-center text-2xl font-black shrink-0">
-              <i className="fa-solid fa-triangle-exclamation"></i>
-            </div>
-            <div>
-              <h3 className="text-base font-black tracking-wide">
-                🚨 आपातकालीन अलर्ट: ड्राइवर {activeTelemetry.driverName} ने SOS भेजा है!
-              </h3>
-              <p className="text-xs text-red-100 font-medium">
-                संदेश: {activeTelemetry.sosMessage || 'तुरंत सहायता की आवश्यकता है!'} • संपर्क: {activeTelemetry.driverPhone}
-              </p>
+        <div className="p-3.5 bg-red-600 text-white rounded-2xl shadow-lg flex items-center justify-between gap-3 animate-pulse">
+          <div className="flex items-center gap-2.5">
+            <i className="fa-solid fa-triangle-exclamation text-xl"></i>
+            <div className="text-xs">
+              <strong className="block text-sm">🚨 SOS अलर्ट: चालक {activeTelemetry.driverName}</strong>
+              <span>{activeTelemetry.sosMessage || 'तुरंत सहायता की आवश्यकता है!'}</span>
             </div>
           </div>
           <a
             href={`tel:${activeTelemetry.driverPhone}`}
-            className="px-4 py-2 rounded-xl bg-white text-red-700 font-black text-xs hover:bg-red-50 transition-colors shadow-md shrink-0 flex items-center gap-1.5"
+            className="px-3 py-1.5 rounded-xl bg-white text-red-700 font-black text-xs hover:bg-red-50"
           >
-            <i className="fa-solid fa-phone"></i>
-            <span>ड्राइवर को कॉल करें</span>
+            कॉल करें
           </a>
         </div>
       )}
 
-      {/* 2.5 MASTER ROUTE & SHIFT SWITCHER BAR */}
-      <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        {/* Route Selector (Route 1 vs Route 2) */}
-        <div className="space-y-1.5 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] font-black uppercase tracking-wider text-slate-500">
-              रूट चयन (Select Route):
+      {/* SCHOOL PIN ADJUSTMENT TOOLBAR (Shown when active) */}
+      {isSchoolPinMode && (
+        <div className="p-3.5 bg-indigo-950/90 text-indigo-100 rounded-2xl border-2 border-indigo-400 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md animate-fadeIn">
+          <div className="flex items-center gap-2.5 text-xs">
+            <span className="w-8 h-8 rounded-xl bg-indigo-500 text-white flex items-center justify-center text-sm font-bold shrink-0">
+              🏫
             </span>
-            <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-900 text-[10px] font-extrabold">
-              {activeRouteId === 'route-1' ? 'रूट #1' : 'रूट #2'}
-            </span>
+            <div>
+              <strong className="text-white block text-sm">स्कूल पिन मोड सक्रिय</strong>
+              <span>नक्शे पर कहीं भी क्लिक करें, या पीले स्कूल मार्कर को खींचकर (Drag करके) सही गेट/बिल्डिंग पर रखें।</span>
+            </div>
           </div>
-          <div className="grid grid-cols-2 gap-2 max-w-md">
+          <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
-              onClick={() => handleSelectRoute('route-1')}
-              className={`p-2.5 rounded-2xl text-left border transition-all cursor-pointer ${
-                activeRouteId === 'route-1'
-                  ? 'bg-[#0c2340] text-white border-blue-900 shadow-md ring-2 ring-blue-900/30'
-                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
-              }`}
+              onClick={handleSetCurrentGpsAsSchool}
+              className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+              title="ड्राइवर की वर्तमान GPS लोकेशन को स्कूल बनाएं"
             >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-black">🚐 रूट #1</span>
-                {activeRouteId === 'route-1' && <span className="text-[10px] text-amber-300 font-bold">✓ सक्रिय</span>}
-              </div>
-              <p className={`text-[11px] mt-0.5 truncate ${activeRouteId === 'route-1' ? 'text-slate-300' : 'text-slate-500'}`}>
-                चिलकाना - सुल्तानपुर - रामपुर
-              </p>
+              <i className="fa-solid fa-location-crosshairs"></i>
+              <span>वाहन की जगह स्कूल बनाएं</span>
             </button>
-
             <button
               type="button"
-              onClick={() => handleSelectRoute('route-2')}
-              className={`p-2.5 rounded-2xl text-left border transition-all cursor-pointer ${
-                activeRouteId === 'route-2'
-                  ? 'bg-[#0c2340] text-white border-blue-900 shadow-md ring-2 ring-blue-900/30'
-                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
-              }`}
+              onClick={handleResetSchoolToDefault}
+              className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-all border border-slate-700 cursor-pointer"
+              title="सत्यापित स्कूल लोकेशन (30.07152, 77.47396) पर रीसेट करें"
             >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-black">🚐 रूट #2</span>
-                {activeRouteId === 'route-2' && <span className="text-[10px] text-amber-300 font-bold">✓ सक्रिय</span>}
-              </div>
-              <p className={`text-[11px] mt-0.5 truncate ${activeRouteId === 'route-2' ? 'text-slate-300' : 'text-slate-500'}`}>
-                पटनी - दुमझेड़ा - देहात
-              </p>
+              डिफ़ॉल्ट
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsSchoolPinMode(false)}
+              className="px-3 py-1.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-xs font-bold cursor-pointer"
+            >
+              ✓ पूरा हुआ
             </button>
           </div>
         </div>
+      )}
 
-        {/* Shift Selector (Morning Pickup vs Evening Drop) */}
-        <div className="space-y-1.5 md:border-l md:border-slate-200 md:pl-5">
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] font-black uppercase tracking-wider text-slate-500">
-              दैनिक शिफ्ट (Daily Shift):
-            </span>
-            <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
-              activeShift === 'morning' ? 'bg-emerald-100 text-emerald-800' : 'bg-orange-100 text-orange-800'
-            }`}>
-              {activeShift === 'morning' ? '🌅 सुबह पिकअप' : '🌇 शाम ड्रॉप'}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => handleSelectShift('morning')}
-              className={`px-3.5 py-2 rounded-2xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer border ${
-                activeShift === 'morning'
-                  ? 'bg-emerald-600 text-white border-emerald-500 shadow-md ring-2 ring-emerald-500/30'
-                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
-              }`}
-            >
-              <span className="text-sm">🌅</span>
-              <div className="text-left">
-                <div className="leading-tight">सुबह पिकअप</div>
-                <div className={`text-[10px] ${activeShift === 'morning' ? 'text-emerald-100' : 'text-slate-400'}`}>
-                  घर से स्कूल
-                </div>
-              </div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleSelectShift('evening')}
-              className={`px-3.5 py-2 rounded-2xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer border ${
-                activeShift === 'evening'
-                  ? 'bg-orange-600 text-white border-orange-500 shadow-md ring-2 ring-orange-500/30'
-                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
-              }`}
-            >
-              <span className="text-sm">🌇</span>
-              <div className="text-left">
-                <div className="leading-tight">शाम ड्रॉप</div>
-                <div className={`text-[10px] ${activeShift === 'evening' ? 'text-orange-100' : 'text-slate-400'}`}>
-                  स्कूल से घर
-                </div>
-              </div>
-            </button>
-          </div>
+      {/* School Pin Success Toast */}
+      {schoolPinSuccess && (
+        <div className="p-3 bg-emerald-600 text-white rounded-2xl text-xs font-bold flex items-center gap-2 shadow-md animate-fadeIn">
+          <i className="fa-solid fa-circle-check text-base"></i>
+          <span>✓ ई.वी.एस. पब्लिक स्कूल की लोकेशन सफलतापूर्वक अपडेट हो गई! नक्शा व रूट स्वतः अपडेट हो गए हैं।</span>
         </div>
-      </div>
+      )}
 
       {/* 2.8 DELHI-METRO STYLE TRANSIT ANNOUNCEMENT HUD & LIVE STATION STRIP */}
       <div className="bg-gradient-to-br from-slate-950 via-[#071527] to-slate-900 text-white rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-800 space-y-5 relative overflow-hidden">
@@ -1229,146 +1306,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
       </div>
     </div>
 
-      {/* 3. CONTROL PANEL & LIVE ROUTE METRICS */}
-      <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 sm:p-6 space-y-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-[#0c2340] text-amber-300 flex items-center justify-center text-xl font-bold shadow-md shadow-blue-900/20">
-              <i className="fa-solid fa-location-crosshairs"></i>
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-slate-500">वाहन ID:</span>
-                <select
-                  value={selectedBusId}
-                  onChange={(e) => setSelectedBusId(e.target.value)}
-                  className="px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-300 font-mono text-xs font-extrabold text-slate-900 focus:ring-2 focus:ring-blue-900 focus:outline-none"
-                >
-                  {sheetBuses.map((b) => (
-                    <option key={b.Bus_ID} value={b.Bus_ID}>
-                      {b.Bus_ID} ({b.Driver_Name || 'Amjad'})
-                    </option>
-                  ))}
-                </select>
-                <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-black uppercase">
-                  ✓ गूगल शीट कनेक्टेड
-                </span>
-              </div>
-              <p className="text-xs text-slate-600 mt-1">
-                चालक: <strong className="text-slate-900">{activeTelemetry.driverName}</strong> • फ़ोन: <strong className="text-slate-900">{activeTelemetry.driverPhone}</strong>
-              </p>
-            </div>
-          </div>
-
-          {/* Quick Driver Contact Buttons */}
-          <div className="flex items-center gap-2">
-            <a
-              href={`tel:${activeTelemetry.driverPhone}`}
-              className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold transition-all flex items-center gap-1.5 border border-slate-300"
-            >
-              <i className="fa-solid fa-phone text-emerald-600"></i>
-              <span>कॉल करें</span>
-            </a>
-
-            <a
-              href={`https://wa.me/91${activeTelemetry.driverPhone}?text=${encodeURIComponent(
-                `नमस्ते अमजद जी, EVS स्कूल वैन (${selectedBusId}) की लाइव लोकेशन की जानकारी चाहिए।`
-              )}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs"
-            >
-              <i className="fa-brands fa-whatsapp text-sm"></i>
-              <span>WhatsApp</span>
-            </a>
-
-            <button
-              type="button"
-              onClick={handleCopyTrackingLink}
-              className="px-3.5 py-2 rounded-xl bg-[#0c2340] hover:bg-slate-900 text-amber-300 text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs cursor-pointer"
-              title="अभिभावकों के साथ लोकेशन लिंक शेयर करें"
-            >
-              <i className={`fa-solid ${copiedLink ? 'fa-check' : 'fa-share-nodes'}`}></i>
-              <span>{copiedLink ? 'कॉपी हुआ!' : 'शेयर लिंक'}</span>
-            </button>
-          </div>
-        </div>
-
-        {/* 4 DYNAMIC ETA & TELEMETRY CARDS */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-center">
-          {/* Card 1: Next Stoppage & ETA */}
-          <div className="p-3.5 bg-gradient-to-br from-amber-50 to-amber-100/60 rounded-2xl border border-amber-300 text-left">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] font-black text-amber-800 uppercase">
-                अगला स्टॉपेज (Next Stop)
-              </span>
-              <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>
-            </div>
-            <div className="text-xs font-black text-slate-950 mt-1 truncate">
-              {upcomingStoppage ? `#${upcomingStoppage.sequence}. ${upcomingStoppage.name}` : 'कैंपस वापसी'}
-            </div>
-            <div className="text-sm font-extrabold text-amber-900 mt-0.5">
-              ETA: {upcomingStoppage?.etaFormatted || 'पहुँच रही है'}
-            </div>
-          </div>
-
-          {/* Card 2: Speed & Bearing */}
-          <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 text-left">
-            <span className="text-[10px] font-bold text-slate-400 uppercase block">
-              गति व दिशा (Speed & Heading)
-            </span>
-            <div className="text-sm font-black text-slate-900 mt-1 flex items-center gap-2">
-              <span>{activeTelemetry.speed ? `${Math.round(activeTelemetry.speed)} km/h` : '0 km/h'}</span>
-              <span className="text-xs font-bold text-slate-500">
-                • {activeTelemetry.heading !== null ? `${Math.round(activeTelemetry.heading)}°` : '0°'}
-              </span>
-            </div>
-            <div className="text-[11px] text-emerald-700 font-bold mt-0.5">
-              औसत रूट गति: {etaCalculation.effectiveSpeedKmH} km/h
-            </div>
-          </div>
-
-          {/* Card 3: School Distance & Remaining Route */}
-          <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 text-left">
-            <span className="text-[10px] font-bold text-slate-400 uppercase block">
-              स्कूल से दूरी / शेष रूट
-            </span>
-            <div className="text-sm font-black text-[#0c2340] mt-1">
-              {distanceFromSchool} किमी
-            </div>
-            <div className="text-[11px] text-slate-600 font-bold mt-0.5">
-              शेष रूट: ~{etaCalculation.totalRemainingDistanceKm} km (~{etaCalculation.totalRemainingMinutes} min)
-            </div>
-          </div>
-
-          {/* Card 4: GPS Health & Last Sync */}
-          <div className={`p-3.5 rounded-2xl border text-left ${
-            etaCalculation.isStaleSignal
-              ? 'bg-rose-50 border-rose-300'
-              : 'bg-emerald-50/70 border-emerald-200'
-          }`}>
-            <span className={`text-[10px] font-black uppercase block ${
-              etaCalculation.isStaleSignal ? 'text-rose-700' : 'text-emerald-700'
-            }`}>
-              {etaCalculation.isStaleSignal ? '⚠️ विलंबित सिग्नल' : '✓ जीपीएस सिग्नल सक्रिय'}
-            </span>
-            <div className={`text-sm font-black mt-1 font-mono ${
-              etaCalculation.isStaleSignal ? 'text-rose-900' : 'text-emerald-950'
-            }`}>
-              {activeTelemetry.lastUpdated ? activeTelemetry.lastUpdated.split(' ')[1] || activeTelemetry.lastUpdated : lastSyncTime}
-            </div>
-            <div className={`text-[11px] font-bold mt-0.5 ${
-              etaCalculation.isStaleSignal ? 'text-rose-600' : 'text-emerald-700'
-            }`}>
-              {etaCalculation.isStaleSignal
-                ? `${etaCalculation.staleSeconds}s पूर्व अपडेट`
-                : 'रीयल-टाइम कनेक्टेड'}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* 4. MAIN INTERACTIVE MAP & TIMELINE SIDEBAR GRID */}
+      {/* 3. MAIN INTERACTIVE MAP & TIMELINE SIDEBAR GRID */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
         {/* MAP COLUMN (2 Cols on lg) */}
         <div className="lg:col-span-2 space-y-4">
@@ -1377,10 +1315,10 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
               <div>
                 <h3 className="text-base font-black text-slate-900 flex items-center gap-2">
                   <i className="fa-solid fa-map-location-dot text-blue-900"></i>
-                  <span>इंटरैक्टिव रूट मैप (OpenStreetMap + Leaflet)</span>
+                  <span>इंटरैक्टिव रूट व स्कूल मैप</span>
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  क्रमबद्ध स्टॉपेज (#), गतिशील वैन मार्कर, और रूट पॉलीलाइन। किसी भी स्टॉप को खींचकर स्थान बदलें।
+                  क्रमबद्ध स्टॉपेज, वैन मार्कर, और स्कूल पिन। किसी भी स्टॉप या स्कूल पिन को खींचकर स्थान बदल सकते हैं।
                 </p>
               </div>
 
@@ -1413,6 +1351,9 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
               onUpdateStoppageCoords={handleUpdateStoppageCoords}
               onEditStoppage={handleOpenEditStop}
               onDeleteStoppage={handleDeleteStoppage}
+              onUpdateSchoolCoords={handleUpdateSchoolLocation}
+              isSchoolPinMode={isSchoolPinMode}
+              onToggleSchoolPinMode={() => setIsSchoolPinMode(!isSchoolPinMode)}
               focusedStoppage={focusedStoppage}
               driverName={activeTelemetry.driverName}
               driverPhone={activeTelemetry.driverPhone}

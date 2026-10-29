@@ -47,12 +47,16 @@ let cachedSchoolLocation: SchoolLocationConfig = (() => {
     const saved = localStorage.getItem(STORAGE_KEY_LOCATION);
     if (saved) {
       const parsed = JSON.parse(saved);
+      // Auto-migrate away from old inaccurate village centroid 30.078676
       if (typeof parsed.lat === 'number' && typeof parsed.lng === 'number') {
-        return {
-          ...DEFAULT_CONFIG,
-          ...parsed,
-          radiusMeters: parsed.radiusMeters || DEFAULT_CONFIG.radiusMeters,
-        };
+        const isOldCentroid = Math.abs(parsed.lat - 30.078676) < 0.0005 && Math.abs(parsed.lng - 77.469929) < 0.0005;
+        if (!isOldCentroid) {
+          return {
+            ...DEFAULT_CONFIG,
+            ...parsed,
+            radiusMeters: parsed.radiusMeters || DEFAULT_CONFIG.radiusMeters,
+          };
+        }
       }
     }
   } catch {}

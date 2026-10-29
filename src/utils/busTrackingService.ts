@@ -72,8 +72,8 @@ export interface VanTelemetry {
 
 // School Campus Coordinates (EVS PUBLIC SCHOOL, Saharanpur Road, Chilkana Sultanpur)
 export const DEFAULT_SCHOOL_COORDS = {
-  lat: 30.078676,
-  lng: 77.469929,
+  lat: 30.071520,
+  lng: 77.473969,
   name: 'EVS PUBLIC SCHOOL, Chilkana Sultanpur',
   address: 'Saharanpur road, Chilkana Sultanpur, Chilkana, Uttar Pradesh 247231',
   mapsUrl: 'https://maps.app.goo.gl/TCqvnXrQN2326Lpp6',
@@ -2403,8 +2403,17 @@ export const testGoogleSheetSync = async (targetUrl?: string): Promise<SheetSync
       };
     }
 
-    // 3. Test if new actions (Homework, Bus Tracking, Behavior) are supported
+    // 3. Test if new actions (Route Stops, Bus Tracking, Homework, Behavior) are supported
+    let supportsRouteStops = false;
     let supportsNewActions = false;
+    try {
+      const stopCheckRes = await fetch(`${urlToTest}?action=getRouteStops&route_id=route-1`);
+      const stopCheckText = await stopCheckRes.text();
+      if (!stopCheckText.includes('Invalid Action') && (stopCheckText.includes('success') || stopCheckText.startsWith('['))) {
+        supportsRouteStops = true;
+      }
+    } catch {}
+
     try {
       const testActionRes = await fetch(`${urlToTest}?action=updateBusTracking&bus_id=test&driver_name=test&current_location=0,0`);
       const testActionText = await testActionRes.text();
@@ -2413,12 +2422,22 @@ export const testGoogleSheetSync = async (targetUrl?: string): Promise<SheetSync
       }
     } catch {}
 
-    if (supportsNewActions || hasBusData || (getText.includes('Bus_ID') && !getText.includes('Invalid'))) {
+    if (supportsRouteStops && supportsNewActions) {
       return {
         configured: true,
         statusType: 'success',
-        message: '✅ बहुत बढ़िया! Google Sheet (Bus_Tracking, Homework, Behavior) पूरी तरह कनेक्टेड व सक्रिय है!',
-        details: 'नया Apps Script वर्शन सफलतापूर्वक कनेक्ट हो चुका है। अब होमवर्क, आचरण, ट्रैकिंग व बस लोकेशन सीधे आपकी Google Sheet में ऑटो-सेव होंगे।',
+        message: '✅ बहुत बढ़िया! Google Sheet (Route_Stops, Bus_Tracking, Homework, Behavior) पूरी तरह सक्रिय व कनेक्टेड है!',
+        details: 'नया Apps Script वर्शन सफलतापूर्वक सक्रिय है। आपके द्वारा जोड़े गए सभी स्टॉपेज सीधे आपकी Google Sheet के Route_Stops टैब में सेव होंगे।',
+        testedUrl: urlToTest,
+      };
+    }
+
+    if (supportsNewActions && !supportsRouteStops) {
+      return {
+        configured: false,
+        statusType: 'old_version',
+        message: "⚠️ Google Apps Script में नया 'Route_Stops' कोड अपडेट करें!",
+        details: "आपकी Google Sheet में 'Bus_Tracking' तो सक्रिय है, लेकिन स्टॉपेज का डेटा 'Route_Stops' में जाने के लिए नया Apps Script कोड कॉपी करके Extensions > Apps Script में Deploy > Manage Deployments > Edit > Version: New version करना आवश्यक है।",
         testedUrl: urlToTest,
       };
     }
@@ -2667,14 +2686,15 @@ export const saveRouteStopsToApi = async (
   routeId: string,
   stops: RouteStoppage[]
 ): Promise<{ success: boolean; message: string }> => {
-  // 1. Cache to localStorage immediately
+  // 1. Cache to localStorage immediately for instant offline and multi-tab access
   try {
     localStorage.setItem(`evs_van_route_stoppages_${routeId}`, JSON.stringify(stops));
   } catch (e) {}
 
   let serverMessage = '';
+  const activeUrl = getAppsScriptUrl();
 
-  // 2. Post to server API (persists in memory and triggers Google Sheet forwarder)
+  // 2. Post to Node server API (if available in dev or full-stack)
   try {
     const res = await fetch('/api/route-stops', {
       method: 'POST',
@@ -2686,12 +2706,12 @@ export const saveRouteStopsToApi = async (
       serverMessage = data.message || "गूगल शीट 'Route_Stops' टैब में स्टॉपेज सुरक्षित हो गए!";
     }
   } catch (e: any) {
-    console.warn('Error saving route stops to server API:', e);
+    // Non-fatal if running on static host like Vercel
   }
 
-  // 3. Backup: forward directly to Apps Script
+  // 3. Post to Node forwarder proxy if available
   try {
-    const fRes = await fetch('/api/forward-apps-script', {
+    await fetch('/api/forward-apps-script', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -2700,10 +2720,40 @@ export const saveRouteStopsToApi = async (
         stops: JSON.stringify(stops),
       }),
     });
-    if (fRes.ok) {
-      return { success: true, message: "गूगल शीट 'Route_Stops' टैब में स्टॉपेज दर्ज हो गए!" };
-    }
   } catch {}
+
+  // 4. DIRECT CLIENT-TO-APPS-SCRIPT SYNC (Works on Vercel & mobile browser directly!)
+  if (activeUrl && activeUrl.startsWith('https://script.google.com/macros/s/')) {
+    // 4A. Text/plain POST (Bypasses browser CORS preflight & redirects cleanly)
+    try {
+      fetch(activeUrl, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'saveRouteStops',
+          route_id: routeId,
+          stops: JSON.stringify(stops),
+        }),
+      }).catch(() => {});
+    } catch {}
+
+    // 4B. GET query string fallback
+    try {
+      const encodedStops = encodeURIComponent(JSON.stringify(stops));
+      fetch(`${activeUrl}?action=saveRouteStops&route_id=${encodeURIComponent(routeId)}&stops=${encodedStops}`, {
+        mode: 'no-cors',
+      }).catch(() => {});
+    } catch {}
+
+    // 4C. Individual stop GET calls for granular persistence in Google Sheet
+    for (const stop of stops) {
+      try {
+        const singleUrl = `${activeUrl}?action=addRouteStop&route_id=${encodeURIComponent(routeId)}&stop_id=${encodeURIComponent(stop.id)}&stop_name=${encodeURIComponent(stop.name)}&sequence=${stop.sequence}&lat=${stop.lat}&lng=${stop.lng}&morning_time=${encodeURIComponent(stop.morningTime || stop.scheduledTime || '')}&evening_time=${encodeURIComponent(stop.eveningTime || '')}&village_name=${encodeURIComponent(stop.villageName || '')}&student_count=${stop.studentCount || 0}&notes=${encodeURIComponent(stop.notes || '')}`;
+        fetch(singleUrl, { mode: 'no-cors' }).catch(() => {});
+      } catch {}
+    }
+  }
 
   return {
     success: true,

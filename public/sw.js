@@ -130,12 +130,18 @@ self.addEventListener('fetch', (event) => {
         return networkResponse;
       })
       .catch(async () => {
-        const cachedResponse = await caches.match(event.request);
-        if (cachedResponse) return cachedResponse;
-        if (event.request.mode === 'navigate') {
-          return caches.match('/');
-        }
-        return new Response('Offline', { status: 503, statusText: 'Offline' });
+        try {
+          const cachedResponse = await caches.match(event.request);
+          if (cachedResponse) return cachedResponse;
+          if (event.request.mode === 'navigate') {
+            const cachedIndex = (await caches.match('/')) || (await caches.match('/index.html'));
+            if (cachedIndex) return cachedIndex;
+          }
+        } catch {}
+        return new Response('<!DOCTYPE html><html><body><h1>EVS School Offline</h1><p>कृपया इंटरनेट कनेक्शन चेक करें और पुनः लोड करें।</p><button onclick="location.reload()">पुनः लोड करें</button></body></html>', {
+          status: 200,
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
       })
   );
 });

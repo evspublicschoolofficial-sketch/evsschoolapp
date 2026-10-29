@@ -17,6 +17,9 @@ interface InteractiveRouteMapProps {
   onUpdateStoppageCoords: (stopId: string, lat: number, lng: number) => void;
   onEditStoppage?: (stoppage: RouteStoppage) => void;
   onDeleteStoppage: (stopId: string) => void;
+  onUpdateSchoolCoords?: (lat: number, lng: number) => void;
+  isSchoolPinMode?: boolean;
+  onToggleSchoolPinMode?: () => void;
   focusedStoppage?: RouteStoppage | null;
   driverName?: string;
   driverPhone?: string;
@@ -35,6 +38,9 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
   onUpdateStoppageCoords,
   onEditStoppage,
   onDeleteStoppage,
+  onUpdateSchoolCoords,
+  isSchoolPinMode = false,
+  onToggleSchoolPinMode,
   focusedStoppage,
   driverName = 'Amjad',
   driverPhone = '9761081818',
@@ -136,8 +142,16 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
     if (!map) return;
 
     const handleMapClick = (e: L.LeafletMouseEvent) => {
-      if (!isPinDropActive) return;
       const { lat, lng } = e.latlng;
+
+      // Mode 1: School Pin Repositioning Mode
+      if (isSchoolPinMode && onUpdateSchoolCoords) {
+        onUpdateSchoolCoords(lat, lng);
+        return;
+      }
+
+      // Mode 2: Stoppage Pin Drop Mode
+      if (!isPinDropActive) return;
 
       // Drop animated temporary pin
       if (tempPinMarkerRef.current) {
@@ -166,15 +180,15 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
 
     map.on('click', handleMapClick);
 
-    // Change cursor style based on pin drop state
+    // Change cursor style based on active mode
     if (mapContainerRef.current) {
-      mapContainerRef.current.style.cursor = isPinDropActive ? 'crosshair' : 'grab';
+      mapContainerRef.current.style.cursor = (isPinDropActive || isSchoolPinMode) ? 'crosshair' : 'grab';
     }
 
     return () => {
       map.off('click', handleMapClick);
     };
-  }, [isPinDropActive, onMapClickDropPin]);
+  }, [isPinDropActive, isSchoolPinMode, onMapClickDropPin, onUpdateSchoolCoords]);
 
   // Clean up temp pin when pin drop becomes inactive
   useEffect(() => {
@@ -184,7 +198,7 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
     }
   }, [isPinDropActive]);
 
-  // Update School Campus Marker
+  // Update School Campus Marker (Draggable so manager can place it anywhere precisely)
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
@@ -198,8 +212,8 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
       const schoolIcon = L.divIcon({
         className: 'school-campus-marker',
         html: `
-          <div style="position: relative; display: flex; flex-direction: column; align-items: center; cursor: pointer;">
-            <div style="background: #0c2340; color: #fde047; padding: 6px 10px; border-radius: 12px; font-weight: 900; font-size: 11px; box-shadow: 0 6px 18px rgba(12,35,64,0.4); border: 2px solid #fde047; display: flex; align-items: center; gap: 6px; white-space: nowrap;">
+          <div style="position: relative; display: flex; flex-direction: column; align-items: center; cursor: grab;">
+            <div style="background: #0c2340; color: #fde047; padding: 6px 10px; border-radius: 12px; font-weight: 900; font-size: 11px; box-shadow: 0 6px 18px rgba(12,35,64,0.4); border: 2.5px solid #fde047; display: flex; align-items: center; gap: 6px; white-space: nowrap;">
               <i class="fa-solid fa-school" style="font-size: 13px;"></i>
               <span>${routeConfig.schoolOrigin.name}</span>
             </div>
@@ -210,19 +224,28 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
         iconAnchor: [80, 40],
       });
 
-      const marker = L.marker(schoolCoords, { icon: schoolIcon }).addTo(map);
+      const marker = L.marker(schoolCoords, { icon: schoolIcon, draggable: true }).addTo(map);
+
+      marker.on('dragend', (e) => {
+        const newPos = (e.target as L.Marker).getLatLng();
+        if (onUpdateSchoolCoords) {
+          onUpdateSchoolCoords(newPos.lat, newPos.lng);
+        }
+      });
+
       marker.bindPopup(`
-        <div style="padding: 4px; font-family: sans-serif; font-size: 12px; min-width: 180px;">
+        <div style="padding: 4px; font-family: sans-serif; font-size: 12px; min-width: 200px;">
           <strong style="color: #0c2340; font-size: 13px; display: block; margin-bottom: 2px;">🏫 ${routeConfig.schoolOrigin.name}</strong>
           <span style="color: #64748b; font-size: 11px; display: block;">प्रस्थान एवं वापसी केंद्र (Origin & Hub)</span>
-          <span style="color: #0f766e; font-weight: 700; font-size: 11px; display: block; margin-top: 4px;">निर्देशांक: ${routeConfig.schoolOrigin.lat.toFixed(5)}, ${routeConfig.schoolOrigin.lng.toFixed(5)}</span>
+          <span style="color: #0f766e; font-weight: 700; font-size: 11px; display: block; margin-top: 4px;">निर्देशांक: ${routeConfig.schoolOrigin.lat.toFixed(6)}, ${routeConfig.schoolOrigin.lng.toFixed(6)}</span>
+          <span style="color: #b45309; font-size: 10px; font-weight: bold; display: block; margin-top: 4px;">💡 इस पिन को खींचकर (Drag करके) सही जगह रख सकते हैं</span>
         </div>
       `);
       schoolMarkerRef.current = marker;
     } else {
       schoolMarkerRef.current.setLatLng(schoolCoords);
     }
-  }, [routeConfig.schoolOrigin, mapInitialized]);
+  }, [routeConfig.schoolOrigin, onUpdateSchoolCoords, mapInitialized]);
 
   // Update Live Van Marker with Bearing & Radar Pulse
   useEffect(() => {
