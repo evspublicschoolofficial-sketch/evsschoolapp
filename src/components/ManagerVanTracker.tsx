@@ -39,16 +39,23 @@ const loadStoppagesForRoute = (routeId: string): RouteStoppage[] => {
     const saved = localStorage.getItem(getRouteStorageKey(routeId));
     if (saved) {
       const parsed = JSON.parse(saved);
-      // Purge old mock seed if present
-      const hasOldSeed = Array.isArray(parsed) && parsed.some((s: any) => s.id === 'stop-01' || s.id === 'stop-02' || s.id === 'stop-03');
-      if (!hasOldSeed && Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        // Strictly filter out any previous mock seed stops
+        const userCreated = parsed.filter(
+          (s: any) =>
+            s &&
+            s.id &&
+            !s.id.startsWith('stop-r1-') &&
+            !s.id.startsWith('stop-r2-') &&
+            !['stop-01', 'stop-02', 'stop-03', 'stop-04', 'stop-05', 'stop-06'].includes(s.id)
+        );
+        return userCreated;
       }
     }
   } catch (e) {
     console.warn('Error reading stored stoppages:', e);
   }
-  return routeId === 'route-2' ? DEFAULT_ROUTE_2_STOPPAGES : DEFAULT_ROUTE_1_STOPPAGES;
+  return [];
 };
 
 interface ManagerVanTrackerProps {
@@ -249,11 +256,9 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
       setSelectedBusId(assignedBus);
     }
 
-    // Refresh route stops from server API
+    // Refresh route stops from Google Sheet or server API
     fetchRouteStopsFromApi(routeId).then((serverStops) => {
-      if (serverStops && serverStops.length > 0) {
-        setStoppages(serverStops);
-      }
+      setStoppages(serverStops || []);
     });
   }, []);
 
@@ -306,11 +311,9 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
   useEffect(() => {
     fetchSheetData();
 
-    // Fetch initial route stops from server
+    // Fetch initial route stops from Google Sheet or server
     fetchRouteStopsFromApi(activeRouteId).then((serverStops) => {
-      if (serverStops && serverStops.length > 0) {
-        setStoppages(serverStops);
-      }
+      setStoppages(serverStops || []);
     });
 
     // Real-time WebSocket subscription for instant location updates
@@ -329,7 +332,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
         }));
       } else if (msg.type === 'APP_DATA_UPDATED' && msg.entity === 'route_stops') {
         fetchRouteStopsFromApi(activeRouteId).then((stops) => {
-          if (stops && stops.length > 0) setStoppages(stops);
+          setStoppages(stops || []);
         });
       }
     });
@@ -1094,13 +1097,44 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
           </div>
 
           <div className="overflow-x-auto pb-3 pt-2 scrollbar-thin">
-            <div className="flex items-center min-w-max px-2">
-              {etaCalculation.stoppages.map((stop, idx) => {
-                const isPassed = stop.status === 'passed';
-                const isAt = stop.status === 'at_stop';
-                const isApproaching = stop.status === 'approaching';
-                const isFocused = focusedStoppage?.id === stop.id;
-                const isLast = idx === etaCalculation.stoppages.length - 1;
+            {etaCalculation.stoppages.length === 0 ? (
+              <div className="py-6 px-4 text-center text-slate-300 w-full flex flex-col items-center justify-center gap-2 bg-white/5 rounded-xl border border-dashed border-white/10">
+                <div className="w-10 h-10 rounded-xl bg-amber-400/20 border border-amber-400/30 flex items-center justify-center text-amber-400 text-lg">
+                  <i className="fa-solid fa-map-pin"></i>
+                </div>
+                <div className="font-bold text-sm text-amber-300">
+                  इस रूट पर अभी कोई स्टॉप नहीं है
+                </div>
+                <p className="text-xs text-slate-400 max-w-lg">
+                  नक्शे पर क्लिक करके या ऊपर <strong>'📍 वाहन की लोकेशन पर स्टॉप जोड़ें'</strong> / <strong>'📌 नया स्टॉप पिन गिराएं'</strong> बटन दबाकर स्टॉप बनाएं। वह तुरंत आपकी Google Sheet के <strong>'Route_Stops'</strong> टैब में दर्ज हो जाएगा।
+                </p>
+                <div className="flex flex-wrap items-center justify-center gap-2 mt-1">
+                  <button
+                    type="button"
+                    onClick={handleAddStopAtCurrentGps}
+                    className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  >
+                    <i className="fa-solid fa-location-crosshairs text-amber-300"></i>
+                    <span>📍 वाहन लोकेशन पर स्टॉप जोड़ें</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleTogglePinDrop}
+                    className="px-3.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  >
+                    <i className="fa-solid fa-map-pin"></i>
+                    <span>📌 नया स्टॉप पिन गिराएं</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center min-w-max px-2">
+                {etaCalculation.stoppages.map((stop, idx) => {
+                  const isPassed = stop.status === 'passed';
+                  const isAt = stop.status === 'at_stop';
+                  const isApproaching = stop.status === 'approaching';
+                  const isFocused = focusedStoppage?.id === stop.id;
+                  const isLast = idx === etaCalculation.stoppages.length - 1;
 
                 return (
                   <React.Fragment key={stop.id}>
@@ -1190,9 +1224,10 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
                 );
               })}
             </div>
-          </div>
+          )}
         </div>
       </div>
+    </div>
 
       {/* 3. CONTROL PANEL & LIVE ROUTE METRICS */}
       <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 sm:p-6 space-y-5">

@@ -13,6 +13,8 @@ export interface RouteStoppage {
   eveningTime?: string; // Evening drop time e.g. "02:30 PM"
   studentCount: number; // e.g. 5
   landmark?: string; // Optional landmark/notes
+  villageName?: string; // Village name e.g. "Ibrahimpura"
+  notes?: string; // Stoppage specific notes
   // Dynamic calculation fields computed by ETA engine
   status?: 'passed' | 'approaching' | 'at_stop' | 'upcoming';
   etaMinutes?: number;

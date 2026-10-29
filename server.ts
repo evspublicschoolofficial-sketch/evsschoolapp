@@ -65,166 +65,33 @@ function saveTelemetryCache() {
 const ROUTE_STOPS_FILE = '/tmp/evs_route_stops.json';
 
 const DEFAULT_SERVER_ROUTE_STOPS: Record<string, any[]> = {
-  'route-1': [
-    {
-      id: 'stop-r1-01',
-      name: 'इब्राहिमपुरा (Ibrahimpura)',
-      sequence: 1,
-      lat: 30.0820,
-      lng: 77.4580,
-      scheduledTime: '07:15 AM',
-      morningTime: '07:15 AM',
-      eveningTime: '02:20 PM',
-      villageName: 'Ibrahimpura',
-      studentCount: 4,
-      notes: 'मुख्य बस स्टैंड तिराहा',
-    },
-    {
-      id: 'stop-r1-02',
-      name: 'मजहर हसन चिलकाना (Majhar Hasan)',
-      sequence: 2,
-      lat: 30.0760,
-      lng: 77.4690,
-      scheduledTime: '07:25 AM',
-      morningTime: '07:25 AM',
-      eveningTime: '02:30 PM',
-      villageName: 'Majhar hasan chilkana',
-      studentCount: 5,
-      notes: 'चिलकाना बाजार मोड़',
-    },
-    {
-      id: 'stop-r1-03',
-      name: 'कतला खुर्द (Katla Khurd)',
-      sequence: 3,
-      lat: 30.0710,
-      lng: 77.4720,
-      scheduledTime: '07:35 AM',
-      morningTime: '07:35 AM',
-      eveningTime: '02:40 PM',
-      villageName: 'Katla khurd',
-      studentCount: 6,
-      notes: 'चौपाल एवं प्राथमिक स्कूल के पास',
-    },
-    {
-      id: 'stop-r1-04',
-      name: 'सीकरी खुर्द (Sikri Khurd)',
-      sequence: 4,
-      lat: 30.0650,
-      lng: 77.4620,
-      scheduledTime: '07:45 AM',
-      morningTime: '07:45 AM',
-      eveningTime: '02:50 PM',
-      villageName: 'Sikri khurd',
-      studentCount: 4,
-      notes: 'सीकरी मुख्य संपर्क मार्ग',
-    },
-    {
-      id: 'stop-r1-05',
-      name: 'नलहेड़ा (Nalhera)',
-      sequence: 5,
-      lat: 30.0610,
-      lng: 77.4480,
-      scheduledTime: '07:55 AM',
-      morningTime: '07:55 AM',
-      eveningTime: '03:00 PM',
-      villageName: 'Nalhera',
-      studentCount: 3,
-      notes: 'नलहेड़ा मोड़',
-    },
-    {
-      id: 'stop-r1-06',
-      name: 'ई.वी.एस. पब्लिक स्कूल (E.V.S. Campus)',
-      sequence: 6,
-      lat: 30.056038,
-      lng: 77.419096,
-      scheduledTime: '08:10 AM',
-      morningTime: '08:10 AM',
-      eveningTime: '02:00 PM',
-      villageName: 'Sultanpur Chilkana',
-      studentCount: 0,
-      notes: 'स्कूल मुख्य गेट (अंतिम गंतव्य)',
-    },
-  ],
-  'route-2': [
-    {
-      id: 'stop-r2-01',
-      name: 'दुमझेड़ा (Dumjhera)',
-      sequence: 1,
-      lat: 30.0910,
-      lng: 77.4320,
-      scheduledTime: '07:20 AM',
-      morningTime: '07:20 AM',
-      eveningTime: '02:20 PM',
-      villageName: 'Dumjhera',
-      studentCount: 5,
-      notes: 'दुमझेड़ा मेन रोड',
-    },
-    {
-      id: 'stop-r2-02',
-      name: 'पटनी (Patni)',
-      sequence: 2,
-      lat: 30.0810,
-      lng: 77.4250,
-      scheduledTime: '07:32 AM',
-      morningTime: '07:32 AM',
-      eveningTime: '02:35 PM',
-      villageName: 'Patni',
-      studentCount: 3,
-      notes: 'पटनी तिराहा',
-    },
-    {
-      id: 'stop-r2-03',
-      name: 'चौरा खुर्द (Chaura Khurd)',
-      sequence: 3,
-      lat: 30.0720,
-      lng: 77.4210,
-      scheduledTime: '07:45 AM',
-      morningTime: '07:45 AM',
-      eveningTime: '02:45 PM',
-      villageName: 'Chaura khurd',
-      studentCount: 4,
-      notes: 'हुसैनपुर / चौरा मोड़',
-    },
-    {
-      id: 'stop-r2-04',
-      name: 'नयाबांस (Nayabans)',
-      sequence: 4,
-      lat: 30.0640,
-      lng: 77.4200,
-      scheduledTime: '07:55 AM',
-      morningTime: '07:55 AM',
-      eveningTime: '02:55 PM',
-      villageName: 'Nayabans',
-      studentCount: 4,
-      notes: 'नयाबांस मुख्य बस स्टॉप',
-    },
-    {
-      id: 'stop-r2-05',
-      name: 'ई.वी.एस. पब्लिक स्कूल (E.V.S. Campus)',
-      sequence: 5,
-      lat: 30.056038,
-      lng: 77.419096,
-      scheduledTime: '08:10 AM',
-      morningTime: '08:10 AM',
-      eveningTime: '02:00 PM',
-      villageName: 'Sultanpur Chilkana',
-      studentCount: 0,
-      notes: 'स्कूल मुख्य गेट (अंतिम गंतव्य)',
-    },
-  ],
+  'route-1': [],
+  'route-2': [],
 };
 
-let routeStopsStore: Record<string, any[]> = {};
+let routeStopsStore: Record<string, any[]> = { 'route-1': [], 'route-2': [] };
 try {
   if (fs.existsSync(ROUTE_STOPS_FILE)) {
     const rawStops = fs.readFileSync(ROUTE_STOPS_FILE, 'utf-8');
-    routeStopsStore = JSON.parse(rawStops) || {};
+    const parsed = JSON.parse(rawStops) || {};
+    const cleanStore: Record<string, any[]> = { 'route-1': [], 'route-2': [] };
+    for (const [rId, list] of Object.entries(parsed)) {
+      if (Array.isArray(list)) {
+        cleanStore[rId] = list.filter((s: any) =>
+          s && s.id && !s.id.startsWith('stop-r1-') && !s.id.startsWith('stop-r2-') && !['stop-01', 'stop-02', 'stop-03', 'stop-04', 'stop-05', 'stop-06'].includes(s.id)
+        );
+      } else {
+        cleanStore[rId] = [];
+      }
+    }
+    routeStopsStore = cleanStore;
+    fs.writeFileSync(ROUTE_STOPS_FILE, JSON.stringify(routeStopsStore, null, 2), 'utf-8');
   } else {
-    routeStopsStore = { ...DEFAULT_SERVER_ROUTE_STOPS };
+    routeStopsStore = { 'route-1': [], 'route-2': [] };
     fs.writeFileSync(ROUTE_STOPS_FILE, JSON.stringify(routeStopsStore, null, 2), 'utf-8');
   }
 } catch (e) {
-  routeStopsStore = { ...DEFAULT_SERVER_ROUTE_STOPS };
+  routeStopsStore = { 'route-1': [], 'route-2': [] };
 }
 
 function saveRouteStopsCache() {

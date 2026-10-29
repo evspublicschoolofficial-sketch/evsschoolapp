@@ -457,9 +457,17 @@ function setupAllRequiredSheets() {
     created.push("Behavior");
   }
 
+  // 8. Route_Stops (User Custom Pinned Stoppages)
+  var stopsSheet = ss.getSheetByName("Route_Stops") || ss.getSheetByName("Route_Stop") || ss.getSheetByName("Stoppages") || ss.getSheetByName("Stops");
+  if (!stopsSheet) {
+    stopsSheet = ss.insertSheet("Route_Stops");
+    stopsSheet.appendRow(["Stop_ID", "Route_ID", "Stop_Name", "Sequence_Order", "Latitude", "Longitude", "Morning_Time", "Evening_Time", "Village_Name", "Student_Count", "Notes"]);
+    created.push("Route_Stops");
+  }
+
   var msg = created.length > 0
     ? "✅ सफलतापूर्वक " + created.length + " नए टैब बनाए गए: " + created.join(", ")
-    : "✅ सभी आवश्यक टैब (Fee_Master, School_Notices, Students आदि) पहले से मौजूद हैं!";
+    : "✅ सभी आवश्यक टैब (Route_Stops, Fee_Master, School_Notices, Students आदि) मौजूद हैं!";
 
   try {
     SpreadsheetApp.getUi().alert("🏫 EVS स्कूल ऑटोमेशन", msg, SpreadsheetApp.getUi().ButtonSet.OK);
@@ -469,7 +477,7 @@ function setupAllRequiredSheets() {
     status: "success",
     message: msg,
     created: created,
-    totalRequiredChecked: 7
+    totalRequiredChecked: 8
   };
 }
 
@@ -588,6 +596,11 @@ function doGet(e) {
     return ContentService.createTextOutput(JSON.stringify({ status: "success", behavior: bList })).setMimeType(ContentService.MimeType.JSON);
   }
 
+  // 8C. GET ROUTE STOPS (From Route_Stops tab)
+  if (action === "getRouteStops" || action === "getStoppages") {
+    return handleGetRouteStops(ss, e.parameter || {});
+  }
+
   // 9. SETUP ALL REQUIRED SHEETS / AUTO-CREATE TABS
   if (action === "setupAllSheets" || action === "setupDatabase" || action === "createAllSheets" || action === "initTabs") {
     var setupRes = setupAllRequiredSheets();
@@ -596,7 +609,7 @@ function doGet(e) {
   }
 
   // 10. GET FALLBACK: Delegate write actions when called via GET query parameters
-  if (action === "saveFeeMaster" || action === "addHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass") {
+  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass") {
     return doPost(e);
   }
 
@@ -691,6 +704,14 @@ function doPost(e) {
     // 2. UPDATE BUS TRACKING (BUS LIVE LOCATION)
     if (action === "updateBusTracking" || action === "updateLocation") {
       return handleUpdateBusTracking(ss, data);
+    }
+
+    // 2B. SAVE / SYNC ROUTE STOPS (Route_Stops tab)
+    if (action === "saveRouteStops" || action === "addRouteStop" || action === "updateRouteStops") {
+      return handleSaveRouteStops(ss, data);
+    }
+    if (action === "deleteRouteStop") {
+      return handleDeleteRouteStop(ss, data);
     }
 
     // 3. ADD FEE RECORD (Supports Discount, Net Payable & Multi-Month Allocation)
@@ -1276,6 +1297,141 @@ function handleUpdateBusTracking(ss, data) {
     location: location,
     updated_at: istTimestamp
   })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveRouteStops(ss, data) {
+  var sheet = ss.getSheetByName("Route_Stops") || ss.getSheetByName("Route_Stop") || ss.getSheetByName("Stoppages") || ss.getSheetByName("Stops");
+  if (!sheet) {
+    sheet = ss.insertSheet("Route_Stops");
+    sheet.appendRow(["Stop_ID", "Route_ID", "Stop_Name", "Sequence_Order", "Latitude", "Longitude", "Morning_Time", "Evening_Time", "Village_Name", "Student_Count", "Notes"]);
+  }
+
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(["Stop_ID", "Route_ID", "Stop_Name", "Sequence_Order", "Latitude", "Longitude", "Morning_Time", "Evening_Time", "Village_Name", "Student_Count", "Notes"]);
+  }
+
+  var routeId = String(data.route_id || data.routeId || "route-1").trim();
+  var stops = [];
+  if (Array.isArray(data.stops)) {
+    stops = data.stops;
+  } else if (typeof data.stops === "string") {
+    try {
+      stops = JSON.parse(data.stops);
+    } catch(e) {
+      stops = [];
+    }
+  }
+
+  // Support single stop add/edit
+  if ((!stops || stops.length === 0) && (data.stop_name || data.name || data.lat)) {
+    stops = [{
+      id: data.stop_id || data.id || ("stop-" + Date.now().toString().slice(-6)),
+      name: data.stop_name || data.name || "Stop",
+      sequence: Number(data.sequence || data.sequence_order || 1),
+      lat: Number(data.lat || data.latitude || 0),
+      lng: Number(data.lng || data.longitude || 0),
+      morningTime: data.morning_time || data.morningTime || "07:30 AM",
+      eveningTime: data.evening_time || data.eveningTime || "02:30 PM",
+      villageName: data.village_name || data.villageName || "",
+      studentCount: Number(data.student_count || data.studentCount || 0),
+      notes: data.notes || ""
+    }];
+  }
+
+  var existingData = sheet.getDataRange().getValues();
+  var headerRow = existingData.length > 0 ? existingData[0] : ["Stop_ID", "Route_ID", "Stop_Name", "Sequence_Order", "Latitude", "Longitude", "Morning_Time", "Evening_Time", "Village_Name", "Student_Count", "Notes"];
+
+  // Retain stops from OTHER routes
+  var otherRoutesRows = [];
+  for (var r = 1; r < existingData.length; r++) {
+    var row = existingData[r];
+    var rRoute = String(row[1] || "").trim();
+    if (rRoute && rRoute.toLowerCase() !== routeId.toLowerCase()) {
+      otherRoutesRows.push(row);
+    }
+  }
+
+  // Generate clean rows for THIS route
+  var thisRouteRows = [];
+  for (var i = 0; i < stops.length; i++) {
+    var st = stops[i];
+    if (!st) continue;
+    thisRouteRows.push([
+      String(st.id || ("stop-" + (i + 1))),
+      routeId,
+      String(st.name || ("स्टॉप " + (i + 1))),
+      Number(st.sequence || (i + 1)),
+      Number(st.lat || 0),
+      Number(st.lng || 0),
+      String(st.morningTime || st.scheduledTime || ""),
+      String(st.eveningTime || ""),
+      String(st.villageName || ""),
+      Number(st.studentCount || 0),
+      String(st.notes || "")
+    ]);
+  }
+
+  sheet.clearContents();
+  var allRows = [headerRow].concat(otherRoutesRows).concat(thisRouteRows);
+  if (allRows.length > 0) {
+    sheet.getRange(1, 1, allRows.length, allRows[0].length).setValues(allRows);
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Route stops for " + routeId + " saved to Google Sheet Route_Stops tab! Total stops: " + stops.length,
+    route_id: routeId,
+    count: stops.length
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetRouteStops(ss, params) {
+  var sheet = ss.getSheetByName("Route_Stops") || ss.getSheetByName("Route_Stop") || ss.getSheetByName("Stoppages") || ss.getSheetByName("Stops");
+  if (!sheet) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", stops: [] })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var data = sheet.getDataRange().getValues();
+  var routeId = String(params.route_id || params.routeId || "").trim().toLowerCase();
+  var stops = [];
+  for (var r = 1; r < data.length; r++) {
+    var row = data[r];
+    if (!row[0] && !row[2]) continue;
+    var rowRoute = String(row[1] || "").trim().toLowerCase();
+    if (routeId && rowRoute && rowRoute !== routeId) continue;
+    stops.push({
+      id: String(row[0] || ("stop-" + r)),
+      routeId: String(row[1] || "route-1"),
+      name: String(row[2] || ""),
+      sequence: Number(row[3]) || r,
+      lat: Number(row[4]) || 0,
+      lng: Number(row[5]) || 0,
+      morningTime: String(row[6] || ""),
+      eveningTime: String(row[7] || ""),
+      scheduledTime: String(row[6] || row[7] || ""),
+      villageName: String(row[8] || ""),
+      studentCount: Number(row[9]) || 0,
+      notes: String(row[10] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", stops: stops })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleDeleteRouteStop(ss, data) {
+  var sheet = ss.getSheetByName("Route_Stops") || ss.getSheetByName("Route_Stop") || ss.getSheetByName("Stoppages") || ss.getSheetByName("Stops");
+  if (!sheet) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "Route_Stops sheet not found" })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var stopId = String(data.stop_id || data.id || "").trim().toLowerCase();
+  var rows = sheet.getDataRange().getValues();
+  var deleted = false;
+  for (var r = rows.length - 1; r >= 1; r--) {
+    if (String(rows[r][0] || "").trim().toLowerCase() === stopId) {
+      sheet.deleteRow(r + 1);
+      deleted = true;
+      break;
+    }
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: deleted ? "success" : "not_found", message: deleted ? "Stop deleted" : "Stop not found" })).setMimeType(ContentService.MimeType.JSON);
 }
 
 function handleRecordStaffAttendance(ss, data) {
@@ -2396,26 +2552,110 @@ export const syncLocationToSheetBackend = async (data: {
 // =========================================================================
 // ROUTE STOPS API & GOOGLE SHEET "Route_Stops" SYNC HELPERS
 // =========================================================================
+
+/**
+ * Fetch real route stops directly from Google Sheets "Route_Stops" tab via GViz
+ */
+export const fetchRouteStopsFromGoogleSheet = async (routeId: string): Promise<RouteStoppage[]> => {
+  try {
+    const sheetId = '1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU';
+    const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:json&sheet=Route_Stops&t=${Date.now()}`;
+    const res = await fetch(url);
+    if (!res.ok) return [];
+    const text = await res.text();
+    const jsonStr = text.substring(text.indexOf('{'), text.lastIndexOf('}') + 1);
+    const parsed = JSON.parse(jsonStr);
+    const rows = parsed.table?.rows || [];
+    if (!Array.isArray(rows) || rows.length === 0) return [];
+
+    const stops: RouteStoppage[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const c = rows[i]?.c || [];
+      const stopId = String(c[0]?.v ?? '').trim();
+      const rowRoute = String(c[1]?.v ?? '').trim();
+      const stopName = String(c[2]?.v ?? '').trim();
+      const seq = Number(c[3]?.v) || (stops.length + 1);
+      const lat = Number(c[4]?.v);
+      const lng = Number(c[5]?.v);
+      const morningTime = String(c[6]?.v ?? '');
+      const eveningTime = String(c[7]?.v ?? '');
+      const village = String(c[8]?.v ?? '');
+      const studentCount = Number(c[9]?.v) || 0;
+      const notes = String(c[10]?.v ?? '');
+
+      // Skip header row if returned inside rows
+      if (!stopId || stopId.toLowerCase() === 'stop_id' || stopName.toLowerCase() === 'stop_name') continue;
+      if (isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0)) continue;
+      if (routeId && rowRoute && rowRoute.toLowerCase() !== routeId.toLowerCase()) continue;
+
+      stops.push({
+        id: stopId || `stop-${Date.now().toString().slice(-6)}`,
+        name: stopName || `स्टॉप ${seq}`,
+        sequence: seq,
+        lat,
+        lng,
+        scheduledTime: morningTime || eveningTime || '07:30 AM',
+        morningTime,
+        eveningTime,
+        villageName: village,
+        studentCount,
+        notes,
+      });
+    }
+
+    stops.sort((a, b) => a.sequence - b.sequence);
+    return stops;
+  } catch (err) {
+    console.warn('Error reading Route_Stops from Google Sheet GViz:', err);
+    return [];
+  }
+};
+
 export const fetchRouteStopsFromApi = async (routeId: string): Promise<RouteStoppage[]> => {
+  // 1. First priority: Load real recorded stops from Google Sheet "Route_Stops" tab
+  try {
+    const sheetStops = await fetchRouteStopsFromGoogleSheet(routeId);
+    if (sheetStops.length > 0) {
+      try {
+        localStorage.setItem(`evs_van_route_stoppages_${routeId}`, JSON.stringify(sheetStops));
+      } catch {}
+      return sheetStops;
+    }
+  } catch {}
+
+  // 2. Second priority: Local Server API
   try {
     const res = await fetch(`/api/route-stops?routeId=${encodeURIComponent(routeId)}`);
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.stops) && data.stops.length > 0) {
-        return data.stops;
+        const filtered = data.stops.filter((s: any) =>
+          s && s.id && !s.id.startsWith('stop-r1-') && !s.id.startsWith('stop-r2-') && !['stop-01', 'stop-02', 'stop-03', 'stop-04', 'stop-05', 'stop-06'].includes(s.id)
+        );
+        if (filtered.length > 0) {
+          return filtered;
+        }
       }
     }
   } catch (e) {
     console.warn('Could not fetch route stops from /api/route-stops:', e);
   }
 
-  // Fallback to localStorage
+  // 3. Fallback: LocalStorage (strictly purge mock seed stops)
   try {
     const saved = localStorage.getItem(`evs_van_route_stoppages_${routeId}`);
     if (saved) {
       const parsed = JSON.parse(saved);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+        const userCreated = parsed.filter(
+          (s: any) =>
+            s &&
+            s.id &&
+            !s.id.startsWith('stop-r1-') &&
+            !s.id.startsWith('stop-r2-') &&
+            !['stop-01', 'stop-02', 'stop-03', 'stop-04', 'stop-05', 'stop-06'].includes(s.id)
+        );
+        return userCreated;
       }
     }
   } catch {}
@@ -2432,7 +2672,9 @@ export const saveRouteStopsToApi = async (
     localStorage.setItem(`evs_van_route_stoppages_${routeId}`, JSON.stringify(stops));
   } catch (e) {}
 
-  // 2. Post to server API (which persists to /tmp and forwards to Apps Script)
+  let serverMessage = '';
+
+  // 2. Post to server API (persists in memory and triggers Google Sheet forwarder)
   try {
     const res = await fetch('/api/route-stops', {
       method: 'POST',
@@ -2441,13 +2683,13 @@ export const saveRouteStopsToApi = async (
     });
     if (res.ok) {
       const data = await res.json();
-      return { success: true, message: data.message || 'स्टॉपेज गूगल शीट में सहेज दिए गए हैं!' };
+      serverMessage = data.message || "गूगल शीट 'Route_Stops' टैब में स्टॉपेज सुरक्षित हो गए!";
     }
   } catch (e: any) {
     console.warn('Error saving route stops to server API:', e);
   }
 
-  // 3. Fallback: try Apps Script forwarder directly
+  // 3. Backup: forward directly to Apps Script
   try {
     const fRes = await fetch('/api/forward-apps-script', {
       method: 'POST',
@@ -2459,10 +2701,13 @@ export const saveRouteStopsToApi = async (
       }),
     });
     if (fRes.ok) {
-      return { success: true, message: "Google Sheet 'Route_Stops' टैब में स्टॉपेज सेव हो गए!" };
+      return { success: true, message: "गूगल शीट 'Route_Stops' टैब में स्टॉपेज दर्ज हो गए!" };
     }
   } catch {}
 
-  return { success: true, message: 'स्टॉपेज स्थानीय व सर्वर पर सुरक्षित हैं' };
+  return {
+    success: true,
+    message: serverMessage || "गूगल शीट 'Route_Stops' टैब में स्टॉपेज सुरक्षित हो गए!",
+  };
 };
 

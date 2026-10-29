@@ -1,7 +1,7 @@
 // Real Road Routing Service using Open Source Routing Machine (OSRM)
 // Snaps straight route lines to actual highways, village roads, and streets for free (No Google Maps billing required)
 
-import { RouteConfig, RouteShift } from '../types/routeTracking';
+import { RouteConfig, RouteShift, RouteStoppage } from '../types/routeTracking';
 import { DEFAULT_SCHOOL_COORDS } from './busTrackingService';
 
 export interface RoadRoutingResult {
@@ -120,155 +120,9 @@ export const fetchRoadSnappingRoute = async (
   };
 };
 
-// Default realistic stoppages aligned with real student villages around Sultanpur / Chilkana
-export const DEFAULT_ROUTE_1_STOPPAGES = [
-  {
-    id: 'stop-r1-01',
-    name: 'इब्राहिमपुरा (Ibrahimpura)',
-    sequence: 1,
-    lat: 30.0820,
-    lng: 77.4580,
-    scheduledTime: '07:15 AM',
-    morningTime: '07:15 AM',
-    eveningTime: '02:20 PM',
-    villageName: 'Ibrahimpura',
-    studentCount: 4,
-    notes: 'मुख्य बस स्टैंड तिराहा',
-  },
-  {
-    id: 'stop-r1-02',
-    name: 'मजहर हसन चिलकाना (Majhar Hasan)',
-    sequence: 2,
-    lat: 30.0760,
-    lng: 77.4690,
-    scheduledTime: '07:25 AM',
-    morningTime: '07:25 AM',
-    eveningTime: '02:30 PM',
-    villageName: 'Majhar hasan chilkana',
-    studentCount: 5,
-    notes: 'चिलकाना बाजार मोड़',
-  },
-  {
-    id: 'stop-r1-03',
-    name: 'कतला खुर्द (Katla Khurd)',
-    sequence: 3,
-    lat: 30.0710,
-    lng: 77.4720,
-    scheduledTime: '07:35 AM',
-    morningTime: '07:35 AM',
-    eveningTime: '02:40 PM',
-    villageName: 'Katla khurd',
-    studentCount: 6,
-    notes: 'चौपाल एवं प्राथमिक स्कूल के पास',
-  },
-  {
-    id: 'stop-r1-04',
-    name: 'सीकरी खुर्द (Sikri Khurd)',
-    sequence: 4,
-    lat: 30.0650,
-    lng: 77.4620,
-    scheduledTime: '07:45 AM',
-    morningTime: '07:45 AM',
-    eveningTime: '02:50 PM',
-    villageName: 'Sikri khurd',
-    studentCount: 4,
-    notes: 'सीकरी मुख्य संपर्क मार्ग',
-  },
-  {
-    id: 'stop-r1-05',
-    name: 'नलहेड़ा (Nalhera)',
-    sequence: 5,
-    lat: 30.0610,
-    lng: 77.4480,
-    scheduledTime: '07:55 AM',
-    morningTime: '07:55 AM',
-    eveningTime: '03:00 PM',
-    villageName: 'Nalhera',
-    studentCount: 3,
-    notes: 'नलहेड़ा मोड़',
-  },
-  {
-    id: 'stop-r1-06',
-    name: 'ई.वी.एस. पब्लिक स्कूल (E.V.S. Campus)',
-    sequence: 6,
-    lat: DEFAULT_SCHOOL_COORDS.lat,
-    lng: DEFAULT_SCHOOL_COORDS.lng,
-    scheduledTime: '08:10 AM',
-    morningTime: '08:10 AM',
-    eveningTime: '02:00 PM',
-    villageName: 'Sultanpur Chilkana',
-    studentCount: 0,
-    notes: 'स्कूल मुख्य गेट (अंतिम गंतव्य)',
-  },
-];
-
-export const DEFAULT_ROUTE_2_STOPPAGES = [
-  {
-    id: 'stop-r2-01',
-    name: 'दुमझेड़ा (Dumjhera)',
-    sequence: 1,
-    lat: 30.0910,
-    lng: 77.4320,
-    scheduledTime: '07:20 AM',
-    morningTime: '07:20 AM',
-    eveningTime: '02:20 PM',
-    villageName: 'Dumjhera',
-    studentCount: 5,
-    notes: 'दुमझेड़ा मेन रोड',
-  },
-  {
-    id: 'stop-r2-02',
-    name: 'पटनी (Patni)',
-    sequence: 2,
-    lat: 30.0810,
-    lng: 77.4250,
-    scheduledTime: '07:32 AM',
-    morningTime: '07:32 AM',
-    eveningTime: '02:35 PM',
-    villageName: 'Patni',
-    studentCount: 3,
-    notes: 'पटनी तिराहा',
-  },
-  {
-    id: 'stop-r2-03',
-    name: 'चौरा खुर्द (Chaura Khurd)',
-    sequence: 3,
-    lat: 30.0720,
-    lng: 77.4210,
-    scheduledTime: '07:45 AM',
-    morningTime: '07:45 AM',
-    eveningTime: '02:45 PM',
-    villageName: 'Chaura khurd',
-    studentCount: 4,
-    notes: 'हुसैनपुर / चौरा मोड़',
-  },
-  {
-    id: 'stop-r2-04',
-    name: 'नयाबांस (Nayabans)',
-    sequence: 4,
-    lat: 30.0640,
-    lng: 77.4200,
-    scheduledTime: '07:55 AM',
-    morningTime: '07:55 AM',
-    eveningTime: '02:55 PM',
-    villageName: 'Nayabans',
-    studentCount: 4,
-    notes: 'नयाबांस मुख्य बस स्टॉप',
-  },
-  {
-    id: 'stop-r2-05',
-    name: 'ई.वी.एस. पब्लिक स्कूल (E.V.S. Campus)',
-    sequence: 5,
-    lat: DEFAULT_SCHOOL_COORDS.lat,
-    lng: DEFAULT_SCHOOL_COORDS.lng,
-    scheduledTime: '08:10 AM',
-    morningTime: '08:10 AM',
-    eveningTime: '02:00 PM',
-    villageName: 'Sultanpur Chilkana',
-    studentCount: 0,
-    notes: 'स्कूल मुख्य गेट (अंतिम गंतव्य)',
-  },
-];
+// Default stoppages empty - dynamically loaded from Google Sheet "Route_Stops" tab and manager pin drops
+export const DEFAULT_ROUTE_1_STOPPAGES: RouteStoppage[] = [];
+export const DEFAULT_ROUTE_2_STOPPAGES: RouteStoppage[] = [];
 
 // =========================================================================
 // TWO ROUTES (दो रूट) DEFAULT CONFIGURATIONS
