@@ -144,20 +144,27 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
       return false;
     }
   });
+  const isTrackingRef = useRef<boolean>(false);
+  useEffect(() => {
+    isTrackingRef.current = isTracking;
+  }, [isTracking]);
+
   const [gpsError, setGpsError] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
   const [lastUpdatedTime, setLastUpdatedTime] = useState<string>(new Date().toLocaleTimeString('hi-IN'));
   const [fetchingGps, setFetchingGps] = useState<boolean>(false);
   const [updateCount, setUpdateCount] = useState<number>(0);
 
-  // 15-second automated countdown timer
-  const [countdown, setCountdown] = useState<number>(15);
+  // 5-second automated countdown timer
+  const [countdown, setCountdown] = useState<number>(5);
 
   // Keep latest state in refs
   const latestCoordsRef = useRef({ lat: initialCoords.lat, lng: initialCoords.lng, speed: 0, accuracy: 8, heading: 0 });
   useEffect(() => {
     latestCoordsRef.current = { lat: latitude, lng: longitude, speed: speed || 0, accuracy, heading: heading || 0 };
   }, [latitude, longitude, speed, accuracy, heading]);
+
+  const lastWatchBroadcastRef = useRef<number>(0);
 
   const [vanStatus, setVanStatus] = useState<'running' | 'stopped'>(() => {
     try {
@@ -362,15 +369,15 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
     options?: { force?: boolean; customStatus?: 'running' | 'stopped' }
   ) => {
     // Guard clause: If tracking is off and not explicitly forced, do not send telemetry
-    if (!isTracking && !options?.force) {
+    if (!isTrackingRef.current && !options?.force) {
       return;
     }
 
-    const currentStatus = options?.customStatus || (isTracking ? 'running' : 'stopped');
+    const currentStatus = options?.customStatus || (isTrackingRef.current ? 'running' : 'stopped');
     setSyncStatus('syncing');
     const dName = loggedDriver?.Name || activeBusRecord?.Driver_Name || 'Amjad';
     const dPhone = String(loggedDriver?.Mobile_number || '9761081818');
-    const bId = selectedBusId || activeBusRecord?.Bus_ID || 'ecad7ddc';
+    const bId = selectedBusId || activeBusRecord?.Bus_ID || '121212';
     const locStr = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
 
     const packet: VanTelemetry = {
@@ -490,10 +497,12 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
     );
   };
 
-  // Perform 15-second cycle GPS capture and sheet update
-  const execute15sUpdate = () => {
-    captureCurrentGps();
-    setCountdown(15);
+  // Perform 5-second cycle GPS capture and sheet update
+  const execute5sUpdate = () => {
+    if (!isTrackingRef.current) return;
+    const cur = latestCoordsRef.current;
+    broadcastLocation(cur.lat, cur.lng, cur.speed, cur.accuracy, cur.heading);
+    setCountdown(5);
   };
 
   // Stop active hardware watching, background worker and intervals
@@ -528,9 +537,11 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
     startKeepAliveAudio();
 
     // 1. Send immediate location right now
-    execute15sUpdate();
+    const cur = latestCoordsRef.current;
+    broadcastLocation(cur.lat, cur.lng, cur.speed, cur.accuracy, cur.heading, { force: true });
+    setCountdown(5);
 
-    // 2. Watch device movement for continuous precision
+    // 2. Watch device movement for continuous precision (transmits whenever device moves!)
     if ('geolocation' in navigator) {
       try {
         const id = navigator.geolocation.watchPosition(
@@ -548,6 +559,13 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
             setHeading(hd);
             setGpsError(null);
             latestCoordsRef.current = { lat, lng, speed: spd, accuracy: acc, heading: hd };
+
+            // CONTINUOUS MOVEMENT BROADCAST! (Throttled at most once every 3 seconds)
+            const now = Date.now();
+            if (isTrackingRef.current && now - lastWatchBroadcastRef.current >= 3000) {
+              lastWatchBroadcastRef.current = now;
+              broadcastLocation(lat, lng, spd, acc, hd);
+            }
           },
           (err) => {
             console.warn('Geolocation watch error:', err.message);
@@ -576,8 +594,8 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
           if (msg.type === 'TICK') {
             setCountdown(msg.countdown);
           } else if (msg.type === 'TRIGGER_UPDATE') {
-            setCountdown(15);
-            execute15sUpdate();
+            setCountdown(5);
+            execute5sUpdate();
           }
         };
         worker.postMessage({ action: 'START_TRACKING' });
@@ -592,22 +610,23 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
     countdownIntervalRef.current = setInterval(() => {
       setCountdown((prev) => {
         if (prev <= 1) {
-          return 15;
+          return 5;
         }
         return prev - 1;
       });
     }, 1000);
 
-    // 5. Foreground fallback 15-second timer
+    // 5. Foreground fallback 5-second timer
     if (timer15sRef.current) clearInterval(timer15sRef.current);
     timer15sRef.current = setInterval(() => {
-      execute15sUpdate();
-    }, 15000);
+      execute5sUpdate();
+    }, 5000);
   };
 
   // Auto-resume tracking on initial mount / reload if it was previously started
   useEffect(() => {
     if (isTracking && loggedDriver) {
+      isTrackingRef.current = true;
       startTrackingServices();
     }
     return () => {
@@ -615,22 +634,24 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
     };
   }, []);
 
-  // Start / Stop Live GPS Tracking (with 15s interval)
+  // Start / Stop Live GPS Tracking (with 5s interval & continuous movement broadcast)
   const toggleTracking = () => {
     if (isTracking) {
       // STOP TRACKING
+      isTrackingRef.current = false;
       stopTrackingServices();
       setIsTracking(false);
       setVanStatus('stopped');
-      setCountdown(15);
+      setCountdown(5);
       // Inform backend and manager view that tracking has explicitly stopped
       broadcastLocation(latitude, longitude, 0, accuracy, heading, { force: true, customStatus: 'stopped' });
     } else {
-      // START TRACKING (15 seconds cycle)
+      // START TRACKING (5 seconds cycle + continuous movement broadcast)
       setGpsError(null);
+      isTrackingRef.current = true;
       setIsTracking(true);
       setVanStatus('running');
-      setCountdown(15);
+      setCountdown(5);
       startTrackingServices();
     }
   };
@@ -638,10 +659,10 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
   // Re-acquire WakeLock and trigger instant refresh if app comes back to view
   useEffect(() => {
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && isTracking) {
+      if (document.visibilityState === 'visible' && isTrackingRef.current) {
         requestWakeLock();
         startKeepAliveAudio();
-        execute15sUpdate();
+        execute5sUpdate();
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -905,7 +926,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
                 <span>ड्राइवर GPS पोर्टल (Driver Portal)</span>
               </span>
               <span className="text-xs text-amber-300 font-bold bg-amber-400/20 border border-amber-400/30 px-2.5 py-0.5 rounded-full">
-                ⏱️ हर 15 सेकंड में गूगल शीट ऑटो-अपडेट
+                ⏱️ हर 5 सेकंड व मूवमेंट पर गूगल शीट ऑटो-अपडेट
               </span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-black tracking-tight flex items-center gap-2.5">
@@ -1024,7 +1045,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
                   </h3>
                 </div>
                 <p className="text-xs text-slate-500 mt-1">
-                  बटन दबाते ही आपके फोन से हर 15 सेकंड में लाइव लोकेशन गूगल शीट और मैनेजर स्क्रीन पर अपडेट होती रहेगी।
+                  बटन दबाते ही आपके फोन से हर 5 सेकंड और गाड़ी चलने पर लाइव लोकेशन गूगल शीट और मैनेजर स्क्रीन पर लगातार अपडेट होती रहेगी।
                 </p>
 
                 {/* Google Sheet Sync Status Indicator */}
@@ -1102,7 +1123,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
                   <div className="flex items-center gap-2">
                     <span className="font-extrabold text-sm">
                       {isTracking
-                        ? '🟢 लाइव ट्रैकिंग चालू है (हर 15 सेकंड में गूगल शीट में अपडेट)'
+                        ? '🟢 लाइव ट्रैकिंग चालू है (हर 5 सेकंड व मूवमेंट पर लगातार अपडेट)'
                         : '⚪ ट्रैकिंग रुकी हुई है'}
                     </span>
                     {syncStatus === 'syncing' && (

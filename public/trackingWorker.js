@@ -3,20 +3,20 @@
 // by mobile browsers when tabs lose focus or screens lock.
 
 let heartbeatInterval = null;
-let currentCountdown = 15;
+let currentCountdown = 5;
 
 self.onmessage = function (e) {
   const data = e.data;
   if (!data) return;
 
   if (data.action === 'START_TRACKING') {
-    currentCountdown = 15;
+    currentCountdown = 5;
     if (heartbeatInterval) clearInterval(heartbeatInterval);
 
     heartbeatInterval = setInterval(() => {
       currentCountdown--;
       if (currentCountdown <= 0) {
-        currentCountdown = 15;
+        currentCountdown = 5;
         // Notify main thread to trigger high accuracy GPS position and sheet push
         self.postMessage({ type: 'TRIGGER_UPDATE', timestamp: Date.now() });
       } else {
@@ -30,7 +30,7 @@ self.onmessage = function (e) {
       clearInterval(heartbeatInterval);
       heartbeatInterval = null;
     }
-    currentCountdown = 15;
+    currentCountdown = 5;
     self.postMessage({ type: 'STOPPED' });
   }
 };

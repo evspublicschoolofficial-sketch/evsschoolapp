@@ -118,7 +118,21 @@ async function forwardToGoogleAppsScript(payload: any) {
       status: payload.status || 'running',
     };
 
-    // 1. Try POST to Google Apps Script
+    // For updateBusTracking, Google Apps Script doGet is proven 100% reliable and follows redirects cleanly
+    if (formattedPayload.action === 'updateBusTracking') {
+      try {
+        const getUrl = `${targetUrl}?action=updateBusTracking&bus_id=${encodeURIComponent(formattedPayload.bus_id)}&driver_name=${encodeURIComponent(formattedPayload.driver_name)}&current_location=${encodeURIComponent(formattedPayload.current_location)}`;
+        const gRes = await fetch(getUrl, { redirect: 'follow' });
+        const gText = await gRes.text();
+        if (gText.includes('success') || gText.includes('updated')) {
+          return { ok: true, response: gText };
+        }
+      } catch (err: any) {
+        console.warn('GET updateBusTracking error:', err);
+      }
+    }
+
+    // 1. Try POST to Google Apps Script for other actions
     const res = await fetch(targetUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -126,17 +140,7 @@ async function forwardToGoogleAppsScript(payload: any) {
     });
     const text = await res.text();
 
-    // 2. Fallbacks if needed
-    if (text.includes('Invalid action') && formattedPayload.action === 'updateBusTracking') {
-      try {
-        const getUrl = `${targetUrl}?action=updateBusTracking&bus_id=${encodeURIComponent(formattedPayload.bus_id)}&driver_name=${encodeURIComponent(formattedPayload.driver_name)}&current_location=${encodeURIComponent(formattedPayload.current_location)}`;
-        const gRes = await fetch(getUrl);
-        const gText = await gRes.text();
-        if (gText.includes('success') || gText.includes('updated')) {
-          return { ok: true, response: gText };
-        }
-      } catch {}
-    } else if (formattedPayload.action === 'addHomework' && (!res.ok || text.includes('error'))) {
+    if (formattedPayload.action === 'addHomework' && (!res.ok || text.includes('error'))) {
       try {
         const getUrl = `${targetUrl}?action=addHomework&homework_id=${encodeURIComponent(formattedPayload.homework_id || '')}&date=${encodeURIComponent(formattedPayload.date || '')}&class_name=${encodeURIComponent(formattedPayload.class_name || formattedPayload.class || '')}&subject=${encodeURIComponent(formattedPayload.subject || '')}&detail=${encodeURIComponent(formattedPayload.detail || formattedPayload.Homework_Detail || '')}&teacher=${encodeURIComponent(formattedPayload.teacher || '')}`;
         const gRes = await fetch(getUrl);

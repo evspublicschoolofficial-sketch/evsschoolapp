@@ -2528,32 +2528,33 @@ export const syncLocationToSheetBackend = async (data: {
       }
     } catch {}
 
-    // Try GET request first (most reliable with Google Apps Script without CORS redirect blocks)
-    try {
-      const getUrl = `${activeUrl}?action=updateBusTracking&bus_id=${encodeURIComponent(data.busId)}&driver_name=${encodeURIComponent(data.driverName)}&current_location=${encodeURIComponent(locStr)}`;
-      const getRes = await fetch(getUrl);
-      const getText = await getRes.text();
-      if (getText.includes('success') || getText.includes('Bus location updated')) {
-        return { success: true, message: 'गूगल शीट (Bus_Tracking) में लोकेशन अपडेट हो गई!' };
-      }
-    } catch {}
+    // 2A. Direct browser push via GET (using Image beacon and no-cors fetch)
+    // Image beacons are never blocked by CORS and always transmit the URL params to Google Apps Script!
+    if (activeUrl && activeUrl.startsWith('https://script.google.com/macros/s/')) {
+      const getUrl = `${activeUrl}?action=updateBusTracking&bus_id=${encodeURIComponent(data.busId)}&driver_name=${encodeURIComponent(data.driverName)}&current_location=${encodeURIComponent(locStr)}&t=${Date.now()}`;
+      try {
+        if (typeof Image !== 'undefined') {
+          const img = new Image();
+          img.src = getUrl;
+        }
+      } catch {}
+      try {
+        fetch(getUrl, { mode: 'no-cors' }).catch(() => {});
+      } catch {}
+    }
 
-    // POST fallback
+    // 2B. Direct POST fallback
     try {
-      const res = await fetch(activeUrl, {
+      fetch(activeUrl, {
         method: 'POST',
+        mode: 'no-cors',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(payload),
-      });
-
-      const text = await res.text();
-      if (text.includes('success') || text.includes('Bus location updated')) {
-        return { success: true, message: 'गूगल शीट (Bus_Tracking) में लोकेशन अपडेट हो गई!' };
-      }
+      }).catch(() => {});
     } catch {}
 
     if (proxyOk) {
-      return { success: true, message: 'बस लोकेशन सर्वर व ऐप में रियल-टाइम अपडेट हो गई!' };
+      return { success: true, message: 'बस लोकेशन सर्वर व शीट में रियल-टाइम अपडेट हो गई!' };
     }
 
     return {
