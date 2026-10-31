@@ -44,16 +44,10 @@ const loadStoppagesForRoute = (routeId: string): RouteStoppage[] => {
     if (saved) {
       const parsed = JSON.parse(saved);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        // Strictly filter out any previous mock seed stops
-        const userCreated = parsed.filter(
-          (s: any) =>
-            s &&
-            s.id &&
-            !s.id.startsWith('stop-r1-') &&
-            !s.id.startsWith('stop-r2-') &&
-            !['stop-01', 'stop-02', 'stop-03', 'stop-04', 'stop-05', 'stop-06'].includes(s.id)
+        const validStops = parsed.filter(
+          (s: any) => s && s.id && s.name && !isNaN(Number(s.lat)) && !isNaN(Number(s.lng))
         );
-        return userCreated;
+        if (validStops.length > 0) return validStops;
       }
     }
   } catch (e) {
@@ -367,7 +361,9 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
 
     // Fetch initial route stops from Google Sheet or server
     fetchRouteStopsFromApi(activeRouteId).then((serverStops) => {
-      setStoppages(serverStops || []);
+      if (serverStops && serverStops.length > 0) {
+        setStoppages(serverStops);
+      }
     });
 
     // Real-time WebSocket subscription for instant location updates
@@ -386,7 +382,9 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
         }));
       } else if (msg.type === 'APP_DATA_UPDATED' && msg.entity === 'route_stops') {
         fetchRouteStopsFromApi(activeRouteId).then((stops) => {
-          setStoppages(stops || []);
+          if (stops && stops.length > 0) {
+            setStoppages(stops);
+          }
         });
       }
     });
@@ -627,42 +625,74 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
   // Update details of an existing stoppage (including sequence reordering)
   const handleUpdateStopDetails = useCallback(
     (stopId: string, updatedFields: Partial<RouteStoppage>) => {
-      let updated = stoppages.map((s) => {
-        if (s.id === stopId) {
-          const morningTime = updatedFields.morningTime ?? s.morningTime ?? s.scheduledTime;
-          const eveningTime = updatedFields.eveningTime ?? s.eveningTime ?? s.scheduledTime;
+      setStoppages((prevStoppages) => {
+        const currentList = prevStoppages.length > 0
+          ? [...prevStoppages]
+          : (editingStoppage ? [editingStoppage] : []);
+
+        const targetId = stopId || editingStoppage?.id;
+        const exists = currentList.some((s) => s.id === targetId || (editingStoppage && s.id === editingStoppage.id));
+
+        let updated: RouteStoppage[];
+        if (exists) {
+          updated = currentList.map((s) => {
+            if (s.id === targetId || (editingStoppage && s.id === editingStoppage.id)) {
+              const morningTime = updatedFields.morningTime ?? s.morningTime ?? s.scheduledTime;
+              const eveningTime = updatedFields.eveningTime ?? s.eveningTime ?? s.scheduledTime;
+              const scheduledTime = activeShift === 'morning' ? morningTime : eveningTime;
+              return {
+                ...s,
+                ...updatedFields,
+                id: s.id, // ID must remain stable
+                morningTime,
+                eveningTime,
+                scheduledTime,
+              };
+            }
+            return s;
+          });
+        } else if (editingStoppage) {
+          const morningTime = updatedFields.morningTime ?? editingStoppage.morningTime ?? editingStoppage.scheduledTime;
+          const eveningTime = updatedFields.eveningTime ?? editingStoppage.eveningTime ?? editingStoppage.scheduledTime;
           const scheduledTime = activeShift === 'morning' ? morningTime : eveningTime;
-          return {
-            ...s,
-            ...updatedFields,
-            morningTime,
-            eveningTime,
-            scheduledTime,
-          };
+          updated = [
+            ...currentList,
+            {
+              ...editingStoppage,
+              ...updatedFields,
+              id: editingStoppage.id,
+              morningTime,
+              eveningTime,
+              scheduledTime,
+            },
+          ];
+        } else {
+          updated = currentList;
         }
-        return s;
+
+        // Handle sequence re-ordering if sequence changed
+        if (updatedFields.sequence !== undefined && updated.length > 1) {
+          const foundIdx = updated.findIndex((s) => s.id === targetId || (editingStoppage && s.id === editingStoppage.id));
+          if (foundIdx !== -1) {
+            const [targetStop] = updated.splice(foundIdx, 1);
+            const targetSeq = Math.max(1, Math.min(updatedFields.sequence, updated.length + 1));
+            updated.splice(targetSeq - 1, 0, targetStop);
+            updated = updated.map((s, idx) => ({
+              ...s,
+              sequence: idx + 1,
+            }));
+          }
+        }
+
+        saveStoppages(updated, { text: '✏️ स्टॉपेज विवरण संशोधित हो गया!', type: 'success' });
+        return updated;
       });
 
-      // Handle sequence re-ordering if sequence changed
-      if (updatedFields.sequence !== undefined) {
-        const targetStop = updated.find((s) => s.id === stopId);
-        if (targetStop) {
-          const withoutTarget = updated.filter((s) => s.id !== stopId);
-          const targetSeq = Math.max(1, Math.min(updatedFields.sequence, updated.length));
-          withoutTarget.splice(targetSeq - 1, 0, targetStop);
-          updated = withoutTarget.map((s, idx) => ({
-            ...s,
-            sequence: idx + 1,
-          }));
-        }
-      }
-
-      saveStoppages(updated, { text: '✏️ स्टॉपेज विवरण संशोधित हो गया!', type: 'success' });
       setEditingStoppage(null);
       setIsCreationModalOpen(false);
       setTempPinCoords(null);
     },
-    [stoppages, activeShift, saveStoppages]
+    [activeShift, editingStoppage, saveStoppages]
   );
 
   const handleUpdateStoppageCoords = useCallback(

@@ -2641,20 +2641,15 @@ export const fetchRouteStopsFromApi = async (routeId: string): Promise<RouteStop
       const parsed = JSON.parse(saved);
       if (Array.isArray(parsed) && parsed.length > 0) {
         localStops = parsed.filter(
-          (s: any) =>
-            s &&
-            s.id &&
-            !s.id.startsWith('stop-r1-') &&
-            !s.id.startsWith('stop-r2-') &&
-            !['stop-01', 'stop-02', 'stop-03', 'stop-04', 'stop-05', 'stop-06'].includes(s.id)
+          (s: any) => s && s.id && s.name && !isNaN(Number(s.lat)) && !isNaN(Number(s.lng))
         );
       }
     }
     localUpdateTime = Number(localStorage.getItem(`evs_van_route_stoppages_time_${routeId}`) || 0);
   } catch {}
 
-  // If local edit happened recently (last 15 seconds), prioritize localStops so edits/deletes don't flicker or revert
-  if (Date.now() - localUpdateTime < 15000 && localStops.length > 0) {
+  // If local edit happened recently (last 20 seconds), prioritize localStops so edits/deletes don't flicker or revert
+  if (Date.now() - localUpdateTime < 20000 && localStops.length > 0) {
     return localStops;
   }
 
@@ -2675,8 +2670,8 @@ export const fetchRouteStopsFromApi = async (routeId: string): Promise<RouteStop
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.stops) && data.stops.length > 0) {
-        const filtered = data.stops.filter((s: any) =>
-          s && s.id && !s.id.startsWith('stop-r1-') && !s.id.startsWith('stop-r2-') && !['stop-01', 'stop-02', 'stop-03', 'stop-04', 'stop-05', 'stop-06'].includes(s.id)
+        const filtered = data.stops.filter(
+          (s: any) => s && s.id && s.name && !isNaN(Number(s.lat)) && !isNaN(Number(s.lng))
         );
         if (filtered.length > 0) {
           return filtered;
@@ -2687,7 +2682,7 @@ export const fetchRouteStopsFromApi = async (routeId: string): Promise<RouteStop
     console.warn('Could not fetch route stops from /api/route-stops:', e);
   }
 
-  // 3. Fallback: LocalStorage
+  // 3. Fallback: LocalStorage (Preserves user's newly created/edited stops even if remote is empty)
   return localStops;
 };
 

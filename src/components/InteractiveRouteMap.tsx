@@ -366,23 +366,27 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
         return;
       }
 
-      // CASE 2: Build sequential road path: School -> Stop 1 -> Stop 2 -> ... -> Stop N -> School
-      const sequentialWaypoints: Array<{ lat: number; lng: number }> = [
+      // CASE 2: Build sequential road path: School -> Stop 1 -> Stop 2 -> ... -> Stop N
+      // The route goes from School to the stops along the real road, and immediately returns along the same corridor back to School
+      const forwardWaypoints: Array<{ lat: number; lng: number }> = [
         { lat: routeConfig.schoolOrigin.lat, lng: routeConfig.schoolOrigin.lng },
         ...sortedStops.map((s) => ({ lat: s.lat, lng: s.lng })),
-        { lat: routeConfig.schoolOrigin.lat, lng: routeConfig.schoolOrigin.lng },
       ];
 
-      const roadResult = await fetchRoadSnappingRoute(sequentialWaypoints);
+      const roadResult = await fetchRoadSnappingRoute(forwardWaypoints);
       if (!isSubscribed) return;
 
+      // Clean direct return: Retraces the exact same road back to school without OSRM 10km detour loops
+      const returnCoords = [...roadResult.roadCoordinates].reverse();
+      const roundTripCoords = [...roadResult.roadCoordinates, ...returnCoords];
+
       setIsRoadSnapped(roadResult.isSnappedToRoad);
-      setRoadDistanceKm(roadResult.distanceKm);
-      setRoadDurationMin(roadResult.durationMinutes);
+      setRoadDistanceKm(Math.round(roadResult.distanceKm * 2 * 10) / 10);
+      setRoadDurationMin(Math.round(roadResult.durationMinutes * 2));
       setIsRoutingLoading(false);
 
       // 1. Dark navy outer glow / halo line for high road contrast
-      const halo = L.polyline(roadResult.roadCoordinates, {
+      const halo = L.polyline(roundTripCoords, {
         color: '#0c2340',
         weight: 9,
         opacity: 0.35,
@@ -392,7 +396,7 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
       routeHaloPolylineRef.current = halo;
 
       // 2. Main high-visibility vibrant blue road navigation line
-      const line = L.polyline(roadResult.roadCoordinates, {
+      const line = L.polyline(roundTripCoords, {
         color: '#2563eb', // Blue-600
         weight: 5,
         opacity: 0.95,

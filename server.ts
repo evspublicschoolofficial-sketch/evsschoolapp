@@ -164,7 +164,7 @@ async function forwardToGoogleAppsScript(payload: any) {
     } else if (formattedPayload.action === 'saveRouteStops' && (!res.ok || text.includes('error') || text.includes('<!DOCTYPE'))) {
       try {
         const getUrl = `${targetUrl}?action=saveRouteStops&route_id=${encodeURIComponent(formattedPayload.route_id || 'route-1')}&routeId=${encodeURIComponent(formattedPayload.route_id || 'route-1')}&stops=${encodeURIComponent(typeof formattedPayload.stops === 'string' ? formattedPayload.stops : JSON.stringify(formattedPayload.stops || []))}`;
-        const gRes = await fetch(getUrl);
+        const gRes = await fetch(getUrl, { redirect: 'follow' });
         const gText = await gRes.text();
         if (gText.includes('success')) return { ok: true, response: gText };
 
