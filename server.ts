@@ -167,17 +167,6 @@ async function forwardToGoogleAppsScript(payload: any) {
         const gRes = await fetch(getUrl, { redirect: 'follow' });
         const gText = await gRes.text();
         if (gText.includes('success')) return { ok: true, response: gText };
-
-        // Fallback: Granular addRouteStop calls per stop
-        const stopsArr = Array.isArray(formattedPayload.stops)
-          ? formattedPayload.stops
-          : (typeof formattedPayload.stops === 'string' ? JSON.parse(formattedPayload.stops) : []);
-        for (const st of stopsArr) {
-          try {
-            const singleUrl = `${targetUrl}?action=addRouteStop&route_id=${encodeURIComponent(formattedPayload.route_id || 'route-1')}&stop_id=${encodeURIComponent(st.id || '')}&stop_name=${encodeURIComponent(st.name || '')}&sequence=${st.sequence || 1}&lat=${st.lat || 0}&lng=${st.lng || 0}&morning_time=${encodeURIComponent(st.morningTime || '')}&evening_time=${encodeURIComponent(st.eveningTime || '')}&village_name=${encodeURIComponent(st.villageName || '')}&student_count=${st.studentCount || 0}`;
-            fetch(singleUrl).catch(() => {});
-          } catch {}
-        }
       } catch {}
     }
 

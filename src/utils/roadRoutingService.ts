@@ -13,13 +13,35 @@ export interface RoadRoutingResult {
 
 // In-memory cache to prevent redundant API calls
 const ROUTE_CACHE = new Map<string, RoadRoutingResult>();
-const CACHE_STORAGE_PREFIX = 'evs_road_cache_';
+const CACHE_STORAGE_PREFIX = 'evs_road_cache_v3_';
 
-// Build a unique cache key from waypoints
+// Purge any old legacy road caches that caused collision/truncation to 1 stop
+try {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    Object.keys(localStorage).forEach((key) => {
+      if (key.startsWith('evs_road_cache_') && !key.startsWith('evs_road_cache_v3_')) {
+        localStorage.removeItem(key);
+      }
+    });
+  }
+} catch {}
+
+// Simple deterministic hash for long waypoint sequences
+const hashString = (str: string): string => {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(36);
+};
+
+// Build a unique cache key from waypoints (includes count + hashed coords)
 const getRouteCacheKey = (waypoints: Array<{ lat: number; lng: number }>): string => {
-  return waypoints
+  const raw = waypoints
     .map((p) => `${p.lat.toFixed(5)},${p.lng.toFixed(5)}`)
     .join(';');
+  return `pts${waypoints.length}_${hashString(raw)}`;
 };
 
 /**
@@ -40,6 +62,7 @@ export const fetchRoadSnappingRoute = async (
   }
 
   const cacheKey = getRouteCacheKey(waypoints);
+  const storageKey = CACHE_STORAGE_PREFIX + cacheKey;
 
   // 1. Check in-memory cache
   if (ROUTE_CACHE.has(cacheKey)) {
@@ -48,7 +71,7 @@ export const fetchRoadSnappingRoute = async (
 
   // 2. Check localStorage cache
   try {
-    const saved = localStorage.getItem(CACHE_STORAGE_PREFIX + cacheKey.slice(0, 32));
+    const saved = localStorage.getItem(storageKey);
     if (saved) {
       const parsed = JSON.parse(saved);
       if (parsed && Array.isArray(parsed.roadCoordinates) && parsed.roadCoordinates.length > 0) {
@@ -94,13 +117,10 @@ export const fetchRoadSnappingRoute = async (
           isSnappedToRoad: true,
         };
 
-        // Cache the successful result
+        // Cache the successful result with unique non-colliding key
         ROUTE_CACHE.set(cacheKey, result);
         try {
-          localStorage.setItem(
-            CACHE_STORAGE_PREFIX + cacheKey.slice(0, 32),
-            JSON.stringify(result)
-          );
+          localStorage.setItem(storageKey, JSON.stringify(result));
         } catch {}
 
         return result;

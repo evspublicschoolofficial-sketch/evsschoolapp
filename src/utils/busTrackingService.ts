@@ -2699,12 +2699,25 @@ export const saveRouteStopsToApi = async (
   let serverMessage = '';
   const activeUrl = getAppsScriptUrl();
 
+  const formattedStops = stops.map((s, idx) => ({
+    id: s.id || `stop-${Date.now().toString().slice(-6)}`,
+    name: s.name,
+    sequence: s.sequence || (idx + 1),
+    lat: Number(s.lat),
+    lng: Number(s.lng),
+    morningTime: s.morningTime || s.scheduledTime || '07:30 AM',
+    eveningTime: s.eveningTime || '02:30 PM',
+    villageName: s.villageName || '',
+    studentCount: Number(s.studentCount || 0),
+    notes: s.notes || '',
+  }));
+
   // 2. Post to Node server API (updates cache and broadcasts to all clients)
   try {
     const res = await fetch('/api/route-stops', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ routeId, stops }),
+      body: JSON.stringify({ routeId, stops: formattedStops }),
     });
     if (res.ok) {
       const data = await res.json();
@@ -2720,14 +2733,14 @@ export const saveRouteStopsToApi = async (
       body: JSON.stringify({
         action: 'saveRouteStops',
         route_id: routeId,
-        stops: JSON.stringify(stops),
+        stops: JSON.stringify(formattedStops),
       }),
     });
   } catch {}
 
-  // 4. DIRECT CLIENT-TO-APPS-SCRIPT CALLS (Works on Vercel & mobile browser directly!)
+  // 4. DIRECT CLIENT-TO-APPS-SCRIPT CALLS (Atomic write of all stops, preserves every stop in Google Sheet)
   if (activeUrl && activeUrl.startsWith('https://script.google.com/macros/s/')) {
-    const encodedStops = encodeURIComponent(JSON.stringify(stops));
+    const encodedStops = encodeURIComponent(JSON.stringify(formattedStops));
 
     // 4A. GET with encoded payload (Works without CORS blockage and cleanly follows 302 redirects)
     try {
@@ -2745,23 +2758,15 @@ export const saveRouteStopsToApi = async (
         body: JSON.stringify({
           action: 'saveRouteStops',
           route_id: routeId,
-          stops: stops,
+          stops: formattedStops,
         }),
       }).catch(() => {});
     } catch {}
-
-    // 4C. Individual stop GET calls for granular persistence in Google Sheet
-    for (const stop of stops) {
-      try {
-        const singleUrl = `${activeUrl}?action=addRouteStop&route_id=${encodeURIComponent(routeId)}&stop_id=${encodeURIComponent(stop.id)}&stop_name=${encodeURIComponent(stop.name)}&sequence=${stop.sequence}&lat=${stop.lat}&lng=${stop.lng}&morning_time=${encodeURIComponent(stop.morningTime || stop.scheduledTime || '')}&evening_time=${encodeURIComponent(stop.eveningTime || '')}&village_name=${encodeURIComponent(stop.villageName || '')}&student_count=${stop.studentCount || 0}&notes=${encodeURIComponent(stop.notes || '')}`;
-        fetch(singleUrl, { mode: 'no-cors' }).catch(() => {});
-      } catch {}
-    }
   }
 
   return {
     success: true,
-    message: serverMessage || "गूगल शीट 'Route_Stops' टैब में स्टॉपेज सुरक्षित हो गए!",
+    message: serverMessage || "गूगल शीट 'Route_Stops' टैब में सभी स्टॉपेज सुरक्षित हो गए!",
   };
 };
 
