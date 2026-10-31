@@ -348,11 +348,9 @@ export const StoppageTimelineSidebar: React.FC<StoppageTimelineSidebarProps> = (
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (window.confirm(`क्या आप स्टॉप #${stop.sequence} (${stop.name}) हटाना चाहते हैं?`)) {
-                            onDeleteStoppage(stop.id);
-                          }
+                          onDeleteStoppage(stop.id);
                         }}
-                        className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-rose-100 text-slate-400 hover:text-rose-600 flex items-center justify-center text-xs transition-colors cursor-pointer"
+                        className="w-7 h-7 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 flex items-center justify-center text-xs transition-colors cursor-pointer active:scale-90 shadow-2xs"
                         title="स्टॉपेज हटाएं (Delete Stop)"
                       >
                         <i className="fa-solid fa-trash-can"></i>

@@ -2631,10 +2631,36 @@ export const fetchRouteStopsFromGoogleSheet = async (routeId: string): Promise<R
 };
 
 export const fetchRouteStopsFromApi = async (routeId: string): Promise<RouteStoppage[]> => {
+  // Check localStorage first
+  let localStops: RouteStoppage[] = [];
+  let localUpdateTime = 0;
+  try {
+    const saved = localStorage.getItem(`evs_van_route_stoppages_${routeId}`);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        localStops = parsed.filter(
+          (s: any) =>
+            s &&
+            s.id &&
+            !s.id.startsWith('stop-r1-') &&
+            !s.id.startsWith('stop-r2-') &&
+            !['stop-01', 'stop-02', 'stop-03', 'stop-04', 'stop-05', 'stop-06'].includes(s.id)
+        );
+      }
+    }
+    localUpdateTime = Number(localStorage.getItem(`evs_van_route_stoppages_time_${routeId}`) || 0);
+  } catch {}
+
+  // If local edit happened recently (last 15 seconds), prioritize localStops so edits/deletes don't flicker or revert
+  if (Date.now() - localUpdateTime < 15000 && localStops.length > 0) {
+    return localStops;
+  }
+
   // 1. First priority: Load real recorded stops from Google Sheet "Route_Stops" tab
   try {
     const sheetStops = await fetchRouteStopsFromGoogleSheet(routeId);
-    if (sheetStops.length > 0) {
+    if (sheetStops && sheetStops.length > 0) {
       try {
         localStorage.setItem(`evs_van_route_stoppages_${routeId}`, JSON.stringify(sheetStops));
       } catch {}
@@ -2660,26 +2686,8 @@ export const fetchRouteStopsFromApi = async (routeId: string): Promise<RouteStop
     console.warn('Could not fetch route stops from /api/route-stops:', e);
   }
 
-  // 3. Fallback: LocalStorage (strictly purge mock seed stops)
-  try {
-    const saved = localStorage.getItem(`evs_van_route_stoppages_${routeId}`);
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        const userCreated = parsed.filter(
-          (s: any) =>
-            s &&
-            s.id &&
-            !s.id.startsWith('stop-r1-') &&
-            !s.id.startsWith('stop-r2-') &&
-            !['stop-01', 'stop-02', 'stop-03', 'stop-04', 'stop-05', 'stop-06'].includes(s.id)
-        );
-        return userCreated;
-      }
-    }
-  } catch {}
-
-  return [];
+  // 3. Fallback: LocalStorage
+  return localStops;
 };
 
 export const saveRouteStopsToApi = async (
@@ -2689,12 +2697,13 @@ export const saveRouteStopsToApi = async (
   // 1. Cache to localStorage immediately for instant offline and multi-tab access
   try {
     localStorage.setItem(`evs_van_route_stoppages_${routeId}`, JSON.stringify(stops));
+    localStorage.setItem(`evs_van_route_stoppages_time_${routeId}`, String(Date.now()));
   } catch (e) {}
 
   let serverMessage = '';
   const activeUrl = getAppsScriptUrl();
 
-  // 2. Post to Node server API (if available in dev or full-stack)
+  // 2. Post to Node server API (updates cache and broadcasts to all clients)
   try {
     const res = await fetch('/api/route-stops', {
       method: 'POST',
@@ -2705,9 +2714,7 @@ export const saveRouteStopsToApi = async (
       const data = await res.json();
       serverMessage = data.message || "गूगल शीट 'Route_Stops' टैब में स्टॉपेज सुरक्षित हो गए!";
     }
-  } catch (e: any) {
-    // Non-fatal if running on static host like Vercel
-  }
+  } catch (e: any) {}
 
   // 3. Post to Node forwarder proxy if available
   try {
@@ -2722,9 +2729,18 @@ export const saveRouteStopsToApi = async (
     });
   } catch {}
 
-  // 4. DIRECT CLIENT-TO-APPS-SCRIPT SYNC (Works on Vercel & mobile browser directly!)
+  // 4. DIRECT CLIENT-TO-APPS-SCRIPT CALLS (Works on Vercel & mobile browser directly!)
   if (activeUrl && activeUrl.startsWith('https://script.google.com/macros/s/')) {
-    // 4A. Text/plain POST (Bypasses browser CORS preflight & redirects cleanly)
+    const encodedStops = encodeURIComponent(JSON.stringify(stops));
+
+    // 4A. GET with encoded payload (Works without CORS blockage and cleanly follows 302 redirects)
+    try {
+      fetch(`${activeUrl}?action=saveRouteStops&route_id=${encodeURIComponent(routeId)}&routeId=${encodeURIComponent(routeId)}&stops=${encodedStops}`, {
+        mode: 'no-cors',
+      }).catch(() => {});
+    } catch {}
+
+    // 4B. Text/plain POST (Bypasses browser CORS preflight)
     try {
       fetch(activeUrl, {
         method: 'POST',
@@ -2733,16 +2749,8 @@ export const saveRouteStopsToApi = async (
         body: JSON.stringify({
           action: 'saveRouteStops',
           route_id: routeId,
-          stops: JSON.stringify(stops),
+          stops: stops,
         }),
-      }).catch(() => {});
-    } catch {}
-
-    // 4B. GET query string fallback
-    try {
-      const encodedStops = encodeURIComponent(JSON.stringify(stops));
-      fetch(`${activeUrl}?action=saveRouteStops&route_id=${encodeURIComponent(routeId)}&stops=${encodedStops}`, {
-        mode: 'no-cors',
       }).catch(() => {});
     } catch {}
 
@@ -2760,4 +2768,172 @@ export const saveRouteStopsToApi = async (
     message: serverMessage || "गूगल शीट 'Route_Stops' टैब में स्टॉपेज सुरक्षित हो गए!",
   };
 };
+
+// =========================================================================
+// ROUTE STOPS ADD-ON SNIPPET (मौजूदा स्क्रिप्ट में केवल इतना कोड जोड़ें)
+// =========================================================================
+export const ROUTE_STOPS_ADDON_SNIPPET = `// ============================================================
+// 📍 E.V.S. SCHOOL - ROUTE STOPS (स्टॉपेज) छोटा कोड
+// (अपनी मौजूदा Apps Script में नीचे दिए 3 छोटे कदम जोड़ें)
+// ============================================================
+
+// [कदम 1] अपनी मौजूदा doGet(e) फंक्शन के अंदर यह 3 लाइनें जोड़ें:
+/*
+  if (action === "getRouteStops" || action === "getStoppages") {
+    return handleGetRouteStops(e);
+  }
+  if (action === "saveRouteStops" || action === "addRouteStop" || action === "deleteRouteStop") {
+    return handleSaveRouteStops(e);
+  }
+*/
+
+// [कदम 2] अपनी मौजूदा doPost(e) फंक्शन के अंदर यह 3 लाइनें जोड़ें:
+/*
+  if (action === "saveRouteStops" || action === "addRouteStop" || action === "deleteRouteStop") {
+    return handleSaveRouteStops(e);
+  }
+*/
+
+// [कदम 3] अपनी Script फाइल (Code.gs) के सबसे नीचे यह फंक्शन्स पेस्ट कर दें:
+
+function handleGetRouteStops(e) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) ss = SpreadsheetApp.openById("1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU");
+    var sheet = ss.getSheetByName("Route_Stops") || ss.getSheetByName("Stoppages");
+    if (!sheet) {
+      return ContentService.createTextOutput(JSON.stringify({ status: "success", stops: [] })).setMimeType(ContentService.MimeType.JSON);
+    }
+    var data = sheet.getDataRange().getValues();
+    var params = (e && e.parameter) ? e.parameter : {};
+    var routeId = String(params.route_id || params.routeId || "").trim().toLowerCase();
+    var stops = [];
+    for (var r = 1; r < data.length; r++) {
+      var row = data[r];
+      if (!row[0] && !row[2]) continue;
+      var rowRoute = String(row[1] || "").trim().toLowerCase();
+      if (routeId && rowRoute && rowRoute !== routeId) continue;
+      stops.push({
+        id: String(row[0] || ("stop-" + r)),
+        routeId: String(row[1] || "route-1"),
+        name: String(row[2] || ""),
+        sequence: Number(row[3]) || r,
+        lat: Number(row[4]) || 0,
+        lng: Number(row[5]) || 0,
+        morningTime: String(row[6] || ""),
+        eveningTime: String(row[7] || ""),
+        scheduledTime: String(row[6] || row[7] || ""),
+        villageName: String(row[8] || ""),
+        studentCount: Number(row[9]) || 0,
+        notes: String(row[10] || "")
+      });
+    }
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", stops: stops })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: err.toString() })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function handleSaveRouteStops(arg1, arg2) {
+  try {
+    var ss = (arg1 && typeof arg1.getSheetByName === "function") ? arg1 : SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) ss = SpreadsheetApp.openById("1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU");
+    var sheet = ss.getSheetByName("Route_Stops");
+    if (!sheet) {
+      sheet = ss.insertSheet("Route_Stops");
+      sheet.appendRow(["Stop_ID", "Route_ID", "Stop_Name", "Sequence_Order", "Latitude", "Longitude", "Morning_Time", "Evening_Time", "Village_Name", "Student_Count", "Notes"]);
+      sheet.getRange(1, 1, 1, 11).setFontWeight("bold").setBackground("#d9ead3");
+    }
+
+    var e = (arg2 !== undefined) ? arg2 : arg1;
+    var params = {};
+    if (e) {
+      if (e.parameter) {
+        for (var p in e.parameter) params[p] = e.parameter[p];
+      }
+      if (e.postData && e.postData.contents) {
+        try {
+          var body = JSON.parse(e.postData.contents);
+          for (var b in body) params[b] = body[b];
+        } catch(err) {}
+      }
+      if (!e.parameter && !e.postData) {
+        for (var k in e) params[k] = e[k];
+      }
+    }
+
+    var routeId = String(params.route_id || params.routeId || "route-1").trim();
+    var stops = [];
+    if (Array.isArray(params.stops)) {
+      stops = params.stops;
+    } else if (typeof params.stops === "string") {
+      try { stops = JSON.parse(params.stops); } catch(err) { stops = []; }
+    }
+
+    // Support single stop parameter addition/edit
+    if ((!stops || stops.length === 0) && (params.stop_name || params.name || params.lat)) {
+      stops = [{
+        id: params.stop_id || params.id || ("stop-" + Date.now().toString().slice(-6)),
+        name: params.stop_name || params.name || "Stop",
+        sequence: Number(params.sequence || params.sequence_order || 1),
+        lat: Number(params.lat || params.latitude || 0),
+        lng: Number(params.lng || params.longitude || 0),
+        morningTime: params.morning_time || params.morningTime || "07:30 AM",
+        eveningTime: params.evening_time || params.eveningTime || "02:30 PM",
+        villageName: params.village_name || params.villageName || "",
+        studentCount: Number(params.student_count || params.studentCount || 0),
+        notes: params.notes || ""
+      }];
+    }
+
+    var existingData = sheet.getDataRange().getValues();
+    var headerRow = existingData.length > 0 ? existingData[0] : ["Stop_ID", "Route_ID", "Stop_Name", "Sequence_Order", "Latitude", "Longitude", "Morning_Time", "Evening_Time", "Village_Name", "Student_Count", "Notes"];
+
+    var otherRoutesRows = [];
+    for (var r = 1; r < existingData.length; r++) {
+      var row = existingData[r];
+      var rRoute = String(row[1] || "").trim();
+      if (rRoute && rRoute.toLowerCase() !== routeId.toLowerCase()) {
+        otherRoutesRows.push(row);
+      }
+    }
+
+    var thisRouteRows = [];
+    for (var i = 0; i < stops.length; i++) {
+      var st = stops[i];
+      if (!st) continue;
+      thisRouteRows.push([
+        String(st.id || ("stop-" + (i + 1))),
+        routeId,
+        String(st.name || ("स्टॉप " + (i + 1))),
+        Number(st.sequence || (i + 1)),
+        Number(st.lat || 0),
+        Number(st.lng || 0),
+        String(st.morningTime || st.scheduledTime || ""),
+        String(st.eveningTime || ""),
+        String(st.villageName || ""),
+        Number(st.studentCount || 0),
+        String(st.notes || "")
+      ]);
+    }
+
+    sheet.clearContents();
+    var allRows = [headerRow].concat(otherRoutesRows).concat(thisRouteRows);
+    if (allRows.length > 0) {
+      sheet.getRange(1, 1, allRows.length, allRows[0].length).setValues(allRows);
+    }
+
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      message: "Route stops saved to Route_Stops tab successfully!",
+      count: stops.length
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "error",
+      message: err.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}`;
+
 

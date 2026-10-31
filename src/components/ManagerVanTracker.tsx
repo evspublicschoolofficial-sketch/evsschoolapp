@@ -260,11 +260,16 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
   const [isCreationModalOpen, setIsCreationModalOpen] = useState<boolean>(false);
   const [editingStoppage, setEditingStoppage] = useState<RouteStoppage | null>(null);
   const [focusedStoppage, setFocusedStoppage] = useState<RouteStoppage | null>(null);
+  const [actionToast, setActionToast] = useState<{ text: string; type: 'success' | 'info' | 'error' } | null>(null);
 
-  // Persist stoppages to localStorage & Server / Google Sheet
+  // Persist stoppages to localStorage & Server / Google Sheet with instant visual feedback
   const saveStoppages = useCallback(
-    (newStoppages: RouteStoppage[]) => {
+    (newStoppages: RouteStoppage[], toast?: { text: string; type: 'success' | 'info' | 'error' }) => {
       setStoppages(newStoppages);
+      if (toast) {
+        setActionToast(toast);
+        setTimeout(() => setActionToast(null), 3500);
+      }
       saveRouteStopsToApi(activeRouteId, newStoppages);
     },
     [activeRouteId]
@@ -274,9 +279,13 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
   const handleSyncStoppagesToSheet = async () => {
     setSheetSyncingStops(true);
     try {
-      await saveRouteStopsToApi(activeRouteId, stoppages);
+      const res = await saveRouteStopsToApi(activeRouteId, stoppages);
       setSheetStopsSyncSuccess(true);
-      setTimeout(() => setSheetStopsSyncSuccess(false), 3500);
+      setActionToast({ text: "✅ Google Sheet 'Route_Stops' टैब में सभी स्टॉपेज सुरक्षित हो गए!", type: 'success' });
+      setTimeout(() => {
+        setSheetStopsSyncSuccess(false);
+        setActionToast(null);
+      }, 3500);
     } catch (e) {
       console.warn('Error syncing stoppages to sheet:', e);
     } finally {
@@ -600,7 +609,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
         sequence: stoppages.length + 1,
       };
       const updated = [...stoppages, newStop];
-      saveStoppages(updated);
+      saveStoppages(updated, { text: `✅ नया स्टॉपेज '${newStop.name}' जुड़ गया!`, type: 'success' });
       setIsPinDropActive(false);
       setTempPinCoords(null);
       setEditingStoppage(null);
@@ -648,7 +657,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
         }
       }
 
-      saveStoppages(updated);
+      saveStoppages(updated, { text: '✏️ स्टॉपेज विवरण संशोधित हो गया!', type: 'success' });
       setEditingStoppage(null);
       setIsCreationModalOpen(false);
       setTempPinCoords(null);
@@ -661,7 +670,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
       const updated = stoppages.map((s) =>
         s.id === stopId ? { ...s, lat, lng } : s
       );
-      saveStoppages(updated);
+      saveStoppages(updated, { text: '📍 स्टॉपेज लोकेशन अपडेट हो गई!', type: 'info' });
     },
     [stoppages, saveStoppages]
   );
@@ -674,7 +683,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
         ...s,
         sequence: idx + 1,
       }));
-      saveStoppages(resequenced);
+      saveStoppages(resequenced, { text: '🗑️ स्टॉपेज हटा दिया गया!', type: 'info' });
       if (focusedStoppage?.id === stopId) {
         setFocusedStoppage(null);
       }
@@ -698,11 +707,9 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
 
   // Clear all stoppages for starting completely fresh
   const handleClearAllStoppages = useCallback(() => {
-    if (window.confirm('क्या आप सभी स्टॉपेज हटाकर नया खाली रूट शुरू करना चाहते हैं?')) {
-      saveStoppages([]);
-      setFocusedStoppage(null);
-      setIsPinDropActive(false);
-    }
+    saveStoppages([], { text: 'रूट के सभी स्टॉपेज हटा दिए गए!', type: 'info' });
+    setFocusedStoppage(null);
+    setIsPinDropActive(false);
   }, [saveStoppages]);
 
   const handleResetToDefault = useCallback(() => {
@@ -1336,6 +1343,39 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
                 </button>
               </div>
             </div>
+
+            {/* Floating Toast Notification for Instant Feedback */}
+            {actionToast && (
+              <div
+                className={`mb-3 p-3 rounded-2xl shadow-lg border text-xs font-black flex items-center justify-between gap-2 transition-all animate-fadeIn ${
+                  actionToast.type === 'success'
+                    ? 'bg-emerald-600 text-white border-emerald-500'
+                    : actionToast.type === 'error'
+                    ? 'bg-rose-600 text-white border-rose-500'
+                    : 'bg-slate-900 text-amber-300 border-amber-400'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <i
+                    className={`fa-solid ${
+                      actionToast.type === 'success'
+                        ? 'fa-circle-check'
+                        : actionToast.type === 'error'
+                        ? 'fa-circle-xmark'
+                        : 'fa-circle-info'
+                    }`}
+                  ></i>
+                  <span>{actionToast.text}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActionToast(null)}
+                  className="w-5 h-5 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center text-[10px] cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
 
             {/* Interactive Leaflet Map Component */}
             <InteractiveRouteMap

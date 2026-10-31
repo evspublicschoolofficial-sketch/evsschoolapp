@@ -157,12 +157,23 @@ async function forwardToGoogleAppsScript(payload: any) {
         const gText = await gRes.text();
         if (gText.includes('success')) return { ok: true, response: gText };
       } catch {}
-    } else if (formattedPayload.action === 'saveRouteStops' && (!res.ok || text.includes('error'))) {
+    } else if (formattedPayload.action === 'saveRouteStops' && (!res.ok || text.includes('error') || text.includes('<!DOCTYPE'))) {
       try {
-        const getUrl = `${targetUrl}?action=saveRouteStops&route_id=${encodeURIComponent(formattedPayload.route_id || 'route-1')}&stops=${encodeURIComponent(typeof formattedPayload.stops === 'string' ? formattedPayload.stops : JSON.stringify(formattedPayload.stops || []))}`;
+        const getUrl = `${targetUrl}?action=saveRouteStops&route_id=${encodeURIComponent(formattedPayload.route_id || 'route-1')}&routeId=${encodeURIComponent(formattedPayload.route_id || 'route-1')}&stops=${encodeURIComponent(typeof formattedPayload.stops === 'string' ? formattedPayload.stops : JSON.stringify(formattedPayload.stops || []))}`;
         const gRes = await fetch(getUrl);
         const gText = await gRes.text();
         if (gText.includes('success')) return { ok: true, response: gText };
+
+        // Fallback: Granular addRouteStop calls per stop
+        const stopsArr = Array.isArray(formattedPayload.stops)
+          ? formattedPayload.stops
+          : (typeof formattedPayload.stops === 'string' ? JSON.parse(formattedPayload.stops) : []);
+        for (const st of stopsArr) {
+          try {
+            const singleUrl = `${targetUrl}?action=addRouteStop&route_id=${encodeURIComponent(formattedPayload.route_id || 'route-1')}&stop_id=${encodeURIComponent(st.id || '')}&stop_name=${encodeURIComponent(st.name || '')}&sequence=${st.sequence || 1}&lat=${st.lat || 0}&lng=${st.lng || 0}&morning_time=${encodeURIComponent(st.morningTime || '')}&evening_time=${encodeURIComponent(st.eveningTime || '')}&village_name=${encodeURIComponent(st.villageName || '')}&student_count=${st.studentCount || 0}`;
+            fetch(singleUrl).catch(() => {});
+          } catch {}
+        }
       } catch {}
     }
 

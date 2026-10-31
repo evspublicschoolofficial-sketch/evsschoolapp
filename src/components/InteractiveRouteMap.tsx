@@ -252,7 +252,13 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
     const map = mapInstanceRef.current;
     if (!map) return;
 
-    const vanCoords: [number, number] = [currentGps.lat, currentGps.lng];
+    // If van is sitting directly at school campus, offset marker slightly so both School & Van icons are clearly visible
+    const isAtSchoolExact =
+      Math.abs(currentGps.lat - routeConfig.schoolOrigin.lat) < 0.0004 &&
+      Math.abs(currentGps.lng - routeConfig.schoolOrigin.lng) < 0.0004;
+    const vanCoords: [number, number] = isAtSchoolExact
+      ? [currentGps.lat + 0.00028, currentGps.lng + 0.00028]
+      : [currentGps.lat, currentGps.lng];
     const heading = currentGps.heading || 0;
     const speed = currentGps.speed !== null ? `${Math.round(currentGps.speed)} km/h` : '0 km/h';
 
@@ -514,9 +520,7 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
           const delBtn = document.getElementById(`del-btn-${stop.id}`);
           if (delBtn) {
             delBtn.onclick = () => {
-              if (window.confirm(`क्या आप स्टॉप #${stop.sequence} (${stop.name}) हटाना चाहते हैं?`)) {
-                onDeleteStoppage(stop.id);
-              }
+              onDeleteStoppage(stop.id);
             };
           }
         });
@@ -538,9 +542,7 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
           const delBtn = document.getElementById(`del-btn-${stop.id}`);
           if (delBtn) {
             delBtn.onclick = () => {
-              if (window.confirm(`क्या आप स्टॉप #${stop.sequence} (${stop.name}) हटाना चाहते हैं?`)) {
-                onDeleteStoppage(stop.id);
-              }
+              onDeleteStoppage(stop.id);
             };
           }
         });

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   GOOGLE_APPS_SCRIPT_CODE,
+  ROUTE_STOPS_ADDON_SNIPPET,
   testGoogleSheetSync,
   getAppsScriptUrl,
   setAppsScriptUrl,
@@ -18,6 +19,7 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
   onClose,
 }) => {
   const [copied, setCopied] = useState<boolean>(false);
+  const [codeTab, setCodeTab] = useState<'snippet' | 'full'>('snippet');
   const [testing, setTesting] = useState<boolean>(false);
   const [customUrl, setCustomUrl] = useState<string>(getAppsScriptUrl());
   const [urlSaved, setUrlSaved] = useState<boolean>(false);
@@ -92,13 +94,14 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
   };
 
   const handleCopyCode = async () => {
+    const textToCopy = codeTab === 'snippet' ? ROUTE_STOPS_ADDON_SNIPPET : GOOGLE_APPS_SCRIPT_CODE;
     try {
-      await navigator.clipboard.writeText(GOOGLE_APPS_SCRIPT_CODE);
+      await navigator.clipboard.writeText(textToCopy);
       setCopied(true);
       setTimeout(() => setCopied(false), 3000);
     } catch {
       const ta = document.createElement('textarea');
-      ta.value = GOOGLE_APPS_SCRIPT_CODE;
+      ta.value = textToCopy;
       document.body.appendChild(ta);
       ta.select();
       document.execCommand('copy');
@@ -332,64 +335,133 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
             </div>
           </div>
 
-          {/* Quick 4 Steps Guide */}
-          <div className="space-y-2.5">
-            <h3 className="font-extrabold text-slate-900 flex items-center gap-2 text-xs sm:text-sm">
-              <span className="w-5 h-5 rounded-full bg-blue-900 text-white text-[11px] flex items-center justify-center font-black">
-                ✓
+          {/* Code Selection Tabs: Snippet vs Full */}
+          <div className="space-y-3">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 border-b border-slate-200 pb-2">
+              <span className="font-black text-slate-900 text-xs sm:text-sm flex items-center gap-2">
+                <i className="fa-solid fa-code text-indigo-600"></i>
+                <span>Apps Script कोड विकल्प:</span>
               </span>
-              <span>गूगल शीट में सही तरह से डिप्लॉय करने के 4 स्टेप्स:</span>
-            </h3>
-
-            <div className="grid grid-cols-1 gap-2 pl-1">
-              <div className="flex items-start gap-2.5 p-2.5 rounded-xl bg-slate-50 border border-slate-200">
-                <span className="w-5 h-5 rounded-md bg-blue-100 text-blue-900 text-[11px] font-black flex items-center justify-center shrink-0 mt-0.5">
-                  1
-                </span>
-                <p className="text-xs text-slate-700">
-                  अपनी स्कूल की गूगल शीट (<strong>E.V.S. Public School</strong>) खोलें और ऊपर मेन्यू में <strong>Extensions</strong> &gt; <strong>Apps Script</strong> पर क्लिक करें।
-                </p>
-              </div>
-
-              <div className="flex items-start gap-2.5 p-2.5 rounded-xl bg-slate-50 border border-slate-200">
-                <span className="w-5 h-5 rounded-md bg-blue-100 text-blue-900 text-[11px] font-black flex items-center justify-center shrink-0 mt-0.5">
-                  2
-                </span>
-                <p className="text-xs text-slate-700">
-                  नीचे दिए गए नीले बटन <strong>"पूरा Apps Script कोड कॉपी करें"</strong> पर क्लिक करें और Apps Script के <code>Code.gs</code> में पुराना कोड हटाकर यह नया कोड पेस्ट कर दें।
-                </p>
-              </div>
-
-              <div className="flex items-start gap-2.5 p-2.5 rounded-xl bg-amber-50 border border-amber-300">
-                <span className="w-5 h-5 rounded-md bg-amber-500 text-slate-950 text-[11px] font-black flex items-center justify-center shrink-0 mt-0.5">
-                  3
-                </span>
-                <div className="text-xs text-amber-950 space-y-0.5">
-                  <p className="font-bold">
-                    ★ सबसे महत्वपूर्ण स्टेप (Deploy New Version):
-                  </p>
-                  <p>
-                    ऊपर दाएँ कोने में <strong>Deploy</strong> बटन &gt; <strong>Manage deployments</strong> पर जाएँ, बाईं तरफ ✏️ <strong>Edit (पेंसिल)</strong> आइकन पर क्लिक करें, <strong>Version</strong> ड्रॉपडाउन में <strong>"New version"</strong> चुनें, और <strong>Deploy</strong> दबाएँ!
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-start gap-2.5 p-2.5 rounded-xl bg-slate-50 border border-slate-200">
-                <span className="w-5 h-5 rounded-md bg-blue-100 text-blue-900 text-[11px] font-black flex items-center justify-center shrink-0 mt-0.5">
-                  4
-                </span>
-                <p className="text-xs text-slate-700">
-                  यदि नया URL बना हो, तो उसे ऊपर बॉक्स में पेस्ट करके <strong>"सेव करें"</strong> पर क्लिक करें और <strong>"टेस्ट करें"</strong> बटन दबाएँ।
-                </p>
+              <div className="flex bg-slate-100 p-1 rounded-xl gap-1">
+                <button
+                  type="button"
+                  onClick={() => setCodeTab('snippet')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                    codeTab === 'snippet'
+                      ? 'bg-blue-900 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  ⚡ छोटा स्टॉपेज कोड (पुराना कोड सुरक्षित)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCodeTab('full')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    codeTab === 'full'
+                      ? 'bg-blue-900 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  📄 पूरा कोड (नया सेटअप)
+                </button>
               </div>
             </div>
+
+            {codeTab === 'snippet' ? (
+              /* Snippet Mode Instructions */
+              <div className="space-y-2">
+                <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-950 text-xs space-y-1.5">
+                  <div className="font-black flex items-center gap-1.5 text-emerald-900">
+                    <i className="fa-solid fa-circle-check text-emerald-600"></i>
+                    <span>आपको पुराना कोड हटाने या बदलने की बिल्कुल जरूरत नहीं है!</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-emerald-900">
+                    अपने पुराने <strong>Code.gs</strong> में सिर्फ नीचे दिया गया छोटा स्निपेट जोड़ें। आपका पुराना सभी डाटा (फीस, अटेंडेंस, आदि) यथावत रहेगा।
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 gap-2 pl-1">
+                  <div className="flex items-start gap-2.5 p-2 rounded-xl bg-slate-50 border border-slate-200">
+                    <span className="w-5 h-5 rounded-md bg-blue-100 text-blue-900 text-[11px] font-black flex items-center justify-center shrink-0 mt-0.5">
+                      1
+                    </span>
+                    <p className="text-xs text-slate-700">
+                      Apps Script में <code>function doGet(e)</code> के अंदर <code>action === 'getRouteStops'</code> और <code>action === 'saveRouteStops'</code> दोनों जोड़ें।
+                    </p>
+                  </div>
+
+                  <div className="flex items-start gap-2.5 p-2 rounded-xl bg-slate-50 border border-slate-200">
+                    <span className="w-5 h-5 rounded-md bg-blue-100 text-blue-900 text-[11px] font-black flex items-center justify-center shrink-0 mt-0.5">
+                      2
+                    </span>
+                    <p className="text-xs text-slate-700">
+                      <code>function doPost(e)</code> के अंदर <code>action == 'saveRouteStops'</code> की जाँच जोड़ें।
+                    </p>
+                  </div>
+
+                  <div className="flex items-start gap-2.5 p-2 rounded-xl bg-slate-50 border border-slate-200">
+                    <span className="w-5 h-5 rounded-md bg-blue-100 text-blue-900 text-[11px] font-black flex items-center justify-center shrink-0 mt-0.5">
+                      3
+                    </span>
+                    <p className="text-xs text-slate-700">
+                      नीचे दिए गए दोनों फंक्शन्स (<code>handleSaveRouteStops</code> और <code>handleGetRouteStops</code>) को <code>Code.gs</code> के सबसे नीचे पेस्ट कर दें।
+                    </p>
+                  </div>
+
+                  <div className="flex items-start gap-2.5 p-2 rounded-xl bg-amber-50 border border-amber-300">
+                    <span className="w-5 h-5 rounded-md bg-amber-500 text-slate-950 text-[11px] font-black flex items-center justify-center shrink-0 mt-0.5">
+                      4
+                    </span>
+                    <p className="text-xs text-amber-950 font-bold">
+                      Deploy &gt; Manage deployments &gt; ✏️ Edit &gt; Version: <strong>"New version"</strong> &gt; <strong>Deploy</strong> दबाएँ!
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* Full Mode Instructions */
+              <div className="space-y-2">
+                <div className="grid grid-cols-1 gap-2 pl-1">
+                  <div className="flex items-start gap-2.5 p-2.5 rounded-xl bg-slate-50 border border-slate-200">
+                    <span className="w-5 h-5 rounded-md bg-blue-100 text-blue-900 text-[11px] font-black flex items-center justify-center shrink-0 mt-0.5">
+                      1
+                    </span>
+                    <p className="text-xs text-slate-700">
+                      Google Sheet में <strong>Extensions</strong> &gt; <strong>Apps Script</strong> खोलें।
+                    </p>
+                  </div>
+                  <div className="flex items-start gap-2.5 p-2.5 rounded-xl bg-slate-50 border border-slate-200">
+                    <span className="w-5 h-5 rounded-md bg-blue-100 text-blue-900 text-[11px] font-black flex items-center justify-center shrink-0 mt-0.5">
+                      2
+                    </span>
+                    <p className="text-xs text-slate-700">
+                      नीचे दिया गया पूरा कोड कॉपी करें और <code>Code.gs</code> में पेस्ट करें।
+                    </p>
+                  </div>
+                  <div className="flex items-start gap-2.5 p-2.5 rounded-xl bg-amber-50 border border-amber-300">
+                    <span className="w-5 h-5 rounded-md bg-amber-500 text-slate-950 text-[11px] font-black flex items-center justify-center shrink-0 mt-0.5">
+                      3
+                    </span>
+                    <p className="text-xs text-amber-950 font-bold">
+                      Deploy &gt; Manage deployments &gt; ✏️ Edit &gt; Version: "New version" &gt; Deploy.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Apps Script Code Preview Box */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <span className="font-extrabold text-slate-900 text-xs">
-                Code.gs (Apps Script कोड):
+              <span className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5">
+                <i className="fa-solid fa-code text-blue-700"></i>
+                <span>
+                  {codeTab === 'snippet'
+                    ? 'छोटा स्टॉपेज कोड (Code.gs में जोड़ने हेतु):'
+                    : 'पूरा Apps Script कोड (Code.gs):'}
+                </span>
               </span>
               <button
                 type="button"
@@ -401,12 +473,20 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
                 }`}
               >
                 <i className={`fa-solid ${copied ? 'fa-check' : 'fa-copy'}`}></i>
-                <span>{copied ? 'कॉपी हो गया! ✓' : 'पूरा Apps Script कोड कॉपी करें'}</span>
+                <span>
+                  {copied
+                    ? 'कॉपी हो गया! ✓'
+                    : codeTab === 'snippet'
+                    ? 'छोटा स्टॉपेज कोड कॉपी करें'
+                    : 'पूरा Apps Script कोड कॉपी करें'}
+                </span>
               </button>
             </div>
 
-            <div className="relative rounded-2xl bg-slate-900 p-4 text-emerald-400 font-mono text-[11px] leading-relaxed max-h-44 overflow-y-auto border border-slate-800 shadow-inner">
-              <pre className="whitespace-pre-wrap">{GOOGLE_APPS_SCRIPT_CODE}</pre>
+            <div className="relative rounded-2xl bg-slate-900 p-4 text-emerald-400 font-mono text-[11px] leading-relaxed max-h-52 overflow-y-auto border border-slate-800 shadow-inner">
+              <pre className="whitespace-pre-wrap">
+                {codeTab === 'snippet' ? ROUTE_STOPS_ADDON_SNIPPET : GOOGLE_APPS_SCRIPT_CODE}
+              </pre>
             </div>
           </div>
         </div>
