@@ -4,6 +4,46 @@ import 'leaflet/dist/leaflet.css';
 import { RouteStoppage, RouteConfig, GpsPoint } from '../types/routeTracking';
 import { fetchRoadSnappingRoute } from '../utils/roadRoutingService';
 
+export type MapStyleMode = 'satellite' | 'streets' | 'dark';
+
+export const MAP_TILE_CONFIGS: Record<
+  MapStyleMode,
+  { name: string; shortName: string; icon: string; url: string; options: L.TileLayerOptions }
+> = {
+  satellite: {
+    name: 'गूगल सैटेलाइट (Google Satellite HD)',
+    shortName: 'सैटेलाइट',
+    icon: 'fa-satellite',
+    url: 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
+    options: {
+      maxZoom: 21,
+      subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+      attribution: '&copy; Google Satellite Imagery with Roads & Places',
+    },
+  },
+  streets: {
+    name: 'सड़क मैप (Street Map)',
+    shortName: 'सड़क',
+    icon: 'fa-map',
+    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    options: {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors',
+    },
+  },
+  dark: {
+    name: 'कॉकपिट नाइट (Dark Cockpit HUD)',
+    shortName: 'डार्क HUD',
+    icon: 'fa-moon',
+    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    options: {
+      maxZoom: 20,
+      subdomains: 'abcd',
+      attribution: '&copy; CARTO Dark Matter',
+    },
+  },
+};
+
 interface InteractiveRouteMapProps {
   currentGps: GpsPoint;
   routeConfig: RouteConfig;
@@ -45,6 +85,7 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
   driverName = 'Amjad',
   driverPhone = '9761081818',
 }) => {
+  const mapWrapperRef = useRef<HTMLDivElement | null>(null);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const vanMarkerRef = useRef<L.Marker | null>(null);
@@ -53,9 +94,45 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
   const routePolylineRef = useRef<L.Polyline | null>(null);
   const routeHaloPolylineRef = useRef<L.Polyline | null>(null);
   const tempPinMarkerRef = useRef<L.Marker | null>(null);
+  const activeTileLayerRef = useRef<L.TileLayer | null>(null);
+
+  // Satellite view by default!
+  const [mapStyle, setMapStyle] = useState<MapStyleMode>(() => {
+    try {
+      return (localStorage.getItem('evs_preferred_map_style') as MapStyleMode) || 'satellite';
+    } catch {
+      return 'satellite';
+    }
+  });
 
   const [followVan, setFollowVan] = useState<boolean>(true);
   const [mapInitialized, setMapInitialized] = useState<boolean>(false);
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+
+  // Toggle fullscreen mode
+  const toggleFullscreen = useCallback(() => {
+    if (!mapWrapperRef.current) return;
+    if (!document.fullscreenElement) {
+      mapWrapperRef.current.requestFullscreen().catch(() => {
+        setIsFullscreen((prev) => !prev);
+      });
+      setIsFullscreen(true);
+    } else {
+      document.exitFullscreen().catch(() => {});
+      setIsFullscreen(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+      setTimeout(() => {
+        mapInstanceRef.current?.invalidateSize();
+      }, 200);
+    };
+    document.addEventListener('fullscreenchange', handleFsChange);
+    return () => document.removeEventListener('fullscreenchange', handleFsChange);
+  }, []);
 
   // Real road snapping metrics
   const [isRoadSnapped, setIsRoadSnapped] = useState<boolean>(true);
@@ -87,12 +164,10 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
       zoomControl: false,
     });
 
-    // Add free OpenStreetMap tile layer
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution:
-        '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors',
-    }).addTo(map);
+    // Add high-resolution Satellite or active tile layer
+    const cfg = MAP_TILE_CONFIGS[mapStyle] || MAP_TILE_CONFIGS.satellite;
+    const tileLayer = L.tileLayer(cfg.url, cfg.options).addTo(map);
+    activeTileLayerRef.current = tileLayer;
 
     // Zoom control in bottom right
     L.control.zoom({ position: 'bottomright' }).addTo(map);
@@ -135,6 +210,28 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
       tempPinMarkerRef.current = null;
     };
   }, []);
+
+  // Dynamically switch map tile layers (Satellite HD, Streets, Dark HUD)
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !mapInitialized) return;
+
+    if (activeTileLayerRef.current) {
+      activeTileLayerRef.current.remove();
+      activeTileLayerRef.current = null;
+    }
+
+    const cfg = MAP_TILE_CONFIGS[mapStyle] || MAP_TILE_CONFIGS.satellite;
+    const newLayer = L.tileLayer(cfg.url, cfg.options).addTo(map);
+    if ((newLayer as any).bringToBack) {
+      (newLayer as any).bringToBack();
+    }
+    activeTileLayerRef.current = newLayer;
+
+    try {
+      localStorage.setItem('evs_preferred_map_style', mapStyle);
+    } catch {}
+  }, [mapStyle, mapInitialized]);
 
   // Handle map clicks for Pin Drop
   useEffect(() => {
@@ -385,21 +482,28 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
       setRoadDurationMin(Math.round(roadResult.durationMinutes * 2));
       setIsRoutingLoading(false);
 
-      // 1. Dark navy outer glow / halo line for high road contrast
+      // Contrast halo: deep solid black outline on satellite mode so the road line pops over fields and trees
+      const haloColor = mapStyle === 'satellite' ? '#000000' : '#0c2340';
+      const haloWeight = mapStyle === 'satellite' ? 10 : 8;
+      const haloOpacity = mapStyle === 'satellite' ? 0.85 : 0.35;
+
       const halo = L.polyline(roundTripCoords, {
-        color: '#0c2340',
-        weight: 9,
-        opacity: 0.35,
+        color: haloColor,
+        weight: haloWeight,
+        opacity: haloOpacity,
         lineCap: 'round',
         lineJoin: 'round',
       }).addTo(map);
       routeHaloPolylineRef.current = halo;
 
-      // 2. Main high-visibility vibrant blue road navigation line
+      // Core navigation line: Electric Cyan (#00e5ff) on satellite for commercial telemetry visibility, vibrant blue on streets
+      const lineColor = mapStyle === 'satellite' ? '#00e5ff' : mapStyle === 'dark' ? '#38bdf8' : '#2563eb';
+      const lineWeight = 5;
+
       const line = L.polyline(roundTripCoords, {
-        color: '#2563eb', // Blue-600
-        weight: 5,
-        opacity: 0.95,
+        color: lineColor,
+        weight: lineWeight,
+        opacity: 1,
         lineCap: 'round',
         lineJoin: 'round',
       }).addTo(map);
@@ -411,7 +515,7 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
     return () => {
       isSubscribed = false;
     };
-  }, [stoppages, routeConfig.schoolOrigin, routeConfig.routeId, routeConfig.shift, currentGps.lat, currentGps.lng, mapInitialized]);
+  }, [stoppages, routeConfig.schoolOrigin, routeConfig.routeId, routeConfig.shift, currentGps.lat, currentGps.lng, mapInitialized, mapStyle]);
 
   // Update Ordered Stoppage Markers with Dynamic States (Passed, Approaching, At Stop, Upcoming)
   useEffect(() => {
@@ -598,13 +702,20 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
   }, [routeConfig.schoolOrigin, currentGps, stoppages]);
 
   return (
-    <div className="relative w-full h-[560px] rounded-3xl overflow-hidden border-2 border-slate-200 shadow-md">
+    <div
+      ref={mapWrapperRef}
+      className={`relative transition-all duration-300 overflow-hidden ${
+        isFullscreen
+          ? 'fixed inset-0 z-[99999] rounded-none border-0 h-screen w-screen bg-slate-950'
+          : 'w-full h-[580px] rounded-3xl border-2 border-slate-300 shadow-xl bg-slate-900'
+      }`}
+    >
       {/* MAP CANVAS */}
       <div ref={mapContainerRef} className="w-full h-full z-0" />
 
-      {/* STALE / OFFLINE GPS WARNING BANNER (Section 5) */}
+      {/* STALE / OFFLINE GPS WARNING BANNER */}
       {isStaleSignal && (
-        <div className="absolute top-3 left-3 right-3 z-[1000] bg-rose-600/95 text-white p-3 sm:p-3.5 rounded-2xl shadow-xl border border-rose-400 backdrop-blur-md flex items-center justify-between gap-3 animate-pulse">
+        <div className="absolute top-3 left-3 right-3 z-[1000] bg-rose-600/95 text-white p-3 sm:p-3.5 rounded-2xl shadow-2xl border border-rose-400 backdrop-blur-md flex items-center justify-between gap-3 animate-pulse">
           <div className="flex items-center gap-2.5">
             <span className="w-8 h-8 rounded-xl bg-white text-rose-600 flex items-center justify-center text-sm font-black shrink-0">
               <i className="fa-solid fa-triangle-exclamation"></i>
@@ -624,89 +735,121 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
         </div>
       )}
 
-      {/* TOP CONTROLS OVERLAY: PIN-DROP, CURRENT VEHICLE GPS STOP, & VIEW CONTROLS */}
-      <div className={`absolute left-3 right-3 z-[900] flex flex-wrap items-center gap-2 ${isStaleSignal ? 'top-20' : 'top-3'}`}>
-        {/* ONE-TAP BUTTON: ADD STOP AT CURRENT VEHICLE GPS */}
-        {onAddStopAtCurrentGps && (
+      {/* TOP FLOATING COCKPIT BAR: SATELLITE SWITCHER & ACTION BUTTONS */}
+      <div
+        className={`absolute left-3 right-3 z-[900] flex flex-wrap items-center justify-between gap-2 pointer-events-none ${
+          isStaleSignal ? 'top-20' : 'top-3'
+        }`}
+      >
+        {/* LEFT GROUP: SATELLITE / STREET / DARK HUD SELECTOR + FULLSCREEN */}
+        <div className="pointer-events-auto flex items-center gap-1 p-1 rounded-2xl bg-slate-950/85 backdrop-blur-md border border-white/20 shadow-2xl">
+          {(['satellite', 'streets', 'dark'] as MapStyleMode[]).map((mode) => {
+            const cfg = MAP_TILE_CONFIGS[mode];
+            const isActive = mapStyle === mode;
+            return (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setMapStyle(mode)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
+                  isActive
+                    ? mode === 'satellite'
+                      ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-lg shadow-cyan-500/30 ring-2 ring-cyan-300'
+                      : 'bg-white text-slate-950 shadow-md ring-2 ring-white/50'
+                    : 'text-slate-300 hover:text-white hover:bg-white/10'
+                }`}
+                title={cfg.name}
+              >
+                <i className={`fa-solid ${cfg.icon} ${isActive && mode === 'satellite' ? 'text-amber-300 animate-pulse' : ''}`}></i>
+                <span>{cfg.shortName}</span>
+              </button>
+            );
+          })}
+
+          <div className="w-px h-5 bg-white/20 mx-0.5" />
+
+          {/* FULLSCREEN BUTTON */}
           <button
             type="button"
-            onClick={onAddStopAtCurrentGps}
-            className="px-3.5 py-2 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white text-xs font-black flex items-center gap-2 shadow-lg cursor-pointer border border-emerald-400 active:scale-95 transition"
-            title="वाहन वर्तमान में जहाँ खड़ा है, ठीक उसी स्थान को सड़क पर स्टॉपेज के रूप में जोड़ें"
+            onClick={toggleFullscreen}
+            className="px-2.5 py-1.5 rounded-xl text-slate-300 hover:text-white hover:bg-white/15 text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+            title={isFullscreen ? 'सामान्य स्क्रीन पर लौटें' : 'बड़ी स्क्रीन (फुलस्क्रीन मोड) में खोलें'}
           >
-            <i className="fa-solid fa-location-crosshairs text-amber-300"></i>
-            <span>📍 वाहन की लोकेशन पर स्टॉप बनाएं</span>
+            <i className={`fa-solid ${isFullscreen ? 'fa-compress' : 'fa-expand'} text-amber-300`}></i>
+            <span className="hidden sm:inline">{isFullscreen ? 'छोटा' : 'फुलस्क्रीन'}</span>
           </button>
-        )}
+        </div>
 
-        {/* PIN DROP BUTTON */}
-        <button
-          type="button"
-          onClick={onTogglePinDrop}
-          className={`px-3.5 py-2 rounded-2xl text-xs font-black flex items-center gap-2 shadow-lg transition-all cursor-pointer backdrop-blur-md border ${
-            isPinDropActive
-              ? 'bg-rose-500 hover:bg-rose-600 text-white border-rose-300 ring-4 ring-rose-300/40'
-              : 'bg-[#0c2340]/90 hover:bg-[#0c2340] text-amber-300 border-blue-900/40'
-          }`}
-          title="मैप पर किसी भी जगह क्लिक करके नया स्टॉप जोड़ें"
-        >
-          <i className={`fa-solid ${isPinDropActive ? 'fa-xmark' : 'fa-map-pin'}`}></i>
-          <span>{isPinDropActive ? 'पिन मोड रद्द करें' : '📌 मैप पर पिन गिराएं'}</span>
-        </button>
-
-        {/* FOLLOW VAN TOGGLE */}
-        <button
-          type="button"
-          onClick={() => setFollowVan(!followVan)}
-          className={`px-3 py-2 rounded-2xl text-xs font-bold flex items-center gap-1.5 shadow-md transition-all cursor-pointer backdrop-blur-md border ${
-            followVan
-              ? 'bg-emerald-600 text-white border-emerald-400'
-              : 'bg-white/90 hover:bg-white text-slate-700 border-slate-300'
-          }`}
-          title="गाड़ी के साथ-साथ मैप को केंद्रित रखें"
-        >
-          <i className="fa-solid fa-crosshairs text-xs"></i>
-          <span>{followVan ? '✓ वैन का पीछा जारी' : 'वैन पर केंद्रित करें'}</span>
-        </button>
-
-        {/* FIT ROUTE BUTTON */}
-        <button
-          type="button"
-          onClick={handleFitRoute}
-          className="px-3 py-2 rounded-2xl bg-white/90 hover:bg-white text-slate-800 text-xs font-bold flex items-center gap-1.5 shadow-md transition-all cursor-pointer backdrop-blur-md border border-slate-300"
-          title="पूरा रूट और सभी स्टॉप एक साथ देखें"
-        >
-          <i className="fa-solid fa-arrows-to-eye text-blue-900 text-xs"></i>
-          <span>पूरा रूट देखें (Fit Route)</span>
-        </button>
-
-        {/* REAL ROAD SNAPPING STATUS BADGE */}
-        <div className="ml-auto hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-2xl bg-[#0c2340]/90 text-white text-[11px] font-bold border border-blue-400/40 backdrop-blur-md shadow-md">
-          <i className="fa-solid fa-road text-amber-400"></i>
-          <span>{isRoadSnapped ? '🛣️ सड़क पर वास्तविक रूट' : 'सड़क रूट'}</span>
-          {roadDistanceKm > 0 && (
-            <span className="text-amber-300 font-mono ml-1">
-              ({roadDistanceKm} km)
-            </span>
+        {/* RIGHT GROUP: GPS STOP, PIN-DROP, FOCUS & FIT CONTROLS */}
+        <div className="pointer-events-auto flex flex-wrap items-center gap-1.5 ml-auto">
+          {/* ONE-TAP BUTTON: ADD STOP AT CURRENT VEHICLE GPS */}
+          {onAddStopAtCurrentGps && (
+            <button
+              type="button"
+              onClick={onAddStopAtCurrentGps}
+              className="px-3.5 py-2 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white text-xs font-black flex items-center gap-2 shadow-xl cursor-pointer border border-emerald-400 active:scale-95 transition"
+              title="वाहन वर्तमान में जहाँ खड़ा है, ठीक उसी स्थान को सड़क पर स्टॉपेज के रूप में जोड़ें"
+            >
+              <i className="fa-solid fa-location-crosshairs text-amber-300 animate-spin"></i>
+              <span>📍 वाहन की लोकेशन पर स्टॉप बनाएं</span>
+            </button>
           )}
-          {isRoutingLoading && (
-            <i className="fa-solid fa-spinner fa-spin text-xs text-amber-300 ml-1"></i>
-          )}
+
+          {/* PIN DROP BUTTON */}
+          <button
+            type="button"
+            onClick={onTogglePinDrop}
+            className={`px-3.5 py-2 rounded-2xl text-xs font-black flex items-center gap-1.5 shadow-xl transition-all cursor-pointer backdrop-blur-md border ${
+              isPinDropActive
+                ? 'bg-rose-500 hover:bg-rose-600 text-white border-rose-300 ring-4 ring-rose-300/40'
+                : 'bg-slate-950/85 hover:bg-slate-900 text-amber-300 border-white/20'
+            }`}
+            title="मैप पर किसी भी जगह क्लिक करके नया स्टॉप जोड़ें"
+          >
+            <i className={`fa-solid ${isPinDropActive ? 'fa-xmark' : 'fa-map-pin'}`}></i>
+            <span>{isPinDropActive ? 'पिन रद्द करें' : '📌 पिन गिराएं'}</span>
+          </button>
+
+          {/* FOLLOW VAN TOGGLE */}
+          <button
+            type="button"
+            onClick={() => setFollowVan(!followVan)}
+            className={`px-3 py-2 rounded-2xl text-xs font-bold flex items-center gap-1.5 shadow-lg transition-all cursor-pointer backdrop-blur-md border ${
+              followVan
+                ? 'bg-emerald-600 text-white border-emerald-400'
+                : 'bg-slate-950/85 hover:bg-slate-900 text-slate-200 border-white/20'
+            }`}
+            title="गाड़ी के साथ-साथ मैप को केंद्रित रखें"
+          >
+            <i className="fa-solid fa-crosshairs text-xs"></i>
+            <span className="hidden sm:inline">{followVan ? '✓ वैन ट्रैक' : 'वैन ट्रैक'}</span>
+          </button>
+
+          {/* FIT ROUTE BUTTON */}
+          <button
+            type="button"
+            onClick={handleFitRoute}
+            className="px-3 py-2 rounded-2xl bg-slate-950/85 hover:bg-slate-900 text-slate-200 text-xs font-bold flex items-center gap-1.5 shadow-lg transition-all cursor-pointer backdrop-blur-md border border-white/20"
+            title="पूरा रूट और सभी स्टॉप एक साथ देखें"
+          >
+            <i className="fa-solid fa-arrows-to-eye text-cyan-400 text-xs"></i>
+            <span className="hidden sm:inline">पूरा रूट</span>
+          </button>
         </div>
       </div>
 
       {/* PIN DROP ACTIVE HINT BANNER */}
       {isPinDropActive && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[900] bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-black px-4 py-2 rounded-2xl shadow-xl border-2 border-white flex items-center gap-2 text-xs animate-bounce">
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[900] bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-black px-4 py-2 rounded-2xl shadow-2xl border-2 border-white flex items-center gap-2 text-xs animate-bounce">
           <i className="fa-solid fa-hand-pointer text-sm"></i>
-          <span>मैप पर जिस जगह स्टॉप जोड़ना है, वहां क्लिक करें!</span>
+          <span>मैप पर जिस जगह स्टॉप जोड़ना है, उस सड़क पर क्लिक करें!</span>
         </div>
       )}
 
       {/* EMPTY ROUTE NOTICE (When Stoppages == 0) */}
       {stoppages.length === 0 && !isPinDropActive && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[800] bg-[#0c2340]/90 text-white px-4 py-2.5 rounded-2xl shadow-xl border border-amber-400/50 backdrop-blur-md flex items-center gap-3 text-xs max-w-md text-center">
-          <span className="w-7 h-7 rounded-lg bg-amber-400 text-slate-950 flex items-center justify-center font-bold text-sm shrink-0">
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[800] bg-slate-950/90 text-white px-4 py-3 rounded-2xl shadow-2xl border border-amber-400/50 backdrop-blur-md flex items-center gap-3 text-xs max-w-md text-center">
+          <span className="w-8 h-8 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center font-bold text-base shrink-0">
             <i className="fa-solid fa-route"></i>
           </span>
           <div className="text-left">
@@ -714,35 +857,81 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
               {routeConfig.routeName}: अभी कोई स्टॉपेज दर्ज नहीं है
             </div>
             <p className="text-[11px] text-slate-200 mt-0.5">
-              वाहन जहाँ रुकेगा, ऊपर <strong>"📍 वाहन की लोकेशन पर स्टॉप बनाएं"</strong> दबाकर नया स्टॉपेज जोड़ें। नीली लाइन स्वतः सड़क पर बनेगी।
+              वाहन जहाँ रुकेगा, ऊपर <strong>"📍 वाहन की लोकेशन पर स्टॉप बनाएं"</strong> दबाकर नया स्टॉपेज जोड़ें। सड़क की वास्तविक नेविगेशन लाइन स्वतः बनेगी।
             </p>
           </div>
         </div>
       )}
 
-      {/* MAP LEGEND BADGE (Bottom Left) */}
-      <div className="absolute bottom-3 left-3 z-[800] bg-white/95 backdrop-blur-xs p-2.5 rounded-2xl border border-slate-200 shadow-md text-[10px] space-y-1 hidden sm:block">
-        <div className="font-extrabold text-slate-800 border-b border-slate-100 pb-1 mb-1 flex items-center justify-between gap-2">
-          <span>रूट संकेत (Map Legend)</span>
-          <span className="text-[9px] px-1.5 py-0.2 rounded bg-blue-100 text-blue-900 font-mono">
-            {routeConfig.shift === 'morning' ? '🌅 सुबह' : '🌇 शाम'}
-          </span>
+      {/* BOTTOM COCKPIT TELEMETRY HUD BAR */}
+      <div className="absolute bottom-3 left-3 right-3 z-[800] flex flex-wrap items-center justify-between gap-2 pointer-events-none">
+        {/* MAP LEGEND BADGE (Left) */}
+        <div className="pointer-events-auto bg-slate-950/90 text-white backdrop-blur-md p-2.5 rounded-2xl border border-white/20 shadow-xl text-[10px] space-y-1 hidden sm:block">
+          <div className="font-black text-slate-200 border-b border-white/10 pb-1 mb-1 flex items-center justify-between gap-3">
+            <span className="flex items-center gap-1.5">
+              <i className="fa-solid fa-layer-group text-cyan-400"></i>
+              <span>रूट संकेत (Legend)</span>
+            </span>
+            <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/30 text-cyan-300 font-mono border border-cyan-400/30">
+              {routeConfig.shift === 'morning' ? '🌅 सुबह' : '🌇 शाम'}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 text-slate-300">
+            <span className="w-2.5 h-2.5 rounded-full bg-slate-500"></span>
+            <span>पार हो चुका (Passed)</span>
+          </div>
+          <div className="flex items-center gap-2 text-slate-300">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
+            <span>पहुँच रही है (Approaching)</span>
+          </div>
+          <div className="flex items-center gap-2 text-slate-300">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+            <span>स्टॉप पर है (At Stop)</span>
+          </div>
+          <div className="flex items-center gap-2 text-slate-300">
+            <span className="w-2.5 h-2.5 rounded-full bg-cyan-400"></span>
+            <span>आगामी (Upcoming)</span>
+          </div>
         </div>
-        <div className="flex items-center gap-2 text-slate-600">
-          <span className="w-2.5 h-2.5 rounded-full bg-slate-400"></span>
-          <span>पार हो चुका (Passed)</span>
-        </div>
-        <div className="flex items-center gap-2 text-slate-600">
-          <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
-          <span>पहुँच रही है (Approaching)</span>
-        </div>
-        <div className="flex items-center gap-2 text-slate-600">
-          <span className="w-2.5 h-2.5 rounded-full bg-emerald-600"></span>
-          <span>स्टॉप पर है (At Stop)</span>
-        </div>
-        <div className="flex items-center gap-2 text-slate-600">
-          <span className="w-2.5 h-2.5 rounded-full bg-sky-500"></span>
-          <span>आगामी (Upcoming)</span>
+
+        {/* TELEMETRY STRIP (Right) */}
+        <div className="pointer-events-auto ml-auto flex flex-wrap items-center gap-2 bg-slate-950/90 backdrop-blur-md p-2 rounded-2xl border border-white/20 shadow-2xl text-white text-xs">
+          {/* SATELLITE LINK BADGE */}
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 font-bold text-[11px]">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+            <span>{mapStyle === 'satellite' ? '🛰️ GOOGLE SATELLITE' : '🗺️ STREET HUD'}</span>
+          </div>
+
+          {/* LIVE SPEED */}
+          <div className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-white/10 border border-white/10 font-bold">
+            <i className="fa-solid fa-gauge-high text-cyan-400"></i>
+            <span className="font-mono text-cyan-300">{currentGps.speed ? Math.round(currentGps.speed) : 0}</span>
+            <span className="text-[10px] text-slate-400">km/h</span>
+          </div>
+
+          {/* ROAD DISTANCE */}
+          {roadDistanceKm > 0 && (
+            <div className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-white/10 border border-white/10 font-bold">
+              <i className="fa-solid fa-road text-amber-400"></i>
+              <span className="font-mono text-amber-300">{roadDistanceKm}</span>
+              <span className="text-[10px] text-slate-400">km</span>
+            </div>
+          )}
+
+          {/* ROAD DURATION */}
+          {roadDurationMin > 0 && (
+            <div className="hidden md:flex items-center gap-1 px-2.5 py-1 rounded-xl bg-white/10 border border-white/10 font-bold">
+              <i className="fa-solid fa-clock text-emerald-400"></i>
+              <span className="font-mono text-emerald-300">{roadDurationMin}</span>
+              <span className="text-[10px] text-slate-400">min</span>
+            </div>
+          )}
+
+          {/* TOTAL STOPS COUNT */}
+          <div className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-blue-600/30 text-blue-200 border border-blue-400/30 font-bold">
+            <i className="fa-solid fa-location-dot text-blue-400"></i>
+            <span>{stoppages.length} स्टॉप</span>
+          </div>
         </div>
       </div>
     </div>

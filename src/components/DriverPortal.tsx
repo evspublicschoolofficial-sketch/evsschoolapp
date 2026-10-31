@@ -175,7 +175,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
   });
   const [sosActive, setSosActive] = useState<boolean>(false);
   const [sosMessage, setSosMessage] = useState<string>('');
-  const [mapViewType, setMapViewType] = useState<'google' | 'osm'>('google');
+  const [mapViewType, setMapViewType] = useState<'satellite' | 'google' | 'osm'>('satellite');
 
   // Sync isTracking to localStorage whenever it changes
   useEffect(() => {
@@ -770,6 +770,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
   };
 
   // Map Embed URLs
+  const googleSatelliteEmbedUrl = `https://maps.google.com/maps?q=${latitude},${longitude}&t=k&hl=hi&z=17&output=embed`;
   const googleMapEmbedUrl = `https://maps.google.com/maps?q=${latitude},${longitude}&hl=hi&z=16&output=embed`;
   const delta = 0.015;
   const osmEmbedUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${longitude - delta}%2C${latitude - delta}%2C${longitude + delta}%2C${latitude + delta}&layer=mapnik&marker=${latitude}%2C${longitude}`;
@@ -1309,6 +1310,16 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
                 <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs font-bold">
                   <button
                     type="button"
+                    onClick={() => setMapViewType('satellite')}
+                    className={`px-3 py-1 rounded-lg transition-colors cursor-pointer flex items-center gap-1 ${
+                      mapViewType === 'satellite' ? 'bg-cyan-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <i className="fa-solid fa-satellite text-[11px]"></i>
+                    <span>🛰️ सैटेलाइट</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setMapViewType('google')}
                     className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
                       mapViewType === 'google' ? 'bg-white text-blue-900 shadow-xs' : 'text-slate-600'
@@ -1323,7 +1334,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
                       mapViewType === 'osm' ? 'bg-white text-blue-900 shadow-xs' : 'text-slate-600'
                     }`}
                   >
-                    OpenStreetMap
+                    OSM
                   </button>
                 </div>
               </div>
@@ -1331,7 +1342,13 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
               <div className="relative w-full h-72 sm:h-80 bg-slate-100 rounded-2xl overflow-hidden border border-slate-200 shadow-inner">
                 <iframe
                   title="Driver Location Map"
-                  src={mapViewType === 'google' ? googleMapEmbedUrl : osmEmbedUrl}
+                  src={
+                    mapViewType === 'satellite'
+                      ? googleSatelliteEmbedUrl
+                      : mapViewType === 'google'
+                      ? googleMapEmbedUrl
+                      : osmEmbedUrl
+                  }
                   className="w-full h-full border-0"
                   loading="lazy"
                 />
