@@ -2940,4 +2940,116 @@ function handleSaveRouteStops(arg1, arg2) {
   }
 }`;
 
+/**
+ * STOPPAGE DISTANCE & DIRECTION FILTER
+ * Compares current vehicle GPS coordinates against an ordered route stoppage list.
+ * Automatically excludes or bypasses any stops already passed based on the direction of travel,
+ * preventing repeat announcements and ensuring next stops are computed accurately.
+ */
+export interface FilteredStoppageInfo {
+  unpassedStops: RouteStoppage[];
+  passedStops: RouteStoppage[];
+  activeNextStop: RouteStoppage | null;
+  activeStopIndex: number;
+  isAtStop: boolean;
+  distanceToActiveKm: number;
+  directionOfTravelDegrees: number;
+}
+
+export const stoppageDistanceFilter = (
+  currentCoords: { lat: number; lng: number; heading?: number | null; speed?: number | null },
+  routeStops: RouteStoppage[],
+  options?: {
+    atStopThresholdKm?: number; // default 0.12 km (120m)
+    progressThresholdFraction?: number; // default 0.04 (4%)
+    bypassThresholdKm?: number; // default 0.10 km (100m)
+  }
+): FilteredStoppageInfo => {
+  const atStopThreshold = options?.atStopThresholdKm ?? 0.12;
+  const progressThreshold = options?.progressThresholdFraction ?? 0.04;
+  const bypassThreshold = options?.bypassThresholdKm ?? 0.10;
+
+  if (!routeStops || routeStops.length === 0) {
+    return {
+      unpassedStops: [],
+      passedStops: [],
+      activeNextStop: null,
+      activeStopIndex: -1,
+      isAtStop: false,
+      distanceToActiveKm: 0,
+      directionOfTravelDegrees: currentCoords.heading || 0,
+    };
+  }
+
+  // 1. Sort stoppages by sequential order
+  const sorted = [...routeStops].sort((a, b) => a.sequence - b.sequence);
+
+  // 2. Measure distances from current vehicle position to each stop
+  const distances = sorted.map((stop) =>
+    calculateDistanceKm(currentCoords.lat, currentCoords.lng, stop.lat, stop.lng)
+  );
+
+  // 3. Directional progression evaluation along sequential route corridor
+  let firstUnpassedIndex = 0;
+
+  for (let i = 0; i < sorted.length; i++) {
+    const stopA = sorted[i];
+    const distToA = distances[i];
+
+    if (i < sorted.length - 1) {
+      const stopB = sorted[i + 1];
+      const distToB = distances[i + 1];
+      const legDist = calculateDistanceKm(stopA.lat, stopA.lng, stopB.lat, stopB.lng);
+
+      // Vector from stopA to stopB (Direction of travel for this segment)
+      const dAB_lat = stopB.lat - stopA.lat;
+      const dAB_lng = stopB.lng - stopA.lng;
+      const dAV_lat = currentCoords.lat - stopA.lat;
+      const dAV_lng = currentCoords.lng - stopA.lng;
+      const lenSq = dAB_lat * dAB_lat + dAB_lng * dAB_lng;
+      const projectionFraction = lenSq > 0 ? (dAV_lat * dAB_lat + dAV_lng * dAB_lng) / lenSq : 0;
+
+      // Has vehicle bypassed or progressed past stop A towards stop B?
+      // Evaluated based on:
+      // a) Forward projection along corridor (projectionFraction > 4%) AND vehicle has departed stop A (> 100m)
+      // b) Vehicle is closer to next stop B than previous stop A (distToB < distToA)
+      // c) Vehicle has made significant progress towards B along the leg (distToB < legDist - 0.15km)
+      const isPastStopA =
+        (projectionFraction > progressThreshold && distToA > bypassThreshold) ||
+        distToB < distToA ||
+        (legDist > 0.3 && distToB < legDist - 0.15);
+
+      if (isPastStopA) {
+        firstUnpassedIndex = i + 1;
+        continue;
+      }
+    } else {
+      // Last stop on route
+      if (distToA <= atStopThreshold) {
+        firstUnpassedIndex = i;
+        break;
+      }
+    }
+
+    firstUnpassedIndex = i;
+    break;
+  }
+
+  const passedStops = sorted.slice(0, firstUnpassedIndex);
+  const unpassedStops = sorted.slice(firstUnpassedIndex);
+  const activeNextStop = unpassedStops.length > 0 ? unpassedStops[0] : null;
+  const isAtStop = activeNextStop ? distances[firstUnpassedIndex] <= atStopThreshold : false;
+  const distanceToActiveKm = activeNextStop ? distances[firstUnpassedIndex] : 0;
+
+  return {
+    unpassedStops,
+    passedStops,
+    activeNextStop,
+    activeStopIndex: firstUnpassedIndex,
+    isAtStop,
+    distanceToActiveKm,
+    directionOfTravelDegrees: currentCoords.heading || 0,
+  };
+};
+
 

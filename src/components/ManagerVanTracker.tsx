@@ -907,8 +907,45 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
             </div>
           </div>
 
-          {/* Quick Contact & Driver Portal */}
+          {/* Live Speedometer & Quick Actions */}
           <div className="flex items-center gap-2 flex-wrap">
+            {/* Live Speedometer Cockpit Badge */}
+            <div className="bg-slate-900/90 border border-amber-400/40 rounded-2xl px-3.5 py-1.5 flex items-center gap-2.5 shadow-inner">
+              <div className={`w-8 h-8 rounded-xl flex items-center justify-center text-sm ${
+                (activeTelemetry.speed || 0) > 40
+                  ? 'bg-rose-500 text-white animate-bounce'
+                  : (activeTelemetry.speed || 0) > 0
+                  ? 'bg-emerald-500 text-slate-950 animate-pulse'
+                  : 'bg-slate-800 text-slate-400'
+              }`}>
+                <i className="fa-solid fa-gauge-high"></i>
+              </div>
+              <div>
+                <span className="text-[9px] uppercase font-bold text-slate-400 block tracking-wider">
+                  ड्राइवर गति (Speed)
+                </span>
+                <div className="flex items-center gap-1.5 leading-none">
+                  <span className="text-base sm:text-lg font-black font-mono text-amber-300">
+                    {activeTelemetry.speed ? Math.round(activeTelemetry.speed) : 0}
+                  </span>
+                  <span className="text-[10px] text-slate-300 font-bold">km/h</span>
+                  <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${
+                    (activeTelemetry.speed || 0) === 0
+                      ? 'bg-slate-800 text-slate-300'
+                      : (activeTelemetry.speed || 0) <= 30
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/40'
+                      : 'bg-amber-500/20 text-amber-300 border border-amber-400/40'
+                  }`}>
+                    {(activeTelemetry.speed || 0) === 0
+                      ? 'रुकी हुई'
+                      : (activeTelemetry.speed || 0) <= 30
+                      ? 'सामान्य गति'
+                      : 'सड़क गति'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
             <a
               href={`tel:${activeTelemetry.driverPhone}`}
               className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-all flex items-center gap-1.5 border border-slate-700 cursor-pointer"

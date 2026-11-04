@@ -5,7 +5,7 @@ import {
   GpsPoint,
   EtaCalculationResult,
 } from '../types/routeTracking';
-import { DEFAULT_SCHOOL_COORDS } from './busTrackingService';
+import { DEFAULT_SCHOOL_COORDS, stoppageDistanceFilter } from './busTrackingService';
 
 // Clean slate: Stoppages will be dynamically added by manager as auto travels along the route
 export const DEFAULT_ROUTE_STOPPAGES: RouteStoppage[] = [];
@@ -147,54 +147,16 @@ export const calculateStoppageEtas = (
     haversineDistanceKm(currentGps.lat, currentGps.lng, stop.lat, stop.lng)
   );
 
-  // 3. Intelligently determine sequential route progress
-  // A stop i is marked as 'passed' if the vehicle has departed from it towards subsequent stops
-  let activeIndex = 0;
+  // 3. Stoppage Distance & Direction Filter
+  // Compares coordinates against the route list and automatically excludes/bypasses passed stops
+  const filterResult = stoppageDistanceFilter(
+    currentGps,
+    sortedStops,
+    { atStopThresholdKm: 0.12, progressThresholdFraction: 0.04, bypassThresholdKm: 0.10 }
+  );
 
-  for (let i = 0; i < sortedStops.length; i++) {
-    const stopA = sortedStops[i];
-    const distToA = distances[i];
-
-    if (i < sortedStops.length - 1) {
-      const stopB = sortedStops[i + 1];
-      const distToB = distances[i + 1];
-      const legDist = haversineDistanceKm(stopA.lat, stopA.lng, stopB.lat, stopB.lng);
-
-      // Vector from stopA to stopB
-      const dAB_lat = stopB.lat - stopA.lat;
-      const dAB_lng = stopB.lng - stopA.lng;
-      const dAV_lat = currentGps.lat - stopA.lat;
-      const dAV_lng = currentGps.lng - stopA.lng;
-      const lenSq = dAB_lat * dAB_lat + dAB_lng * dAB_lng;
-      const t = lenSq > 0 ? (dAV_lat * dAB_lat + dAV_lng * dAB_lng) / lenSq : 0;
-
-      // Has vehicle moved past stop A towards stop B?
-      // 1) Vehicle is closer to B than to A (distToB < distToA)
-      // 2) OR projection along A->B corridor is forward (t > 0.04) and vehicle has moved past A (> 100m away)
-      // 3) OR distance to B is substantially shorter than total leg distance (distToB < legDist - 0.15)
-      const isPastA =
-        (t > 0.04 && distToA > 0.10) ||
-        distToB < distToA ||
-        (legDist > 0.3 && distToB < legDist - 0.15);
-
-      if (isPastA) {
-        activeIndex = i + 1;
-        continue;
-      }
-    } else {
-      // Last stop
-      if (distToA <= 0.12) {
-        activeIndex = i;
-        break;
-      }
-    }
-
-    activeIndex = i;
-    break;
-  }
-
-  // Check if van is currently inside the radius of the active stop
-  const isAtStop = distances[activeIndex] <= 0.12;
+  const activeIndex = filterResult.activeStopIndex;
+  const isAtStop = filterResult.isAtStop;
 
   // 4. Calculate blended effective transit speed
   // If van is stopped (e.g. at red light or stop sign), blend with average transit speed
