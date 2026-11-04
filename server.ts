@@ -33,15 +33,15 @@ try {
   console.warn('Could not read telemetry cache file:', e);
 }
 
-// Pre-seed real coordinates for Bus 121212 (Amjad) from Google Sheet if missing
-if (!liveTelemetryStore['121212']) {
+// Pre-seed real coordinates for Bus 121212 (Amjad) from Google Sheet
+if (!liveTelemetryStore['121212'] || liveTelemetryStore['121212'].currentLocationStr === '30.078676, 77.469929') {
   liveTelemetryStore['121212'] = {
     busId: '121212',
     driverName: 'Amjad',
     driverPhone: '9761081818',
-    currentLocationStr: '30.078676, 77.469929',
-    latitude: 30.078676,
-    longitude: 77.469929,
+    currentLocationStr: '30.071192, 77.473767',
+    latitude: 30.071192,
+    longitude: 77.473767,
     accuracy: 8,
     speed: 0,
     heading: 0,
@@ -1696,6 +1696,68 @@ async function startServer() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+
+  // Automatic continuous background sync from Google Sheet 'Bus_Tracking' (every 5 seconds)
+  // Ensures whenever driver's location updates in Google Sheet, server cache & all connected screens update instantly!
+  const syncBusTrackingFromSheet = async () => {
+    try {
+      const url = `${currentAppsScriptUrl}?action=getBusTracking&_t=${Date.now()}`;
+      const response = await fetch(url);
+      if (response.ok) {
+        const data = await response.json();
+        if (Array.isArray(data) && data.length > 1) {
+          for (let i = 1; i < data.length; i++) {
+            const row = data[i];
+            if (Array.isArray(row) && row[0]) {
+              const busId = String(row[0]).trim();
+              const driverName = String(row[1] || 'Amjad').trim();
+              const locStr = String(row[2] || '').trim();
+              const lastUpdated = String(row[3] || '').trim();
+
+              if (locStr && locStr.includes(',')) {
+                const parts = locStr.split(',').map((p) => parseFloat(p.trim()));
+                const lat = parts[0];
+                const lng = parts[1];
+                if (!isNaN(lat) && !isNaN(lng) && (lat !== 0 || lng !== 0)) {
+                  const existing = liveTelemetryStore[busId];
+                  // If coordinates changed or if existing was stale school default
+                  if (!existing || existing.currentLocationStr !== locStr || existing.latitude !== lat || existing.longitude !== lng) {
+                    const telemetry = {
+                      busId,
+                      driverName,
+                      driverPhone: existing?.driverPhone || '9761081818',
+                      currentLocationStr: locStr,
+                      latitude: lat,
+                      longitude: lng,
+                      accuracy: existing?.accuracy || 8,
+                      speed: existing?.speed || 0,
+                      heading: existing?.heading || 0,
+                      lastUpdated: lastUpdated || new Date().toISOString(),
+                      status: 'running',
+                      isLiveFromSheet: true,
+                    };
+                    liveTelemetryStore[busId] = telemetry;
+                    saveTelemetryCache();
+
+                    const broadcastMsg = JSON.stringify({ type: 'BUS_UPDATE', telemetry });
+                    for (const client of clients) {
+                      if (client.readyState === WebSocket.OPEN) {
+                        client.send(broadcastMsg);
+                      }
+                    }
+                    console.log(`[GoogleSheetSync] Live bus ${busId} moved to ${locStr} (Broadcasted to ${clients.size} clients)`);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch {}
+  };
+
+  syncBusTrackingFromSheet();
+  setInterval(syncBusTrackingFromSheet, 5000);
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${PORT} with WebSocket /ws/location`);

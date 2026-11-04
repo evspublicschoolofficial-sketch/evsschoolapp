@@ -325,22 +325,48 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
     if (records.length > 0) {
       setSheetBuses(records);
       const amjadBus = records.find(
-        (b) => String(b.Driver_Name || '').toLowerCase().includes('amjad')
+        (b) => String(b.Driver_Name || '').toLowerCase().includes('amjad') || String(b.Bus_ID).includes('121212')
       );
       // If current selected bus is not present in records, select Amjad's bus or first row
-      if (!records.some((r) => r.Bus_ID === selectedBusId)) {
+      if (!records.some((r) => String(r.Bus_ID).trim() === String(selectedBusId).trim())) {
         if (amjadBus) {
-          setSelectedBusId(amjadBus.Bus_ID);
+          setSelectedBusId(String(amjadBus.Bus_ID).trim());
         } else if (records[0]) {
-          setSelectedBusId(records[0].Bus_ID);
+          setSelectedBusId(String(records[0].Bus_ID).trim());
         }
       }
+
+      // Synchronize liveTelemetry with Google Sheet records so map immediately reflects driver's moving GPS
+      setLiveTelemetry((prev) => {
+        const next = { ...prev };
+        for (const rec of records) {
+          const coords = parseCoordinates(rec.Current_Location);
+          const bKey = String(rec.Bus_ID).trim();
+          if (!isNaN(coords.lat) && !isNaN(coords.lng) && (coords.lat !== 0 || coords.lng !== 0)) {
+            next[bKey] = {
+              busId: bKey,
+              driverName: rec.Driver_Name,
+              driverPhone: getDriverPhone(rec.Driver_Name),
+              currentLocationStr: rec.Current_Location,
+              latitude: coords.lat,
+              longitude: coords.lng,
+              accuracy: next[bKey]?.accuracy || 8,
+              speed: next[bKey]?.speed || 0,
+              heading: next[bKey]?.heading || 0,
+              lastUpdated: rec.Last_Updated || new Date().toLocaleString('hi-IN'),
+              status: 'running',
+              isLiveFromSheet: true,
+            };
+          }
+        }
+        return next;
+      });
     } else {
       setSheetBuses([
         {
           Bus_ID: '121212',
           Driver_Name: 'Amjad',
-          Current_Location: '30.078676, 77.469929',
+          Current_Location: '30.071192, 77.473767',
           Last_Updated: new Date().toLocaleString('hi-IN'),
         },
         {
@@ -455,14 +481,34 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
       try {
         const serverData = await fetchTelemetryFromSharedApi();
         if (serverData && Object.keys(serverData).length > 0) {
-          setLiveTelemetry((prev) => ({ ...prev, ...serverData }));
+          setLiveTelemetry((prev) => {
+            const next = { ...prev };
+            for (const [k, v] of Object.entries(serverData)) {
+              // Never let a default school coordinate overwrite real driver movement
+              if (v && (v.latitude !== DEFAULT_SCHOOL_COORDS.lat || v.longitude !== DEFAULT_SCHOOL_COORDS.lng || !prev[k])) {
+                next[k] = v;
+              }
+            }
+            return next;
+          });
         }
       } catch (e) {}
 
       try {
         const saved = localStorage.getItem('evs_van_live_locations');
         if (saved) {
-          setLiveTelemetry((prev) => ({ ...prev, ...JSON.parse(saved) }));
+          const parsed = JSON.parse(saved);
+          if (parsed && typeof parsed === 'object') {
+            setLiveTelemetry((prev) => {
+              const next = { ...prev };
+              for (const [k, v] of Object.entries(parsed as Record<string, any>)) {
+                if (v && (v.latitude !== DEFAULT_SCHOOL_COORDS.lat || v.longitude !== DEFAULT_SCHOOL_COORDS.lng || !prev[k])) {
+                  next[k] = v;
+                }
+              }
+              return next;
+            });
+          }
         }
       } catch {}
     }, 2500);
@@ -470,7 +516,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
     const sheetSyncTimer = setInterval(() => {
       fetchSheetData();
       setCountdown(6);
-    }, 6000);
+    }, 5000);
 
     return () => {
       clearInterval(countdownInterval);
@@ -496,42 +542,73 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
   // Active bus record from sheet
   const activeBus = useMemo(() => {
     return (
-      sheetBuses.find((b) => b.Bus_ID === selectedBusId) ||
-      sheetBuses.find((b) => String(b.Driver_Name || '').toLowerCase().includes('amjad')) ||
+      sheetBuses.find((b) => String(b.Bus_ID).trim() === String(selectedBusId).trim()) ||
+      sheetBuses.find(
+        (b) =>
+          String(b.Driver_Name || '').toLowerCase().includes('amjad') ||
+          String(b.Bus_ID).includes('121212')
+      ) ||
       sheetBuses[0]
     );
   }, [sheetBuses, selectedBusId]);
 
-  // Active live telemetry from driver or sheet (flexible lookup)
+  // Active live telemetry from driver or sheet (always prioritizing real live updated GPS coordinates)
   const activeTelemetry: VanTelemetry = useMemo(() => {
-    const busId = activeBus?.Bus_ID || selectedBusId || '121212';
+    const busId = String(activeBus?.Bus_ID || selectedBusId || '121212').trim();
     const driverName = activeBus?.Driver_Name || 'Amjad';
     const driverPhone = getDriverPhone(driverName);
 
-    // 1. Flexible lookup in live telemetry (by exact id, string id, or driver name)
+    // 1. Parse coordinates from real Google Sheet record first
+    const sheetCoords = parseCoordinates(activeBus?.Current_Location);
+    const hasValidSheetCoords =
+      !isNaN(sheetCoords.lat) &&
+      !isNaN(sheetCoords.lng) &&
+      (sheetCoords.lat !== 0 || sheetCoords.lng !== 0);
+
+    // 2. Flexible lookup in live telemetry (by exact id, string id, or driver name)
     const live =
       liveTelemetry[busId] ||
       liveTelemetry[String(busId)] ||
       (Object.values(liveTelemetry) as VanTelemetry[]).find(
         (t: VanTelemetry) =>
-          t.busId === busId ||
-          String(t.busId) === String(busId) ||
+          String(t.busId).trim() === busId ||
           (t.driverName && driverName && t.driverName.toLowerCase().includes(driverName.toLowerCase()))
       );
+
+    // If live telemetry is actively broadcasting from driver's moving device
+    if (live && !live.isLiveFromSheet && (live.speed || 0) > 0) {
+      return live;
+    }
+
+    // Always prefer real Google Sheet location if valid (driver updates this continuously)
+    if (hasValidSheetCoords) {
+      return {
+        busId,
+        driverName,
+        driverPhone,
+        currentLocationStr: activeBus?.Current_Location || `${sheetCoords.lat}, ${sheetCoords.lng}`,
+        latitude: sheetCoords.lat,
+        longitude: sheetCoords.lng,
+        accuracy: live?.accuracy || 8,
+        speed: live?.speed || 0,
+        heading: live?.heading || 0,
+        lastUpdated: activeBus?.Last_Updated || live?.lastUpdated || new Date().toLocaleString('hi-IN'),
+        status: 'running',
+        isLiveFromSheet: true,
+      };
+    }
 
     if (live) {
       return live;
     }
 
-    // 2. Otherwise parse from Google Sheet "Current_Location"
-    const parsed = parseCoordinates(activeBus?.Current_Location);
     return {
       busId,
       driverName,
       driverPhone,
-      currentLocationStr: activeBus?.Current_Location || '30.078676, 77.469929',
-      latitude: parsed.lat,
-      longitude: parsed.lng,
+      currentLocationStr: activeBus?.Current_Location || '30.071192, 77.473767',
+      latitude: sheetCoords.lat || 30.071192,
+      longitude: sheetCoords.lng || 77.473767,
       accuracy: 8,
       speed: 0,
       heading: 0,

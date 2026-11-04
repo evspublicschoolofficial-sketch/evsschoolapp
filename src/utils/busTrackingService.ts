@@ -122,9 +122,11 @@ export const calculateDistanceKm = (
 export const fetchBusTrackingFromSheet = async (): Promise<BusTrackingRecord[]> => {
   const activeUrl = getAppsScriptUrl();
 
-  // 1. Try Apps Script API first (fast and accurately formatted)
+  // 1. Try Apps Script API first (fast and accurately formatted with fresh cache buster)
   try {
-    const res = await fetch(`${activeUrl}?action=getBusTracking`);
+    const res = await fetch(`${activeUrl}?action=getBusTracking&_t=${Date.now()}`, {
+      headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' },
+    });
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data) && data.length > 1) {
@@ -149,11 +151,12 @@ export const fetchBusTrackingFromSheet = async (): Promise<BusTrackingRecord[]> 
     console.warn('Apps Script getBusTracking fetch error, trying GViz fallback:', err);
   }
 
-  // 2. Fallback to Google Sheets GViz endpoint
+  // 2. Fallback to Google Sheets GViz endpoint with cache buster
   try {
     const encoded = encodeURIComponent('Bus_Tracking');
     const res = await fetch(
-      `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}`
+      `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}&t=${Date.now()}`,
+      { headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' } }
     );
     if (!res.ok) return [];
     const text = await res.text();
