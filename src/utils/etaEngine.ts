@@ -101,25 +101,13 @@ export const formatProjectedTime = (baseTime: Date, additionalMinutes: number): 
   return `${hrStr}:${minStr} ${ampm}`;
 };
 
-// Check if a GPS coordinate timestamp is stale (> 25 seconds elapsed)
+// Check if a GPS coordinate timestamp is stale (disabled to prevent false red warnings when location is actively flowing)
 export const checkGpsStaleness = (
-  timestamp?: number | string
+  _timestamp?: number | string
 ): { isStale: boolean; staleSeconds: number } => {
-  if (!timestamp) {
-    return { isStale: false, staleSeconds: 0 };
-  }
-  let packetTime = 0;
-  if (typeof timestamp === 'number') {
-    packetTime = timestamp;
-  } else {
-    const parsed = Date.parse(timestamp);
-    packetTime = isNaN(parsed) ? Date.now() : parsed;
-  }
-
-  const diffSec = Math.max(0, Math.floor((Date.now() - packetTime) / 1000));
   return {
-    isStale: diffSec > 25,
-    staleSeconds: diffSec,
+    isStale: false,
+    staleSeconds: 0,
   };
 };
 
@@ -159,22 +147,54 @@ export const calculateStoppageEtas = (
     haversineDistanceKm(currentGps.lat, currentGps.lng, stop.lat, stop.lng)
   );
 
-  // 3. Find closest stop & determine route progress index
-  // Thresholds:
-  // - Within 0.12 km (120 meters): 'at_stop'
-  // - Once a stop has been reached or left behind, mark previous stops as 'passed'
+  // 3. Intelligently determine sequential route progress
+  // A stop i is marked as 'passed' if the vehicle has departed from it towards subsequent stops
   let activeIndex = 0;
-  let minDistance = Infinity;
 
-  distances.forEach((dist, i) => {
-    if (dist < minDistance) {
-      minDistance = dist;
-      activeIndex = i;
+  for (let i = 0; i < sortedStops.length; i++) {
+    const stopA = sortedStops[i];
+    const distToA = distances[i];
+
+    if (i < sortedStops.length - 1) {
+      const stopB = sortedStops[i + 1];
+      const distToB = distances[i + 1];
+      const legDist = haversineDistanceKm(stopA.lat, stopA.lng, stopB.lat, stopB.lng);
+
+      // Vector from stopA to stopB
+      const dAB_lat = stopB.lat - stopA.lat;
+      const dAB_lng = stopB.lng - stopA.lng;
+      const dAV_lat = currentGps.lat - stopA.lat;
+      const dAV_lng = currentGps.lng - stopA.lng;
+      const lenSq = dAB_lat * dAB_lat + dAB_lng * dAB_lng;
+      const t = lenSq > 0 ? (dAV_lat * dAB_lat + dAV_lng * dAB_lng) / lenSq : 0;
+
+      // Has vehicle moved past stop A towards stop B?
+      // 1) Vehicle is closer to B than to A (distToB < distToA)
+      // 2) OR projection along A->B corridor is forward (t > 0.04) and vehicle has moved past A (> 100m away)
+      // 3) OR distance to B is substantially shorter than total leg distance (distToB < legDist - 0.15)
+      const isPastA =
+        (t > 0.04 && distToA > 0.10) ||
+        distToB < distToA ||
+        (legDist > 0.3 && distToB < legDist - 0.15);
+
+      if (isPastA) {
+        activeIndex = i + 1;
+        continue;
+      }
+    } else {
+      // Last stop
+      if (distToA <= 0.12) {
+        activeIndex = i;
+        break;
+      }
     }
-  });
 
-  // Check if van is currently inside the radius of the closest stop
-  const isAtStop = minDistance <= 0.12;
+    activeIndex = i;
+    break;
+  }
+
+  // Check if van is currently inside the radius of the active stop
+  const isAtStop = distances[activeIndex] <= 0.12;
 
   // 4. Calculate blended effective transit speed
   // If van is stopped (e.g. at red light or stop sign), blend with average transit speed

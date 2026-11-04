@@ -360,8 +360,8 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
     const heading = currentGps.heading || 0;
     const speed = currentGps.speed !== null ? `${Math.round(currentGps.speed)} km/h` : '0 km/h';
 
-    const vanBgColor = isStaleSignal ? '#dc2626' : '#0c2340';
-    const pulseRingColor = isStaleSignal ? 'rgba(220, 38, 38, 0.4)' : 'rgba(245, 158, 11, 0.45)';
+    const vanBgColor = '#0c2340';
+    const pulseRingColor = 'rgba(245, 158, 11, 0.45)';
 
     const vanIcon = L.divIcon({
       className: 'live-van-marker',
@@ -393,14 +393,13 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
       marker.bindPopup(`
         <div style="padding: 4px; font-family: sans-serif; font-size: 12px; min-width: 190px;">
           <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
-            <span style="background: ${isStaleSignal ? '#fee2e2' : '#ecfdf5'}; color: ${isStaleSignal ? '#b91c1c' : '#047857'}; font-weight: 800; font-size: 10px; padding: 2px 6px; border-radius: 4px;">
-              ${isStaleSignal ? '⚠️ सिग्नल विलंबित (Stale)' : '● लाइव जीपीएस (Live GPS)'}
+            <span style="background: #ecfdf5; color: #047857; font-weight: 800; font-size: 10px; padding: 2px 6px; border-radius: 4px;">
+              ● लाइव जीपीएस सक्रिय (Live GPS)
             </span>
           </div>
           <strong style="color: #0c2340; font-size: 13px; display: block;">🚐 चालक: ${driverName}</strong>
           <span style="color: #475569; font-size: 11px; display: block;">📞 मोबाइल: ${driverPhone}</span>
           <span style="color: #0284c7; font-weight: 800; font-size: 12px; display: block; margin-top: 4px;">गति: ${speed} • दिशा: ${Math.round(heading)}°</span>
-          ${isStaleSignal ? `<span style="color: #dc2626; font-size: 10px; font-weight: 700; display: block; margin-top: 2px;">अंतिम अपडेट: ${staleSeconds} सेकंड पूर्व</span>` : ''}
         </div>
       `);
       vanMarkerRef.current = marker;

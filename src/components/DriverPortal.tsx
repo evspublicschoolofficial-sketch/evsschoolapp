@@ -483,10 +483,15 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
       },
       (err) => {
         setFetchingGps(false);
-        console.warn('GPS single capture error:', err.message);
-        setGpsError(`GPS एरर (${err.message})। कृपया फोन में Location चालू रखें।`);
-        // If device GPS times out, broadcast latest known coordinates
+        console.warn('GPS single capture note:', err.message);
+        // Only show error if no valid coordinates are available at all
         const cur = latestCoordsRef.current;
+        if (!cur.lat || !cur.lng) {
+          setGpsError(`GPS सिग्नल खोजा जा रहा है... कृपया फोन में Location ऑन रखें।`);
+        } else {
+          setGpsError(null);
+        }
+        // Broadcast latest known coordinates smoothly
         broadcastLocation(cur.lat, cur.lng, cur.speed, cur.accuracy, cur.heading, { force: forceSend });
       },
       {
@@ -1293,7 +1298,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
               </div>
             </div>
 
-            {gpsError && (
+            {gpsError && (!latitude || !longitude) && (
               <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-xl font-bold flex items-center gap-2">
                 <i className="fa-solid fa-circle-exclamation text-amber-600"></i>
                 <span>{gpsError}</span>

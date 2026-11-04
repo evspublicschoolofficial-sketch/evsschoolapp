@@ -823,14 +823,15 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
     handleClearAllStoppages();
   }, [handleClearAllStoppages]);
 
-  // Next upcoming or active stoppage
+  // Next upcoming or active stoppage (strictly excluding all passed stops)
   const upcomingStoppage = useMemo(() => {
+    const unpassedStops = etaCalculation.stoppages.filter((s) => s.status !== 'passed');
+    if (unpassedStops.length === 0) return null;
+
     return (
-      etaCalculation.stoppages.find(
-        (s) => s.status === 'at_stop' || s.status === 'approaching'
-      ) ||
-      etaCalculation.stoppages.find((s) => s.status === 'upcoming') ||
-      etaCalculation.stoppages[0]
+      unpassedStops.find((s) => s.status === 'at_stop' || s.status === 'approaching') ||
+      unpassedStops.find((s) => s.status === 'upcoming') ||
+      unpassedStops[0]
     );
   }, [etaCalculation.stoppages]);
 
@@ -847,12 +848,17 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
   }, [upcomingStoppage]);
 
   // Automatic Delhi-Metro style voice and chime announcement effect
+  // Strictly speaks only the NEXT upcoming stop and NEVER repeats passed stops
   useEffect(() => {
     if (!voiceAnnouncementEnabled || !upcomingStoppage) return;
+
+    // Safety: Never announce a stop that has already been passed
+    if (upcomingStoppage.status === 'passed') return;
+
     const status = upcomingStoppage.status;
     const stopKey = `${upcomingStoppage.id}_${status}`;
 
-    // Announce when approaching or when arriving at a stop
+    // Announce when approaching or when arriving at a stop (only once per status)
     if ((status === 'approaching' || status === 'at_stop') && lastAnnouncedStopKeyRef.current !== stopKey) {
       lastAnnouncedStopKeyRef.current = stopKey;
       announceStationVoice(upcomingStoppage.name, status === 'at_stop');
@@ -1220,32 +1226,52 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
                     <span className="w-2 h-2 rounded-full bg-slate-950 animate-bounce"></span>
                     <span>📢 अगला स्टॉप निकट है (&lt; 500m)</span>
                   </span>
-                ) : (
+                ) : upcomingStoppage ? (
                   <span className="px-2.5 py-0.5 rounded-full bg-blue-500/30 text-blue-300 font-bold text-[11px] tracking-wide uppercase border border-blue-400/30 flex items-center gap-1.5">
                     <i className="fa-solid fa-angles-right text-xs"></i>
                     <span>🚆 अगला स्टेशन / स्टॉपेज (Next Stop)</span>
                   </span>
+                ) : (
+                  <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold text-[11px] uppercase border border-emerald-400/30 flex items-center gap-1.5">
+                    <i className="fa-solid fa-circle-check text-emerald-400"></i>
+                    <span>✓ सभी स्टॉप पूरे (Completed)</span>
+                  </span>
                 )}
-                <span className="text-slate-400 text-xs font-medium">
-                  {activeShift === 'morning' ? 'पिकअप समय:' : 'ड्रॉप समय:'} <strong className="text-white">{upcomingStoppage?.scheduledTime || '07:30 AM'}</strong>
-                </span>
+                {upcomingStoppage && (
+                  <span className="text-slate-400 text-xs font-medium">
+                    {activeShift === 'morning' ? 'पिकअप समय:' : 'ड्रॉप समय:'} <strong className="text-white">{upcomingStoppage.scheduledTime || '07:30 AM'}</strong>
+                  </span>
+                )}
               </div>
 
               {/* Station Name Heading */}
               <h2 className="text-xl sm:text-2xl font-black tracking-tight text-white flex items-center gap-2.5 pt-1">
-                <span className="text-amber-400">#{upcomingStoppage?.sequence || 1}.</span>
-                <span>{upcomingStoppage?.name || 'ई.वी.एस. पब्लिक स्कूल'}</span>
+                {upcomingStoppage ? (
+                  <>
+                    <span className="text-amber-400">#{upcomingStoppage.sequence}.</span>
+                    <span>{upcomingStoppage.name}</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-emerald-400">✓</span>
+                    <span>रूट के सभी स्टॉप पूरे हो चुके हैं</span>
+                  </>
+                )}
               </h2>
 
               <p className="text-xs sm:text-sm text-slate-300 font-medium">
-                {upcomingStoppage?.status === 'at_stop' ? (
-                  <span>विद्यार्थी वाहन में चढ़/उतर रहे हैं • अनुमानित ठहराव: <strong>60 सेकंड</strong></span>
+                {upcomingStoppage ? (
+                  upcomingStoppage.status === 'at_stop' ? (
+                    <span>विद्यार्थी वाहन में चढ़/उतर रहे हैं • अनुमानित ठहराव: <strong>60 सेकंड</strong></span>
+                  ) : (
+                    <span>
+                      वाहन से दूरी: <strong className="text-amber-300">{activeDistanceMeters > 1000 ? `${(activeDistanceMeters / 1000).toFixed(1)} km` : `${activeDistanceMeters} मीटर`}</strong>
+                      {' '}• अनुमानित आगमन: <strong className="text-emerald-300">{upcomingStoppage.etaFormatted || 'पहुँच रही है'}</strong>
+                      {upcomingStoppage.studentCount ? ` • 🎒 ${upcomingStoppage.studentCount} छात्र` : ''}
+                    </span>
+                  )
                 ) : (
-                  <span>
-                    वाहन से दूरी: <strong className="text-amber-300">{activeDistanceMeters > 1000 ? `${(activeDistanceMeters / 1000).toFixed(1)} km` : `${activeDistanceMeters} मीटर`}</strong>
-                    {' '}• अनुमानित आगमन: <strong className="text-emerald-300">{upcomingStoppage?.etaFormatted || 'पहुँच रही है'}</strong>
-                    {upcomingStoppage?.studentCount ? ` • 🎒 ${upcomingStoppage.studentCount} छात्र` : ''}
-                  </span>
+                  <span>वाहन सभी निर्धारित स्टॉप पार कर चुका है और स्कूल केंद्र की ओर वापस लौट रहा है।</span>
                 )}
               </p>
             </div>
