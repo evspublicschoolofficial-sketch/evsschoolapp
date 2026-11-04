@@ -137,6 +137,7 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
   // Real road snapping metrics
   const [isRoadSnapped, setIsRoadSnapped] = useState<boolean>(true);
   const [roadDistanceKm, setRoadDistanceKm] = useState<number>(0);
+  const [roadOneWayKm, setRoadOneWayKm] = useState<number>(0);
   const [roadDurationMin, setRoadDurationMin] = useState<number>(0);
   const [isRoutingLoading, setIsRoutingLoading] = useState<boolean>(false);
 
@@ -478,6 +479,7 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
       const roundTripCoords = [...roadResult.roadCoordinates, ...returnCoords];
 
       setIsRoadSnapped(roadResult.isSnappedToRoad);
+      setRoadOneWayKm(roadResult.distanceKm);
       setRoadDistanceKm(Math.round(roadResult.distanceKm * 2 * 10) / 10);
       setRoadDurationMin(Math.round(roadResult.durationMinutes * 2));
       setIsRoutingLoading(false);
@@ -910,11 +912,17 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
           </div>
 
           {/* ROAD DISTANCE */}
-          {roadDistanceKm > 0 && (
-            <div className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-white/10 border border-white/10 font-bold">
+          {(roadOneWayKm > 0 || roadDistanceKm > 0) && (
+            <div
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-white/10 border border-white/10 font-bold"
+              title="सबसे छोटा सीधा मार्ग (Shortest Direct Route)"
+            >
               <i className="fa-solid fa-road text-amber-400"></i>
-              <span className="font-mono text-amber-300">{roadDistanceKm}</span>
-              <span className="text-[10px] text-slate-400">km</span>
+              <span className="font-mono text-amber-300">
+                {roadOneWayKm > 0 ? roadOneWayKm : Math.round((roadDistanceKm / 2) * 10) / 10}
+              </span>
+              <span className="text-[10px] text-slate-300">km सीधा मार्ग</span>
+              <span className="text-[9px] text-slate-400 font-normal">({roadDistanceKm} km कुल)</span>
             </div>
           )}
 
