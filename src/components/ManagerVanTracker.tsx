@@ -336,13 +336,24 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
         }
       }
 
-      // Synchronize liveTelemetry with Google Sheet records so map immediately reflects driver's moving GPS
+      // Synchronize liveTelemetry with Google Sheet records (only when direct live telemetry is not active)
       setLiveTelemetry((prev) => {
         const next = { ...prev };
         for (const rec of records) {
           const coords = parseCoordinates(rec.Current_Location);
           const bKey = String(rec.Bus_ID).trim();
           if (!isNaN(coords.lat) && !isNaN(coords.lng) && (coords.lat !== 0 || coords.lng !== 0)) {
+            const existing = prev[bKey];
+            const isFreshDriverLive =
+              existing &&
+              !existing.isLiveFromSheet &&
+              Date.now() - new Date(existing.lastUpdated).getTime() < 60000;
+
+            // Never let lagging Google Sheets (which updates after 10-20s) overwrite active real-time GPS
+            if (isFreshDriverLive) {
+              continue;
+            }
+
             next[bKey] = {
               busId: bKey,
               driverName: rec.Driver_Name,
@@ -350,9 +361,9 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
               currentLocationStr: rec.Current_Location,
               latitude: coords.lat,
               longitude: coords.lng,
-              accuracy: next[bKey]?.accuracy || 8,
-              speed: next[bKey]?.speed || 0,
-              heading: next[bKey]?.heading || 0,
+              accuracy: existing?.accuracy || 8,
+              speed: existing?.speed || 0,
+              heading: existing?.heading || 0,
               lastUpdated: rec.Last_Updated || new Date().toLocaleString('hi-IN'),
               status: 'running',
               isLiveFromSheet: true,
@@ -483,9 +494,18 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
         if (serverData && Object.keys(serverData).length > 0) {
           setLiveTelemetry((prev) => {
             const next = { ...prev };
-            for (const [k, v] of Object.entries(serverData)) {
+            for (const [k, v] of Object.entries(serverData as Record<string, any>)) {
+              if (!v) continue;
+              const prevItem = prev[k];
+              const isPrevFreshDriver =
+                prevItem &&
+                !prevItem.isLiveFromSheet &&
+                Date.now() - new Date(prevItem.lastUpdated).getTime() < 60000;
+              if (v.isLiveFromSheet && isPrevFreshDriver) {
+                continue;
+              }
               // Never let a default school coordinate overwrite real driver movement
-              if (v && (v.latitude !== DEFAULT_SCHOOL_COORDS.lat || v.longitude !== DEFAULT_SCHOOL_COORDS.lng || !prev[k])) {
+              if (v.latitude !== DEFAULT_SCHOOL_COORDS.lat || v.longitude !== DEFAULT_SCHOOL_COORDS.lng || !prev[k]) {
                 next[k] = v;
               }
             }
@@ -502,7 +522,16 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
             setLiveTelemetry((prev) => {
               const next = { ...prev };
               for (const [k, v] of Object.entries(parsed as Record<string, any>)) {
-                if (v && (v.latitude !== DEFAULT_SCHOOL_COORDS.lat || v.longitude !== DEFAULT_SCHOOL_COORDS.lng || !prev[k])) {
+                if (!v) continue;
+                const prevItem = prev[k];
+                const isPrevFreshDriver =
+                  prevItem &&
+                  !prevItem.isLiveFromSheet &&
+                  Date.now() - new Date(prevItem.lastUpdated).getTime() < 60000;
+                if (v.isLiveFromSheet && isPrevFreshDriver) {
+                  continue;
+                }
+                if (v.latitude !== DEFAULT_SCHOOL_COORDS.lat || v.longitude !== DEFAULT_SCHOOL_COORDS.lng || !prev[k]) {
                   next[k] = v;
                 }
               }
@@ -575,12 +604,22 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
           (t.driverName && driverName && t.driverName.toLowerCase().includes(driverName.toLowerCase()))
       );
 
-    // If live telemetry is actively broadcasting from driver's moving device
-    if (live && !live.isLiveFromSheet && (live.speed || 0) > 0) {
+    // CRITICAL: If direct live telemetry exists and is fresh (within 90s), ALWAYS return it!
+    // Whether the vehicle is driving (speed > 0) or standing at a stop/traffic (speed = 0),
+    // live GPS is the TRUE real-time location.
+    // Falling back to Google Sheets when speed=0 caused the vehicle to jump backwards!
+    if (live && !live.isLiveFromSheet) {
+      const timeSinceUpdate = Date.now() - new Date(live.lastUpdated).getTime();
+      if (timeSinceUpdate < 90000) {
+        return live;
+      }
+    }
+
+    if (live && (live.speed || 0) > 0) {
       return live;
     }
 
-    // Always prefer real Google Sheet location if valid (driver updates this continuously)
+    // Always prefer real Google Sheet location if valid when no direct live telemetry is active
     if (hasValidSheetCoords) {
       return {
         busId,

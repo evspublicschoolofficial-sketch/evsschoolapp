@@ -165,6 +165,43 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
   }, [latitude, longitude, speed, accuracy, heading]);
 
   const lastWatchBroadcastRef = useRef<number>(0);
+  const lastSpeedCalcRef = useRef<{ lat: number; lng: number; time: number } | null>(null);
+
+  // Compute live speed in km/h: Uses device GPS speed if present, or calculates delta distance / delta time
+  const computeSpeedKmh = (lat: number, lng: number, deviceSpeedMps: number | null): number => {
+    // If device provides valid speed in m/s, convert to km/h
+    if (typeof deviceSpeedMps === 'number' && deviceSpeedMps > 0) {
+      return Math.round(deviceSpeedMps * 3.6);
+    }
+
+    const now = Date.now();
+    const prev = lastSpeedCalcRef.current;
+    lastSpeedCalcRef.current = { lat, lng, time: now };
+
+    if (prev && prev.time) {
+      const timeDiffSec = (now - prev.time) / 1000;
+      if (timeDiffSec >= 1 && timeDiffSec <= 60) {
+        const R = 6371e3; // Earth radius in meters
+        const phi1 = (prev.lat * Math.PI) / 180;
+        const phi2 = (lat * Math.PI) / 180;
+        const deltaPhi = ((lat - prev.lat) * Math.PI) / 180;
+        const deltaLambda = ((lng - prev.lng) * Math.PI) / 180;
+        const a =
+          Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+          Math.cos(phi1) * Math.cos(phi2) * Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+        const distMeters = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+        // Filter out small stationary GPS jitter (less than 3.5m)
+        if (distMeters >= 3.5) {
+          const kmh = Math.round((distMeters / timeDiffSec) * 3.6);
+          if (kmh <= 100) {
+            return kmh;
+          }
+        }
+      }
+    }
+    return 0;
+  };
 
   const [vanStatus, setVanStatus] = useState<'running' | 'stopped'>(() => {
     try {
@@ -468,7 +505,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
         const lat = pos.coords.latitude;
         const lng = pos.coords.longitude;
         const acc = pos.coords.accuracy || 8;
-        const spd = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
+        const spd = computeSpeedKmh(lat, lng, pos.coords.speed);
         const hd = pos.coords.heading || 0;
 
         setLatitude(lat);
@@ -553,7 +590,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
           (pos) => {
             const lat = pos.coords.latitude;
             const lng = pos.coords.longitude;
-            const spd = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
+            const spd = computeSpeedKmh(lat, lng, pos.coords.speed);
             const acc = Math.round(pos.coords.accuracy || 8);
             const hd = pos.coords.heading || 0;
 

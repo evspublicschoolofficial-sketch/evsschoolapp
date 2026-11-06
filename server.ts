@@ -176,6 +176,19 @@ async function forwardToGoogleAppsScript(payload: any) {
   }
 }
 
+function getHaversineDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371e3; // meters
+  const phi1 = (lat1 * Math.PI) / 180;
+  const phi2 = (lat2 * Math.PI) / 180;
+  const deltaPhi = ((lat2 - lat1) * Math.PI) / 180;
+  const deltaLambda = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+    Math.cos(phi1) * Math.cos(phi2) * Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
 function processTelemetryPayload(data: any) {
   const busId = String(data.busId || data.bus_id || 'ecad7ddc').trim();
   const driverName = String(data.driverName || data.driver_name || 'Amjad').trim();
@@ -188,17 +201,46 @@ function processTelemetryPayload(data: any) {
 
   const locStr = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
   const now = new Date().toISOString();
+  const existing = liveTelemetryStore[busId];
+
+  // Derive instantaneous speed if device GPS speed is 0 or null
+  let finalSpeed = typeof data.speed === 'number' && data.speed > 0 ? Math.round(data.speed) : 0;
+  let finalHeading = typeof data.heading === 'number' ? data.heading : (existing?.heading || 0);
+
+  if ((!finalSpeed || finalSpeed === 0) && existing && existing.latitude && existing.longitude) {
+    const prevTime = new Date(existing.lastServerSync || existing.lastUpdated).getTime();
+    const elapsedSec = (Date.now() - prevTime) / 1000;
+    if (elapsedSec >= 1 && elapsedSec <= 60) {
+      const distMeters = getHaversineDistanceMeters(existing.latitude, existing.longitude, lat, lng);
+      if (distMeters >= 3.5) {
+        const computedKmh = Math.round((distMeters / elapsedSec) * 3.6);
+        if (computedKmh <= 100) {
+          finalSpeed = computedKmh;
+        }
+        // Also compute bearing if heading is missing
+        if (!finalHeading || finalHeading === 0) {
+          const y = Math.sin(((lng - existing.longitude) * Math.PI) / 180) * Math.cos((lat * Math.PI) / 180);
+          const x =
+            Math.cos((existing.latitude * Math.PI) / 180) * Math.sin((lat * Math.PI) / 180) -
+            Math.sin((existing.latitude * Math.PI) / 180) * Math.cos((lat * Math.PI) / 180) * Math.cos(((lng - existing.longitude) * Math.PI) / 180);
+          finalHeading = Math.round(((Math.atan2(y, x) * 180) / Math.PI + 360) % 360);
+        }
+      } else {
+        finalSpeed = 0;
+      }
+    }
+  }
 
   const telemetry = {
     busId,
     driverName,
-    driverPhone: data.driverPhone || '9761081818',
+    driverPhone: data.driverPhone || existing?.driverPhone || '9761081818',
     currentLocationStr: locStr,
     latitude: lat,
     longitude: lng,
-    accuracy: data.accuracy || 10,
-    speed: data.speed !== undefined ? data.speed : null,
-    heading: data.heading !== undefined ? data.heading : null,
+    accuracy: data.accuracy || 8,
+    speed: finalSpeed,
+    heading: finalHeading,
     lastUpdated: data.lastUpdated || now,
     status: data.status || 'running',
     isLiveFromSheet: false,
@@ -1720,6 +1762,18 @@ async function startServer() {
                 const lng = parts[1];
                 if (!isNaN(lat) && !isNaN(lng) && (lat !== 0 || lng !== 0)) {
                   const existing = liveTelemetryStore[busId];
+                  // CRITICAL PROTECTION: If driver is actively broadcasting live GPS directly (within last 60s),
+                  // DO NOT allow Google Sheets (which has a 10-20s update delay) to overwrite with an older location!
+                  // This completely eliminates the vehicle jumping backwards ("पीछे भागना")!
+                  const isDirectDriverLive =
+                    existing &&
+                    !existing.isLiveFromSheet &&
+                    Date.now() - new Date(existing.lastServerSync || existing.lastUpdated).getTime() < 60000;
+
+                  if (isDirectDriverLive) {
+                    continue;
+                  }
+
                   // If coordinates changed or if existing was stale school default
                   if (!existing || existing.currentLocationStr !== locStr || existing.latitude !== lat || existing.longitude !== lng) {
                     const telemetry = {

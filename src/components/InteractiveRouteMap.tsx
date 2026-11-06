@@ -89,6 +89,7 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const vanMarkerRef = useRef<L.Marker | null>(null);
+  const lastMarkerStateRef = useRef<{ speed: string; heading: number } | null>(null);
   const schoolMarkerRef = useRef<L.Marker | null>(null);
   const stoppageMarkersRef = useRef<Map<string, L.Marker>>(new Map());
   const routePolylineRef = useRef<L.Polyline | null>(null);
@@ -358,38 +359,42 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
       ? [currentGps.lat + 0.00028, currentGps.lng + 0.00028]
       : [currentGps.lat, currentGps.lng];
     const heading = currentGps.heading || 0;
-    const speed = currentGps.speed !== null ? `${Math.round(currentGps.speed)} km/h` : '0 km/h';
+    const speed =
+      currentGps.speed !== null && currentGps.speed !== undefined
+        ? `${Math.round(currentGps.speed)} km/h`
+        : '0 km/h';
 
     const vanBgColor = '#0c2340';
     const pulseRingColor = 'rgba(245, 158, 11, 0.45)';
 
-    const vanIcon = L.divIcon({
-      className: 'live-van-marker',
-      html: `
+    const createVanIcon = (spd: string, hdg: number) =>
+      L.divIcon({
+        className: 'live-van-marker',
+        html: `
         <div style="position: relative; width: 56px; height: 56px; display: flex; align-items: center; justify-content: center;">
-          <!-- Radar Pulse Wave -->
-          <div style="position: absolute; inset: 0; border-radius: 9999px; background: ${pulseRingColor}; animation: ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
-          <div style="position: absolute; inset: 6px; border-radius: 9999px; background: ${pulseRingColor}; opacity: 0.7;"></div>
+          <!-- Gentle Smooth Radar Pulse Halo (Non-flickering, smooth CSS breathing) -->
+          <div class="van-radar-pulse" style="position: absolute; inset: 2px; border-radius: 9999px; background: ${pulseRingColor};"></div>
+          <div style="position: absolute; inset: 8px; border-radius: 9999px; background: ${pulseRingColor}; opacity: 0.6;"></div>
 
           <!-- Rotating Vehicle Body Container -->
           <div style="position: relative; width: 40px; height: 40px; border-radius: 12px; background: ${vanBgColor}; color: #fde047; display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 24px rgba(0,0,0,0.35); border: 2.5px solid white;">
             <!-- Heading Direction Needle -->
-            <div style="position: absolute; top: -6px; width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 7px solid #fde047; transform: rotate(${heading}deg); transform-origin: 5px 26px;"></div>
+            <div style="position: absolute; top: -6px; width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 7px solid #fde047; transform: rotate(${hdg}deg); transform-origin: 5px 26px;"></div>
             <i class="fa-solid fa-van-shuttle" style="font-size: 16px;"></i>
           </div>
 
           <!-- Speed Badge -->
           <div style="position: absolute; bottom: -8px; background: #0c2340; color: white; border: 1.5px solid white; border-radius: 9999px; padding: 1px 6px; font-size: 9px; font-weight: 900; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.3);">
-            ${speed}
+            ${spd}
           </div>
         </div>
       `,
-      iconSize: [56, 56],
-      iconAnchor: [28, 28],
-    });
+        iconSize: [56, 56],
+        iconAnchor: [28, 28],
+      });
 
     if (!vanMarkerRef.current) {
-      const marker = L.marker(vanCoords, { icon: vanIcon, zIndexOffset: 1000 }).addTo(map);
+      const marker = L.marker(vanCoords, { icon: createVanIcon(speed, heading), zIndexOffset: 1000 }).addTo(map);
       marker.bindPopup(`
         <div style="padding: 4px; font-family: sans-serif; font-size: 12px; min-width: 190px;">
           <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
@@ -403,9 +408,17 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
         </div>
       `);
       vanMarkerRef.current = marker;
+      lastMarkerStateRef.current = { speed, heading };
     } else {
+      // Smoothly update location without destroying DOM elements
       vanMarkerRef.current.setLatLng(vanCoords);
-      vanMarkerRef.current.setIcon(vanIcon);
+
+      // Only update icon DOM when speed or heading genuinely changes (prevents blinking/flashing!)
+      const lastState = lastMarkerStateRef.current;
+      if (!lastState || lastState.speed !== speed || Math.abs(lastState.heading - heading) >= 4) {
+        vanMarkerRef.current.setIcon(createVanIcon(speed, heading));
+        lastMarkerStateRef.current = { speed, heading };
+      }
     }
 
     // Auto follow van if enabled
@@ -713,6 +726,22 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
     >
       {/* MAP CANVAS */}
       <div ref={mapContainerRef} className="w-full h-full z-0" />
+
+      {/* Smooth Marker Movement & Non-Flickering Pulse Styles */}
+      <style>{`
+        .live-van-marker {
+          transition: transform 0.6s cubic-bezier(0.25, 1, 0.5, 1) !important;
+          will-change: transform;
+        }
+        @keyframes gentleRadar {
+          0% { transform: scale(0.94); opacity: 0.55; }
+          50% { transform: scale(1.18); opacity: 0.18; }
+          100% { transform: scale(0.94); opacity: 0.55; }
+        }
+        .van-radar-pulse {
+          animation: gentleRadar 2.5s ease-in-out infinite;
+        }
+      `}</style>
 
       {/* STALE / OFFLINE GPS WARNING BANNER */}
       {isStaleSignal && (
