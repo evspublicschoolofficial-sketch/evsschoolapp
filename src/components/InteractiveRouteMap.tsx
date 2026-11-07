@@ -359,42 +359,55 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
       ? [currentGps.lat + 0.00028, currentGps.lng + 0.00028]
       : [currentGps.lat, currentGps.lng];
     const heading = currentGps.heading || 0;
-    const speed =
+    const speedNum =
       currentGps.speed !== null && currentGps.speed !== undefined
-        ? `${Math.round(currentGps.speed)} km/h`
-        : '0 km/h';
+        ? Math.round(currentGps.speed)
+        : 0;
+    const speed = `${speedNum} km/h`;
 
-    const vanBgColor = '#0c2340';
-    const pulseRingColor = 'rgba(245, 158, 11, 0.45)';
+    const createVanIcon = (spdNum: number, hdg: number) => {
+      const moving = spdNum > 0;
+      const spdBadgeBg = moving
+        ? 'linear-gradient(135deg, #059669 0%, #10b981 100%)'
+        : 'linear-gradient(135deg, #d97706 0%, #b45309 100%)';
+      const spdBadgeBorder = moving ? '#34d399' : '#fde68a';
+      const spdIcon = moving ? '⚡' : '⏹️';
+      const statusLabel = moving ? `${spdNum} km/h` : '0 km/h (खड़ी है)';
 
-    const createVanIcon = (spd: string, hdg: number) =>
-      L.divIcon({
+      return L.divIcon({
         className: 'live-van-marker',
         html: `
-        <div style="position: relative; width: 56px; height: 56px; display: flex; align-items: center; justify-content: center;">
-          <!-- Gentle Smooth Radar Pulse Halo (Non-flickering, smooth CSS breathing) -->
-          <div class="van-radar-pulse" style="position: absolute; inset: 2px; border-radius: 9999px; background: ${pulseRingColor};"></div>
-          <div style="position: absolute; inset: 8px; border-radius: 9999px; background: ${pulseRingColor}; opacity: 0.6;"></div>
-
-          <!-- Rotating Vehicle Body Container -->
-          <div style="position: relative; width: 40px; height: 40px; border-radius: 12px; background: ${vanBgColor}; color: #fde047; display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 24px rgba(0,0,0,0.35); border: 2.5px solid white;">
-            <!-- Heading Direction Needle -->
-            <div style="position: absolute; top: -6px; width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 7px solid #fde047; transform: rotate(${hdg}deg); transform-origin: 5px 26px;"></div>
-            <i class="fa-solid fa-van-shuttle" style="font-size: 16px;"></i>
+        <div style="position: relative; width: 104px; height: 96px; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none;">
+          <!-- 1. TOP LIVE GPS SIGNAL BEACON (Always indicates active connection) -->
+          <div style="position: absolute; top: 0; background: rgba(12, 35, 64, 0.95); backdrop-filter: blur(4px); color: #ecfdf5; border: 1.5px solid ${isStaleSignal ? '#f43f5e' : '#10b981'}; border-radius: 9999px; padding: 2px 8px; font-size: 9px; font-weight: 800; white-space: nowrap; box-shadow: 0 4px 12px rgba(0,0,0,0.45); display: flex; align-items: center; gap: 4px; z-index: 20;">
+            <span style="width: 7px; height: 7px; border-radius: 9999px; background: ${isStaleSignal ? '#f43f5e' : '#10b981'}; display: inline-block; box-shadow: 0 0 8px ${isStaleSignal ? '#f43f5e' : '#10b981'};"></span>
+            <span>${isStaleSignal ? '⚠️ सिग्नल इंतज़ार' : '🟢 LIVE GPS • 4G'}</span>
           </div>
 
-          <!-- Speed Badge -->
-          <div style="position: absolute; bottom: -8px; background: #0c2340; color: white; border: 1.5px solid white; border-radius: 9999px; padding: 1px 6px; font-size: 9px; font-weight: 900; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.3);">
-            ${spd}
+          <!-- 2. Gentle Radar Pulse Halo -->
+          <div class="van-radar-pulse" style="position: absolute; width: 62px; height: 62px; border-radius: 9999px; background: ${moving ? 'rgba(16, 185, 129, 0.35)' : 'rgba(245, 158, 11, 0.35)'};"></div>
+
+          <!-- 3. Rotating Vehicle Body Container -->
+          <div style="position: relative; width: 44px; height: 44px; margin-top: 6px; border-radius: 14px; background: #0c2340; color: #fde047; display: flex; align-items: center; justify-content: center; box-shadow: 0 10px 25px rgba(0,0,0,0.45); border: 2.8px solid white; z-index: 10;">
+            <!-- Heading Direction Needle -->
+            <div style="position: absolute; top: -7px; width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-bottom: 8px solid #fde047; transform: rotate(${hdg}deg); transform-origin: 6px 29px;"></div>
+            <i class="fa-solid fa-van-shuttle" style="font-size: 19px; color: #facc15;"></i>
+          </div>
+
+          <!-- 4. HIGH VISIBILITY SPEEDOMETER BADGE -->
+          <div style="position: absolute; bottom: 0; background: ${spdBadgeBg}; color: white; border: 2px solid ${spdBadgeBorder}; border-radius: 9999px; padding: 2px 8px; font-size: 10px; font-weight: 900; white-space: nowrap; box-shadow: 0 4px 12px rgba(0,0,0,0.45); display: flex; align-items: center; gap: 4px; z-index: 20;">
+            <span>${spdIcon}</span>
+            <span style="font-family: monospace; letter-spacing: 0.5px;">${statusLabel}</span>
           </div>
         </div>
       `,
-        iconSize: [56, 56],
-        iconAnchor: [28, 28],
+        iconSize: [104, 96],
+        iconAnchor: [52, 48],
       });
+    };
 
     if (!vanMarkerRef.current) {
-      const marker = L.marker(vanCoords, { icon: createVanIcon(speed, heading), zIndexOffset: 1000 }).addTo(map);
+      const marker = L.marker(vanCoords, { icon: createVanIcon(speedNum, heading), zIndexOffset: 1000 }).addTo(map);
       marker.bindPopup(`
         <div style="padding: 4px; font-family: sans-serif; font-size: 12px; min-width: 190px;">
           <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
@@ -416,7 +429,7 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
       // Only update icon DOM when speed or heading genuinely changes (prevents blinking/flashing!)
       const lastState = lastMarkerStateRef.current;
       if (!lastState || lastState.speed !== speed || Math.abs(lastState.heading - heading) >= 4) {
-        vanMarkerRef.current.setIcon(createVanIcon(speed, heading));
+        vanMarkerRef.current.setIcon(createVanIcon(speedNum, heading));
         lastMarkerStateRef.current = { speed, heading };
       }
     }
@@ -925,18 +938,53 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
         </div>
 
         {/* TELEMETRY STRIP (Right) */}
-        <div className="pointer-events-auto ml-auto flex flex-wrap items-center gap-2 bg-slate-950/90 backdrop-blur-md p-2 rounded-2xl border border-white/20 shadow-2xl text-white text-xs">
-          {/* SATELLITE LINK BADGE */}
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 font-bold text-[11px]">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-            <span>{mapStyle === 'satellite' ? '🛰️ GOOGLE SATELLITE' : '🗺️ STREET HUD'}</span>
+        <div className="pointer-events-auto ml-auto flex flex-wrap items-center gap-2 bg-slate-950/95 backdrop-blur-md p-2 rounded-2xl border border-white/20 shadow-2xl text-white text-xs">
+          {/* GPS SIGNAL STATUS WITH PULSING BEACON */}
+          <div
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border font-bold text-[11px] ${
+              isStaleSignal
+                ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                : 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40'
+            }`}
+            title="लाइव जीपीएस कनेक्शन स्थिति"
+          >
+            <span
+              className={`w-2.5 h-2.5 rounded-full ${
+                isStaleSignal ? 'bg-rose-500' : 'bg-emerald-400 animate-ping'
+              }`}
+            ></span>
+            <span>{isStaleSignal ? '⚠️ सिग्नल इंतज़ार...' : '🟢 GPS लाइव • 100% सिग्नल'}</span>
           </div>
 
-          {/* LIVE SPEED */}
-          <div className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-white/10 border border-white/10 font-bold">
-            <i className="fa-solid fa-gauge-high text-cyan-400"></i>
-            <span className="font-mono text-cyan-300">{currentGps.speed ? Math.round(currentGps.speed) : 0}</span>
-            <span className="text-[10px] text-slate-400">km/h</span>
+          {/* PROMINENT DIGITAL SPEEDOMETER HUD */}
+          <div
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl border shadow-inner transition-all font-black ${
+              (currentGps.speed || 0) > 0
+                ? 'bg-gradient-to-r from-emerald-950/80 to-teal-900/80 border-emerald-400 text-white ring-2 ring-emerald-500/30'
+                : 'bg-white/10 border-white/15 text-slate-300'
+            }`}
+            title="वाहन की लाइव गति (Speedometer)"
+          >
+            <i
+              className={`fa-solid fa-gauge-high text-sm ${
+                (currentGps.speed || 0) > 0 ? 'text-emerald-400 animate-pulse' : 'text-slate-400'
+              }`}
+            ></i>
+            <div className="flex items-baseline gap-1">
+              <span className="font-mono text-base font-extrabold tracking-tight text-emerald-300">
+                {currentGps.speed ? Math.round(currentGps.speed) : 0}
+              </span>
+              <span className="text-[10px] text-emerald-200/80 uppercase font-bold">km/h</span>
+            </div>
+            <span
+              className={`text-[9px] px-1.5 py-0.5 rounded-md font-bold uppercase ${
+                (currentGps.speed || 0) > 0
+                  ? 'bg-emerald-500 text-slate-950'
+                  : 'bg-amber-500/30 text-amber-300 border border-amber-400/30'
+              }`}
+            >
+              {(currentGps.speed || 0) > 0 ? 'चल रहा है' : 'खड़ा है'}
+            </span>
           </div>
 
           {/* ROAD DISTANCE */}

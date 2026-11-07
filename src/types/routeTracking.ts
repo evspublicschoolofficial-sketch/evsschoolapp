@@ -15,6 +15,7 @@ export interface RouteStoppage {
   landmark?: string; // Optional landmark/notes
   villageName?: string; // Village name e.g. "Ibrahimpura"
   notes?: string; // Stoppage specific notes
+  routeId?: string; // 'route-1' or 'route-2'
   // Dynamic calculation fields computed by ETA engine
   status?: 'passed' | 'approaching' | 'at_stop' | 'upcoming';
   etaMinutes?: number;

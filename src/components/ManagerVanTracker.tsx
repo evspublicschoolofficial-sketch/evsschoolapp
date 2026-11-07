@@ -10,6 +10,7 @@ import {
   fetchTelemetryFromSharedApi,
   subscribeToBusUpdates,
   fetchRouteStopsFromApi,
+  fetchRouteStopsFromGoogleSheet,
   saveRouteStopsToApi,
 } from '../utils/busTrackingService';
 import {
@@ -39,6 +40,17 @@ import { StoppageTimelineSidebar } from './StoppageTimelineSidebar';
 import { StopCreationModal } from './StopCreationModal';
 
 const loadStoppagesForRoute = (routeId: string): RouteStoppage[] => {
+  if (routeId === 'all') {
+    const r1 = loadStoppagesForRoute('route-1');
+    const r2 = loadStoppagesForRoute('route-2');
+    const combined = [...r1, ...r2];
+    const seen = new Set<string>();
+    return combined.filter((s) => {
+      if (!s.id || seen.has(s.id)) return false;
+      seen.add(s.id);
+      return true;
+    });
+  }
   try {
     const saved = localStorage.getItem(getRouteStorageKey(routeId));
     if (saved) {
@@ -106,9 +118,41 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
       return true;
     }
   });
+  const [autoRouteEnabled, setAutoRouteEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('evs_auto_route_enabled') !== 'false';
+    } catch {
+      return true;
+    }
+  });
   const [sheetSyncingStops, setSheetSyncingStops] = useState<boolean>(false);
   const [sheetStopsSyncSuccess, setSheetStopsSyncSuccess] = useState<boolean>(false);
   const lastAnnouncedStopKeyRef = useRef<string | null>(null);
+  const activeUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+
+  // User Interaction Audio Unlock (ensures Web Speech API & Web Audio API play without browser block)
+  useEffect(() => {
+    const unlockAudio = () => {
+      try {
+        if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+          window.speechSynthesis.resume();
+        }
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioCtx) {
+          const ctx = new AudioCtx();
+          if (ctx.state === 'suspended') {
+            ctx.resume().catch(() => {});
+          }
+        }
+      } catch {}
+    };
+    window.addEventListener('click', unlockAudio, { once: true });
+    window.addEventListener('touchstart', unlockAudio, { once: true });
+    return () => {
+      window.removeEventListener('click', unlockAudio);
+      window.removeEventListener('touchstart', unlockAudio);
+    };
+  }, []);
 
   // Play authentic 2-tone Delhi Metro arrival chime using Web Audio API
   const playMetroChime = useCallback(() => {
@@ -116,6 +160,9 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       if (!AudioCtx) return;
       const ctx = new AudioCtx();
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+      }
       const now = ctx.currentTime;
 
       // Tone 1: E5 (659 Hz)
@@ -123,24 +170,24 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
       const gain1 = ctx.createGain();
       osc1.type = 'sine';
       osc1.frequency.setValueAtTime(659.25, now);
-      gain1.gain.setValueAtTime(0.18, now);
-      gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+      gain1.gain.setValueAtTime(0.22, now);
+      gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.32);
       osc1.connect(gain1);
       gain1.connect(ctx.destination);
       osc1.start(now);
-      osc1.stop(now + 0.3);
+      osc1.stop(now + 0.32);
 
       // Tone 2: C5 (523 Hz)
       const osc2 = ctx.createOscillator();
       const gain2 = ctx.createGain();
       osc2.type = 'sine';
-      osc2.frequency.setValueAtTime(523.25, now + 0.22);
-      gain2.gain.setValueAtTime(0.22, now + 0.22);
-      gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+      osc2.frequency.setValueAtTime(523.25, now + 0.24);
+      gain2.gain.setValueAtTime(0.25, now + 0.24);
+      gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.65);
       osc2.connect(gain2);
       gain2.connect(ctx.destination);
-      osc2.start(now + 0.22);
-      osc2.stop(now + 0.6);
+      osc2.start(now + 0.24);
+      osc2.stop(now + 0.65);
     } catch (e) {
       console.warn('Could not play metro chime:', e);
     }
@@ -149,32 +196,53 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
   // Announce next station / arrival using Web Speech API in Hindi + English
   const announceStationVoice = useCallback(
     (stopName: string, isAtStop: boolean = false) => {
-      if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+      if (typeof window === 'undefined') return;
+
+      // 1. Play chime alert
+      playMetroChime();
+
+      if (!('speechSynthesis' in window)) return;
       try {
-        playMetroChime();
+        window.speechSynthesis.resume();
         window.speechSynthesis.cancel();
 
         const cleanName = stopName.split('(')[0].trim();
         const textToSpeak = isAtStop
-          ? `वाहन ${cleanName} स्टॉप पर पहुंच गया है। Arrived at ${cleanName}.`
-          : `अगला स्टॉप ${cleanName} है। Next stop is ${cleanName}.`;
+          ? `स्कूल वाहन ${cleanName} स्टॉप पर पहुंच गया है। Arrived at ${cleanName}.`
+          : `सावधान! स्कूल वाहन ${cleanName} पहुंचने वाला है। Next stop is ${cleanName}.`;
 
         const utterance = new SpeechSynthesisUtterance(textToSpeak);
-        utterance.rate = 0.92;
+        utterance.rate = 0.9;
         utterance.pitch = 1.05;
+        utterance.lang = 'hi-IN';
 
         const voices = window.speechSynthesis.getVoices();
-        const preferredVoice =
-          voices.find((v) => v.lang.includes('hi') || v.lang.includes('HI')) ||
-          voices.find((v) => v.lang.includes('en-IN') || v.name.includes('India')) ||
-          voices[0];
-        if (preferredVoice) {
-          utterance.voice = preferredVoice;
+        const hiVoice = voices.find((v) => v.lang.includes('hi') || v.lang.includes('HI'));
+        const inVoice = voices.find((v) => v.lang.includes('en-IN') || v.name.includes('India'));
+        if (hiVoice) {
+          utterance.voice = hiVoice;
+        } else if (inVoice) {
+          utterance.voice = inVoice;
         }
 
+        activeUtteranceRef.current = utterance;
+        utterance.onend = () => {
+          activeUtteranceRef.current = null;
+        };
+        utterance.onerror = (e) => {
+          console.warn('Speech synthesis error:', e);
+          activeUtteranceRef.current = null;
+        };
+
+        // Delay speech until metro chime finishes (650ms)
         setTimeout(() => {
-          window.speechSynthesis.speak(utterance);
-        }, 380);
+          try {
+            window.speechSynthesis.resume();
+            window.speechSynthesis.speak(utterance);
+          } catch (err) {
+            console.warn('SpeechSynthesis speak() error:', err);
+          }
+        }, 650);
       } catch (e) {
         console.warn('Speech synthesis error:', e);
       }
@@ -396,7 +464,28 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
   useEffect(() => {
     fetchSheetData();
 
-    // Fetch initial route stops from Google Sheet or server
+    // Fetch all route stops from Google Sheet Route_Stops tab
+    fetchRouteStopsFromGoogleSheet('all').then((allSheetStops) => {
+      if (allSheetStops && allSheetStops.length > 0) {
+        const r1 = allSheetStops.filter((s) => !s.routeId || s.routeId.toLowerCase() === 'route-1');
+        const r2 = allSheetStops.filter((s) => s.routeId && s.routeId.toLowerCase() === 'route-2');
+        if (r1.length > 0) {
+          try { localStorage.setItem(getRouteStorageKey('route-1'), JSON.stringify(r1)); } catch {}
+        }
+        if (r2.length > 0) {
+          try { localStorage.setItem(getRouteStorageKey('route-2'), JSON.stringify(r2)); } catch {}
+        }
+
+        if (activeRouteId === 'route-2' && r2.length > 0) {
+          setStoppages(r2);
+        } else if (activeRouteId === 'all') {
+          setStoppages(allSheetStops);
+        } else if (r1.length > 0) {
+          setStoppages(r1);
+        }
+      }
+    });
+
     fetchRouteStopsFromApi(activeRouteId).then((serverStops) => {
       if (serverStops && serverStops.length > 0) {
         setStoppages(serverStops);
@@ -656,6 +745,54 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
       isLiveFromSheet: true,
     };
   }, [activeBus, selectedBusId, liveTelemetry, users]);
+
+  // =========================================================================
+  // DYNAMIC AUTO-ROUTE SWITCHER (Only 1 vehicle in school - auto-detects route)
+  // =========================================================================
+  useEffect(() => {
+    if (!autoRouteEnabled || activeRouteId === 'all') return;
+    const curLat = activeTelemetry.latitude;
+    const curLng = activeTelemetry.longitude;
+    if (!curLat || !curLng || (curLat === DEFAULT_SCHOOL_COORDS.lat && curLng === DEFAULT_SCHOOL_COORDS.lng)) return;
+
+    try {
+      const r1Stops = loadStoppagesForRoute('route-1');
+      const r2Stops = loadStoppagesForRoute('route-2');
+
+      if (r1Stops.length > 0 && r2Stops.length > 0) {
+        let minR1 = Infinity;
+        for (const s of r1Stops) {
+          const d = calculateDistanceKm(curLat, curLng, s.lat, s.lng);
+          if (d < minR1) minR1 = d;
+        }
+
+        let minR2 = Infinity;
+        for (const s of r2Stops) {
+          const d = calculateDistanceKm(curLat, curLng, s.lat, s.lng);
+          if (d < minR2) minR2 = d;
+        }
+
+        // Auto-switch to Route 2 (e.g. Ibrahimpura) if vehicle is closer to Route 2
+        if (minR2 < minR1 && minR2 <= 2.5 && activeRouteId !== 'route-2') {
+          setActiveRouteId('route-2');
+          setStoppages(r2Stops);
+          setActionToast({
+            text: '⚡ ऑटो-डिटेक्ट: वाहन इब्राहिमपुरा (रूट #2) के पास पहुँचा - रूट स्वतः बदला गया!',
+            type: 'info',
+          });
+        } else if (minR1 < minR2 && minR1 <= 2.5 && activeRouteId !== 'route-1') {
+          setActiveRouteId('route-1');
+          setStoppages(r1Stops);
+          setActionToast({
+            text: '⚡ ऑटो-डिटेक्ट: वाहन रूट #1 (नरेला/सीकरी) के पास पहुँचा - रूट स्वतः बदला गया!',
+            type: 'info',
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('Auto route detect error:', e);
+    }
+  }, [activeTelemetry.latitude, activeTelemetry.longitude, autoRouteEnabled, activeRouteId]);
 
   // Current GPS point for the ETA engine
   const currentGpsPoint: GpsPoint = useMemo(
@@ -1032,28 +1169,76 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pt-3 border-t border-white/10">
           {/* Route & Shift Pills */}
           <div className="flex items-center gap-2 flex-wrap">
-            <div className="bg-slate-900/90 p-1 rounded-xl border border-slate-700 flex items-center gap-1">
+            <div className="bg-slate-900/90 p-1 rounded-xl border border-slate-700 flex items-center gap-1 flex-wrap">
+              {/* Auto Route Switcher Button */}
               <button
                 type="button"
-                onClick={() => handleSelectRoute('route-1')}
+                onClick={() => {
+                  setAutoRouteEnabled(true);
+                  try { localStorage.setItem('evs_auto_route_enabled', 'true'); } catch {}
+                  setActionToast({
+                    text: '⚡ ऑटो-डिटेक्ट रूट सक्रिय: वाहन की लाइव लोकेशन अनुसार रूट स्वतः बदलेगा!',
+                    type: 'info',
+                  });
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  autoRouteEnabled
+                    ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-black shadow-md ring-2 ring-emerald-300'
+                    : 'text-slate-300 hover:text-white hover:bg-white/10'
+                }`}
+                title="गाड़ी की लाइव लोकेशन के आधार पर रूट 1 या रूट 2 अपने आप बदलेगा"
+              >
+                <i className={`fa-solid fa-wand-magic-sparkles text-xs ${autoRouteEnabled ? 'text-amber-300 animate-pulse' : ''}`}></i>
+                <span>⚡ ऑटो-रूट (लोकेशन अनुसार)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setAutoRouteEnabled(false);
+                  try { localStorage.setItem('evs_auto_route_enabled', 'false'); } catch {}
+                  handleSelectRoute('route-1');
+                }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                  activeRouteId === 'route-1'
+                  !autoRouteEnabled && activeRouteId === 'route-1'
                     ? 'bg-amber-400 text-slate-950 font-black shadow-xs'
                     : 'text-slate-300 hover:text-white'
                 }`}
               >
-                🚐 रूट #1 (चिलकाना)
+                🚐 रूट #1 (नरेला - सीकरी खुर्द)
               </button>
+
               <button
                 type="button"
-                onClick={() => handleSelectRoute('route-2')}
+                onClick={() => {
+                  setAutoRouteEnabled(false);
+                  try { localStorage.setItem('evs_auto_route_enabled', 'false'); } catch {}
+                  handleSelectRoute('route-2');
+                }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                  activeRouteId === 'route-2'
+                  !autoRouteEnabled && activeRouteId === 'route-2'
                     ? 'bg-blue-500 text-white font-black shadow-xs'
                     : 'text-slate-300 hover:text-white'
                 }`}
               >
-                🚐 रूट #2 (पटनी)
+                🚐 रूट #2 (इब्राहिमपुरा)
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setAutoRouteEnabled(false);
+                  try { localStorage.setItem('evs_auto_route_enabled', 'false'); } catch {}
+                  handleSelectRoute('all');
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  !autoRouteEnabled && activeRouteId === 'all'
+                    ? 'bg-indigo-600 text-white font-black shadow-xs'
+                    : 'text-slate-300 hover:text-white'
+                }`}
+                title="सभी रूटों के स्टॉपेज एक साथ देखें"
+              >
+                🌐 सभी स्टॉप्स (Master)
               </button>
             </div>
 
@@ -1217,12 +1402,22 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-4">
           <div className="flex items-center gap-2.5 flex-wrap">
             <span className={`px-3 py-1 rounded-full text-xs font-black tracking-wider uppercase flex items-center gap-1.5 shadow-sm ${
-              activeRouteId === 'route-1'
+              activeRouteId === 'all'
+                ? 'bg-indigo-600 text-white font-black'
+                : activeRouteId === 'route-1'
                 ? 'bg-amber-400 text-slate-950 font-black'
                 : 'bg-blue-500 text-white font-black'
             }`}>
               <i className="fa-solid fa-train-subway"></i>
-              <span>{activeRouteId === 'route-1' ? 'येलो लाइन (रूट #1: चिलकाना - सुल्तानपुर)' : 'ब्लू लाइन (रूट #2: पटनी - देहात)'}</span>
+              <span>
+                {autoRouteEnabled
+                  ? `⚡ ऑटो: ${activeRouteId === 'route-2' ? 'रूट #2 (इब्राहिमपुरा)' : 'रूट #1 (नरेला - सीकरी)'}`
+                  : activeRouteId === 'all'
+                  ? '🌐 मास्टर रूट (सभी स्टॉप्स)'
+                  : activeRouteId === 'route-1'
+                  ? 'रूट #1 (नरेला - सीकरी खुर्द)'
+                  : 'रूट #2 (इब्राहिमपुरा)'}
+              </span>
             </span>
 
             <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[11px] font-bold border border-emerald-500/30 flex items-center gap-1">

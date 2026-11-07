@@ -116,7 +116,7 @@ const fetchSingleLegRoad = async (
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 4500);
+    const timeoutId = setTimeout(() => controller.abort(), 6500);
 
     const response = await fetch(osrmUrl, {
       signal: controller.signal,
@@ -129,16 +129,11 @@ const fetchSingleLegRoad = async (
       if (data.code === 'Ok' && data.routes && data.routes[0]) {
         const route = data.routes[0];
         const osrmDist = (route.distance || 0) / 1000;
-        const detourRatio = directDist > 0.05 ? osrmDist / directDist : 1;
-        const excessKm = osrmDist - directDist;
 
-        // DETOUR REJECTION RULE:
-        // If OSRM took a detour > 2.0x direct distance AND added > 2.0 km excess, OR ratio > 2.5:
-        // E.g. Nalhera to Chaura is 3.1 km direct, but OSRM routes 10.66 km (ratio 3.44, excess 7.56 km).
-        // We reject the detour and take the direct shortest village road path!
-        const isDetour = (detourRatio > 2.0 && excessKm > 2.0) || detourRatio > 2.5;
-
-        if (!isDetour && Array.isArray(route.geometry?.coordinates) && route.geometry.coordinates.length > 0) {
+        // ALWAYS USE REAL ROAD GEOMETRY:
+        // Village roads naturally curve and connect through actual junctions.
+        // Never replace real paved road geometry with straight diagonal lines through agricultural fields!
+        if (Array.isArray(route.geometry?.coordinates) && route.geometry.coordinates.length > 0) {
           const leafLetCoords: [number, number][] = route.geometry.coordinates.map(
             (c: [number, number]) => [c[1], c[0]]
           );
@@ -148,10 +143,6 @@ const fetchSingleLegRoad = async (
             durationMinutes: Math.round(((route.duration || 0) / 60) * 10) / 10,
             isSnappedToRoad: true,
           };
-        } else if (isDetour) {
-          console.info(
-            `[RoadRouting] Artificial detour rejected between (${start.lat.toFixed(4)}, ${start.lng.toFixed(4)}) and (${end.lat.toFixed(4)}, ${end.lng.toFixed(4)}): OSRM ${osrmDist.toFixed(1)}km vs Direct ${directDist.toFixed(1)}km. Using shortest direct corridor (${fallbackRoadDist}km).`
-          );
         }
       }
     }
@@ -159,7 +150,7 @@ const fetchSingleLegRoad = async (
     // Network or timeout, fallback to smooth corridor
   }
 
-  // Fallback to direct corridor
+  // Fallback only if OSRM is totally unreachable
   return {
     roadCoordinates: generateSmoothCorridor(start, end, 8),
     distanceKm: fallbackRoadDist,

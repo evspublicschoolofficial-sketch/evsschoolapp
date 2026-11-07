@@ -1566,6 +1566,10 @@ async function startServer() {
   app.get('/api/route-stops', (req, res) => {
     try {
       const routeId = (req.query.routeId as string) || '';
+      if (routeId === 'all' || routeId === 'auto') {
+        const allStops = Object.values(routeStopsStore).flat();
+        return res.json({ success: true, routeId, stops: allStops });
+      }
       if (routeId) {
         const stops = routeStopsStore[routeId] || DEFAULT_SERVER_ROUTE_STOPS[routeId] || [];
         return res.json({ success: true, routeId, stops });

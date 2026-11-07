@@ -2609,12 +2609,13 @@ export const fetchRouteStopsFromGoogleSheet = async (routeId: string): Promise<R
       // Skip header row if returned inside rows
       if (!stopId || stopId.toLowerCase() === 'stop_id' || stopName.toLowerCase() === 'stop_name') continue;
       if (isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0)) continue;
-      if (routeId && rowRoute && rowRoute.toLowerCase() !== routeId.toLowerCase()) continue;
+      if (routeId && routeId !== 'all' && routeId !== 'auto' && rowRoute && rowRoute.toLowerCase() !== routeId.toLowerCase()) continue;
 
       stops.push({
         id: stopId || `stop-${Date.now().toString().slice(-6)}`,
         name: stopName || `स्टॉप ${seq}`,
         sequence: seq,
+        routeId: rowRoute || 'route-1',
         lat,
         lng,
         scheduledTime: morningTime || eveningTime || '07:30 AM',
