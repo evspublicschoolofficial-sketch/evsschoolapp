@@ -372,7 +372,7 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
         : 'linear-gradient(135deg, #d97706 0%, #b45309 100%)';
       const spdBadgeBorder = moving ? '#34d399' : '#fde68a';
       const spdIcon = moving ? '⚡' : '⏹️';
-      const statusLabel = moving ? `${spdNum} km/h` : '0 km/h (खड़ी है)';
+      const statusLabel = moving ? `${spdNum} km/h • चल रहा है` : '0 km/h (खड़ी है)';
 
       return L.divIcon({
         className: 'live-van-marker',

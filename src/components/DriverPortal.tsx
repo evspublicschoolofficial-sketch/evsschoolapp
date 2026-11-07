@@ -433,7 +433,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
       status: currentStatus,
       sosAlert: sosActive,
       sosMessage: sosActive ? sosMessage || 'आपातकालीन सहायता आवश्यक है!' : undefined,
-      isLiveFromSheet: true,
+      isLiveFromSheet: false,
     };
 
     // 1. Cross-Device API & Persistent WebSocket (Transmits to server so manager & parents receive it instantly)

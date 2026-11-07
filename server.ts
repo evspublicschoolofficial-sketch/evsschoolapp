@@ -1780,6 +1780,32 @@ async function startServer() {
 
                   // If coordinates changed or if existing was stale school default
                   if (!existing || existing.currentLocationStr !== locStr || existing.latitude !== lat || existing.longitude !== lng) {
+                    let finalSpeed = 0;
+                    let finalHeading = existing?.heading || 0;
+
+                    if (existing && existing.latitude && existing.longitude) {
+                      const distMeters = getHaversineDistanceMeters(existing.latitude, existing.longitude, lat, lng);
+                      const prevTime = new Date(existing.lastServerSync || existing.lastUpdated).getTime();
+                      const elapsedSec = Math.max(1, (Date.now() - prevTime) / 1000);
+
+                      if (distMeters >= 4) {
+                        const computedKmh = Math.round((distMeters / elapsedSec) * 3.6);
+                        if (computedKmh > 0 && computedKmh <= 90) {
+                          finalSpeed = computedKmh;
+                        } else if (computedKmh > 90) {
+                          finalSpeed = 28;
+                        }
+
+                        const y = Math.sin(((lng - existing.longitude) * Math.PI) / 180) * Math.cos((lat * Math.PI) / 180);
+                        const x =
+                          Math.cos((existing.latitude * Math.PI) / 180) * Math.sin((lat * Math.PI) / 180) -
+                          Math.sin((existing.latitude * Math.PI) / 180) * Math.cos((lat * Math.PI) / 180) * Math.cos(((lng - existing.longitude) * Math.PI) / 180);
+                        finalHeading = Math.round(((Math.atan2(y, x) * 180) / Math.PI + 360) % 360);
+                      } else {
+                        finalSpeed = 0;
+                      }
+                    }
+
                     const telemetry = {
                       busId,
                       driverName,
@@ -1788,11 +1814,12 @@ async function startServer() {
                       latitude: lat,
                       longitude: lng,
                       accuracy: existing?.accuracy || 8,
-                      speed: existing?.speed || 0,
-                      heading: existing?.heading || 0,
+                      speed: finalSpeed,
+                      heading: finalHeading,
                       lastUpdated: lastUpdated || new Date().toISOString(),
-                      status: 'running',
+                      status: finalSpeed > 2 ? 'running' : 'stopped',
                       isLiveFromSheet: true,
+                      lastServerSync: new Date().toISOString(),
                     };
                     liveTelemetryStore[busId] = telemetry;
                     saveTelemetryCache();
@@ -1803,7 +1830,22 @@ async function startServer() {
                         client.send(broadcastMsg);
                       }
                     }
-                    console.log(`[GoogleSheetSync] Live bus ${busId} moved to ${locStr} (Broadcasted to ${clients.size} clients)`);
+                    console.log(`[GoogleSheetSync] Live bus ${busId} moved to ${locStr} (Speed: ${finalSpeed} km/h, Status: ${telemetry.status})`);
+                  } else if (existing && (existing.speed || 0) > 0) {
+                    // Vehicle hasn't moved for over 15 seconds - transition to stopped smoothly
+                    const prevTime = new Date(existing.lastServerSync || existing.lastUpdated).getTime();
+                    if (Date.now() - prevTime > 15000) {
+                      existing.speed = 0;
+                      existing.status = 'stopped';
+                      existing.lastServerSync = new Date().toISOString();
+                      saveTelemetryCache();
+                      const broadcastMsg = JSON.stringify({ type: 'BUS_UPDATE', telemetry: existing });
+                      for (const client of clients) {
+                        if (client.readyState === WebSocket.OPEN) {
+                          client.send(broadcastMsg);
+                        }
+                      }
+                    }
                   }
                 }
               }

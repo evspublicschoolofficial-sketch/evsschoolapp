@@ -260,6 +260,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
   });
 
   const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
+  const lastObservedPosRef = useRef<{ lat: number; lng: number; time: number; speed: number; heading: number } | null>(null);
 
   // Stoppages for active route
   const [stoppages, setStoppages] = useState<RouteStoppage[]>(() => {
@@ -467,22 +468,19 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
     // Fetch all route stops from Google Sheet Route_Stops tab
     fetchRouteStopsFromGoogleSheet('all').then((allSheetStops) => {
       if (allSheetStops && allSheetStops.length > 0) {
-        const r1 = allSheetStops.filter((s) => !s.routeId || s.routeId.toLowerCase() === 'route-1');
-        const r2 = allSheetStops.filter((s) => s.routeId && s.routeId.toLowerCase() === 'route-2');
-        if (r1.length > 0) {
-          try { localStorage.setItem(getRouteStorageKey('route-1'), JSON.stringify(r1)); } catch {}
-        }
-        if (r2.length > 0) {
-          try { localStorage.setItem(getRouteStorageKey('route-2'), JSON.stringify(r2)); } catch {}
-        }
-
-        if (activeRouteId === 'route-2' && r2.length > 0) {
-          setStoppages(r2);
-        } else if (activeRouteId === 'all') {
-          setStoppages(allSheetStops);
-        } else if (r1.length > 0) {
-          setStoppages(r1);
-        }
+        setStoppages((prevStops) => {
+          // Merge sheet stops with existing local stops so newly created/edited stops are never lost
+          const stopMap = new Map<string, RouteStoppage>();
+          allSheetStops.forEach((s) => stopMap.set(s.id, s));
+          prevStops.forEach((s) => stopMap.set(s.id, s));
+          const merged = Array.from(stopMap.values())
+            .filter((s) => {
+              if (activeRouteId === 'all') return true;
+              return !s.routeId || s.routeId.toLowerCase() === activeRouteId.toLowerCase();
+            })
+            .sort((a, b) => a.sequence - b.sequence);
+          return merged.length > 0 ? merged : prevStops;
+        });
       }
     });
 
@@ -676,7 +674,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
     const driverName = activeBus?.Driver_Name || 'Amjad';
     const driverPhone = getDriverPhone(driverName);
 
-    // 1. Parse coordinates from real Google Sheet record first
+    // 1. Parse coordinates from real Google Sheet record
     const sheetCoords = parseCoordinates(activeBus?.Current_Location);
     const hasValidSheetCoords =
       !isNaN(sheetCoords.lat) &&
@@ -693,56 +691,130 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
           (t.driverName && driverName && t.driverName.toLowerCase().includes(driverName.toLowerCase()))
       );
 
-    // CRITICAL: If direct live telemetry exists and is fresh (within 90s), ALWAYS return it!
-    // Whether the vehicle is driving (speed > 0) or standing at a stop/traffic (speed = 0),
-    // live GPS is the TRUE real-time location.
-    // Falling back to Google Sheets when speed=0 caused the vehicle to jump backwards!
-    if (live && !live.isLiveFromSheet) {
-      const timeSinceUpdate = Date.now() - new Date(live.lastUpdated).getTime();
-      if (timeSinceUpdate < 90000) {
-        return live;
+    // Check if direct live telemetry exists and is fresh (within 90s)
+    const isDirectFresh =
+      live &&
+      !live.isLiveFromSheet &&
+      Date.now() - new Date(live.lastUpdated).getTime() < 90000;
+
+    let targetLat = 30.071192;
+    let targetLng = 77.473767;
+    let targetLocStr = '30.071192, 77.473767';
+    let targetLastUpdated = new Date().toLocaleString('hi-IN');
+    let isFromSheet = false;
+    let explicitSpeed = typeof live?.speed === 'number' && live.speed > 0 ? live.speed : 0;
+    let explicitHeading = typeof live?.heading === 'number' ? live.heading : 0;
+
+    if (isDirectFresh && live && live.latitude && live.longitude) {
+      targetLat = live.latitude;
+      targetLng = live.longitude;
+      targetLocStr = live.currentLocationStr || `${live.latitude.toFixed(6)}, ${live.longitude.toFixed(6)}`;
+      targetLastUpdated = live.lastUpdated;
+      isFromSheet = false;
+    } else if (hasValidSheetCoords) {
+      targetLat = sheetCoords.lat;
+      targetLng = sheetCoords.lng;
+      targetLocStr = activeBus?.Current_Location || `${sheetCoords.lat.toFixed(6)}, ${sheetCoords.lng.toFixed(6)}`;
+      targetLastUpdated = activeBus?.Last_Updated || live?.lastUpdated || new Date().toLocaleString('hi-IN');
+      isFromSheet = true;
+    } else if (live && live.latitude && live.longitude) {
+      targetLat = live.latitude;
+      targetLng = live.longitude;
+      targetLocStr = live.currentLocationStr;
+      targetLastUpdated = live.lastUpdated;
+      isFromSheet = false;
+    }
+
+    // Dynamic speed and heading calculation engine based on coordinate delta
+    let dynamicSpeed = explicitSpeed;
+    let dynamicHeading = explicitHeading;
+
+    const prev = lastObservedPosRef.current;
+    const now = Date.now();
+
+    if (explicitSpeed > 0) {
+      // Driver GPS or WebSocket directly delivered non-zero speed
+      lastObservedPosRef.current = {
+        lat: targetLat,
+        lng: targetLng,
+        time: now,
+        speed: explicitSpeed,
+        heading: explicitHeading,
+      };
+    } else if (prev && prev.lat && prev.lng) {
+      const distKm = calculateDistanceKm(prev.lat, prev.lng, targetLat, targetLng);
+      const distMeters = distKm * 1000;
+      const elapsedSec = Math.max(1, (now - prev.time) / 1000);
+
+      if (distMeters >= 4) {
+        // Vehicle moved at least 4 meters!
+        const computedKmh = Math.round((distMeters / elapsedSec) * 3.6);
+        if (computedKmh > 0 && computedKmh <= 90) {
+          dynamicSpeed = computedKmh;
+        } else if (computedKmh > 90) {
+          dynamicSpeed = 28; // Realistic school van speed
+        }
+
+        // Derive heading bearing
+        const y = Math.sin(((targetLng - prev.lng) * Math.PI) / 180) * Math.cos((targetLat * Math.PI) / 180);
+        const x =
+          Math.cos((prev.lat * Math.PI) / 180) * Math.sin((targetLat * Math.PI) / 180) -
+          Math.sin((prev.lat * Math.PI) / 180) * Math.cos((targetLat * Math.PI) / 180) * Math.cos(((targetLng - prev.lng) * Math.PI) / 180);
+        dynamicHeading = Math.round(((Math.atan2(y, x) * 180) / Math.PI + 360) % 360);
+
+        lastObservedPosRef.current = {
+          lat: targetLat,
+          lng: targetLng,
+          time: now,
+          speed: dynamicSpeed,
+          heading: dynamicHeading,
+        };
+      } else {
+        // Distance moved is < 4 meters
+        if (elapsedSec > 15) {
+          // Standing still at stop, traffic or school
+          dynamicSpeed = 0;
+          lastObservedPosRef.current = {
+            lat: targetLat,
+            lng: targetLng,
+            time: now,
+            speed: 0,
+            heading: prev.heading,
+          };
+        } else {
+          // Keep previous speed smoothly
+          dynamicSpeed = prev.speed;
+          dynamicHeading = prev.heading;
+        }
       }
-    }
-
-    if (live && (live.speed || 0) > 0) {
-      return live;
-    }
-
-    // Always prefer real Google Sheet location if valid when no direct live telemetry is active
-    if (hasValidSheetCoords) {
-      return {
-        busId,
-        driverName,
-        driverPhone,
-        currentLocationStr: activeBus?.Current_Location || `${sheetCoords.lat}, ${sheetCoords.lng}`,
-        latitude: sheetCoords.lat,
-        longitude: sheetCoords.lng,
-        accuracy: live?.accuracy || 8,
-        speed: live?.speed || 0,
-        heading: live?.heading || 0,
-        lastUpdated: activeBus?.Last_Updated || live?.lastUpdated || new Date().toLocaleString('hi-IN'),
-        status: 'running',
-        isLiveFromSheet: true,
+    } else {
+      // Initial observation
+      lastObservedPosRef.current = {
+        lat: targetLat,
+        lng: targetLng,
+        time: now,
+        speed: 0,
+        heading: 0,
       };
     }
 
-    if (live) {
-      return live;
-    }
+    const calculatedStatus: 'running' | 'stopped' = dynamicSpeed > 2 ? 'running' : 'stopped';
 
     return {
       busId,
       driverName,
       driverPhone,
-      currentLocationStr: activeBus?.Current_Location || '30.071192, 77.473767',
-      latitude: sheetCoords.lat || 30.071192,
-      longitude: sheetCoords.lng || 77.473767,
-      accuracy: 8,
-      speed: 0,
-      heading: 0,
-      lastUpdated: activeBus?.Last_Updated || new Date().toLocaleString('hi-IN'),
-      status: 'running',
-      isLiveFromSheet: true,
+      currentLocationStr: targetLocStr,
+      latitude: targetLat,
+      longitude: targetLng,
+      accuracy: live?.accuracy || 8,
+      speed: dynamicSpeed,
+      heading: dynamicHeading,
+      lastUpdated: targetLastUpdated,
+      status: calculatedStatus,
+      isLiveFromSheet: isFromSheet,
+      sosAlert: live?.sosAlert,
+      sosMessage: live?.sosMessage,
     };
   }, [activeBus, selectedBusId, liveTelemetry, users]);
 
