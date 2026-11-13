@@ -16,6 +16,7 @@ import {
 import {
   ACADEMIC_MONTHS,
   CURRENT_ACADEMIC_YEAR,
+  getDefaultAcademicMonth,
   calculateMonthlyScore,
   computeMonthlyLeaderboard,
   computeTeacherOfTheYear,
@@ -42,6 +43,7 @@ interface TeacherPerformanceDashboardProps {
   behaviorList?: StudentBehaviorRecord[];
   students?: Student[];
   syllabusTopics?: SyllabusTopicRecord[];
+  classMap?: Record<string, string>;
 }
 
 export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardProps> = ({
@@ -57,21 +59,29 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
   behaviorList = [],
   students = [],
   syllabusTopics = [],
+  classMap,
 }) => {
-  // Filter active teachers from users list
+  // Filter active teachers from users list (exclude drivers/parents/non-teaching transport staff)
   const teachers = useMemo(() => {
-    return users.filter(
-      (u) =>
-        !u.Designation ||
-        u.Designation.toLowerCase().includes('teacher') ||
-        u.Designation.toLowerCase().includes('शिक्षक') ||
-        u.Designation.toLowerCase().includes('staff')
-    );
+    return users.filter((u) => {
+      const desig = String(u.Designation || '').toLowerCase();
+      if (/driver|van|bus|conductor|guard|peon|parent|student/i.test(desig)) return false;
+      return (
+        !desig ||
+        desig.includes('teacher') ||
+        desig.includes('शिक्षक') ||
+        desig.includes('faculty') ||
+        desig.includes('instructor') ||
+        desig.includes('principal') ||
+        desig.includes('staff')
+      );
+    });
   }, [users]);
 
   const [records, setRecords] = useState<TeacherPerformanceRecord[]>(() => loadLocalPerformanceRecords());
+  const [loadedSyllabusTopics, setLoadedSyllabusTopics] = useState<SyllabusTopicRecord[]>(syllabusTopics);
   const [activeTab, setActiveTab] = useState<'leaderboard' | 'annual' | 'records' | 'setup' | 'syllabus'>(initialTab);
-  const [selectedMonth, setSelectedMonth] = useState<string>('2026-09');
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => getDefaultAcademicMonth());
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [editingRecord, setEditingRecord] = useState<TeacherPerformanceRecord | null>(null);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
@@ -80,7 +90,7 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
 
   // Form State for Entry Modal
   const [formTeacherId, setFormTeacherId] = useState<string>('');
-  const [formMonth, setFormMonth] = useState<string>('2026-09');
+  const [formMonth, setFormMonth] = useState<string>(() => getDefaultAcademicMonth());
   const [formSyllabus, setFormSyllabus] = useState<number>(25);
   const [formTest, setFormTest] = useState<number>(20);
   const [formAttendance, setFormAttendance] = useState<number>(14);
@@ -89,13 +99,39 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
   const [formRemarks, setFormRemarks] = useState<string>('');
   const [autoBreakdown, setAutoBreakdown] = useState<AutoCalculationBreakdown | null>(null);
   const [isAutoCalculatingAll, setIsAutoCalculatingAll] = useState<boolean>(false);
+  const [isRefreshingSheet, setIsRefreshingSheet] = useState<boolean>(false);
 
-  // Fetch fresh records on mount
+  const effectiveSyllabusTopics = syllabusTopics.length > 0 ? syllabusTopics : loadedSyllabusTopics;
+
+  const handleSyncPerformanceFromSheet = async () => {
+    setIsRefreshingSheet(true);
+    try {
+      const [fresh, sylRes] = await Promise.all([
+        fetchPerformanceRecordsFromApi(true),
+        fetch('/api/syllabus-tracker?refresh=1').then((r) => (r.ok ? r.json() : [])).catch(() => []),
+      ]);
+      if (fresh && fresh.length > 0) setRecords(fresh);
+      if (Array.isArray(sylRes) && sylRes.length > 0) setLoadedSyllabusTopics(sylRes);
+      setSyncStatus('🔄 Google Sheet से सभी शिक्षकों का ताज़ा डेटा सिंक हो गया!');
+      setTimeout(() => setSyncStatus(null), 3500);
+    } catch {}
+    setIsRefreshingSheet(false);
+  };
+
+  // Fetch fresh records and syllabus topics on mount
   useEffect(() => {
     fetchPerformanceRecordsFromApi().then((fresh) => {
       if (fresh && fresh.length > 0) setRecords(fresh);
     });
-  }, []);
+    if (syllabusTopics.length === 0) {
+      fetch('/api/syllabus-tracker')
+        .then((r) => (r.ok ? r.json() : []))
+        .then((data) => {
+          if (Array.isArray(data) && data.length > 0) setLoadedSyllabusTopics(data);
+        })
+        .catch(() => {});
+    }
+  }, [syllabusTopics.length]);
 
   // Compute Live Calculated Monthly Score for Modal
   const liveScore = useMemo(() => {
@@ -158,7 +194,8 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
       staffAttendanceList,
       behaviorList,
       students,
-      syllabusTopics,
+      syllabusTopics: effectiveSyllabusTopics,
+      classMap,
       evaluatedBy: managerName,
     });
     setFormSyllabus(res.record.syllabus_progress_score);
@@ -185,7 +222,8 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
         staffAttendanceList,
         behaviorList,
         students,
-        syllabusTopics,
+        syllabusTopics: effectiveSyllabusTopics,
+        classMap,
         evaluatedBy: managerName,
       });
 
@@ -256,71 +294,236 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
     }, 1500);
   };
 
-  // Google Apps Script Snippet to Display to User
+  // Complete 2-Way Google Apps Script Snippet (doGet + doPost for all 3 Tabs)
   const appsScriptCode = `// ============================================================
-// E.V.S. PUBLIC SCHOOL - TEACHER PERFORMANCE APPS SCRIPT HANDLER
-// इस कोड को अपनी Google Apps Script में function doPost(e) के अंदर जोड़ें:
+// E.V.S. PUBLIC SCHOOL - 3 TABS 2-WAY SYNC (READ + WRITE + DELETE)
+// 1) अपने Code.gs में function doGet(e) के अंदर यह जोड़ें:
+// ============================================================
+/*
+  if (action === "getTeacherPerformance") return handleGetTeacherPerformance(ss);
+  if (action === "getSyllabusTracker") return handleGetSyllabusTracker(ss);
+  if (action === "getSchoolHolidays") return handleGetSchoolHolidays(ss);
+  if (action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSyllabusTopic" || action === "deleteSchoolHoliday") {
+    return doPost(e);
+  }
+*/
+
+// ============================================================
+// 2) अपने Code.gs में function doPost(e) के अंदर यह जोड़ें:
+// ============================================================
+/*
+  if (action === "saveTeacherPerformance") return handleSaveTeacherPerformance(ss, data);
+  if (action === "saveSyllabusTopic") return handleSaveSyllabusTopic(ss, data);
+  if (action === "deleteSyllabusTopic") return handleDeleteRowById(ss, "Syllabus_Tracker", data.id);
+  if (action === "saveSchoolHoliday") return handleSaveSchoolHoliday(ss, data);
+  if (action === "deleteSchoolHoliday") return handleDeleteRowById(ss, "School_Holidays", data.id);
+*/
+
+// ============================================================
+// 3) नीचे दिए सभी फंक्शन्स Code.gs के सबसे नीचे पेस्ट करें:
 // ============================================================
 
-function handleTeacherPerformance(e) {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheetName = "Teacher_Performance";
-  var sheet = ss.getSheetByName(sheetName);
-  
-  // यदि टैब मौजूद नहीं है तो स्वचालित रूप से हेडर के साथ बनाएँ
+function formatCellMonth_(val) {
+  if (!val) return "";
+  if (Object.prototype.toString.call(val) === "[object Date]") {
+    return Utilities.formatDate(val, Session.getScriptTimeZone() || "Asia/Kolkata", "yyyy-MM");
+  }
+  var s = String(val).trim();
+  return s.length >= 7 ? s.slice(0, 7) : s;
+}
+
+function formatCellDate_(val) {
+  if (!val) return "";
+  if (Object.prototype.toString.call(val) === "[object Date]") {
+    return Utilities.formatDate(val, Session.getScriptTimeZone() || "Asia/Kolkata", "yyyy-MM-dd");
+  }
+  var s = String(val).trim();
+  return s.length >= 10 ? s.slice(0, 10) : s;
+}
+
+function handleGetTeacherPerformance(ss) {
+  var sheet = ss.getSheetByName("Teacher_Performance");
   if (!sheet) {
-    sheet = ss.insertSheet(sheetName);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", records: [] })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var records = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r[0] && !r[1]) continue;
+    records.push({
+      id: String(r[0] || ("tp_" + i)),
+      teacher_id: String(r[1] || ""),
+      teacher_name: String(r[2] || ""),
+      assigned_class: String(r[3] || ""),
+      month: formatCellMonth_(r[4]),
+      academic_year: String(r[5] || "2026-2027"),
+      syllabus_progress_score: Number(r[6] || 0),
+      student_test_score: Number(r[7] || 0),
+      attendance_logging_score: Number(r[8] || 0),
+      homework_evaluation_score: Number(r[9] || 0),
+      punctuality_discipline_score: Number(r[10] || 0),
+      monthly_total_score: Number(r[11] || 0),
+      grade: String(r[12] || "B"),
+      evaluated_by: String(r[13] || "Principal / Manager"),
+      remarks: String(r[14] || ""),
+      timestamp: String(r[15] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", records: records })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetSyllabusTracker(ss) {
+  var sheet = ss.getSheetByName("Syllabus_Tracker");
+  if (!sheet) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", topics: [] })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var topics = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r[0] && !r[8] && !r[9]) continue;
+    topics.push({
+      id: String(r[0] || ("syl_" + i)),
+      teacher_id: String(r[1] || ""),
+      teacher_name: String(r[2] || ""),
+      class_name: String(r[3] || ""),
+      subject: String(r[4] || ""),
+      month: formatCellMonth_(r[5]),
+      week_number: Number(r[6] || 1),
+      week_label: String(r[7] || ""),
+      chapter_title: String(r[8] || ""),
+      topic_description: String(r[9] || ""),
+      planned_date: formatCellDate_(r[10]),
+      target_completion_date: formatCellDate_(r[11]),
+      completed_date: formatCellDate_(r[12]),
+      status: String(r[13] || "Pending"),
+      timestamp: String(r[14] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", topics: topics })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetSchoolHolidays(ss) {
+  var sheet = ss.getSheetByName("School_Holidays");
+  if (!sheet) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", holidays: [] })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var holidays = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r[1] && !r[2]) continue;
+    holidays.push({
+      id: String(r[0] || ("hol_" + i)),
+      title: String(r[1] || ""),
+      date: formatCellDate_(r[2]),
+      end_date: formatCellDate_(r[3]),
+      category: String(r[4] || "festival"),
+      description: String(r[5] || ""),
+      timestamp: String(r[6] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", holidays: holidays })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveTeacherPerformance(ss, data) {
+  var sheet = ss.getSheetByName("Teacher_Performance");
+  if (!sheet) {
+    sheet = ss.insertSheet("Teacher_Performance");
     sheet.appendRow([
       "Record_ID", "Teacher_ID", "Teacher_Name", "Assigned_Class",
       "Month", "Academic_Year", "Syllabus_Score_30", "Test_Score_25",
       "Attendance_Score_15", "Homework_Score_15", "Punctuality_Score_15",
       "Total_Score_100", "Grade", "Evaluated_By", "Remarks", "Timestamp"
     ]);
-    sheet.getRange(1, 1, 1, 16).setFontWeight("bold").setBackground("#0c2340").setFontColor("#fde047");
   }
-
-  var data = e.parameter.record ? JSON.parse(e.parameter.record) : e.parameter;
-  var recordId = data.id || ("tp_" + data.month + "_" + data.teacher_id);
-  
-  // मौजूदा रिकॉर्ड खोजें या नया जोड़ें
+  var rec = data.record ? (typeof data.record === "string" ? JSON.parse(data.record) : data.record) : data;
+  var recordId = String(rec.id || ("tp_" + rec.month + "_" + rec.teacher_id));
   var rows = sheet.getDataRange().getValues();
   var rowIndex = -1;
   for (var i = 1; i < rows.length; i++) {
-    if (rows[i][0] == recordId || (rows[i][1] == data.teacher_id && rows[i][4] == data.month)) {
+    if (String(rows[i][0]) === recordId || (String(rows[i][1]) === String(rec.teacher_id) && formatCellMonth_(rows[i][4]) === String(rec.month))) {
       rowIndex = i + 1;
       break;
     }
   }
-
   var rowData = [
-    recordId,
-    data.teacher_id || "",
-    data.teacher_name || "",
-    data.assigned_class || "",
-    data.month || "",
-    data.academic_year || "2026-2027",
-    Number(data.syllabus_progress_score || 0),
-    Number(data.student_test_score || 0),
-    Number(data.attendance_logging_score || 0),
-    Number(data.homework_evaluation_score || 0),
-    Number(data.punctuality_discipline_score || 0),
-    Number(data.monthly_total_score || 0),
-    data.grade || "B",
-    data.evaluated_by || "Principal / Manager",
-    data.remarks || "",
-    new Date()
+    recordId, rec.teacher_id || "", rec.teacher_name || "", rec.assigned_class || "",
+    "'" + String(rec.month || ""), rec.academic_year || "2026-2027",
+    Number(rec.syllabus_progress_score || 0), Number(rec.student_test_score || 0),
+    Number(rec.attendance_logging_score || 0), Number(rec.homework_evaluation_score || 0),
+    Number(rec.punctuality_discipline_score || 0), Number(rec.monthly_total_score || 0),
+    rec.grade || "B", rec.evaluated_by || "Principal / Manager", rec.remarks || "", new Date()
   ];
+  if (rowIndex > 0) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
+  else sheet.appendRow(rowData);
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "Teacher performance saved!" })).setMimeType(ContentService.MimeType.JSON);
+}
 
-  if (rowIndex > 0) {
-    sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
-  } else {
-    sheet.appendRow(rowData);
+function handleSaveSyllabusTopic(ss, data) {
+  var sheet = ss.getSheetByName("Syllabus_Tracker");
+  if (!sheet) {
+    sheet = ss.insertSheet("Syllabus_Tracker");
+    sheet.appendRow([
+      "Topic_ID", "Teacher_ID", "Teacher_Name", "Class_Name", "Subject",
+      "Month", "Week_Number", "Week_Label", "Chapter_Title", "Topic_Description",
+      "Planned_Date", "Target_Completion_Date", "Completed_Date", "Status", "Timestamp"
+    ]);
   }
+  var t = data.topic ? (typeof data.topic === "string" ? JSON.parse(data.topic) : data.topic) : data;
+  var topicId = String(t.id || ("syl_" + Date.now()));
+  var rows = sheet.getDataRange().getValues();
+  var rowIndex = -1;
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]) === topicId) { rowIndex = i + 1; break; }
+  }
+  var rowData = [
+    topicId, t.teacher_id || "", t.teacher_name || "", t.class_name || "", t.subject || "",
+    "'" + String(t.month || ""), Number(t.week_number || 1), t.week_label || "",
+    t.chapter_title || "", t.topic_description || "", t.planned_date || "",
+    t.target_completion_date || "", t.completed_date || "", t.status || "Pending", new Date()
+  ];
+  if (rowIndex > 0) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
+  else sheet.appendRow(rowData);
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "Syllabus topic saved!" })).setMimeType(ContentService.MimeType.JSON);
+}
 
-  return ContentService.createTextOutput(JSON.stringify({
-    status: "success",
-    message: "Teacher performance record saved successfully in Teacher_Performance tab!"
-  })).setMimeType(ContentService.MimeType.JSON);
+function handleSaveSchoolHoliday(ss, data) {
+  var sheet = ss.getSheetByName("School_Holidays");
+  if (!sheet) {
+    sheet = ss.insertSheet("School_Holidays");
+    sheet.appendRow(["Holiday_ID", "Title", "Date", "End_Date", "Category", "Description", "Timestamp"]);
+  }
+  var h = data.holiday ? (typeof data.holiday === "string" ? JSON.parse(data.holiday) : data.holiday) : data;
+  var holId = String(h.id || ("hol_" + Date.now()));
+  var rows = sheet.getDataRange().getValues();
+  var rowIndex = -1;
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]) === holId) { rowIndex = i + 1; break; }
+  }
+  var rowData = [
+    holId, h.title || "", "'" + String(h.date || ""), h.end_date ? ("'" + String(h.end_date)) : "",
+    h.category || "festival", h.description || "", new Date()
+  ];
+  if (rowIndex > 0) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
+  else sheet.appendRow(rowData);
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "Holiday saved!" })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleDeleteRowById(ss, sheetName, id) {
+  var sheet = ss.getSheetByName(sheetName);
+  if (!sheet || !id) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "success" })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  for (var i = rows.length - 1; i >= 1; i--) {
+    if (String(rows[i][0]) === String(id)) {
+      sheet.deleteRow(i + 1);
+      break;
+    }
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", deleted: id })).setMimeType(ContentService.MimeType.JSON);
 }`;
 
   return (
@@ -371,6 +574,17 @@ function handleTeacherPerformance(e) {
                 </button>
               </>
             )}
+
+            <button
+              type="button"
+              onClick={handleSyncPerformanceFromSheet}
+              disabled={isRefreshingSheet}
+              className="px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white font-bold text-sm rounded-xl border border-white/20 backdrop-blur-sm flex items-center gap-2 transition-all cursor-pointer disabled:opacity-60"
+              title="Google Sheet (Teacher_Performance) से 2-Way सिंक करें"
+            >
+              <i className={`fa-solid fa-arrows-rotate ${isRefreshingSheet ? 'fa-spin' : 'text-emerald-300'}`}></i>
+              <span>{isRefreshingSheet ? 'सिंक...' : 'Sheet सिंक'}</span>
+            </button>
 
             <button
               onClick={() => setActiveTab('annual')}
@@ -1037,8 +1251,12 @@ function handleTeacherPerformance(e) {
       {activeTab === 'syllabus' && (
         <TeacherSyllabusPlanner
           allTeachers={teachers}
-          currentUser={teachers.find((t) => t.User_ID === loggedTeacherId)}
+          currentUser={teachers.find(
+            (t) =>
+              (loggedTeacherId && (String(t.User_ID) === String(loggedTeacherId) || String(t.Username) === String(loggedTeacherId)))
+          )}
           isManager={!isTeacherView}
+          onSyllabusUpdated={(updated) => setLoadedSyllabusTopics(updated)}
         />
       )}
 

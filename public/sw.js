@@ -1,7 +1,7 @@
 // EVS Public School - High-Performance PWA Service Worker
 // Enables 0.1-second instant app launch on mobile devices with Stale-While-Revalidate caching
 
-const CACHE_NAME = 'evs-school-pwa-v7';
+const CACHE_NAME = 'evs-school-pwa-v8';
 
 // Static core assets to pre-cache on install
 const PRECACHE_ASSETS = [

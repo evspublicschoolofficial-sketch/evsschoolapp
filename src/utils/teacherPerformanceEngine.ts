@@ -30,6 +30,88 @@ export const ACADEMIC_MONTHS = [
   { key: '2027-03', label: 'मार्च 2027 (March)' },
 ];
 
+export const getDefaultAcademicMonth = (): string => {
+  const ym = new Date().toISOString().slice(0, 7);
+  if (ACADEMIC_MONTHS.some((m) => m.key === ym)) return ym;
+  return '2026-11';
+};
+
+const normalizeDateYmd = (val: any): string => {
+  if (!val) return '';
+  const s = String(val).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const parts = s.split(/[-/.]/);
+  if (parts.length === 3) {
+    if (parts[0].length === 4) {
+      return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+    }
+    const d = parts[0].padStart(2, '0');
+    const m = parts[1].padStart(2, '0');
+    let y = parts[2];
+    if (y.length === 2) y = `20${y}`;
+    return `${y}-${m}-${d}`;
+  }
+  const parsed = new Date(s);
+  if (!isNaN(parsed.getTime())) {
+    return parsed.toISOString().slice(0, 10);
+  }
+  return s;
+};
+
+const normalizeClassKey = (raw: any, classMap?: Record<string, string>): string => {
+  if (raw === undefined || raw === null) return '';
+  let s = String(raw).trim();
+  if (!s) return '';
+  if (classMap && classMap[s]) {
+    s = String(classMap[s]).trim();
+  }
+  return s
+    .toLowerCase()
+    .replace(/^class\s+/i, '')
+    .replace(/^कक्षा\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+const getTeacherAssignedClassKeys = (teacher: SchoolUser, classMap?: Record<string, string>): string[] => {
+  let raw = String(teacher.Assigned_Class || '').trim();
+  if (!raw && typeof window !== 'undefined') {
+    try {
+      const saved = localStorage.getItem('teacher_class_assignments');
+      if (saved) {
+        const map = JSON.parse(saved);
+        raw = String(
+          map[teacher.User_ID] ||
+            map[teacher.Username || ''] ||
+            map[teacher.Name || ''] ||
+            ''
+        ).trim();
+      }
+    } catch {}
+  }
+  if (!raw) return [];
+  return raw
+    .split(/[,;|]+/)
+    .map((part) => normalizeClassKey(part, classMap))
+    .filter(Boolean);
+};
+
+const parseCheckInMinutes = (timeStr?: string): number | null => {
+  if (!timeStr) return null;
+  const s = String(timeStr).trim().toUpperCase();
+  const isPM = s.includes('PM');
+  const isAM = s.includes('AM');
+  const clean = s.replace(/AM|PM/g, '').trim();
+  const match = clean.match(/(\d{1,2}):(\d{1,2})/);
+  if (!match) return null;
+  let hr = parseInt(match[1], 10);
+  const min = parseInt(match[2], 10);
+  if (isNaN(hr) || isNaN(min)) return null;
+  if (isPM && hr < 12) hr += 12;
+  if (isAM && hr === 12) hr = 0;
+  return hr * 60 + min;
+};
+
 /**
  * 1. Automatic Monthly Score & Grade Calculation
  * Sums all 5 key parameters strictly within weightage boundaries
@@ -252,7 +334,7 @@ export interface AutoCalculationResult {
 
 export const autoCalculateTeacherMonthlyScoreFromAppData = (params: {
   teacher: SchoolUser;
-  month: string; // e.g. "2026-09"
+  month: string; // e.g. "2026-11"
   academicYear?: string;
   homeworkList?: Homework[];
   homeworkTrackerList?: HomeworkTrackerRecord[];
@@ -260,6 +342,7 @@ export const autoCalculateTeacherMonthlyScoreFromAppData = (params: {
   behaviorList?: StudentBehaviorRecord[];
   students?: Student[];
   syllabusTopics?: SyllabusTopicRecord[];
+  classMap?: Record<string, string>;
   evaluatedBy?: string;
 }): AutoCalculationResult => {
   const {
@@ -272,32 +355,86 @@ export const autoCalculateTeacherMonthlyScoreFromAppData = (params: {
     behaviorList = [],
     students = [],
     syllabusTopics = [],
+    classMap,
     evaluatedBy = 'AI Auto Engine (App Database)',
   } = params;
 
-  const teacherName = teacher.Name || teacher.Username || 'शिक्षक';
-  const assignedClass = teacher.Assigned_Class || '';
-  const teacherId = teacher.User_ID || teacher.Username;
+  const teacherName = String(teacher.Name || teacher.Username || 'शिक्षक').trim();
+  const teacherUsername = String(teacher.Username || '').trim();
+  const teacherId = String(teacher.User_ID || teacher.Username || '').trim();
+  const teacherNameLower = teacherName.toLowerCase();
+  const teacherUsernameLower = teacherUsername.toLowerCase();
+  const teacherIdLower = teacherId.toLowerCase();
 
-  // Pre-scan homework assigned in this month by teacher
+  const assignedClassKeys = getTeacherAssignedClassKeys(teacher, classMap);
+  const assignedClassDisplay = teacher.Assigned_Class || (assignedClassKeys.length > 0 ? assignedClassKeys.join(', ') : '');
+
+  // Helper: does record belong to this teacher's identity?
+  const matchesTeacherIdentity = (val?: string): boolean => {
+    if (!val) return false;
+    const v = String(val).trim().toLowerCase();
+    if (!v) return false;
+    return (
+      (teacherIdLower && v === teacherIdLower) ||
+      (teacherUsernameLower && v === teacherUsernameLower) ||
+      (teacherNameLower && (v === teacherNameLower || v.includes(teacherNameLower) || teacherNameLower.includes(v)))
+    );
+  };
+
+  // Pre-build student -> normalized class map for fast fallback lookup
+  const studentClassLookup = new Map<string, string>();
+  for (const st of students) {
+    if (st?.Student_ID) {
+      studentClassLookup.set(String(st.Student_ID).trim().toLowerCase(), normalizeClassKey(st.Class, classMap));
+    }
+  }
+
+  // Filter homework assigned in this month specifically by THIS teacher (or their assigned classes if Teacher field empty)
   const teacherMonthHw = homeworkList.filter((h) => {
-    const matchTeacher =
-      (h.Teacher && (h.Teacher === teacherName || h.Teacher === teacher.Username)) ||
-      (assignedClass && h.Class === assignedClass);
-    return matchTeacher && (h.Date ? h.Date.startsWith(month) : false);
+    const ymd = normalizeDateYmd(h.Date);
+    if (!ymd.startsWith(month)) return false;
+    if (h.Teacher && String(h.Teacher).trim()) {
+      return matchesTeacherIdentity(h.Teacher);
+    }
+    const hwClassKey = normalizeClassKey(h.Class, classMap);
+    return assignedClassKeys.length > 0 && hwClassKey && assignedClassKeys.includes(hwClassKey);
   });
-  const uniqueHwDays = new Set(teacherMonthHw.map((h) => h.Date)).size;
+  const uniqueHwDays = new Set(teacherMonthHw.map((h) => normalizeDateYmd(h.Date))).size;
+
+  // Classes handled by this teacher (assigned classes + classes they actually taught via homework)
+  const taughtClassKeys = new Set<string>(assignedClassKeys);
+  if (taughtClassKeys.size === 0) {
+    teacherMonthHw.forEach((h) => {
+      const ck = normalizeClassKey(h.Class, classMap);
+      if (ck) taughtClassKeys.add(ck);
+    });
+  }
+
+  const recordMatchesTeacherClass = (rawClass?: string, studentId?: string): boolean => {
+    if (taughtClassKeys.size === 0) return false;
+    const ck = normalizeClassKey(rawClass, classMap);
+    if (ck && taughtClassKeys.has(ck)) return true;
+    if (studentId) {
+      const sck = studentClassLookup.get(String(studentId).trim().toLowerCase());
+      if (sck && taughtClassKeys.has(sck)) return true;
+    }
+    return false;
+  };
 
   // -------------------------------------------------------------
   // PARAMETER 1: Syllabus Progress (Max 30 Points)
-  // Target: Weekly planned topics vs completed topics in month
-  // Formula: (Completed Topics / Planned Target) * 30 Points
+  // Target: Weekly planned topics vs completed topics in month, or unique homework days
   // -------------------------------------------------------------
-  const teacherSyllabusList = syllabusTopics.filter(
-    (s) =>
-      (s.teacher_id === teacherId || (s.teacher_name && s.teacher_name.includes(teacherName))) &&
-      s.month === month
-  );
+  const teacherSyllabusList = syllabusTopics.filter((s) => {
+    const sMonth = String(s.month || '').trim().slice(0, 7);
+    if (sMonth !== month) return false;
+    const sTid = String(s.teacher_id || '').trim().toLowerCase();
+    return (
+      (teacherIdLower && sTid === teacherIdLower) ||
+      (teacherUsernameLower && sTid === teacherUsernameLower) ||
+      matchesTeacherIdentity(s.teacher_name)
+    );
+  });
 
   let syllabusScore: number;
   let syllabusPercent: number;
@@ -308,25 +445,28 @@ export const autoCalculateTeacherMonthlyScoreFromAppData = (params: {
     const totalTarget = teacherSyllabusList.length;
     syllabusPercent = Math.round((completedCount / totalTarget) * 100);
     syllabusScore = Math.min(30, Math.round(((completedCount / totalTarget) * 30) * 10) / 10);
-    syllabusDetail = `साप्ताहिक प्लानर: ${completedCount}/${totalTarget} टॉपिक पूर्ण (${syllabusPercent}% पाठ्यक्रम लक्ष्य हासिल)`;
+    syllabusDetail = `साप्ताहिक प्लानर: ${completedCount}/${totalTarget} टॉपिक पूर्ण (${syllabusPercent}% पाठ्यक्रम लक्ष्य)`;
   } else if (uniqueHwDays > 0) {
-    // Fallback: check homework lesson coverage if no weekly targets are registered yet
     syllabusPercent = Math.min(100, Math.round((uniqueHwDays / 18) * 100));
-    syllabusScore = Math.min(30, Math.round((20 + (syllabusPercent / 100) * 10) * 10) / 10);
-    syllabusDetail = `${uniqueHwDays} दिन पाठ/होमवर्क अपलोड किए गए (${syllabusPercent}% पाठ्यक्रम प्रगति)`;
+    syllabusScore = Math.min(30, Math.round(((uniqueHwDays / 18) * 30) * 10) / 10);
+    syllabusDetail = `${uniqueHwDays} दिन पाठ/होमवर्क अपलोड (${syllabusPercent}% प्रगति)`;
   } else {
-    syllabusPercent = 88;
-    syllabusScore = 26.5;
-    syllabusDetail = 'मासिक शैक्षणिक कैलेंडर अनुसार अनुमानित प्रगति (88% पूर्ण)';
+    syllabusPercent = 0;
+    syllabusScore = 0;
+    syllabusDetail = 'इस माह अभी तक कोई पाठ योजना या होमवर्क दर्ज नहीं है';
   }
 
   // -------------------------------------------------------------
-  // PARAMETER 2: Student Test Results (Max 25 Points)
-  // Target: Average score achieved by students in monthly tests
+  // PARAMETER 2: Student Test & Academic Performance (Max 25 Points)
   // -------------------------------------------------------------
   const classTracker = homeworkTrackerList.filter((t) => {
-    const matchClass = !assignedClass || t.Class === assignedClass;
-    return matchClass && (t.Date ? t.Date.startsWith(month) : false);
+    const ymd = normalizeDateYmd(t.Date);
+    return ymd.startsWith(month) && recordMatchesTeacherClass(t.Class, t.Student_ID);
+  });
+
+  const classBehavior = behaviorList.filter((b) => {
+    const ymd = normalizeDateYmd(b.Date);
+    return ymd.startsWith(month) && recordMatchesTeacherClass(b.Class, b.Student_ID);
   });
 
   let testScore: number;
@@ -336,36 +476,39 @@ export const autoCalculateTeacherMonthlyScoreFromAppData = (params: {
   if (classTracker.length > 0) {
     const completedCount = classTracker.filter((t) => t.Last_homework_Status === 'Completed').length;
     testPercent = Math.round((completedCount / classTracker.length) * 100);
-    testScore = Math.min(25, Math.max(16, Math.round(((testPercent / 100) * 25) * 10) / 10));
-    testDetail = `छात्र टेस्ट व असाइनमेंट पूर्णता दर: ${testPercent}% (${completedCount}/${classTracker.length})`;
+    testScore = Math.min(25, Math.round(((testPercent / 100) * 25) * 10) / 10);
+    testDetail = `कक्षा असाइनमेंट/टेस्ट पूर्णता दर: ${testPercent}% (${completedCount}/${classTracker.length})`;
+  } else if (classBehavior.length > 0) {
+    const goodCount = classBehavior.filter((b) => b.Discipline !== false && b.Is_Present !== false).length;
+    testPercent = Math.round((goodCount / classBehavior.length) * 100);
+    testScore = Math.min(25, Math.round(((testPercent / 100) * 22) * 10) / 10);
+    testDetail = `कक्षा शैक्षणिक सहभागिता दर: ${testPercent}% (${goodCount}/${classBehavior.length} लॉग्स)`;
   } else {
-    testPercent = 84;
-    testScore = 21.0;
-    testDetail = 'मासिक यूनिट टेस्ट व कक्षा प्रदर्शन औसत (84% अंक)';
+    testPercent = 0;
+    testScore = 0;
+    testDetail = taughtClassKeys.size === 0
+      ? 'शिक्षक को कोई कक्षा असाइन नहीं है (कक्षा असाइन करें)'
+      : 'इस माह कक्षा का कोई टेस्ट/असाइनमेंट रिकॉर्ड नहीं मिला';
   }
 
   // -------------------------------------------------------------
   // PARAMETER 3: Student Attendance & App Logs (Max 15 Points)
-  // Target: Daily attendance logged for assigned class (~22 working days)
   // -------------------------------------------------------------
-  const classBehavior = behaviorList.filter((b) => {
-    const matchClass = !assignedClass || b.Class === assignedClass;
-    return matchClass && (b.Date ? b.Date.startsWith(month) : false);
-  });
-
-  const uniqueAttendanceDates = new Set(classBehavior.map((b) => b.Date)).size;
+  const uniqueAttendanceDates = new Set(classBehavior.map((b) => normalizeDateYmd(b.Date))).size;
   let attendanceScore: number;
   let attendancePercent: number;
   let attendanceDetail: string;
 
   if (uniqueAttendanceDates > 0) {
     attendancePercent = Math.min(100, Math.round((uniqueAttendanceDates / 22) * 100));
-    attendanceScore = Math.min(15, Math.max(8, Math.round(((uniqueAttendanceDates / 22) * 15) * 10) / 10));
-    attendanceDetail = `${uniqueAttendanceDates}/22 कार्यदिवस छात्र दैनिक हाजिरी ऐप में समय पर दर्ज की गई`;
+    attendanceScore = Math.min(15, Math.round(((uniqueAttendanceDates / 22) * 15) * 10) / 10);
+    attendanceDetail = `${uniqueAttendanceDates}/22 कार्यदिवस कक्षा छात्र हाजिरी ऐप में दर्ज`;
   } else {
-    attendancePercent = 93;
-    attendanceScore = 14.0;
-    attendanceDetail = 'डिजिटल हाजिरी रजिस्टर लॉग्स अनुसार (93% सटीकता)';
+    attendancePercent = 0;
+    attendanceScore = 0;
+    attendanceDetail = taughtClassKeys.size === 0
+      ? 'कक्षा असाइन न होने से छात्र हाजिरी मिलान उपलब्ध नहीं'
+      : 'इस माह कक्षा की कोई दैनिक छात्र हाजिरी दर्ज नहीं मिली';
   }
 
   // -------------------------------------------------------------
@@ -382,54 +525,73 @@ export const autoCalculateTeacherMonthlyScoreFromAppData = (params: {
   if (hwAssignedCount > 0 || hwCheckedCount > 0) {
     const assignPts = Math.min(8, Math.round((hwAssignedCount / 16) * 8 * 10) / 10);
     const checkPts = Math.min(7, Math.round((hwCheckedCount / 30) * 7 * 10) / 10);
-    homeworkScore = Math.min(15, Math.max(9, Math.round((assignPts + checkPts) * 10) / 10));
+    homeworkScore = Math.min(15, Math.round((assignPts + checkPts) * 10) / 10);
     homeworkPercent = Math.round((homeworkScore / 15) * 100);
-    homeworkDetail = `${hwAssignedCount} दिन होमवर्क जारी, ${hwCheckedCount} छात्र कॉपियों का मूल्यांकन पूर्ण`;
+    homeworkDetail = `${hwAssignedCount} होमवर्क जारी, ${hwCheckedCount} छात्र कॉपियों की जाँच पूर्ण`;
   } else {
-    homeworkPercent = 90;
-    homeworkScore = 13.5;
-    homeworkDetail = 'नियमित कॉपी जांच व गृहकार्य रिकॉर्ड (90% पूर्णता)';
+    homeworkPercent = 0;
+    homeworkScore = 0;
+    homeworkDetail = 'इस माह होमवर्क या कॉपी जाँच का कोई रिकॉर्ड नहीं मिला';
   }
 
   // -------------------------------------------------------------
   // PARAMETER 5: Punctuality & School Discipline (Max 15 Points)
-  // Target: School QR Code scan upon arrival before 08:35 AM
+  // Target: School QR Code check-in timestamps for THIS teacher
   // -------------------------------------------------------------
   const teacherStaffAtt = staffAttendanceList.filter((sa) => {
-    const matchUser =
-      sa.user_id === teacherId ||
-      (sa.name && sa.name.toLowerCase().includes(teacherName.toLowerCase()));
-    return matchUser && (sa.date ? sa.date.startsWith(month) : false);
+    const ymd = normalizeDateYmd(sa.date);
+    if (!ymd.startsWith(month)) return false;
+    const saUid = String(sa.user_id || '').trim().toLowerCase();
+    const saUname = String(sa.username || '').trim().toLowerCase();
+    const saName = String(sa.name || '').trim().toLowerCase();
+    return (
+      (teacherIdLower && saUid === teacherIdLower) ||
+      (teacherUsernameLower && (saUname === teacherUsernameLower || saUid === teacherUsernameLower)) ||
+      (teacherNameLower && (saName === teacherNameLower || saName.includes(teacherNameLower) || teacherNameLower.includes(saName)))
+    );
   });
 
   let punctualityScore: number;
   let punctualityPercent: number;
   let punctualityDetail: string;
+  let onTimeDaysCount = 0;
 
   if (teacherStaffAtt.length > 0) {
-    const onTimeCount = teacherStaffAtt.filter((sa) => {
-      if (sa.status === 'Present' || sa.status === 'On-Duty') {
-        if (!sa.check_in_time) return true;
-        // e.g. "08:15 AM"
-        const timeStr = sa.check_in_time.toUpperCase();
-        if (timeStr.includes('AM')) {
-          const parts = timeStr.replace('AM', '').trim().split(':');
-          const hr = parseInt(parts[0], 10);
-          const min = parseInt(parts[1] || '0', 10);
-          if (hr < 8 || (hr === 8 && min <= 35)) return true;
-        }
+    let earnedDayWeight = 0;
+    for (const sa of teacherStaffAtt) {
+      const st = String(sa.status || '').toLowerCase();
+      if (st === 'absent' || st === 'leave') continue;
+      if (st === 'on-duty') {
+        onTimeDaysCount += 1;
+        earnedDayWeight += 1;
+        continue;
       }
-      return false;
-    }).length;
+      if (st === 'late' || st === 'half-day') {
+        earnedDayWeight += 0.6;
+        continue;
+      }
+      const mins = parseCheckInMinutes(sa.check_in_time);
+      if (mins === null || mins <= 8 * 60 + 35) {
+        onTimeDaysCount += 1;
+        earnedDayWeight += 1;
+      } else if (mins <= 9 * 60) {
+        earnedDayWeight += 0.75;
+      } else {
+        earnedDayWeight += 0.5;
+      }
+    }
 
-    const onTimeRatio = onTimeCount / teacherStaffAtt.length;
-    punctualityPercent = Math.round(onTimeRatio * 100);
-    punctualityScore = Math.min(15, Math.max(8, Math.round((onTimeRatio * 15) * 10) / 10));
-    punctualityDetail = `${onTimeCount}/${teacherStaffAtt.length} दिन स्कूल QR कोड से समय पर चेक-इन दर्ज (${punctualityPercent}% समयबद्धता)`;
+    const workingTarget = Math.max(teacherStaffAtt.length, 1);
+    punctualityPercent = Math.round((earnedDayWeight / workingTarget) * 100);
+    // Reflect both punctuality quality (10 pts) and attendance regularity (5 pts across month)
+    const qualityPts = (earnedDayWeight / workingTarget) * 10;
+    const regularityPts = Math.min(5, (onTimeDaysCount / 22) * 5);
+    punctualityScore = Math.min(15, Math.round((qualityPts + regularityPts) * 10) / 10);
+    punctualityDetail = `${onTimeDaysCount}/${teacherStaffAtt.length} दिन समय पर स्कूल QR चेक-इन (${punctualityPercent}% समयबद्धता)`;
   } else {
-    punctualityPercent = 94;
-    punctualityScore = 14.0;
-    punctualityDetail = 'बायोमेट्रिक/QR स्कूल उपस्थिति अनुसार (94% समयबद्धता)';
+    punctualityPercent = 0;
+    punctualityScore = 0;
+    punctualityDetail = 'इस माह स्टाफ़ QR उपस्थिति लॉग नहीं मिला';
   }
 
   // -------------------------------------------------------------
@@ -444,10 +606,10 @@ export const autoCalculateTeacherMonthlyScoreFromAppData = (params: {
   });
 
   const autoRecord: TeacherPerformanceRecord = {
-    id: `tp_${month.replace('-', '_')}_${teacherId}`,
+    id: `tp_${month.replace('-', '_')}_${teacherId || teacherUsername}`,
     teacher_id: teacherId,
     teacher_name: teacherName,
-    assigned_class: assignedClass,
+    assigned_class: assignedClassDisplay,
     subject: teacher.Designation || 'समस्त विषय',
     month,
     academic_year: academicYear,
@@ -465,18 +627,18 @@ export const autoCalculateTeacherMonthlyScoreFromAppData = (params: {
     grade: calculated.grade,
     evaluation_date: new Date().toISOString().split('T')[0],
     evaluated_by: evaluatedBy,
-    remarks: `ऐप डेटा से ऑटो-कैलकुलेटेड: पाठ्यक्रम (${syllabusScore}/30), टेस्ट (${testScore}/25), हाजिरी (${attendanceScore}/15), होमवर्क (${homeworkScore}/15), अनुशासन (${punctualityScore}/15)।`,
+    remarks: `लाइव ऐप डेटा स्कोर: पाठ्यक्रम (${syllabusScore}/30), कक्षा परिणाम (${testScore}/25), हाजिरी (${attendanceScore}/15), होमवर्क (${homeworkScore}/15), समयबद्धता (${punctualityScore}/15)।`,
     timestamp: new Date().toISOString(),
     auto_metrics: {
       is_auto_calculated: true,
-      syllabus_topics_count: uniqueHwDays,
+      syllabus_topics_count: teacherSyllabusList.length || uniqueHwDays,
       test_marks_avg: testPercent,
       attendance_days_logged: uniqueAttendanceDates,
       attendance_total_working_days: 22,
       homework_assigned_count: hwAssignedCount,
       homework_copies_checked: hwCheckedCount,
-      punctuality_on_time_days: teacherStaffAtt.length > 0 ? teacherStaffAtt.filter((sa) => sa.status === 'Present').length : 21,
-      punctuality_total_days: teacherStaffAtt.length || 22,
+      punctuality_on_time_days: onTimeDaysCount,
+      punctuality_total_days: teacherStaffAtt.length,
       calculation_breakdown: `${syllabusScore}+${testScore}+${attendanceScore}+${homeworkScore}+${punctualityScore} = ${calculated.totalScore}/100`,
     },
   };
@@ -506,6 +668,7 @@ export const autoEvaluateAllTeachersForMonth = (params: {
   behaviorList?: StudentBehaviorRecord[];
   students?: Student[];
   syllabusTopics?: SyllabusTopicRecord[];
+  classMap?: Record<string, string>;
   evaluatedBy?: string;
 }): TeacherPerformanceRecord[] => {
   const { teachers, ...rest } = params;
@@ -680,9 +843,9 @@ export const syncPerformanceRecordToApi = async (
   return { success: true, message: 'स्थानीय रूप से सुरक्षित (Local Storage Updated)' };
 };
 
-export const fetchPerformanceRecordsFromApi = async (): Promise<TeacherPerformanceRecord[]> => {
+export const fetchPerformanceRecordsFromApi = async (forceRefresh = false): Promise<TeacherPerformanceRecord[]> => {
   try {
-    const res = await fetch('/api/teacher-performance');
+    const res = await fetch(`/api/teacher-performance${forceRefresh ? '?refresh=1' : ''}`);
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data) && data.length > 0) {

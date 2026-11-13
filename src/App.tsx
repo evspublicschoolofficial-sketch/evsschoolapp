@@ -11207,12 +11207,13 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 <TeacherPerformanceDashboard
                   users={usersList}
                   isTeacherView={true}
-                  loggedTeacherId={teacherUser?.ID}
+                  loggedTeacherId={teacherUser?.User_ID || teacherUser?.Username}
                   homeworkList={homeworkList}
                   homeworkTrackerList={hwTrackerList}
                   staffAttendanceList={staffAttendanceList}
                   behaviorList={behaviorList}
                   students={students}
+                  classMap={classMap}
                 />
               </Suspense>
             )}
@@ -13263,6 +13264,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   staffAttendanceList={staffAttendanceList}
                   behaviorList={behaviorList}
                   students={students}
+                  classMap={classMap}
                 />
               </Suspense>
             )}

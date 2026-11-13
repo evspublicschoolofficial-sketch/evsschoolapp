@@ -267,11 +267,340 @@ async function forwardToGoogleAppsScript(payload: any) {
         const gText = await gRes.text();
         if (gText.includes('success')) return { ok: true, response: gText };
       } catch {}
+    } else if (formattedPayload.action === 'saveSyllabusTopic' && (!res.ok || text.includes('error') || text.includes('<!DOCTYPE'))) {
+      try {
+        const getUrl = `${targetUrl}?action=saveSyllabusTopic&topic=${encodeURIComponent(typeof formattedPayload.topic === 'string' ? formattedPayload.topic : JSON.stringify(formattedPayload))}`;
+        const gRes = await fetch(getUrl, { redirect: 'follow' });
+        const gText = await gRes.text();
+        if (gText.includes('success')) return { ok: true, response: gText };
+      } catch {}
+    } else if (formattedPayload.action === 'saveSchoolHoliday' && (!res.ok || text.includes('error') || text.includes('<!DOCTYPE'))) {
+      try {
+        const getUrl = `${targetUrl}?action=saveSchoolHoliday&holiday=${encodeURIComponent(typeof formattedPayload.holiday === 'string' ? formattedPayload.holiday : JSON.stringify(formattedPayload))}`;
+        const gRes = await fetch(getUrl, { redirect: 'follow' });
+        const gText = await gRes.text();
+        if (gText.includes('success')) return { ok: true, response: gText };
+      } catch {}
+    } else if ((formattedPayload.action === 'deleteSyllabusTopic' || formattedPayload.action === 'deleteSchoolHoliday') && (!res.ok || text.includes('error') || text.includes('<!DOCTYPE'))) {
+      try {
+        const getUrl = `${targetUrl}?action=${encodeURIComponent(formattedPayload.action)}&id=${encodeURIComponent(formattedPayload.id || '')}`;
+        const gRes = await fetch(getUrl, { redirect: 'follow' });
+        const gText = await gRes.text();
+        if (gText.includes('success')) return { ok: true, response: gText };
+      } catch {}
     }
 
     return { ok: res.ok, response: text };
   } catch (err: any) {
     return { ok: false, error: err.message };
+  }
+}
+
+// =========================================================================
+// 2-WAY GOOGLE SHEET READ SYNC FOR TEACHER PERFORMANCE, SYLLABUS & HOLIDAYS
+// =========================================================================
+let lastTpSheetSync = 0;
+let lastSyllabusSheetSync = 0;
+let lastHolidaySheetSync = 0;
+
+function normalizeSheetMonth(val: any): string {
+  if (!val) return '';
+  const str = String(val).trim();
+  if (/^\d{4}-\d{2}$/.test(str)) return str;
+  if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.slice(0, 7);
+  const parsed = new Date(str);
+  if (!isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, '0');
+    return `${y}-${m}`;
+  }
+  return str;
+}
+
+function normalizeSheetDate(val: any): string {
+  if (!val) return '';
+  const str = String(val).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+  if (/^\d{4}-\d{2}-\d{2}T/.test(str)) return str.slice(0, 10);
+  const parsed = new Date(str);
+  if (!isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return str.slice(0, 10);
+}
+
+async function syncTeacherPerformanceFromSheet(force = false): Promise<boolean> {
+  const now = Date.now();
+  if (!force && now - lastTpSheetSync < 12000) return false;
+  lastTpSheetSync = now;
+  try {
+    const url = `${currentAppsScriptUrl}?action=getTeacherPerformance&_t=${now}`;
+    const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(6000) });
+    if (!res.ok) return false;
+    const json: any = await res.json();
+    if (json?.status === 'error') return false;
+
+    const rawRows: any[] = Array.isArray(json)
+      ? json
+      : Array.isArray(json?.records)
+      ? json.records
+      : Array.isArray(json?.data)
+      ? json.data
+      : [];
+
+    if (rawRows.length === 0) return false;
+
+    const parsed: any[] = [];
+    // Support both 2D array (header + rows) and array of objects
+    if (Array.isArray(rawRows[0])) {
+      for (let i = 1; i < rawRows.length; i++) {
+        const r = rawRows[i];
+        if (!r || (!r[0] && !r[1])) continue;
+        const syllabusScore = Number(r[6] || 0);
+        const testScore = Number(r[7] || 0);
+        const attScore = Number(r[8] || 0);
+        const hwScore = Number(r[9] || 0);
+        const puncScore = Number(r[10] || 0);
+        const totalScore = Number(r[11] || (syllabusScore + testScore + attScore + hwScore + puncScore));
+        const monthStr = normalizeSheetMonth(r[4]) || '2026-09';
+        parsed.push({
+          id: String(r[0] || `tp_${monthStr}_${r[1] || i}`).trim(),
+          teacher_id: String(r[1] || '').trim(),
+          teacher_name: String(r[2] || '').trim(),
+          assigned_class: String(r[3] || '').trim(),
+          month: monthStr,
+          academic_year: String(r[5] || '2026-2027').trim(),
+          syllabus_progress_score: syllabusScore,
+          student_test_score: testScore,
+          attendance_logging_score: attScore,
+          homework_evaluation_score: hwScore,
+          punctuality_discipline_score: puncScore,
+          monthly_total_score: Math.round(totalScore * 10) / 10,
+          grade: String(r[12] || (totalScore >= 90 ? 'A+' : totalScore >= 80 ? 'A' : totalScore >= 70 ? 'B' : totalScore >= 60 ? 'C' : 'D')).trim(),
+          evaluated_by: String(r[13] || 'Principal / Manager').trim(),
+          remarks: String(r[14] || '').trim(),
+          evaluation_date: normalizeSheetDate(r[15]) || new Date().toISOString().slice(0, 10),
+          timestamp: r[15] ? String(r[15]) : new Date().toISOString(),
+        });
+      }
+    } else {
+      for (const obj of rawRows) {
+        if (!obj || (!obj.teacher_id && !obj.Teacher_ID)) continue;
+        const syllabusScore = Number(obj.syllabus_progress_score ?? obj.Syllabus_Score_30 ?? 0);
+        const testScore = Number(obj.student_test_score ?? obj.Test_Score_25 ?? 0);
+        const attScore = Number(obj.attendance_logging_score ?? obj.Attendance_Score_15 ?? 0);
+        const hwScore = Number(obj.homework_evaluation_score ?? obj.Homework_Score_15 ?? 0);
+        const puncScore = Number(obj.punctuality_discipline_score ?? obj.Punctuality_Score_15 ?? 0);
+        const totalScore = Number(obj.monthly_total_score ?? obj.Total_Score_100 ?? (syllabusScore + testScore + attScore + hwScore + puncScore));
+        const monthStr = normalizeSheetMonth(obj.month ?? obj.Month) || '2026-09';
+        const teacherId = String(obj.teacher_id ?? obj.Teacher_ID ?? '').trim();
+        parsed.push({
+          id: String(obj.id ?? obj.Record_ID ?? `tp_${monthStr}_${teacherId}`).trim(),
+          teacher_id: teacherId,
+          teacher_name: String(obj.teacher_name ?? obj.Teacher_Name ?? '').trim(),
+          assigned_class: String(obj.assigned_class ?? obj.Assigned_Class ?? '').trim(),
+          month: monthStr,
+          academic_year: String(obj.academic_year ?? obj.Academic_Year ?? '2026-2027').trim(),
+          syllabus_progress_score: syllabusScore,
+          student_test_score: testScore,
+          attendance_logging_score: attScore,
+          homework_evaluation_score: hwScore,
+          punctuality_discipline_score: puncScore,
+          monthly_total_score: Math.round(totalScore * 10) / 10,
+          grade: String(obj.grade ?? obj.Grade ?? (totalScore >= 90 ? 'A+' : totalScore >= 80 ? 'A' : totalScore >= 70 ? 'B' : totalScore >= 60 ? 'C' : 'D')).trim(),
+          evaluated_by: String(obj.evaluated_by ?? obj.Evaluated_By ?? 'Principal / Manager').trim(),
+          remarks: String(obj.remarks ?? obj.Remarks ?? '').trim(),
+          evaluation_date: normalizeSheetDate(obj.evaluation_date ?? obj.Timestamp) || new Date().toISOString().slice(0, 10),
+          timestamp: String(obj.timestamp ?? obj.Timestamp ?? new Date().toISOString()),
+        });
+      }
+    }
+
+    if (parsed.length > 0) {
+      // Sheet is authoritative; merge in any newly created local entries not yet written to sheet
+      const sheetKeys = new Set(parsed.map((p) => `${p.teacher_id}_${p.month}`));
+      const sheetIds = new Set(parsed.map((p) => p.id));
+      const localOnly = teacherPerformanceStore.filter(
+        (loc) => !sheetIds.has(loc.id) && !sheetKeys.has(`${loc.teacher_id}_${loc.month}`) &&
+          loc.timestamp && (Date.now() - new Date(loc.timestamp).getTime() < 45000)
+      );
+      teacherPerformanceStore = [...localOnly, ...parsed];
+      saveTeacherPerformanceCache();
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+async function syncSyllabusTrackerFromSheet(force = false): Promise<boolean> {
+  const now = Date.now();
+  if (!force && now - lastSyllabusSheetSync < 12000) return false;
+  lastSyllabusSheetSync = now;
+  try {
+    const url = `${currentAppsScriptUrl}?action=getSyllabusTracker&_t=${now}`;
+    const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(6000) });
+    if (!res.ok) return false;
+    const json: any = await res.json();
+    if (json?.status === 'error') return false;
+
+    const rawRows: any[] = Array.isArray(json)
+      ? json
+      : Array.isArray(json?.topics)
+      ? json.topics
+      : Array.isArray(json?.records)
+      ? json.records
+      : [];
+
+    if (rawRows.length === 0) return false;
+
+    const parsed: any[] = [];
+    if (Array.isArray(rawRows[0])) {
+      for (let i = 1; i < rawRows.length; i++) {
+        const r = rawRows[i];
+        if (!r || (!r[0] && !r[8] && !r[9])) continue;
+        const monthStr = normalizeSheetMonth(r[5]) || '2026-09';
+        const weekNum = Number(r[6] || 1);
+        const rawStatus = String(r[13] || 'Pending').trim();
+        const status = rawStatus === 'Completed' || rawStatus === 'In_Progress' ? rawStatus : 'Pending';
+        parsed.push({
+          id: String(r[0] || `syl_${monthStr}_${r[1] || i}`).trim(),
+          teacher_id: String(r[1] || '').trim(),
+          teacher_name: String(r[2] || '').trim(),
+          class_name: String(r[3] || '').trim(),
+          subject: String(r[4] || '').trim(),
+          month: monthStr,
+          week_number: weekNum,
+          week_label: String(r[7] || `सप्ताह ${weekNum}`).trim(),
+          chapter_title: String(r[8] || '').trim(),
+          topic_description: String(r[9] || '').trim(),
+          planned_date: normalizeSheetDate(r[10]) || new Date().toISOString().slice(0, 10),
+          target_completion_date: normalizeSheetDate(r[11]) || new Date().toISOString().slice(0, 10),
+          completed_date: normalizeSheetDate(r[12]) || undefined,
+          status,
+          timestamp: r[14] ? String(r[14]) : new Date().toISOString(),
+        });
+      }
+    } else {
+      for (const obj of rawRows) {
+        if (!obj || (!obj.topic_description && !obj.Topic_Description && !obj.chapter_title && !obj.Chapter_Title)) continue;
+        const monthStr = normalizeSheetMonth(obj.month ?? obj.Month) || '2026-09';
+        const weekNum = Number(obj.week_number ?? obj.Week_Number ?? 1);
+        const rawStatus = String(obj.status ?? obj.Status ?? 'Pending').trim();
+        const status = rawStatus === 'Completed' || rawStatus === 'In_Progress' ? rawStatus : 'Pending';
+        parsed.push({
+          id: String(obj.id ?? obj.Topic_ID ?? `syl_${monthStr}_${obj.teacher_id || 't'}`).trim(),
+          teacher_id: String(obj.teacher_id ?? obj.Teacher_ID ?? '').trim(),
+          teacher_name: String(obj.teacher_name ?? obj.Teacher_Name ?? '').trim(),
+          class_name: String(obj.class_name ?? obj.Class_Name ?? '').trim(),
+          subject: String(obj.subject ?? obj.Subject ?? '').trim(),
+          month: monthStr,
+          week_number: weekNum,
+          week_label: String(obj.week_label ?? obj.Week_Label ?? `सप्ताह ${weekNum}`).trim(),
+          chapter_title: String(obj.chapter_title ?? obj.Chapter_Title ?? '').trim(),
+          topic_description: String(obj.topic_description ?? obj.Topic_Description ?? '').trim(),
+          planned_date: normalizeSheetDate(obj.planned_date ?? obj.Planned_Date) || new Date().toISOString().slice(0, 10),
+          target_completion_date: normalizeSheetDate(obj.target_completion_date ?? obj.Target_Completion_Date) || new Date().toISOString().slice(0, 10),
+          completed_date: normalizeSheetDate(obj.completed_date ?? obj.Completed_Date) || undefined,
+          status,
+          timestamp: String(obj.timestamp ?? obj.Timestamp ?? new Date().toISOString()),
+        });
+      }
+    }
+
+    if (parsed.length > 0) {
+      const sheetIds = new Set(parsed.map((p) => p.id));
+      const localOnly = syllabusTrackerStore.filter(
+        (loc) => !sheetIds.has(loc.id) && loc.timestamp && (Date.now() - new Date(loc.timestamp).getTime() < 45000)
+      );
+      syllabusTrackerStore = [...localOnly, ...parsed];
+      saveSyllabusTrackerCache();
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+async function syncSchoolHolidaysFromSheet(force = false): Promise<boolean> {
+  const now = Date.now();
+  if (!force && now - lastHolidaySheetSync < 12000) return false;
+  lastHolidaySheetSync = now;
+  try {
+    const url = `${currentAppsScriptUrl}?action=getSchoolHolidays&_t=${now}`;
+    const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(6000) });
+    if (!res.ok) return false;
+    const json: any = await res.json();
+    if (json?.status === 'error') return false;
+
+    const rawRows: any[] = Array.isArray(json)
+      ? json
+      : Array.isArray(json?.holidays)
+      ? json.holidays
+      : Array.isArray(json?.records)
+      ? json.records
+      : [];
+
+    if (rawRows.length === 0) return false;
+
+    const parsed: any[] = [];
+    if (Array.isArray(rawRows[0])) {
+      for (let i = 1; i < rawRows.length; i++) {
+        const r = rawRows[i];
+        if (!r || (!r[1] && !r[2])) continue;
+        const dateStr = normalizeSheetDate(r[2]);
+        if (!dateStr) continue;
+        const endStr = normalizeSheetDate(r[3]);
+        parsed.push({
+          id: String(r[0] || `hol_${dateStr.replace(/-/g, '_')}_${i}`).trim(),
+          title: String(r[1] || 'अवकाश').trim(),
+          date: dateStr,
+          end_date: endStr && endStr !== dateStr ? endStr : undefined,
+          category: String(r[4] || 'festival').trim(),
+          description: String(r[5] || '').trim() || undefined,
+          timestamp: r[6] ? String(r[6]) : new Date().toISOString(),
+        });
+      }
+    } else {
+      for (const obj of rawRows) {
+        const dateStr = normalizeSheetDate(obj.date ?? obj.Date);
+        const titleStr = String(obj.title ?? obj.Title ?? '').trim();
+        if (!dateStr || !titleStr) continue;
+        const endStr = normalizeSheetDate(obj.end_date ?? obj.End_Date);
+        parsed.push({
+          id: String(obj.id ?? obj.Holiday_ID ?? `hol_${dateStr.replace(/-/g, '_')}`).trim(),
+          title: titleStr,
+          date: dateStr,
+          end_date: endStr && endStr !== dateStr ? endStr : undefined,
+          category: String(obj.category ?? obj.Category ?? 'festival').trim(),
+          description: String(obj.description ?? obj.Description ?? '').trim() || undefined,
+          timestamp: String(obj.timestamp ?? obj.Timestamp ?? new Date().toISOString()),
+        });
+      }
+    }
+
+    if (parsed.length > 0) {
+      const sheetIds = new Set(parsed.map((p) => p.id));
+      const sheetDateTitles = new Set(parsed.map((p) => `${p.date}_${p.title}`));
+      const localOnly = schoolHolidaysStore.filter(
+        (loc) =>
+          !sheetIds.has(loc.id) &&
+          !sheetDateTitles.has(`${loc.date}_${loc.title}`) &&
+          loc.timestamp &&
+          Date.now() - new Date(loc.timestamp).getTime() < 45000
+      );
+      schoolHolidaysStore = [...parsed, ...localOnly].sort((a, b) => a.date.localeCompare(b.date));
+      saveSchoolHolidaysCache();
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
   }
 }
 
@@ -1310,7 +1639,9 @@ async function startServer() {
   });
 
   // Endpoints for Teacher Performance Tracking, Monthly Leaderboard & Teacher of the Year
-  app.get('/api/teacher-performance', (_req, res) => {
+  app.get('/api/teacher-performance', async (req, res) => {
+    const force = req.query.refresh === '1' || req.query.sync === '1';
+    await syncTeacherPerformanceFromSheet(force);
     res.json(teacherPerformanceStore);
   });
 
@@ -1363,7 +1694,9 @@ async function startServer() {
   });
 
   // Endpoints for Weekly & Monthly Syllabus Tracker & Progress Planning
-  app.get('/api/syllabus-tracker', (req, res) => {
+  app.get('/api/syllabus-tracker', async (req, res) => {
+    const force = req.query.refresh === '1' || req.query.sync === '1';
+    await syncSyllabusTrackerFromSheet(force);
     const { teacher_id, month, class_name } = req.query;
     let filtered = syllabusTrackerStore;
     if (teacher_id) {
@@ -1432,11 +1765,17 @@ async function startServer() {
     const id = req.params.id;
     syllabusTrackerStore = syllabusTrackerStore.filter((s) => s.id !== id);
     saveSyllabusTrackerCache();
+    forwardToGoogleAppsScript({
+      action: 'deleteSyllabusTopic',
+      id,
+    }).catch(() => {});
     res.json({ success: true, message: 'पाठ्यक्रम लक्ष्य हटा दिया गया' });
   });
 
   // Endpoints for School Holidays (Sunday ke alawa chhuttiyan)
-  app.get('/api/school-holidays', (_req, res) => {
+  app.get('/api/school-holidays', async (req, res) => {
+    const force = req.query.refresh === '1' || req.query.sync === '1';
+    await syncSchoolHolidaysFromSheet(force);
     res.json(schoolHolidaysStore);
   });
 
@@ -1496,6 +1835,10 @@ async function startServer() {
     const id = req.params.id;
     schoolHolidaysStore = schoolHolidaysStore.filter((h) => h.id !== id);
     saveSchoolHolidaysCache();
+    forwardToGoogleAppsScript({
+      action: 'deleteSchoolHoliday',
+      id,
+    }).catch(() => {});
     res.json({ success: true, message: 'अवकाश हटा दिया गया' });
   });
 
@@ -2163,6 +2506,9 @@ async function startServer() {
     setTimeout(() => {
       syncBusTrackingFromSheet();
       setInterval(syncBusTrackingFromSheet, 5000);
+      syncTeacherPerformanceFromSheet(true).catch(() => {});
+      syncSyllabusTrackerFromSheet(true).catch(() => {});
+      syncSchoolHolidaysFromSheet(true).catch(() => {});
     }, 3000);
   });
 

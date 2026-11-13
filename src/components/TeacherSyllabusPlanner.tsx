@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { SchoolUser, SyllabusTopicRecord } from '../types';
-import { ACADEMIC_MONTHS } from '../utils/teacherPerformanceEngine';
+import { ACADEMIC_MONTHS, getDefaultAcademicMonth } from '../utils/teacherPerformanceEngine';
 
 interface TeacherSyllabusPlannerProps {
   currentUser?: SchoolUser | null;
@@ -108,10 +108,10 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
   onSyllabusUpdated,
 }) => {
   const [topics, setTopics] = useState<SyllabusTopicRecord[]>(() => loadLocalSyllabusTopics());
-  const [selectedMonth, setSelectedMonth] = useState<string>('2026-09');
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => getDefaultAcademicMonth());
   const [selectedWeek, setSelectedWeek] = useState<number>(0); // 0 = All Weeks
   const [selectedTeacherId, setSelectedTeacherId] = useState<string>(
-    currentUser?.User_ID || allTeachers[0]?.User_ID || 'teacher_sunita'
+    currentUser?.User_ID || currentUser?.Username || allTeachers[0]?.User_ID || 'teacher_sunita'
   );
   const [filterStatus, setFilterStatus] = useState<'all' | 'Completed' | 'In_Progress' | 'Pending'>('all');
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
@@ -128,6 +128,38 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
   const [formTargetDate, setFormTargetDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
 
+  const [isRefreshingSheet, setIsRefreshingSheet] = useState<boolean>(false);
+
+  // Keep selectedTeacherId synced when currentUser or allTeachers updates
+  useEffect(() => {
+    if (!isManager && (currentUser?.User_ID || currentUser?.Username)) {
+      setSelectedTeacherId(currentUser.User_ID || currentUser.Username);
+      if (currentUser.Assigned_Class) setFormClass(currentUser.Assigned_Class);
+    } else if (isManager && !selectedTeacherId && allTeachers[0]?.User_ID) {
+      setSelectedTeacherId(allTeachers[0].User_ID);
+    }
+  }, [isManager, currentUser?.User_ID, currentUser?.Username, currentUser?.Assigned_Class, allTeachers]);
+
+  const handleSyncSyllabusFromSheet = async (showBanner = true) => {
+    setIsRefreshingSheet(true);
+    try {
+      const res = await fetch('/api/syllabus-tracker?refresh=1');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          setTopics(data);
+          saveLocalSyllabusTopics(data);
+          if (onSyllabusUpdated) onSyllabusUpdated(data);
+        }
+        if (showBanner) {
+          setSyncStatus('🔄 Google Sheet "Syllabus_Tracker" से ताज़ा पाठ्यक्रम डेटा सिंक हो गया!');
+          setTimeout(() => setSyncStatus(null), 3500);
+        }
+      }
+    } catch {}
+    setIsRefreshingSheet(false);
+  };
+
   // Fetch topics from API on mount
   useEffect(() => {
     fetch('/api/syllabus-tracker')
@@ -141,21 +173,42 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
       .catch(() => {});
   }, []);
 
+  const targetTeacherObj = useMemo(() => {
+    if (!isManager && currentUser) return currentUser;
+    return allTeachers.find(
+      (t) => String(t.User_ID || '').trim() === String(selectedTeacherId || '').trim() ||
+             String(t.Username || '').trim() === String(selectedTeacherId || '').trim()
+    ) || currentUser;
+  }, [isManager, currentUser, allTeachers, selectedTeacherId]);
+
+  const matchesActiveTeacher = (topic: SyllabusTopicRecord): boolean => {
+    const tId = String(topic.teacher_id || '').trim().toLowerCase();
+    const activeId = String((!isManager ? (currentUser?.User_ID || currentUser?.Username) : selectedTeacherId) || '').trim().toLowerCase();
+    const activeUname = String(targetTeacherObj?.Username || '').trim().toLowerCase();
+    const activeName = String(targetTeacherObj?.Name || '').trim().toLowerCase();
+    const topicName = String(topic.teacher_name || '').trim().toLowerCase();
+
+    if (activeId && tId === activeId) return true;
+    if (activeUname && tId === activeUname) return true;
+    if (activeName && topicName && topicName === activeName) return true;
+    return false;
+  };
+
   // Filtered Topics for current teacher and month
   const activeTeacherTopics = useMemo(() => {
     return topics.filter((t) => {
-      const matchTeacher = isManager ? (selectedTeacherId ? t.teacher_id === selectedTeacherId : true) : t.teacher_id === (currentUser?.User_ID || selectedTeacherId);
-      const matchMonth = t.month === selectedMonth;
-      const matchWeek = selectedWeek === 0 || t.week_number === selectedWeek;
+      const matchTeacher = isManager ? (selectedTeacherId ? matchesActiveTeacher(t) : true) : matchesActiveTeacher(t);
+      const matchMonth = String(t.month || '').slice(0, 7) === selectedMonth;
+      const matchWeek = selectedWeek === 0 || Number(t.week_number) === selectedWeek;
       const matchStatus = filterStatus === 'all' || t.status === filterStatus;
       return matchTeacher && matchMonth && matchWeek && matchStatus;
     });
-  }, [topics, isManager, selectedTeacherId, currentUser, selectedMonth, selectedWeek, filterStatus]);
+  }, [topics, isManager, selectedTeacherId, currentUser, targetTeacherObj, selectedMonth, selectedWeek, filterStatus]);
 
   // Overall Monthly Metrics for Selected Teacher
   const monthlyMetrics = useMemo(() => {
     const teacherMonthTopics = topics.filter(
-      (t) => t.teacher_id === (isManager ? selectedTeacherId : (currentUser?.User_ID || selectedTeacherId)) && t.month === selectedMonth
+      (t) => matchesActiveTeacher(t) && String(t.month || '').slice(0, 7) === selectedMonth
     );
     const totalPlanned = teacherMonthTopics.length;
     const completed = teacherMonthTopics.filter((t) => t.status === 'Completed').length;
@@ -174,7 +227,7 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
       completionPercent,
       syllabusScore,
     };
-  }, [topics, isManager, selectedTeacherId, currentUser, selectedMonth]);
+  }, [topics, isManager, selectedTeacherId, currentUser, targetTeacherObj, selectedMonth]);
 
   // Toggle status with 1-click
   const handleToggleStatus = async (topicId: string, nextStatus: 'Pending' | 'In_Progress' | 'Completed') => {
@@ -215,12 +268,15 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
     if (!formChapter.trim() || !formTopic.trim()) return;
 
     setIsSubmitting(true);
-    const teacherObj = allTeachers.find((t) => t.User_ID === selectedTeacherId) || currentUser;
+    const teacherObj = targetTeacherObj || allTeachers.find((t) => t.User_ID === selectedTeacherId) || currentUser;
     const teacherName = teacherObj?.Name || teacherObj?.Username || 'शिक्षक';
+    const resolvedTeacherId = (!isManager && (currentUser?.User_ID || currentUser?.Username))
+      ? (currentUser.User_ID || currentUser.Username)
+      : (teacherObj?.User_ID || teacherObj?.Username || selectedTeacherId);
 
     const newRecord: SyllabusTopicRecord = {
-      id: editingTopicId || `syl_${selectedMonth.replace('-', '_')}_${selectedTeacherId}_${Date.now()}`,
-      teacher_id: isManager ? selectedTeacherId : (currentUser?.User_ID || selectedTeacherId),
+      id: editingTopicId || `syl_${selectedMonth.replace('-', '_')}_${resolvedTeacherId}_${Date.now()}`,
+      teacher_id: resolvedTeacherId,
       teacher_name: teacherName,
       class_name: formClass,
       subject: formSubject,
@@ -301,6 +357,17 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => handleSyncSyllabusFromSheet(true)}
+              disabled={isRefreshingSheet}
+              className="px-3.5 py-2.5 bg-white/10 hover:bg-white/20 text-white font-bold text-xs sm:text-sm rounded-xl border border-white/25 transition-all flex items-center gap-2 cursor-pointer disabled:opacity-60"
+              title="Google Sheet (Syllabus_Tracker) से 2-Way सिंक करें"
+            >
+              <i className={`fa-solid fa-arrows-rotate ${isRefreshingSheet ? 'fa-spin' : ''}`}></i>
+              <span>{isRefreshingSheet ? 'सिंक हो रहा है...' : 'Sheet सिंक'}</span>
+            </button>
+
             <button
               onClick={() => {
                 setEditingTopicId(null);

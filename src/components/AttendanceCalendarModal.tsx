@@ -68,6 +68,24 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
   const [holidayDescription, setHolidayDescription] = useState<string>('');
   const [holidaySyncMsg, setHolidaySyncMsg] = useState<string | null>(null);
 
+  const [isRefreshingHolidays, setIsRefreshingHolidays] = useState<boolean>(false);
+
+  const handleSyncHolidaysFromSheet = async () => {
+    setIsRefreshingHolidays(true);
+    try {
+      const r = await fetch('/api/school-holidays?refresh=1');
+      if (r.ok) {
+        const data = await r.json();
+        if (Array.isArray(data)) {
+          setHolidays(data);
+        }
+        setHolidaySyncMsg('🔄 Google Sheet "School_Holidays" से ताज़ा अवकाश सूची सिंक हो गई!');
+        setTimeout(() => setHolidaySyncMsg(null), 3500);
+      }
+    } catch {}
+    setIsRefreshingHolidays(false);
+  };
+
   // Fetch school holidays on mount
   React.useEffect(() => {
     fetch('/api/school-holidays')
@@ -1020,13 +1038,25 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
 
             {/* List Column */}
             <div className="lg:col-span-7 space-y-3">
-              <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+              <div className="flex items-center justify-between gap-2 border-b border-slate-200 pb-2">
                 <span className="font-black text-slate-900 text-sm flex items-center gap-1.5">
                   <span>📅 दर्ज अवकाश सूची ({holidays.length} छुट्टियां)</span>
                 </span>
-                <span className="text-[11px] font-bold text-slate-500">
-                  Google Sheet: <code className="bg-slate-100 text-blue-900 px-1 py-0.5 rounded">School_Holidays</code>
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-bold text-slate-500 hidden sm:inline">
+                    Google Sheet: <code className="bg-slate-100 text-blue-900 px-1 py-0.5 rounded">School_Holidays</code>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleSyncHolidaysFromSheet}
+                    disabled={isRefreshingHolidays}
+                    className="px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-900 border border-blue-200 text-[11px] font-black cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                    title="Google Sheet (School_Holidays) से 2-Way सिंक करें"
+                  >
+                    <i className={`fa-solid fa-arrows-rotate ${isRefreshingHolidays ? 'fa-spin' : ''}`}></i>
+                    <span>{isRefreshingHolidays ? 'सिंक...' : 'Sheet सिंक'}</span>
+                  </button>
+                </div>
               </div>
 
               {holidays.length === 0 ? (
