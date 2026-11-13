@@ -257,17 +257,25 @@ async function forwardToGoogleAppsScript(payload: any) {
     }
 
     // 1. Try POST to Google Apps Script for other actions
-    const res = await fetch(targetUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(formattedPayload),
-      redirect: 'follow',
-      signal: AbortSignal.timeout(12000),
-    });
-    const text = await res.text();
-    const postCheck = parseAppsScriptResponse(text);
-    if (res.ok && postCheck.ok) {
-      return { ok: true, response: text };
+    let lastPostStatus = 0;
+    let lastPostText = '';
+    let postCheck: { ok: boolean; error?: string } = { ok: false };
+    try {
+      const res = await fetch(targetUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(formattedPayload),
+        redirect: 'follow',
+        signal: AbortSignal.timeout(12000),
+      });
+      lastPostStatus = res.status;
+      lastPostText = await res.text();
+      postCheck = parseAppsScriptResponse(lastPostText);
+      if (res.ok && postCheck.ok) {
+        return { ok: true, response: lastPostText };
+      }
+    } catch (postErr: any) {
+      postCheck = { ok: false, error: postErr?.message || 'POST timeout/error' };
     }
 
     if (formattedPayload.action === 'addHomework') {
@@ -336,7 +344,7 @@ async function forwardToGoogleAppsScript(payload: any) {
       } catch {}
     }
 
-    return { ok: false, error: postCheck.error || `HTTP ${res.status}`, response: text };
+    return { ok: false, error: postCheck.error || `HTTP ${lastPostStatus || 500}`, response: lastPostText };
   } catch (err: any) {
     return { ok: false, error: err.message };
   }

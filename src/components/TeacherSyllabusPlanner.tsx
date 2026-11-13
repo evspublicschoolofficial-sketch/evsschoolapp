@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { SchoolUser, SyllabusTopicRecord } from '../types';
 import { ACADEMIC_MONTHS, getDefaultAcademicMonth } from '../utils/teacherPerformanceEngine';
 import { getAppsScriptUrl } from '../utils/busTrackingService';
+import { directGetFromSheet, dualSyncWriteToSheet } from '../utils/sheetDirectSync';
 
 interface TeacherSyllabusPlannerProps {
   currentUser?: SchoolUser | null;
@@ -158,35 +159,109 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
       const demoSeedIds = new Set(['syl_2026_09_sunita_1', 'syl_2026_09_sunita_2', 'syl_2026_09_sunita_3', 'syl_2026_09_sunita_4']);
       const localTopics = topics.filter((t) => t && t.topic_description && !demoSeedIds.has(String(t.id)));
 
-      const res = await fetch('/api/syllabus-tracker/sync-all', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-apps-script-url': activeUrl,
-        },
-        body: JSON.stringify({ localTopics, appsScriptUrl: activeUrl }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data.topics) && data.topics.length > 0) {
-          setTopics(data.topics);
-          saveLocalSyllabusTopics(data.topics);
-          if (onSyllabusUpdated) onSyllabusUpdated(data.topics);
-        }
+      const directExisting = await directGetFromSheet('getSyllabusTracker', activeUrl);
+      if (!directExisting.ok) {
         if (showBanner) {
-          if (data.failed > 0) {
-            setSyncStatus(`⚠️ ${data.pushed || 0} टॉपिक Sheet में गए, पर ${data.failed} में त्रुटि: ${data.lastError || 'Code.gs जांचें'}`);
-            setTimeout(() => setSyncStatus(null), 9000);
-          } else if (data.pushed > 0) {
-            setSyncStatus(`✅ 2-Way सिंक पूर्ण! ${data.pushed} लंबित टॉपिक Google Sheet "Syllabus_Tracker" में सुरक्षित हो गए!`);
-            setTimeout(() => setSyncStatus(null), 5000);
-          } else if (data.sheetCount > 0) {
-            setSyncStatus(`🔄 Google Sheet "Syllabus_Tracker" से सभी ${data.sheetCount} टॉपिक सिंक हो चुके हैं!`);
-            setTimeout(() => setSyncStatus(null), 3500);
-          } else {
-            setSyncStatus('🔄 Google Sheet कनेक्टेड है! अभी कोई नया टॉपिक नहीं है — "+ नया पाठ्यक्रम लक्ष्य" जोड़ें।');
-            setTimeout(() => setSyncStatus(null), 4000);
+          setSyncStatus(`⚠️ Google Sheet से कनेक्ट नहीं हो सका: ${directExisting.error || 'Apps Script जांचें'}`);
+          setTimeout(() => setSyncStatus(null), 6000);
+        }
+        setIsRefreshingSheet(false);
+        return;
+      }
+
+      const sheetRaw: any[] = Array.isArray(directExisting.json)
+        ? directExisting.json
+        : Array.isArray(directExisting.json?.topics)
+        ? directExisting.json.topics
+        : [];
+      const sheetIds = new Set(
+        sheetRaw.filter((r) => r && !Array.isArray(r)).map((r) => String(r.id || '').trim()).filter(Boolean)
+      );
+
+      // Merge any server-cached topics if present
+      let candidateTopics = [...localTopics];
+      try {
+        const srvRes = await fetch('/api/syllabus-tracker', {
+          headers: { 'x-apps-script-url': activeUrl },
+          signal: AbortSignal.timeout(6000),
+        });
+        if (srvRes.ok && (srvRes.headers.get('content-type') || '').includes('application/json')) {
+          const srvArr = await srvRes.json();
+          if (Array.isArray(srvArr)) {
+            for (const s of srvArr) {
+              if (!s || !s.topic_description || demoSeedIds.has(String(s.id))) continue;
+              if (!candidateTopics.some((c) => c.id === s.id)) candidateTopics.push(s);
+            }
           }
+        }
+      } catch {}
+
+      const toPush = candidateTopics.filter((t) => !sheetIds.has(String(t.id).trim()));
+      let pushed = 0;
+      let failed = 0;
+      let lastError = '';
+
+      for (let i = 0; i < toPush.length; i++) {
+        const top = toPush[i];
+        if (showBanner) {
+          setSyncStatus(`🔄 Google Sheet में भेजा जा रहा है... (${i + 1}/${toPush.length})`);
+        }
+        const wr = await dualSyncWriteToSheet({
+          apiPath: '/api/syllabus-tracker',
+          method: 'POST',
+          apiBody: top,
+          directPayload: { action: 'saveSyllabusTopic', topic: JSON.stringify(top), ...top },
+          overrideUrl: activeUrl,
+        });
+        if (wr.sheetSynced) {
+          pushed++;
+        } else {
+          failed++;
+          if (!lastError && wr.sheetError) lastError = wr.sheetError;
+        }
+      }
+
+      // Refresh truth from server/sheet
+      let refreshed: SyllabusTopicRecord[] = [];
+      try {
+        const srvRefresh = await fetch('/api/syllabus-tracker?refresh=1', {
+          headers: { 'x-apps-script-url': activeUrl },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (srvRefresh.ok && (srvRefresh.headers.get('content-type') || '').includes('application/json')) {
+          const arr = await srvRefresh.json();
+          if (Array.isArray(arr) && arr.length > 0) refreshed = arr;
+        }
+      } catch {}
+
+      if (refreshed.length === 0) {
+        const rePull = await directGetFromSheet('getSyllabusTracker', activeUrl);
+        if (rePull.ok) {
+          const reArr = Array.isArray(rePull.json) ? rePull.json : Array.isArray(rePull.json?.topics) ? rePull.json.topics : [];
+          if (reArr.length > 0) refreshed = reArr;
+        }
+      }
+
+      if (refreshed.length > 0) {
+        setTopics(refreshed);
+        saveLocalSyllabusTopics(refreshed);
+        if (onSyllabusUpdated) onSyllabusUpdated(refreshed);
+      }
+
+      const sheetCount = Math.max(sheetIds.size + pushed, refreshed.length);
+      if (showBanner) {
+        if (failed > 0) {
+          setSyncStatus(`⚠️ ${pushed} टॉपिक Sheet में गए, पर ${failed} में त्रुटि: ${lastError || 'Code.gs जांचें'}`);
+          setTimeout(() => setSyncStatus(null), 9000);
+        } else if (pushed > 0) {
+          setSyncStatus(`✅ 2-Way सिंक पूर्ण! ${pushed} लंबित टॉपिक Google Sheet "Syllabus_Tracker" में सुरक्षित हो गए!`);
+          setTimeout(() => setSyncStatus(null), 5000);
+        } else if (sheetCount > 0) {
+          setSyncStatus(`🔄 Google Sheet "Syllabus_Tracker" से सभी ${sheetCount} टॉपिक सिंक हो चुके हैं!`);
+          setTimeout(() => setSyncStatus(null), 3500);
+        } else {
+          setSyncStatus('🔄 Google Sheet कनेक्टेड है! अभी कोई नया टॉपिक नहीं है — "+ नया पाठ्यक्रम लक्ष्य" जोड़ें।');
+          setTimeout(() => setSyncStatus(null), 4000);
         }
       }
     } catch {
@@ -200,20 +275,39 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
 
   // Fetch fresh topics from API + Sheet on mount & listen for cross-tab live updates
   useEffect(() => {
-    const fetchLiveTopics = () => {
+    const fetchLiveTopics = async () => {
       const activeUrl = getAppsScriptUrl();
-      fetch('/api/syllabus-tracker?refresh=1', {
-        headers: { 'x-apps-script-url': activeUrl },
-      })
-        .then((res) => (res.ok ? res.json() : null))
-        .then((data) => {
+      try {
+        const res = await fetch('/api/syllabus-tracker?refresh=1', {
+          headers: { 'x-apps-script-url': activeUrl },
+          signal: AbortSignal.timeout(10000),
+        });
+        if (res.ok && (res.headers.get('content-type') || '').includes('application/json')) {
+          const data = await res.json();
           if (Array.isArray(data) && data.length > 0) {
             setTopics(data);
             saveLocalSyllabusTopics(data);
             if (onSyllabusUpdated) onSyllabusUpdated(data);
+            return;
           }
-        })
-        .catch(() => {});
+        }
+      } catch {}
+
+      try {
+        const direct = await directGetFromSheet('getSyllabusTracker', activeUrl);
+        if (direct.ok) {
+          const rows = Array.isArray(direct.json)
+            ? direct.json
+            : Array.isArray(direct.json?.topics)
+            ? direct.json.topics
+            : [];
+          if (rows.length > 0) {
+            setTopics(rows);
+            saveLocalSyllabusTopics(rows);
+            if (onSyllabusUpdated) onSyllabusUpdated(rows);
+          }
+        }
+      } catch {}
     };
     fetchLiveTopics();
 
@@ -327,26 +421,24 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
 
     const changedItem = updated.find((t) => t.id === topicId);
     if (changedItem) {
-      try {
-        const activeUrl = getAppsScriptUrl();
-        const res = await fetch('/api/syllabus-tracker', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-apps-script-url': activeUrl,
-          },
-          body: JSON.stringify({ ...changedItem, appsScriptUrl: activeUrl }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (data?.sheetSynced === false) {
-          setSyncStatus(`⚠️ स्थिति ऐप में बदली, पर Google Sheet में नहीं: ${data.sheetError || 'Code.gs doPost अपडेट करें'}`);
-          setTimeout(() => setSyncStatus(null), 7000);
-        } else {
-          setSyncStatus(`स्थिति अपडेट: ${nextStatus === 'Completed' ? '✅ पूर्ण' : nextStatus === 'In_Progress' ? '🔄 प्रगति पर' : '⏳ लंबित'}`);
-          setTimeout(() => setSyncStatus(null), 3000);
-        }
-      } catch (e) {
-        console.warn('Sync error:', e);
+      const activeUrl = getAppsScriptUrl();
+      const wr = await dualSyncWriteToSheet({
+        apiPath: '/api/syllabus-tracker',
+        method: 'POST',
+        apiBody: changedItem,
+        directPayload: {
+          action: 'saveSyllabusTopic',
+          topic: JSON.stringify(changedItem),
+          ...changedItem,
+        },
+        overrideUrl: activeUrl,
+      });
+      if (!wr.sheetSynced) {
+        setSyncStatus(`⚠️ स्थिति ऐप में बदली, पर Google Sheet में नहीं: ${wr.sheetError || 'Apps Script जांचें'}`);
+        setTimeout(() => setSyncStatus(null), 7000);
+      } else {
+        setSyncStatus(`स्थिति अपडेट: ${nextStatus === 'Completed' ? '✅ पूर्ण (Google Sheet सिंक्ड)' : nextStatus === 'In_Progress' ? '🔄 प्रगति पर' : '⏳ लंबित'}`);
+        setTimeout(() => setSyncStatus(null), 3000);
       }
     }
   };
@@ -362,6 +454,7 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
     const resolvedTeacherId = (!isManager && (currentUser?.User_ID || currentUser?.Username))
       ? (currentUser.User_ID || currentUser.Username)
       : (teacherObj?.User_ID || teacherObj?.Username || selectedTeacherId);
+    const existingItem = editingTopicId ? topics.find((t) => t.id === editingTopicId) : null;
 
     const newRecord: SyllabusTopicRecord = {
       id: editingTopicId || `syl_${selectedMonth.replace('-', '_')}_${resolvedTeacherId}_${Date.now()}`,
@@ -376,8 +469,9 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
       topic_description: formTopic.trim(),
       planned_date: formPlannedDate,
       target_completion_date: formTargetDate,
-      status: 'Pending',
-      created_at: new Date().toISOString().split('T')[0],
+      status: existingItem?.status || 'Pending',
+      completed_date: existingItem?.completed_date,
+      created_at: existingItem?.created_at || new Date().toISOString().split('T')[0],
       timestamp: new Date().toISOString(),
     };
 
@@ -392,27 +486,24 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
     saveLocalSyllabusTopics(updatedList);
     if (onSyllabusUpdated) onSyllabusUpdated(updatedList);
 
-    try {
-      const activeUrl = getAppsScriptUrl();
-      const res = await fetch('/api/syllabus-tracker', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-apps-script-url': activeUrl,
-        },
-        body: JSON.stringify({ ...newRecord, appsScriptUrl: activeUrl }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data?.sheetSynced === false) {
-        setSyncStatus(`⚠️ लक्ष्य ऐप में जुड़ा, लेकिन Google Sheet में नहीं गया (${data?.sheetError || 'Code.gs doPost में saveSyllabusTopic जोड़ें'})`);
-        setTimeout(() => setSyncStatus(null), 8000);
-      } else {
-        setSyncStatus('✅ साप्ताहिक पाठ्यक्रम लक्ष्य Google Sheet "Syllabus_Tracker" में सुरक्षित!');
-        setTimeout(() => setSyncStatus(null), 4000);
-      }
-    } catch {
-      setSyncStatus('⚠️ नेटवर्क त्रुटि: केवल स्थानीय रूप से सुरक्षित');
-      setTimeout(() => setSyncStatus(null), 5000);
+    const activeUrl = getAppsScriptUrl();
+    const wr = await dualSyncWriteToSheet({
+      apiPath: '/api/syllabus-tracker',
+      method: 'POST',
+      apiBody: newRecord,
+      directPayload: {
+        action: 'saveSyllabusTopic',
+        topic: JSON.stringify(newRecord),
+        ...newRecord,
+      },
+      overrideUrl: activeUrl,
+    });
+    if (!wr.sheetSynced) {
+      setSyncStatus(`⚠️ लक्ष्य ऐप में जुड़ा, लेकिन Google Sheet में नहीं गया (${wr.sheetError || 'Apps Script जांचें'})`);
+      setTimeout(() => setSyncStatus(null), 8000);
+    } else {
+      setSyncStatus('✅ साप्ताहिक पाठ्यक्रम लक्ष्य Google Sheet "Syllabus_Tracker" में सुरक्षित!');
+      setTimeout(() => setSyncStatus(null), 4000);
     }
 
     // Reset Form
@@ -431,18 +522,20 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
     saveLocalSyllabusTopics(filtered);
     if (onSyllabusUpdated) onSyllabusUpdated(filtered);
 
-    try {
-      const activeUrl = getAppsScriptUrl();
-      const res = await fetch(`/api/syllabus-tracker/${id}`, {
-        method: 'DELETE',
-        headers: { 'x-apps-script-url': activeUrl },
-      });
-      const data = await res.json().catch(() => ({}));
-      if (data?.sheetSynced === false) {
-        setSyncStatus(`⚠️ लक्ष्य ऐप से हटा, पर Google Sheet से नहीं: ${data.sheetError || 'Code.gs अपडेट करें'}`);
-        setTimeout(() => setSyncStatus(null), 7000);
-      }
-    } catch {}
+    const activeUrl = getAppsScriptUrl();
+    const wr = await dualSyncWriteToSheet({
+      apiPath: `/api/syllabus-tracker/${id}`,
+      method: 'DELETE',
+      directPayload: { action: 'deleteSyllabusTopic', id },
+      overrideUrl: activeUrl,
+    });
+    if (!wr.sheetSynced) {
+      setSyncStatus(`⚠️ लक्ष्य ऐप से हटा, पर Google Sheet से नहीं: ${wr.sheetError || 'Apps Script जांचें'}`);
+      setTimeout(() => setSyncStatus(null), 7000);
+    } else {
+      setSyncStatus('✅ लक्ष्य ऐप व Google Sheet दोनों से हटा दिया गया');
+      setTimeout(() => setSyncStatus(null), 3000);
+    }
   };
 
   return (

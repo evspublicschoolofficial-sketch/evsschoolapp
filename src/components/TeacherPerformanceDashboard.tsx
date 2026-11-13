@@ -30,6 +30,7 @@ import {
   AutoCalculationBreakdown,
 } from '../utils/teacherPerformanceEngine';
 import { getAppsScriptUrl } from '../utils/busTrackingService';
+import { directGetFromSheet, dualSyncWriteToSheet } from '../utils/sheetDirectSync';
 import { TeacherSyllabusPlanner } from './TeacherSyllabusPlanner';
 
 interface TeacherPerformanceDashboardProps {
@@ -115,28 +116,63 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
       const sylDemoIds = new Set(['syl_2026_09_sunita_1', 'syl_2026_09_sunita_2', 'syl_2026_09_sunita_3', 'syl_2026_09_sunita_4']);
       const localTopics = effectiveSyllabusTopics.filter((t) => t && t.topic_description && !sylDemoIds.has(String(t.id)));
 
-      const [tpSync, sylSync] = await Promise.all([
-        syncAllPerformanceTwoWay(records),
-        fetch('/api/syllabus-tracker/sync-all', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-apps-script-url': activeUrl,
-          },
-          body: JSON.stringify({ localTopics, appsScriptUrl: activeUrl }),
-        })
-          .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null),
-      ]);
+      const tpSync = await syncAllPerformanceTwoWay(records, (done, total) => {
+        setSyncStatus(`🔄 शिक्षक मूल्यांकन Google Sheet में भेजा जा रहा है... (${done}/${total})`);
+      });
+
+      // Push any pending syllabus topics sequentially with direct fallback
+      let sylPushed = 0;
+      let sylFailed = 0;
+      let sylError = '';
+      let sylSheetCount = 0;
+      let finalSylTopics = effectiveSyllabusTopics;
+
+      try {
+        const directSyl = await directGetFromSheet('getSyllabusTracker', activeUrl);
+        const sheetRaw: any[] = directSyl.ok
+          ? (Array.isArray(directSyl.json) ? directSyl.json : Array.isArray(directSyl.json?.topics) ? directSyl.json.topics : [])
+          : [];
+        const sheetSylIds = new Set(sheetRaw.filter((r) => r && !Array.isArray(r)).map((r) => String(r.id || '').trim()).filter(Boolean));
+        const toPushSyl = localTopics.filter((t) => !sheetSylIds.has(String(t.id).trim()));
+
+        for (let i = 0; i < toPushSyl.length; i++) {
+          const top = toPushSyl[i];
+          setSyncStatus(`🔄 सिलेबस टॉपिक Google Sheet में भेजा जा रहा है... (${i + 1}/${toPushSyl.length})`);
+          const wr = await dualSyncWriteToSheet({
+            apiPath: '/api/syllabus-tracker',
+            method: 'POST',
+            apiBody: top,
+            directPayload: { action: 'saveSyllabusTopic', topic: JSON.stringify(top), ...top },
+            overrideUrl: activeUrl,
+          });
+          if (wr.sheetSynced) sylPushed++;
+          else {
+            sylFailed++;
+            if (!sylError && wr.sheetError) sylError = wr.sheetError;
+          }
+        }
+
+        const freshSylRes = await fetch('/api/syllabus-tracker?refresh=1', {
+          headers: { 'x-apps-script-url': activeUrl },
+          signal: AbortSignal.timeout(8000),
+        }).catch(() => null);
+        if (freshSylRes && freshSylRes.ok) {
+          const freshArr = await freshSylRes.json().catch(() => null);
+          if (Array.isArray(freshArr) && freshArr.length > 0) {
+            finalSylTopics = freshArr;
+          }
+        } else if (sheetRaw.length > 0) {
+          finalSylTopics = sheetRaw;
+        }
+        sylSheetCount = sheetSylIds.size + sylPushed;
+      } catch {}
 
       if (tpSync.records && tpSync.records.length > 0) setRecords(tpSync.records);
-      if (sylSync && Array.isArray(sylSync.topics) && sylSync.topics.length > 0) {
-        setLoadedSyllabusTopics(sylSync.topics);
-      }
+      if (finalSylTopics.length > 0) setLoadedSyllabusTopics(finalSylTopics);
 
-      const totalPushed = (tpSync.pushed || 0) + Number(sylSync?.pushed || 0);
-      const totalFailed = (tpSync.failed || 0) + Number(sylSync?.failed || 0);
-      const errMsg = tpSync.lastError || sylSync?.lastError;
+      const totalPushed = (tpSync.pushed || 0) + sylPushed;
+      const totalFailed = (tpSync.failed || 0) + sylFailed;
+      const errMsg = tpSync.lastError || sylError;
 
       if (totalFailed > 0) {
         setSyncStatus(`⚠️ ${totalPushed} रिकॉर्ड Sheet में गए, पर ${totalFailed} में त्रुटि: ${errMsg || 'Apps Script जांचें'}`);
@@ -144,8 +180,8 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
       } else if (totalPushed > 0) {
         setSyncStatus(`✅ 2-Way सिंक पूर्ण! ${totalPushed} लंबित रिकॉर्ड Google Sheet में भेजकर ताज़ा डेटा लोड किया गया!`);
         setTimeout(() => setSyncStatus(null), 5000);
-      } else if ((tpSync.sheetCount || 0) + Number(sylSync?.sheetCount || 0) > 0) {
-        setSyncStatus(`🔄 Google Sheet से सभी ${tpSync.sheetCount} मूल्यांकन और ${Number(sylSync?.sheetCount || 0)} सिलेबस रिकॉर्ड पहले से सिंक हैं!`);
+      } else if ((tpSync.sheetCount || 0) + sylSheetCount > 0) {
+        setSyncStatus(`🔄 Google Sheet से सभी ${tpSync.sheetCount} मूल्यांकन और ${sylSheetCount} सिलेबस रिकॉर्ड पहले से सिंक हैं!`);
         setTimeout(() => setSyncStatus(null), 4000);
       } else {
         setSyncStatus('🔄 Google Sheet कनेक्टेड है! नया मूल्यांकन जोड़ने या "ऑटो-मूल्यांकन" दबाने पर डेटा सीधे Sheet में जाएगा।');
@@ -168,10 +204,19 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
       if (syllabusTopics.length === 0) {
         fetch('/api/syllabus-tracker?refresh=1', {
           headers: { 'x-apps-script-url': activeUrl },
+          signal: AbortSignal.timeout(10000),
         })
-          .then((r) => (r.ok ? r.json() : []))
-          .then((data) => {
-            if (Array.isArray(data) && data.length > 0) setLoadedSyllabusTopics(data);
+          .then((r) => (r.ok ? r.json() : null))
+          .then(async (data) => {
+            if (Array.isArray(data) && data.length > 0) {
+              setLoadedSyllabusTopics(data);
+              return;
+            }
+            const direct = await directGetFromSheet('getSyllabusTracker', activeUrl);
+            const rows = direct.ok
+              ? (Array.isArray(direct.json) ? direct.json : Array.isArray(direct.json?.topics) ? direct.json.topics : [])
+              : [];
+            if (rows.length > 0) setLoadedSyllabusTopics(rows);
           })
           .catch(() => {});
       }

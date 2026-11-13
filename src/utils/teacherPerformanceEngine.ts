@@ -13,6 +13,7 @@ import {
   TeacherOfTheYearResult,
 } from '../types/teacherPerformance';
 import { getAppsScriptUrl } from './busTrackingService';
+import { directGetFromSheet, dualSyncWriteToSheet } from './sheetDirectSync';
 
 export const PERFORMANCE_CACHE_KEY = 'evs_teacher_performance_records_v1';
 export const CURRENT_ACADEMIC_YEAR = '2026-2027';
@@ -826,40 +827,94 @@ export const syncPerformanceRecordToApi = async (
   }
   saveLocalPerformanceRecords(updatedList);
 
-  // Send to Node Server API
-  try {
-    const activeUrl = getAppsScriptUrl();
-    const res = await fetch('/api/teacher-performance', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-apps-script-url': activeUrl,
-      },
-      body: JSON.stringify({ ...record, appsScriptUrl: activeUrl }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      return {
-        success: true,
-        sheetSynced: data.sheetSynced,
-        sheetError: data.sheetError,
-        message: data.message || 'Google Sheet में रिकॉर्ड सुरक्षित हो गया!',
-      };
-    }
-  } catch (err: any) {
-    console.warn('API sync warning:', err);
+  const activeUrl = getAppsScriptUrl();
+  const result = await dualSyncWriteToSheet({
+    apiPath: '/api/teacher-performance',
+    method: 'POST',
+    apiBody: record,
+    directPayload: {
+      action: 'saveTeacherPerformance',
+      record: JSON.stringify(record),
+      ...record,
+    },
+    overrideUrl: activeUrl,
+  });
+
+  if (result.sheetSynced) {
+    return {
+      success: true,
+      sheetSynced: true,
+      message: result.data?.message || "Google Sheet 'Teacher_Performance' में सुरक्षित हो गया!",
+    };
   }
 
-  return { success: true, sheetSynced: false, message: 'स्थानीय रूप से सुरक्षित (Local Storage Updated)' };
+  return {
+    success: true,
+    sheetSynced: false,
+    sheetError: result.sheetError,
+    message: `स्थानीय रूप से सुरक्षित (${result.sheetError || 'Sheet सिंक लंबित'})`,
+  };
 };
 
+function normalizeSheetPerformanceRows(rawRows: any[]): TeacherPerformanceRecord[] {
+  const parsed: TeacherPerformanceRecord[] = [];
+  for (const obj of rawRows) {
+    if (!obj || Array.isArray(obj)) continue;
+    const teacherId = String(obj.teacher_id ?? obj.Teacher_ID ?? '').trim();
+    if (!teacherId) continue;
+    const syllabusScore = Number(obj.syllabus_progress_score ?? obj.Syllabus_Score_30 ?? 0);
+    const testScore = Number(obj.student_test_score ?? obj.Test_Score_25 ?? 0);
+    const attScore = Number(obj.attendance_logging_score ?? obj.Attendance_Score_15 ?? 0);
+    const hwScore = Number(obj.homework_evaluation_score ?? obj.Homework_Score_15 ?? 0);
+    const puncScore = Number(obj.punctuality_discipline_score ?? obj.Punctuality_Score_15 ?? 0);
+    const totalScore = Number(
+      obj.monthly_total_score ??
+        obj.Total_Score_100 ??
+        syllabusScore + testScore + attScore + hwScore + puncScore
+    );
+    const rawMonth = String(obj.month ?? obj.Month ?? '2026-11').trim();
+    const monthStr = /^\d{4}-\d{2}/.test(rawMonth) ? rawMonth.slice(0, 7) : '2026-11';
+    parsed.push({
+      id: String(obj.id ?? obj.Record_ID ?? `tp_${monthStr}_${teacherId}`).trim(),
+      teacher_id: teacherId,
+      teacher_name: String(obj.teacher_name ?? obj.Teacher_Name ?? '').trim(),
+      assigned_class: String(obj.assigned_class ?? obj.Assigned_Class ?? '').trim(),
+      subject: String(obj.subject ?? obj.Subject ?? '').trim(),
+      month: monthStr,
+      academic_year: String(obj.academic_year ?? obj.Academic_Year ?? '2026-2027').trim(),
+      syllabus_progress_score: syllabusScore,
+      syllabus_target_percent: 0,
+      student_test_score: testScore,
+      test_average_percent: 0,
+      attendance_logging_score: attScore,
+      attendance_log_accuracy: 0,
+      homework_evaluation_score: hwScore,
+      homework_checked_count: 0,
+      punctuality_discipline_score: puncScore,
+      punctuality_percent: 0,
+      monthly_total_score: Math.round(totalScore * 10) / 10,
+      grade: (String(
+        obj.grade ??
+          obj.Grade ??
+          (totalScore >= 90 ? 'A+' : totalScore >= 80 ? 'A' : totalScore >= 70 ? 'B' : totalScore >= 60 ? 'C' : 'D')
+      ).trim() || 'D') as TeacherPerformanceRecord['grade'],
+      evaluated_by: String(obj.evaluated_by ?? obj.Evaluated_By ?? 'Principal / Manager').trim(),
+      remarks: String(obj.remarks ?? obj.Remarks ?? '').trim(),
+      evaluation_date: String(obj.evaluation_date ?? new Date().toISOString().slice(0, 10)).slice(0, 10),
+      timestamp: String(obj.timestamp ?? obj.Timestamp ?? new Date().toISOString()),
+    });
+  }
+  return parsed;
+}
+
 export const fetchPerformanceRecordsFromApi = async (forceRefresh = false): Promise<TeacherPerformanceRecord[]> => {
+  const activeUrl = getAppsScriptUrl();
   try {
-    const activeUrl = getAppsScriptUrl();
     const res = await fetch(`/api/teacher-performance${forceRefresh ? '?refresh=1' : ''}`, {
       headers: { 'x-apps-script-url': activeUrl },
+      signal: AbortSignal.timeout(12000),
     });
-    if (res.ok) {
+    if (res.ok && (res.headers.get('content-type') || '').includes('application/json')) {
       const data = await res.json();
       if (Array.isArray(data) && data.length > 0) {
         saveLocalPerformanceRecords(data);
@@ -867,11 +922,32 @@ export const fetchPerformanceRecordsFromApi = async (forceRefresh = false): Prom
       }
     }
   } catch {}
+
+  // Direct Google Sheet read fallback
+  try {
+    const direct = await directGetFromSheet('getTeacherPerformance', activeUrl);
+    if (direct.ok && direct.json) {
+      const rawRows = Array.isArray(direct.json)
+        ? direct.json
+        : Array.isArray(direct.json?.records)
+        ? direct.json.records
+        : Array.isArray(direct.json?.data)
+        ? direct.json.data
+        : [];
+      const parsed = normalizeSheetPerformanceRows(rawRows);
+      if (parsed.length > 0) {
+        saveLocalPerformanceRecords(parsed);
+        return parsed;
+      }
+    }
+  } catch {}
+
   return loadLocalPerformanceRecords();
 };
 
 export const syncAllPerformanceTwoWay = async (
-  localRecords: TeacherPerformanceRecord[]
+  localRecords: TeacherPerformanceRecord[],
+  onProgress?: (completed: number, total: number) => void
 ): Promise<{
   success: boolean;
   pushed: number;
@@ -882,47 +958,82 @@ export const syncAllPerformanceTwoWay = async (
 }> => {
   const demoSeedIds = new Set(['tp_2026_09_t1', 'tp_2026_09_t2', 'tp_2026_09_t3', 'tp_2026_09_t4']);
   const nonDemoLocal = localRecords.filter((r) => r && r.teacher_id && !demoSeedIds.has(String(r.id)));
-  try {
-    const activeUrl = getAppsScriptUrl();
-    const res = await fetch('/api/teacher-performance/sync-all', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-apps-script-url': activeUrl,
-      },
-      body: JSON.stringify({ localRecords: nonDemoLocal, appsScriptUrl: activeUrl }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      const merged: TeacherPerformanceRecord[] = Array.isArray(data.records) && data.records.length > 0 ? data.records : localRecords;
-      if (Array.isArray(data.records) && data.records.length > 0) {
-        saveLocalPerformanceRecords(merged);
-      }
-      return {
-        success: Boolean(data.success),
-        pushed: Number(data.pushed || 0),
-        failed: Number(data.failed || 0),
-        sheetCount: Number(data.sheetCount || 0),
-        lastError: data.lastError,
-        records: merged,
-      };
-    }
-  } catch (err: any) {
+  const activeUrl = getAppsScriptUrl();
+
+  // 1. Check what already exists directly in Google Sheet (fast ~2s call)
+  const directExisting = await directGetFromSheet('getTeacherPerformance', activeUrl);
+  if (!directExisting.ok) {
     return {
       success: false,
       pushed: 0,
       failed: 1,
       sheetCount: 0,
-      lastError: err?.message || 'नेटवर्क त्रुटि',
+      lastError: directExisting.error || 'Google Sheet से कनेक्ट नहीं हो सका',
       records: localRecords,
     };
   }
+
+  const rawRows: any[] = Array.isArray(directExisting.json)
+    ? directExisting.json
+    : Array.isArray(directExisting.json?.records)
+    ? directExisting.json.records
+    : [];
+  const existingParsed = normalizeSheetPerformanceRows(rawRows);
+  const sheetIds = new Set(existingParsed.map((r) => String(r.id).trim()));
+  const sheetKeys = new Set(existingParsed.map((r) => `${r.teacher_id}_${r.month}`));
+
+  // Merge any server-cached unsynced records if localRecords missed them
+  let combinedCandidates = [...nonDemoLocal];
+  try {
+    const srvRes = await fetch('/api/teacher-performance', {
+      headers: { 'x-apps-script-url': activeUrl },
+      signal: AbortSignal.timeout(6000),
+    });
+    if (srvRes.ok && (srvRes.headers.get('content-type') || '').includes('application/json')) {
+      const srvList = await srvRes.json();
+      if (Array.isArray(srvList)) {
+        for (const item of srvList) {
+          if (!item || !item.teacher_id || demoSeedIds.has(String(item.id))) continue;
+          const dup = combinedCandidates.some(
+            (c) => c.id === item.id || (c.teacher_id === item.teacher_id && c.month === item.month)
+          );
+          if (!dup) combinedCandidates.push(item);
+        }
+      }
+    }
+  } catch {}
+
+  const toPush = combinedCandidates.filter(
+    (r) => !sheetIds.has(String(r.id).trim()) && !sheetKeys.has(`${r.teacher_id}_${r.month}`)
+  );
+
+  // 2. Push one by one sequentially via dualSyncWriteToSheet (no 40s single-request timeout!)
+  let pushed = 0;
+  let failed = 0;
+  let lastError = '';
+  for (let i = 0; i < toPush.length; i++) {
+    const rec = toPush[i];
+    if (onProgress) onProgress(i + 1, toPush.length);
+    const res = await syncPerformanceRecordToApi(rec);
+    if (res.sheetSynced) {
+      pushed++;
+    } else {
+      failed++;
+      if (!lastError && res.sheetError) lastError = res.sheetError;
+    }
+  }
+
+  // 3. Re-pull fresh truth from Sheet / Server
+  const freshAfter = await fetchPerformanceRecordsFromApi(true);
+  const finalRecords = freshAfter && freshAfter.length > 0 ? freshAfter : combinedCandidates;
+  if (finalRecords.length > 0) saveLocalPerformanceRecords(finalRecords);
+
   return {
-    success: false,
-    pushed: 0,
-    failed: 1,
-    sheetCount: 0,
-    lastError: 'सर्वर से उत्तर नहीं मिला',
-    records: localRecords,
+    success: failed === 0,
+    pushed,
+    failed,
+    sheetCount: existingParsed.length + pushed,
+    lastError: lastError || undefined,
+    records: finalRecords,
   };
 };

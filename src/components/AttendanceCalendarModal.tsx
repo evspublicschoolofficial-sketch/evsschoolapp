@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Student, StudentBehaviorRecord, SchoolHolidayRecord } from '../types';
 import { getAppsScriptUrl } from '../utils/busTrackingService';
+import { directGetFromSheet, dualSyncWriteToSheet } from '../utils/sheetDirectSync';
 
 interface AttendanceCalendarModalProps {
   isOpen?: boolean;
@@ -60,7 +61,17 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
   } | null>(null);
 
   // School Holidays State (Sunday ke alawa chhuttiyan)
-  const [holidays, setHolidays] = useState<SchoolHolidayRecord[]>([]);
+  const HOLIDAY_STORAGE_KEY = 'evs_school_holidays_v1';
+  const [holidays, setHolidays] = useState<SchoolHolidayRecord[]>(() => {
+    try {
+      const raw = localStorage.getItem('evs_school_holidays_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+    return [];
+  });
   const [isHolidayModalOpen, setIsHolidayModalOpen] = useState<boolean>(false);
   const [holidayTitle, setHolidayTitle] = useState<string>('');
   const [holidayDate, setHolidayDate] = useState<string>('');
@@ -71,34 +82,114 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
 
   const [isRefreshingHolidays, setIsRefreshingHolidays] = useState<boolean>(false);
 
+  const saveLocalHolidays = (list: SchoolHolidayRecord[]) => {
+    try {
+      localStorage.setItem(HOLIDAY_STORAGE_KEY, JSON.stringify(list));
+    } catch {}
+  };
+
   const handleSyncHolidaysFromSheet = async () => {
     setIsRefreshingHolidays(true);
     setHolidaySyncMsg('🔄 Google Sheet "School_Holidays" से 2-Way सिंक हो रहा है...');
     try {
       const activeUrl = getAppsScriptUrl();
-      const r = await fetch('/api/school-holidays/sync-all', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-apps-script-url': activeUrl,
-        },
-        body: JSON.stringify({ localHolidays: holidays, appsScriptUrl: activeUrl }),
-      });
-      if (r.ok) {
-        const data = await r.json();
-        if (Array.isArray(data.holidays)) {
-          setHolidays(data.holidays);
+      const directExisting = await directGetFromSheet('getSchoolHolidays', activeUrl);
+      if (!directExisting.ok) {
+        setHolidaySyncMsg(`⚠️ Google Sheet से कनेक्ट नहीं हो सका: ${directExisting.error || 'Apps Script जांचें'}`);
+        setTimeout(() => setHolidaySyncMsg(null), 6000);
+        setIsRefreshingHolidays(false);
+        return;
+      }
+
+      const sheetRaw: any[] = Array.isArray(directExisting.json)
+        ? directExisting.json
+        : Array.isArray(directExisting.json?.holidays)
+        ? directExisting.json.holidays
+        : [];
+      const sheetIds = new Set(
+        sheetRaw.filter((r) => r && !Array.isArray(r)).map((r) => String(r.id || '').trim()).filter(Boolean)
+      );
+      const sheetDateKeys = new Set(
+        sheetRaw.filter((r) => r && !Array.isArray(r)).map((r) => normalizeDateToYmd(String(r.date || ''))).filter(Boolean)
+      );
+
+      let candidateHolidays = [...holidays];
+      try {
+        const srvRes = await fetch('/api/school-holidays', {
+          headers: { 'x-apps-script-url': activeUrl },
+          signal: AbortSignal.timeout(6000),
+        });
+        if (srvRes.ok && (srvRes.headers.get('content-type') || '').includes('application/json')) {
+          const srvArr = await srvRes.json();
+          if (Array.isArray(srvArr)) {
+            for (const s of srvArr) {
+              if (!s || !s.title || !s.date) continue;
+              if (!candidateHolidays.some((h) => h.id === s.id || (h.date === s.date && h.title === s.title))) {
+                candidateHolidays.push(s);
+              }
+            }
+          }
         }
-        if (data.failed > 0) {
-          setHolidaySyncMsg(`⚠️ ${data.pushed || 0} अवकाश Sheet में गए, पर ${data.failed} में त्रुटि: ${data.lastError || 'Code.gs जांचें'}`);
-          setTimeout(() => setHolidaySyncMsg(null), 9000);
-        } else if (data.pushed > 0) {
-          setHolidaySyncMsg(`✅ 2-Way सिंक पूर्ण! ${data.pushed} अवकाश Google Sheet "School_Holidays" में भेजे गए!`);
-          setTimeout(() => setHolidaySyncMsg(null), 5000);
-        } else {
-          setHolidaySyncMsg('🔄 Google Sheet "School_Holidays" से ताज़ा अवकाश सूची सिंक हो गई!');
-          setTimeout(() => setHolidaySyncMsg(null), 3500);
+      } catch {}
+
+      const toPush = candidateHolidays.filter(
+        (h) => h && h.title && h.date && !sheetIds.has(String(h.id).trim()) && !sheetDateKeys.has(normalizeDateToYmd(h.date))
+      );
+
+      let pushed = 0;
+      let failed = 0;
+      let lastError = '';
+      for (let i = 0; i < toPush.length; i++) {
+        const hol = toPush[i];
+        setHolidaySyncMsg(`🔄 अवकाश Google Sheet में भेजा जा रहा है... (${i + 1}/${toPush.length})`);
+        const wr = await dualSyncWriteToSheet({
+          apiPath: '/api/school-holidays',
+          method: 'POST',
+          apiBody: hol,
+          directPayload: { action: 'saveSchoolHoliday', holiday: JSON.stringify(hol), ...hol },
+          overrideUrl: activeUrl,
+        });
+        if (wr.sheetSynced) pushed++;
+        else {
+          failed++;
+          if (!lastError && wr.sheetError) lastError = wr.sheetError;
         }
+      }
+
+      let refreshed: SchoolHolidayRecord[] = [];
+      try {
+        const srvRefresh = await fetch('/api/school-holidays?refresh=1', {
+          headers: { 'x-apps-script-url': activeUrl },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (srvRefresh.ok && (srvRefresh.headers.get('content-type') || '').includes('application/json')) {
+          const arr = await srvRefresh.json();
+          if (Array.isArray(arr)) refreshed = arr;
+        }
+      } catch {}
+
+      if (refreshed.length === 0) {
+        const rePull = await directGetFromSheet('getSchoolHolidays', activeUrl);
+        if (rePull.ok) {
+          const reArr = Array.isArray(rePull.json) ? rePull.json : Array.isArray(rePull.json?.holidays) ? rePull.json.holidays : [];
+          refreshed = reArr;
+        }
+      }
+
+      if (Array.isArray(refreshed)) {
+        setHolidays(refreshed);
+        saveLocalHolidays(refreshed);
+      }
+
+      if (failed > 0) {
+        setHolidaySyncMsg(`⚠️ ${pushed} अवकाश Sheet में गए, पर ${failed} में त्रुटि: ${lastError || 'Apps Script जांचें'}`);
+        setTimeout(() => setHolidaySyncMsg(null), 9000);
+      } else if (pushed > 0) {
+        setHolidaySyncMsg(`✅ 2-Way सिंक पूर्ण! ${pushed} अवकाश Google Sheet "School_Holidays" में भेजे गए!`);
+        setTimeout(() => setHolidaySyncMsg(null), 5000);
+      } else {
+        setHolidaySyncMsg('🔄 Google Sheet "School_Holidays" से ताज़ा अवकाश सूची सिंक हो गई!');
+        setTimeout(() => setHolidaySyncMsg(null), 3500);
       }
     } catch {
       setHolidaySyncMsg('⚠️ नेटवर्क त्रुटि: Google Sheet से सिंक नहीं हो सका');
@@ -107,22 +198,51 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
     setIsRefreshingHolidays(false);
   };
 
-  // Fetch fresh school holidays on mount + live WebSocket sync across tabs
+  // Fetch fresh school holidays on mount + live WebSocket & storage sync across tabs
   React.useEffect(() => {
-    const fetchHolidays = () => {
+    const fetchHolidays = async () => {
       const activeUrl = getAppsScriptUrl();
-      fetch('/api/school-holidays?refresh=1', {
-        headers: { 'x-apps-script-url': activeUrl },
-      })
-        .then((r) => (r.ok ? r.json() : []))
-        .then((data) => {
+      try {
+        const r = await fetch('/api/school-holidays?refresh=1', {
+          headers: { 'x-apps-script-url': activeUrl },
+          signal: AbortSignal.timeout(10000),
+        });
+        if (r.ok && (r.headers.get('content-type') || '').includes('application/json')) {
+          const data = await r.json();
           if (Array.isArray(data)) {
             setHolidays(data);
+            saveLocalHolidays(data);
+            return;
           }
-        })
-        .catch(() => {});
+        }
+      } catch {}
+
+      try {
+        const direct = await directGetFromSheet('getSchoolHolidays', activeUrl);
+        if (direct.ok) {
+          const rows = Array.isArray(direct.json)
+            ? direct.json
+            : Array.isArray(direct.json?.holidays)
+            ? direct.json.holidays
+            : [];
+          if (Array.isArray(rows)) {
+            setHolidays(rows);
+            saveLocalHolidays(rows);
+          }
+        }
+      } catch {}
     };
     fetchHolidays();
+
+    const onStorage = (ev: StorageEvent) => {
+      if (ev.key === HOLIDAY_STORAGE_KEY && ev.newValue) {
+        try {
+          const parsed = JSON.parse(ev.newValue);
+          if (Array.isArray(parsed)) setHolidays(parsed);
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', onStorage);
 
     let ws: WebSocket | null = null;
     try {
@@ -139,6 +259,7 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
     } catch {}
 
     return () => {
+      window.removeEventListener('storage', onStorage);
       if (ws) {
         try { ws.close(); } catch {}
       }
@@ -172,26 +293,27 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
 
     const updated = [...holidays, newHoliday].sort((a, b) => a.date.localeCompare(b.date));
     setHolidays(updated);
+    saveLocalHolidays(updated);
 
-    try {
-      const activeUrl = getAppsScriptUrl();
-      const res = await fetch('/api/school-holidays', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-apps-script-url': activeUrl,
-        },
-        body: JSON.stringify({ ...newHoliday, appsScriptUrl: activeUrl }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data?.sheetSynced === false) {
-        setHolidaySyncMsg(`⚠️ कैलेंडर में जुड़ा, लेकिन Google Sheet में नहीं गया (${data?.sheetError || 'Code.gs doPost में saveSchoolHoliday जोड़ें'})`);
-        setTimeout(() => setHolidaySyncMsg(null), 8000);
-      } else {
-        setHolidaySyncMsg('✅ अवकाश सफलतापूर्वक कैलेंडर व Google Sheet में सुरक्षित!');
-        setTimeout(() => setHolidaySyncMsg(null), 3500);
-      }
-    } catch {}
+    const activeUrl = getAppsScriptUrl();
+    const wr = await dualSyncWriteToSheet({
+      apiPath: '/api/school-holidays',
+      method: 'POST',
+      apiBody: newHoliday,
+      directPayload: {
+        action: 'saveSchoolHoliday',
+        holiday: JSON.stringify(newHoliday),
+        ...newHoliday,
+      },
+      overrideUrl: activeUrl,
+    });
+    if (!wr.sheetSynced) {
+      setHolidaySyncMsg(`⚠️ कैलेंडर में जुड़ा, लेकिन Google Sheet में नहीं गया (${wr.sheetError || 'Apps Script जांचें'})`);
+      setTimeout(() => setHolidaySyncMsg(null), 8000);
+    } else {
+      setHolidaySyncMsg('✅ अवकाश सफलतापूर्वक कैलेंडर व Google Sheet में सुरक्षित!');
+      setTimeout(() => setHolidaySyncMsg(null), 3500);
+    }
 
     setHolidayTitle('');
     setHolidayDate('');
@@ -203,21 +325,22 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
     if (!confirm('क्या आप इस अवकाश को हटाना चाहते हैं?')) return;
     const filtered = holidays.filter((h) => h.id !== id);
     setHolidays(filtered);
-    try {
-      const activeUrl = getAppsScriptUrl();
-      const res = await fetch(`/api/school-holidays/${id}`, {
-        method: 'DELETE',
-        headers: { 'x-apps-script-url': activeUrl },
-      });
-      const data = await res.json().catch(() => ({}));
-      if (data?.sheetSynced === false) {
-        setHolidaySyncMsg(`⚠️ कैलेंडर से हटा, पर Google Sheet से नहीं: ${data.sheetError || 'Code.gs अपडेट करें'}`);
-        setTimeout(() => setHolidaySyncMsg(null), 7000);
-      } else {
-        setHolidaySyncMsg('अवकाश हटा दिया गया');
-        setTimeout(() => setHolidaySyncMsg(null), 3000);
-      }
-    } catch {}
+    saveLocalHolidays(filtered);
+
+    const activeUrl = getAppsScriptUrl();
+    const wr = await dualSyncWriteToSheet({
+      apiPath: `/api/school-holidays/${id}`,
+      method: 'DELETE',
+      directPayload: { action: 'deleteSchoolHoliday', id },
+      overrideUrl: activeUrl,
+    });
+    if (!wr.sheetSynced) {
+      setHolidaySyncMsg(`⚠️ कैलेंडर से हटा, पर Google Sheet से नहीं: ${wr.sheetError || 'Apps Script जांचें'}`);
+      setTimeout(() => setHolidaySyncMsg(null), 7000);
+    } else {
+      setHolidaySyncMsg('✅ अवकाश कैलेंडर व Google Sheet दोनों से हटा दिया गया');
+      setTimeout(() => setHolidaySyncMsg(null), 3000);
+    }
   };
 
   // Sync mode if initialMode changes
