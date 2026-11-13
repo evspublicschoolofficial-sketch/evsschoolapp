@@ -1,5 +1,5 @@
-import React, { useState, useMemo } from 'react';
-import { SchoolUser, StaffAttendanceRecord } from '../types';
+import React, { useState, useMemo, useEffect } from 'react';
+import { SchoolUser, StaffAttendanceRecord, SchoolHolidayRecord } from '../types';
 import {
   calculateStaffMonthlyStats,
   StaffMonthlyReport,
@@ -8,6 +8,11 @@ import {
   getSchoolShiftSettings,
   saveSchoolShiftSettings,
 } from '../utils/staffAttendanceMetrics';
+import {
+  loadLocalSchoolHolidays,
+  fetchSchoolHolidaysFromApiOrSheet,
+  subscribeSchoolHolidaysUpdates,
+} from '../utils/schoolHolidaysHelper';
 
 interface StaffMonthlyReportViewProps {
   currentUser: SchoolUser;
@@ -84,6 +89,17 @@ export const StaffMonthlyReportView: React.FC<StaffMonthlyReportViewProps> = ({
     setSelectedMonth(`${d.getFullYear()}-${mm}`);
   };
 
+  // School Holidays state (synced from School_Holidays sheet + local cache + cross-tab events)
+  const [schoolHolidays, setSchoolHolidays] = useState<SchoolHolidayRecord[]>(() => loadLocalSchoolHolidays());
+
+  useEffect(() => {
+    fetchSchoolHolidaysFromApiOrSheet(true).then(setSchoolHolidays).catch(() => {});
+    const unsubscribe = subscribeSchoolHolidaysUpdates((latest) => {
+      setSchoolHolidays(latest);
+    });
+    return unsubscribe;
+  }, []);
+
   // Compute monthly report for ALL staff in selected month
   const allStaffReports = useMemo<StaffMonthlyReport[]>(() => {
     return staffList.map((user) => {
@@ -93,16 +109,18 @@ export const StaffMonthlyReportView: React.FC<StaffMonthlyReportViewProps> = ({
         attendanceRecords,
         customWorkingDays,
         standardStartTime,
-        standardEndTime
+        standardEndTime,
+        schoolHolidays
       );
     });
-  }, [staffList, selectedMonth, attendanceRecords, customWorkingDays, standardStartTime, standardEndTime]);
+  }, [staffList, selectedMonth, attendanceRecords, customWorkingDays, standardStartTime, standardEndTime, schoolHolidays]);
 
   // Aggregate School-Wide Rollup
   const schoolRollup = useMemo(() => {
     if (allStaffReports.length === 0) return null;
     const totalStaff = allStaffReports.length;
     const workingDays = allStaffReports[0].workingDays;
+    const totalHolidays = allStaffReports[0].totalHolidays;
     const totalPresentDaysSum = allStaffReports.reduce((acc, r) => acc + r.presentDays, 0);
     const totalAbsentDaysSum = allStaffReports.reduce((acc, r) => acc + r.absentDays, 0);
     const totalLateCases = allStaffReports.reduce((acc, r) => acc + r.lateDays, 0);
@@ -118,6 +136,7 @@ export const StaffMonthlyReportView: React.FC<StaffMonthlyReportViewProps> = ({
     return {
       totalStaff,
       workingDays,
+      totalHolidays,
       totalPresentDaysSum,
       totalAbsentDaysSum,
       totalLateCases,
@@ -431,6 +450,11 @@ export const StaffMonthlyReportView: React.FC<StaffMonthlyReportViewProps> = ({
             </div>
             <div className="text-[11px] text-blue-800 font-medium mt-1">
               {allStaffReports[0]?.monthName}
+              {schoolRollup.totalHolidays > 0 && (
+                <span className="ml-1 font-bold text-amber-700">
+                  • 🌴 {schoolRollup.totalHolidays} अवकाश घटाकर
+                </span>
+              )}
             </div>
           </div>
 
@@ -781,6 +805,11 @@ export const StaffMonthlyReportView: React.FC<StaffMonthlyReportViewProps> = ({
                 </div>
                 <div className="text-[11px] text-slate-500 mt-1">
                   कुल कार्य दिवस ({currentSelectedReport.monthName})
+                  {currentSelectedReport.totalHolidays > 0 && (
+                    <span className="block text-[10px] font-bold text-amber-700 mt-0.5">
+                      🌴 {currentSelectedReport.totalHolidays} स्कूल अवकाश छोड़कर
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
@@ -994,6 +1023,8 @@ export const StaffMonthlyReportView: React.FC<StaffMonthlyReportViewProps> = ({
                       className={`hover:bg-slate-50 transition-colors ${
                         day.isSunday
                           ? 'bg-slate-50/70 text-slate-400'
+                          : day.isHoliday && day.status === 'Holiday'
+                          ? 'bg-amber-50/70 text-amber-900'
                           : day.status === 'Present'
                           ? 'bg-emerald-50/15'
                           : day.status === 'Late'
@@ -1010,6 +1041,8 @@ export const StaffMonthlyReportView: React.FC<StaffMonthlyReportViewProps> = ({
                             className={`w-7 h-7 rounded-lg font-mono font-bold flex items-center justify-center text-xs ${
                               day.isSunday
                                 ? 'bg-slate-200 text-slate-600'
+                                : day.isHoliday
+                                ? 'bg-amber-200 text-amber-900'
                                 : day.isToday
                                 ? 'bg-amber-400 text-slate-950 ring-2 ring-amber-400/50'
                                 : 'bg-slate-100 text-slate-800'
@@ -1029,6 +1062,11 @@ export const StaffMonthlyReportView: React.FC<StaffMonthlyReportViewProps> = ({
                         {day.isSunday ? (
                           <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-200 text-slate-700">
                             रविवार (अवकाश)
+                          </span>
+                        ) : day.status === 'Holiday' || (day.isHoliday && !day.record) ? (
+                          <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-900 border border-amber-300 inline-flex items-center gap-1">
+                            <span>🌴</span>
+                            <span>{day.holidayTitle || 'विद्यालय अवकाश'}</span>
                           </span>
                         ) : day.isFuture ? (
                           <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-400">

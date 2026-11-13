@@ -2,6 +2,12 @@ import React, { useState, useMemo } from 'react';
 import { Student, StudentBehaviorRecord, SchoolHolidayRecord } from '../types';
 import { getAppsScriptUrl } from '../utils/busTrackingService';
 import { directGetFromSheet, dualSyncWriteToSheet } from '../utils/sheetDirectSync';
+import {
+  HOLIDAY_STORAGE_KEY,
+  loadLocalSchoolHolidays,
+  saveLocalSchoolHolidays,
+  findHolidayForDate,
+} from '../utils/schoolHolidaysHelper';
 
 interface AttendanceCalendarModalProps {
   isOpen?: boolean;
@@ -61,17 +67,7 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
   } | null>(null);
 
   // School Holidays State (Sunday ke alawa chhuttiyan)
-  const HOLIDAY_STORAGE_KEY = 'evs_school_holidays_v1';
-  const [holidays, setHolidays] = useState<SchoolHolidayRecord[]>(() => {
-    try {
-      const raw = localStorage.getItem('evs_school_holidays_v1');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch {}
-    return [];
-  });
+  const [holidays, setHolidays] = useState<SchoolHolidayRecord[]>(() => loadLocalSchoolHolidays());
   const [isHolidayModalOpen, setIsHolidayModalOpen] = useState<boolean>(false);
   const [holidayTitle, setHolidayTitle] = useState<string>('');
   const [holidayDate, setHolidayDate] = useState<string>('');
@@ -83,9 +79,7 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
   const [isRefreshingHolidays, setIsRefreshingHolidays] = useState<boolean>(false);
 
   const saveLocalHolidays = (list: SchoolHolidayRecord[]) => {
-    try {
-      localStorage.setItem(HOLIDAY_STORAGE_KEY, JSON.stringify(list));
-    } catch {}
+    saveLocalSchoolHolidays(list, true);
   };
 
   const handleSyncHolidaysFromSheet = async () => {
@@ -267,14 +261,7 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
   }, []);
 
   const getHolidayForDate = (dateYmd: string): SchoolHolidayRecord | null => {
-    for (const h of holidays) {
-      if (!h.date) continue;
-      if (h.date === dateYmd) return h;
-      if (h.end_date && dateYmd >= h.date && dateYmd <= h.end_date) {
-        return h;
-      }
-    }
-    return null;
+    return findHolidayForDate(dateYmd, holidays);
   };
 
   const handleSaveHoliday = async (e: React.FormEvent) => {

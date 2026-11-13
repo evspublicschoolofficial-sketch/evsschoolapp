@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { SchoolUser, StaffAttendanceRecord } from '../types';
+import { SchoolUser, StaffAttendanceRecord, SchoolHolidayRecord } from '../types';
 import { StaffMonthlyReportView } from './StaffMonthlyReportView';
 import { SchoolLocationModal } from './SchoolLocationModal';
 import { GoogleSheetSyncModal } from './GoogleSheetSyncModal';
@@ -12,6 +12,12 @@ import {
   SchoolShiftSettings,
   formatMinutesToHuman,
 } from '../utils/staffAttendanceMetrics';
+import {
+  loadLocalSchoolHolidays,
+  fetchSchoolHolidaysFromApiOrSheet,
+  findHolidayForDate,
+  subscribeSchoolHolidaysUpdates,
+} from '../utils/schoolHolidaysHelper';
 
 interface StaffAttendanceViewProps {
   currentUser: SchoolUser;
@@ -74,7 +80,15 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
   });
   const [manualRemark, setManualRemark] = useState<string>('');
 
+  const [schoolHolidays, setSchoolHolidays] = useState<SchoolHolidayRecord[]>(() => loadLocalSchoolHolidays());
+  useEffect(() => {
+    fetchSchoolHolidaysFromApiOrSheet(true).then(setSchoolHolidays).catch(() => {});
+    return subscribeSchoolHolidaysUpdates(setSchoolHolidays);
+  }, []);
+
   const todayStr = new Date().toISOString().split('T')[0];
+  const todayHoliday = useMemo(() => findHolidayForDate(todayStr, schoolHolidays), [todayStr, schoolHolidays]);
+  const selectedDateHoliday = useMemo(() => findHolidayForDate(selectedDate, schoolHolidays), [selectedDate, schoolHolidays]);
 
   // Current logged in user's record for today
   const myTodayRecord = useMemo(() => {
@@ -207,7 +221,13 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
             </h2>
 
             {/* Today's Presence Status Pill */}
-            <div className="pt-1">
+            <div className="pt-1 flex flex-wrap items-center gap-2">
+              {todayHoliday && (
+                <div className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl bg-amber-400/20 border border-amber-300/60 text-amber-200 font-bold text-xs sm:text-sm">
+                  <span>🌴</span>
+                  <span>आज विद्यालय अवकाश है: {todayHoliday.title}</span>
+                </div>
+              )}
               {myTodayRecord ? (
                 <div className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 font-bold text-xs sm:text-sm shadow-inner">
                   <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
@@ -218,7 +238,7 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
                     </span>
                   )}
                 </div>
-              ) : (
+              ) : todayHoliday ? null : (
                 <div className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl bg-amber-500/20 border border-amber-400/40 text-amber-200 font-bold text-xs sm:text-sm">
                   <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping"></span>
                   <span>⚠️ आज की हाजिरी अभी दर्ज नहीं हुई है — कृपया स्कूल QR कोड स्कैन करें</span>
@@ -603,6 +623,20 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
       {/* VIEW 2: ALL STAFF TODAY ROSTER (MANAGER ONLY) */}
       {isManager && (activeSubTab === 'all_today' || activeSubTab === 'history') && (
         <div className="space-y-6">
+          {selectedDateHoliday && (
+            <div className="p-3.5 rounded-2xl bg-amber-50 border-2 border-amber-300 text-amber-950 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 text-xs sm:text-sm font-bold">
+                <span className="text-lg">🌴</span>
+                <span>
+                  {selectedDate} को विद्यालय अवकाश है: <strong>{selectedDateHoliday.title}</strong>
+                  {selectedDateHoliday.description ? ` (${selectedDateHoliday.description})` : ''}
+                </span>
+              </div>
+              <span className="px-2.5 py-0.5 rounded-full bg-amber-200 text-amber-900 font-black text-[10px] shrink-0">
+                School Holiday
+              </span>
+            </div>
+          )}
           {/* Summary Pills on Selected Date */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs flex items-center justify-between">

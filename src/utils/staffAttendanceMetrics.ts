@@ -1,4 +1,5 @@
-import { SchoolUser, StaffAttendanceRecord } from '../types';
+import { SchoolUser, StaffAttendanceRecord, SchoolHolidayRecord } from '../types';
+import { findHolidayForDate, loadLocalSchoolHolidays } from './schoolHolidaysHelper';
 
 export interface SchoolShiftSettings {
   schoolOpeningTime: string; // e.g. "08:30 AM"
@@ -286,10 +287,12 @@ export interface DayAttendanceDetail {
   dayNumber: number;
   dayName: string; // 'सोमवार', 'मंगलवार', etc.
   isSunday: boolean;
+  isHoliday?: boolean;
+  holidayTitle?: string;
   isToday: boolean;
   isFuture: boolean;
   record?: StaffAttendanceRecord;
-  status: 'Present' | 'Late' | 'Half-Day' | 'Absent' | 'Leave' | 'On-Duty' | 'Sunday' | 'Upcoming';
+  status: 'Present' | 'Late' | 'Half-Day' | 'Absent' | 'Leave' | 'On-Duty' | 'Sunday' | 'Holiday' | 'Upcoming';
   checkIn?: string;
   checkOut?: string;
   totalDurationMinutes: number;
@@ -312,6 +315,7 @@ export interface StaffMonthlyReport {
   monthName: string; // "अक्टूबर 2026"
   totalCalendarDays: number;
   totalSundays: number;
+  totalHolidays: number;
   workingDays: number; // कितने दिन स्कूल खुला
   workingDaysElapsed: number; // महीने में आज तक कार्य दिवस
   presentDays: number; // कितने दिन आया
@@ -378,7 +382,8 @@ export function calculateStaffMonthlyStats(
   records: StaffAttendanceRecord[],
   customWorkingDays?: number,
   standardStartTimeStr: string = '08:30 AM', // Arrival cutoff for lateness
-  standardEndTimeStr: string = '02:00 PM'    // Departure cutoff for overtime/extra
+  standardEndTimeStr: string = '02:00 PM',   // Departure cutoff for overtime/extra
+  holidays?: SchoolHolidayRecord[]
 ): StaffMonthlyReport {
   const [yStr, mStr] = monthStr.split('-');
   const year = parseInt(yStr, 10);
@@ -386,9 +391,15 @@ export function calculateStaffMonthlyStats(
 
   const monthName = `${HINDI_MONTHS[monthZero]} ${year}`;
   const { totalDays, sundaysCount, dates } = getMonthDates(year, monthZero);
+  const activeHolidays = Array.isArray(holidays) ? holidays : loadLocalSchoolHolidays();
 
-  // Default school open days: Calendar days minus Sundays
-  const defaultWorkingDays = totalDays - sundaysCount;
+  const nonSundayHolidaysCount = dates.reduce((acc, d) => {
+    if (d.isSunday) return acc;
+    return findHolidayForDate(d.dateStr, activeHolidays) ? acc + 1 : acc;
+  }, 0);
+
+  // Default school open days: Calendar days minus Sundays minus School Holidays
+  const defaultWorkingDays = Math.max(0, totalDays - sundaysCount - nonSundayHolidaysCount);
   const workingDays = typeof customWorkingDays === 'number' && customWorkingDays > 0
     ? customWorkingDays
     : defaultWorkingDays;
@@ -434,9 +445,11 @@ export function calculateStaffMonthlyStats(
   dates.forEach((d) => {
     const isToday = d.dateStr === todayStr;
     const isFuture = d.dateStr > todayStr;
+    const holidayMatch = findHolidayForDate(d.dateStr, activeHolidays);
+    const isHoliday = Boolean(holidayMatch);
     const rec = recordMap.get(d.dateStr);
 
-    if (!d.isSunday && !isFuture) {
+    if (!d.isSunday && !isHoliday && !isFuture) {
       workingDaysElapsed++;
     }
 
@@ -481,8 +494,8 @@ export function calculateStaffMonthlyStats(
         });
       }
 
-      // If came on Sunday / non-working day
-      if (d.isSunday) {
+      // If came on Sunday / school holiday / non-working day
+      if (d.isSunday || isHoliday) {
         extraDutyDays++;
       }
 
@@ -510,6 +523,8 @@ export function calculateStaffMonthlyStats(
     } else {
       if (d.isSunday) {
         status = 'Sunday';
+      } else if (isHoliday) {
+        status = 'Holiday';
       } else if (isFuture) {
         status = 'Upcoming';
       } else {
@@ -522,6 +537,8 @@ export function calculateStaffMonthlyStats(
       dayNumber: d.dayNumber,
       dayName: d.dayName,
       isSunday: d.isSunday,
+      isHoliday,
+      holidayTitle: holidayMatch?.title,
       isToday,
       isFuture,
       record: rec,
@@ -560,6 +577,7 @@ export function calculateStaffMonthlyStats(
     monthName,
     totalCalendarDays: totalDays,
     totalSundays: sundaysCount,
+    totalHolidays: nonSundayHolidaysCount,
     workingDays,
     workingDaysElapsed,
     presentDays,

@@ -14,6 +14,7 @@ import {
 } from '../types/teacherPerformance';
 import { getAppsScriptUrl } from './busTrackingService';
 import { directGetFromSheet, dualSyncWriteToSheet } from './sheetDirectSync';
+import { countWorkingDaysInMonth, loadLocalSchoolHolidays } from './schoolHolidaysHelper';
 
 export const PERFORMANCE_CACHE_KEY = 'evs_teacher_performance_records_v1';
 export const CURRENT_ACADEMIC_YEAR = '2026-2027';
@@ -496,15 +497,22 @@ export const autoCalculateTeacherMonthlyScoreFromAppData = (params: {
   // -------------------------------------------------------------
   // PARAMETER 3: Student Attendance & App Logs (Max 15 Points)
   // -------------------------------------------------------------
+  const [yrStr, moStr] = month.split('-');
+  const yrNum = parseInt(yrStr, 10) || 2026;
+  const moZero = Math.max(0, (parseInt(moStr, 10) || 1) - 1);
+  const realMonthWorkingDays = Math.max(
+    1,
+    countWorkingDaysInMonth(yrNum, moZero, loadLocalSchoolHolidays()).workingDays || 22
+  );
   const uniqueAttendanceDates = new Set(classBehavior.map((b) => normalizeDateYmd(b.Date))).size;
   let attendanceScore: number;
   let attendancePercent: number;
   let attendanceDetail: string;
 
   if (uniqueAttendanceDates > 0) {
-    attendancePercent = Math.min(100, Math.round((uniqueAttendanceDates / 22) * 100));
-    attendanceScore = Math.min(15, Math.round(((uniqueAttendanceDates / 22) * 15) * 10) / 10);
-    attendanceDetail = `${uniqueAttendanceDates}/22 कार्यदिवस कक्षा छात्र हाजिरी ऐप में दर्ज`;
+    attendancePercent = Math.min(100, Math.round((uniqueAttendanceDates / realMonthWorkingDays) * 100));
+    attendanceScore = Math.min(15, Math.round(((uniqueAttendanceDates / realMonthWorkingDays) * 15) * 10) / 10);
+    attendanceDetail = `${uniqueAttendanceDates}/${realMonthWorkingDays} कार्यदिवस कक्षा छात्र हाजिरी ऐप में दर्ज`;
   } else {
     attendancePercent = 0;
     attendanceScore = 0;
@@ -587,7 +595,7 @@ export const autoCalculateTeacherMonthlyScoreFromAppData = (params: {
     punctualityPercent = Math.round((earnedDayWeight / workingTarget) * 100);
     // Reflect both punctuality quality (10 pts) and attendance regularity (5 pts across month)
     const qualityPts = (earnedDayWeight / workingTarget) * 10;
-    const regularityPts = Math.min(5, (onTimeDaysCount / 22) * 5);
+    const regularityPts = Math.min(5, (onTimeDaysCount / realMonthWorkingDays) * 5);
     punctualityScore = Math.min(15, Math.round((qualityPts + regularityPts) * 10) / 10);
     punctualityDetail = `${onTimeDaysCount}/${teacherStaffAtt.length} दिन समय पर स्कूल QR चेक-इन (${punctualityPercent}% समयबद्धता)`;
   } else {
@@ -636,7 +644,7 @@ export const autoCalculateTeacherMonthlyScoreFromAppData = (params: {
       syllabus_topics_count: teacherSyllabusList.length || uniqueHwDays,
       test_marks_avg: testPercent,
       attendance_days_logged: uniqueAttendanceDates,
-      attendance_total_working_days: 22,
+      attendance_total_working_days: realMonthWorkingDays,
       homework_assigned_count: hwAssignedCount,
       homework_copies_checked: hwCheckedCount,
       punctuality_on_time_days: onTimeDaysCount,

@@ -1,6 +1,12 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Student, StudentBehaviorRecord } from '../types';
+import { Student, StudentBehaviorRecord, SchoolHolidayRecord } from '../types';
 import { StudentAvatar } from './StudentAvatar';
+import {
+  loadLocalSchoolHolidays,
+  fetchSchoolHolidaysFromApiOrSheet,
+  findHolidayForDate,
+  subscribeSchoolHolidaysUpdates,
+} from '../utils/schoolHolidaysHelper';
 
 export interface ClassroomBulkAttendanceProps {
   students: Student[];
@@ -239,6 +245,22 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
   const isEn = lang === 'en';
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
+  const [schoolHolidays, setSchoolHolidays] = useState<SchoolHolidayRecord[]>(() => loadLocalSchoolHolidays());
+
+  useEffect(() => {
+    fetchSchoolHolidaysFromApiOrSheet(true).then(setSchoolHolidays).catch(() => {});
+    return subscribeSchoolHolidaysUpdates(setSchoolHolidays);
+  }, []);
+
+  const selectedDateHoliday = useMemo(
+    () => findHolidayForDate(selectedDate, schoolHolidays),
+    [selectedDate, schoolHolidays]
+  );
+  const isSelectedSunday = useMemo(() => {
+    if (!selectedDate) return false;
+    const d = new Date(`${selectedDate}T00:00:00`);
+    return !isNaN(d.getTime()) && d.getDay() === 0;
+  }, [selectedDate]);
 
   // Normalize allowed classes list if teacher has assigned class(es)
   const allowedClassList = useMemo<string[] | null>(() => {
@@ -823,6 +845,27 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
           </div>
         </div>
       </div>
+
+      {/* Holiday / Sunday Notification Banner */}
+      {(selectedDateHoliday || isSelectedSunday) && (
+        <div className="p-3.5 bg-amber-50 border-2 border-amber-300 rounded-2xl text-amber-950 font-bold text-xs sm:text-sm flex items-center justify-between gap-2 shadow-xs">
+          <div className="flex items-center gap-2">
+            <span className="text-base">🌴</span>
+            <span>
+              {selectedDateHoliday
+                ? (isEn
+                    ? `School Holiday on ${selectedDate}: ${selectedDateHoliday.title}`
+                    : `${selectedDate} को विद्यालय अवकाश है: ${selectedDateHoliday.title}`)
+                : (isEn
+                    ? `Sunday Holiday on ${selectedDate}`
+                    : `${selectedDate} को रविवार (साप्ताहिक अवकाश) है`)}
+            </span>
+          </div>
+          <span className="px-2.5 py-0.5 rounded-full bg-amber-200 text-amber-900 text-[10px] font-black shrink-0">
+            {selectedDateHoliday ? 'School Holiday' : 'Sunday'}
+          </span>
+        </div>
+      )}
 
       {/* Success Notification Bar */}
       {saveSuccessMsg && (
