@@ -380,14 +380,16 @@ function normalizeSheetDate(val: any): string {
 
 async function syncTeacherPerformanceFromSheet(force = false, overrideUrl?: string): Promise<boolean> {
   const now = Date.now();
-  if (!force && now - lastTpSheetSync < 12000) return false;
+  if (!force && now - lastTpSheetSync < 2500) return false;
   lastTpSheetSync = now;
   try {
     const baseUrl = overrideUrl || currentAppsScriptUrl;
     const url = `${baseUrl}?action=getTeacherPerformance&_t=${now}`;
     const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(9000) });
     if (!res.ok) return false;
-    const json: any = await res.json();
+    const text = await res.text();
+    if (!text || text.trim().startsWith('<')) return false;
+    const json: any = JSON.parse(text);
     if (json?.status === 'error') return false;
 
     const rawRows: any[] = Array.isArray(json)
@@ -398,11 +400,9 @@ async function syncTeacherPerformanceFromSheet(force = false, overrideUrl?: stri
       ? json.data
       : [];
 
-    if (rawRows.length === 0) return false;
-
     const parsed: any[] = [];
     // Support both 2D array (header + rows) and array of objects
-    if (Array.isArray(rawRows[0])) {
+    if (rawRows.length > 0 && Array.isArray(rawRows[0])) {
       for (let i = 1; i < rawRows.length; i++) {
         const r = rawRows[i];
         if (!r || (!r[0] && !r[1])) continue;
@@ -431,6 +431,7 @@ async function syncTeacherPerformanceFromSheet(force = false, overrideUrl?: stri
           remarks: String(r[14] || '').trim(),
           evaluation_date: normalizeSheetDate(r[15]) || new Date().toISOString().slice(0, 10),
           timestamp: r[15] ? String(r[15]) : new Date().toISOString(),
+          _sheetSynced: true,
         });
       }
     } else {
@@ -463,23 +464,22 @@ async function syncTeacherPerformanceFromSheet(force = false, overrideUrl?: stri
           remarks: String(obj.remarks ?? obj.Remarks ?? '').trim(),
           evaluation_date: normalizeSheetDate(obj.evaluation_date ?? obj.Timestamp) || new Date().toISOString().slice(0, 10),
           timestamp: String(obj.timestamp ?? obj.Timestamp ?? new Date().toISOString()),
+          _sheetSynced: true,
         });
       }
     }
 
-    if (parsed.length > 0) {
-      // Sheet is authoritative; merge in any newly created local entries not yet written to sheet
-      const sheetKeys = new Set(parsed.map((p) => `${p.teacher_id}_${p.month}`));
-      const sheetIds = new Set(parsed.map((p) => p.id));
-      const localOnly = teacherPerformanceStore.filter(
-        (loc) => !sheetIds.has(loc.id) && !sheetKeys.has(`${loc.teacher_id}_${loc.month}`) &&
-          loc.timestamp && (Date.now() - new Date(loc.timestamp).getTime() < 45000)
-      );
-      teacherPerformanceStore = [...localOnly, ...parsed];
-      saveTeacherPerformanceCache();
-      return true;
-    }
-    return false;
+    const sheetKeys = new Set(parsed.map((p) => `${p.teacher_id}_${p.month}`));
+    const sheetIds = new Set(parsed.map((p) => p.id));
+    const localPending = teacherPerformanceStore.filter(
+      (loc) =>
+        !sheetIds.has(loc.id) &&
+        !sheetKeys.has(`${loc.teacher_id}_${loc.month}`) &&
+        (loc._sheetSynced !== true || (loc.timestamp && Date.now() - new Date(loc.timestamp).getTime() < 45000))
+    );
+    teacherPerformanceStore = [...localPending, ...parsed];
+    saveTeacherPerformanceCache();
+    return true;
   } catch {
     return false;
   }
@@ -487,14 +487,16 @@ async function syncTeacherPerformanceFromSheet(force = false, overrideUrl?: stri
 
 async function syncSyllabusTrackerFromSheet(force = false, overrideUrl?: string): Promise<boolean> {
   const now = Date.now();
-  if (!force && now - lastSyllabusSheetSync < 12000) return false;
+  if (!force && now - lastSyllabusSheetSync < 2500) return false;
   lastSyllabusSheetSync = now;
   try {
     const baseUrl = overrideUrl || currentAppsScriptUrl;
     const url = `${baseUrl}?action=getSyllabusTracker&_t=${now}`;
     const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(9000) });
     if (!res.ok) return false;
-    const json: any = await res.json();
+    const text = await res.text();
+    if (!text || text.trim().startsWith('<')) return false;
+    const json: any = JSON.parse(text);
     if (json?.status === 'error') return false;
 
     const rawRows: any[] = Array.isArray(json)
@@ -505,10 +507,8 @@ async function syncSyllabusTrackerFromSheet(force = false, overrideUrl?: string)
       ? json.records
       : [];
 
-    if (rawRows.length === 0) return false;
-
     const parsed: any[] = [];
-    if (Array.isArray(rawRows[0])) {
+    if (rawRows.length > 0 && Array.isArray(rawRows[0])) {
       for (let i = 1; i < rawRows.length; i++) {
         const r = rawRows[i];
         if (!r || (!r[0] && !r[8] && !r[9])) continue;
@@ -532,6 +532,7 @@ async function syncSyllabusTrackerFromSheet(force = false, overrideUrl?: string)
           completed_date: normalizeSheetDate(r[12]) || undefined,
           status,
           timestamp: r[14] ? String(r[14]) : new Date().toISOString(),
+          _sheetSynced: true,
         });
       }
     } else {
@@ -557,20 +558,20 @@ async function syncSyllabusTrackerFromSheet(force = false, overrideUrl?: string)
           completed_date: normalizeSheetDate(obj.completed_date ?? obj.Completed_Date) || undefined,
           status,
           timestamp: String(obj.timestamp ?? obj.Timestamp ?? new Date().toISOString()),
+          _sheetSynced: true,
         });
       }
     }
 
-    if (parsed.length > 0) {
-      const sheetIds = new Set(parsed.map((p) => p.id));
-      const localOnly = syllabusTrackerStore.filter(
-        (loc) => !sheetIds.has(loc.id) && loc.timestamp && (Date.now() - new Date(loc.timestamp).getTime() < 45000)
-      );
-      syllabusTrackerStore = [...localOnly, ...parsed];
-      saveSyllabusTrackerCache();
-      return true;
-    }
-    return false;
+    const sheetIds = new Set(parsed.map((p) => p.id));
+    const localPending = syllabusTrackerStore.filter(
+      (loc) =>
+        !sheetIds.has(loc.id) &&
+        (loc._sheetSynced !== true || (loc.timestamp && Date.now() - new Date(loc.timestamp).getTime() < 45000))
+    );
+    syllabusTrackerStore = [...localPending, ...parsed];
+    saveSyllabusTrackerCache();
+    return true;
   } catch {
     return false;
   }
@@ -578,14 +579,16 @@ async function syncSyllabusTrackerFromSheet(force = false, overrideUrl?: string)
 
 async function syncSchoolHolidaysFromSheet(force = false, overrideUrl?: string): Promise<boolean> {
   const now = Date.now();
-  if (!force && now - lastHolidaySheetSync < 12000) return false;
+  if (!force && now - lastHolidaySheetSync < 2500) return false;
   lastHolidaySheetSync = now;
   try {
     const baseUrl = overrideUrl || currentAppsScriptUrl;
     const url = `${baseUrl}?action=getSchoolHolidays&_t=${now}`;
     const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(9000) });
     if (!res.ok) return false;
-    const json: any = await res.json();
+    const text = await res.text();
+    if (!text || text.trim().startsWith('<')) return false;
+    const json: any = JSON.parse(text);
     if (json?.status === 'error') return false;
 
     const rawRows: any[] = Array.isArray(json)
@@ -650,6 +653,7 @@ async function syncSchoolHolidaysFromSheet(force = false, overrideUrl?: string):
           category: String(obj.category ?? obj.Category ?? 'festival').trim(),
           description: String(obj.description ?? obj.Description ?? '').trim() || undefined,
           timestamp: String(obj.timestamp ?? obj.Timestamp ?? new Date().toISOString()),
+          _sheetSynced: true,
         });
       }
     }
@@ -661,8 +665,7 @@ async function syncSchoolHolidaysFromSheet(force = false, overrideUrl?: string):
         (loc) =>
           !sheetIds.has(loc.id) &&
           !sheetDateTitles.has(`${loc.date}_${loc.title}`) &&
-          loc.timestamp &&
-          Date.now() - new Date(loc.timestamp).getTime() < 45000
+          (loc._sheetSynced === false || (loc.timestamp && Date.now() - new Date(loc.timestamp).getTime() < 45000))
       );
       schoolHolidaysStore = [...parsed, ...localOnly].sort((a, b) => a.date.localeCompare(b.date));
       saveSchoolHolidaysCache();
@@ -1742,6 +1745,14 @@ async function startServer() {
         ...record,
       });
 
+      const savedIdx = teacherPerformanceStore.findIndex(
+        (r) => r.id === record.id || (r.teacher_id === record.teacher_id && r.month === record.month)
+      );
+      if (savedIdx >= 0) {
+        teacherPerformanceStore[savedIdx]._sheetSynced = gasResult.ok;
+        saveTeacherPerformanceCache();
+      }
+
       // Broadcast update to all connected clients via WebSocket
       const broadcastMsg = JSON.stringify({
         type: 'APP_DATA_UPDATED',
@@ -1783,7 +1794,7 @@ async function startServer() {
           (r) => r.id === loc.id || (r.teacher_id === loc.teacher_id && r.month === loc.month)
         );
         if (existsIdx < 0) {
-          teacherPerformanceStore.unshift(loc);
+          teacherPerformanceStore.unshift({ ...loc, _sheetSynced: false });
         }
       }
       saveTeacherPerformanceCache();
@@ -1835,7 +1846,7 @@ async function startServer() {
         });
       }
 
-      // 2. Push unsynced real records from server/app to Google Sheet
+      // 2. Push unsynced real records sequentially (1 by 1) to avoid Google Apps Script appendRow concurrency races
       const toPush = teacherPerformanceStore.filter(
         (r) => r && r.teacher_id && !demoSeedIds.has(String(r.id)) && !sheetIds.has(String(r.id)) && !sheetKeys.has(`${r.teacher_id}_${r.month}`)
       );
@@ -1843,30 +1854,36 @@ async function startServer() {
       let pushed = 0;
       let failed = 0;
       let lastError = '';
-      for (let i = 0; i < toPush.length; i += 3) {
-        const batch = toPush.slice(i, i + 3);
-        const results = await Promise.all(
-          batch.map((rec) =>
-            forwardToGoogleAppsScript({
-              action: 'saveTeacherPerformance',
-              record: JSON.stringify(rec),
-              appsScriptUrl: targetUrl,
-              ...rec,
-            })
-          )
-        );
-        for (const r of results) {
-          if (r.ok) pushed++;
-          else {
-            failed++;
-            if (!lastError) lastError = r.error || 'Sheet save error';
-          }
+      for (const rec of toPush) {
+        const r = await forwardToGoogleAppsScript({
+          action: 'saveTeacherPerformance',
+          record: JSON.stringify(rec),
+          appsScriptUrl: targetUrl,
+          ...rec,
+        });
+        if (r.ok) {
+          pushed++;
+          rec._sheetSynced = true;
+        } else {
+          failed++;
+          if (!lastError) lastError = r.error || 'Sheet save error';
         }
       }
+      saveTeacherPerformanceCache();
 
       // 3. Pull refreshed records from Google Sheet
       await syncTeacherPerformanceFromSheet(true, targetUrl);
       const sheetCount = Math.max(sheetIds.size + pushed, teacherPerformanceStore.filter((r) => !demoSeedIds.has(String(r.id))).length);
+
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'teacher_performance',
+        action: 'sync',
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) client.send(broadcastMsg);
+      }
 
       res.json({
         success: failed === 0,
@@ -1928,6 +1945,12 @@ async function startServer() {
         ...topic,
       });
 
+      const savedIdx = syllabusTrackerStore.findIndex((s) => s.id === topic.id);
+      if (savedIdx >= 0) {
+        syllabusTrackerStore[savedIdx]._sheetSynced = gasResult.ok;
+        saveSyllabusTrackerCache();
+      }
+
       // Broadcast update via WebSocket
       const broadcastMsg = JSON.stringify({
         type: 'APP_DATA_UPDATED',
@@ -1966,7 +1989,7 @@ async function startServer() {
       for (const loc of localTopics) {
         if (!loc || !loc.topic_description || demoSeedIds.has(String(loc.id))) continue;
         if (!syllabusTrackerStore.some((s) => s.id === loc.id)) {
-          syllabusTrackerStore.unshift(loc);
+          syllabusTrackerStore.unshift({ ...loc, _sheetSynced: false });
         }
       }
       saveSyllabusTrackerCache();
@@ -2020,29 +2043,35 @@ async function startServer() {
       let pushed = 0;
       let failed = 0;
       let lastError = '';
-      for (let i = 0; i < toPush.length; i += 3) {
-        const batch = toPush.slice(i, i + 3);
-        const results = await Promise.all(
-          batch.map((topic) =>
-            forwardToGoogleAppsScript({
-              action: 'saveSyllabusTopic',
-              topic: JSON.stringify(topic),
-              appsScriptUrl: targetUrl,
-              ...topic,
-            })
-          )
-        );
-        for (const r of results) {
-          if (r.ok) pushed++;
-          else {
-            failed++;
-            if (!lastError) lastError = r.error || 'Sheet save error';
-          }
+      for (const topic of toPush) {
+        const r = await forwardToGoogleAppsScript({
+          action: 'saveSyllabusTopic',
+          topic: JSON.stringify(topic),
+          appsScriptUrl: targetUrl,
+          ...topic,
+        });
+        if (r.ok) {
+          pushed++;
+          topic._sheetSynced = true;
+        } else {
+          failed++;
+          if (!lastError) lastError = r.error || 'Sheet save error';
         }
       }
+      saveSyllabusTrackerCache();
 
       await syncSyllabusTrackerFromSheet(true, targetUrl);
       const sheetCount = Math.max(sheetIds.size + pushed, syllabusTrackerStore.filter((t) => !demoSeedIds.has(String(t.id))).length);
+
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'syllabus_tracker',
+        action: 'sync',
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) client.send(broadcastMsg);
+      }
 
       res.json({
         success: failed === 0,
@@ -2067,6 +2096,16 @@ async function startServer() {
       id,
       appsScriptUrl: targetUrl,
     });
+    const broadcastMsg = JSON.stringify({
+      type: 'APP_DATA_UPDATED',
+      entity: 'syllabus_tracker',
+      action: 'delete',
+      details: { id },
+      timestamp: Date.now(),
+    });
+    for (const client of clients) {
+      if (client.readyState === WebSocket.OPEN) client.send(broadcastMsg);
+    }
     res.json({
       success: true,
       sheetSynced: gasResult.ok,
@@ -2115,6 +2154,12 @@ async function startServer() {
         ...holiday,
       });
 
+      const savedHolIdx = schoolHolidaysStore.findIndex((h) => h.id === holiday.id);
+      if (savedHolIdx >= 0) {
+        schoolHolidaysStore[savedHolIdx]._sheetSynced = gasResult.ok;
+        saveSchoolHolidaysCache();
+      }
+
       // Broadcast update via WebSocket
       const broadcastMsg = JSON.stringify({
         type: 'APP_DATA_UPDATED',
@@ -2153,7 +2198,7 @@ async function startServer() {
       for (const loc of localHolidays) {
         if (!loc || !loc.title || !loc.date || defaultIds.has(String(loc.id))) continue;
         if (!schoolHolidaysStore.some((h) => h.id === loc.id || (h.date === loc.date && h.title === loc.title))) {
-          schoolHolidaysStore.push(loc);
+          schoolHolidaysStore.push({ ...loc, _sheetSynced: false });
         }
       }
       schoolHolidaysStore.sort((a, b) => a.date.localeCompare(b.date));
@@ -2218,15 +2263,28 @@ async function startServer() {
           appsScriptUrl: targetUrl,
           ...hol,
         });
-        if (r.ok) pushed++;
-        else {
+        if (r.ok) {
+          pushed++;
+          hol._sheetSynced = true;
+        } else {
           failed++;
           if (!lastError) lastError = r.error || 'Sheet save error';
         }
       }
+      saveSchoolHolidaysCache();
 
       await syncSchoolHolidaysFromSheet(true, targetUrl);
       const sheetCount = Math.max(sheetIds.size + pushed, schoolHolidaysStore.filter((h) => !defaultIds.has(String(h.id))).length);
+
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'school_holidays',
+        action: 'sync',
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) client.send(broadcastMsg);
+      }
 
       res.json({
         success: failed === 0,
@@ -2251,6 +2309,16 @@ async function startServer() {
       id,
       appsScriptUrl: targetUrl,
     });
+    const broadcastMsg = JSON.stringify({
+      type: 'APP_DATA_UPDATED',
+      entity: 'school_holidays',
+      action: 'delete',
+      details: { id },
+      timestamp: Date.now(),
+    });
+    for (const client of clients) {
+      if (client.readyState === WebSocket.OPEN) client.send(broadcastMsg);
+    }
     res.json({
       success: true,
       sheetSynced: gasResult.ok,

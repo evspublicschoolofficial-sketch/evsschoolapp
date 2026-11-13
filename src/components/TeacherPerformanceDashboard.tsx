@@ -158,19 +158,53 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
     setIsRefreshingSheet(false);
   };
 
-  // Fetch fresh records and syllabus topics on mount
+  // Fetch fresh records and syllabus topics on mount + live cross-tab WebSocket/storage sync
   useEffect(() => {
-    fetchPerformanceRecordsFromApi().then((fresh) => {
-      if (fresh && fresh.length > 0) setRecords(fresh);
-    });
-    if (syllabusTopics.length === 0) {
-      fetch('/api/syllabus-tracker')
-        .then((r) => (r.ok ? r.json() : []))
-        .then((data) => {
-          if (Array.isArray(data) && data.length > 0) setLoadedSyllabusTopics(data);
+    const loadFresh = () => {
+      const activeUrl = getAppsScriptUrl();
+      fetchPerformanceRecordsFromApi(true).then((fresh) => {
+        if (fresh && fresh.length > 0) setRecords(fresh);
+      });
+      if (syllabusTopics.length === 0) {
+        fetch('/api/syllabus-tracker?refresh=1', {
+          headers: { 'x-apps-script-url': activeUrl },
         })
-        .catch(() => {});
-    }
+          .then((r) => (r.ok ? r.json() : []))
+          .then((data) => {
+            if (Array.isArray(data) && data.length > 0) setLoadedSyllabusTopics(data);
+          })
+          .catch(() => {});
+      }
+    };
+    loadFresh();
+
+    const onStorage = (ev: StorageEvent) => {
+      if (ev.key === 'evs_teacher_performance_records_v1' || ev.key === 'evs_syllabus_planner_records_v1') {
+        loadFresh();
+      }
+    };
+    window.addEventListener('storage', onStorage);
+
+    let ws: WebSocket | null = null;
+    try {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${proto}//${window.location.host}`);
+      ws.onmessage = (evt) => {
+        try {
+          const msg = JSON.parse(evt.data);
+          if (msg?.type === 'APP_DATA_UPDATED' && (msg.entity === 'teacher_performance' || msg.entity === 'syllabus_tracker')) {
+            loadFresh();
+          }
+        } catch {}
+      };
+    } catch {}
+
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      if (ws) {
+        try { ws.close(); } catch {}
+      }
+    };
   }, [syllabusTopics.length]);
 
   // Compute Live Calculated Monthly Score for Modal
@@ -273,16 +307,13 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
       setRecords(newAll);
       saveLocalPerformanceRecords(newAll);
 
-      // Background sync to server API (in batches of 3 for fast Sheet sync)
+      // Sequential sync to server API -> Google Sheet (prevents Apps Script concurrent appendRow drops)
       let syncedCount = 0;
       let firstSheetError = '';
-      for (let i = 0; i < updated.length; i += 3) {
-        const batch = updated.slice(i, i + 3);
-        const results = await Promise.all(batch.map((rec) => syncPerformanceRecordToApi(rec)));
-        for (const res of results) {
-          if (res.sheetSynced) syncedCount++;
-          else if (!firstSheetError && res.sheetError) firstSheetError = res.sheetError;
-        }
+      for (const rec of updated) {
+        const res = await syncPerformanceRecordToApi(rec);
+        if (res.sheetSynced) syncedCount++;
+        else if (!firstSheetError && res.sheetError) firstSheetError = res.sheetError;
       }
 
       if (syncedCount === updated.length) {

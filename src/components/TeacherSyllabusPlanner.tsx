@@ -136,10 +136,17 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
     if (!isManager && (currentUser?.User_ID || currentUser?.Username)) {
       setSelectedTeacherId(currentUser.User_ID || currentUser.Username);
       if (currentUser.Assigned_Class) setFormClass(currentUser.Assigned_Class);
-    } else if (isManager && !selectedTeacherId && allTeachers[0]?.User_ID) {
-      setSelectedTeacherId(allTeachers[0].User_ID);
+    } else if (isManager && allTeachers.length > 0) {
+      const validSelection = allTeachers.some(
+        (t) => String(t.User_ID || '').trim() === String(selectedTeacherId || '').trim() ||
+               String(t.Username || '').trim() === String(selectedTeacherId || '').trim()
+      );
+      if (!selectedTeacherId || !validSelection) {
+        const firstId = allTeachers[0].User_ID || allTeachers[0].Username || '';
+        if (firstId) setSelectedTeacherId(firstId);
+      }
     }
-  }, [isManager, currentUser?.User_ID, currentUser?.Username, currentUser?.Assigned_Class, allTeachers]);
+  }, [isManager, currentUser?.User_ID, currentUser?.Username, currentUser?.Assigned_Class, allTeachers, selectedTeacherId]);
 
   const handleSyncSyllabusFromSheet = async (showBanner = true) => {
     setIsRefreshingSheet(true);
@@ -191,20 +198,58 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
     setIsRefreshingSheet(false);
   };
 
-  // Fetch topics from API on mount
+  // Fetch fresh topics from API + Sheet on mount & listen for cross-tab live updates
   useEffect(() => {
-    const activeUrl = getAppsScriptUrl();
-    fetch('/api/syllabus-tracker', {
-      headers: { 'x-apps-script-url': activeUrl },
-    })
-      .then((res) => (res.ok ? res.json() : []))
-      .then((data) => {
-        if (Array.isArray(data) && data.length > 0) {
-          setTopics(data);
-          saveLocalSyllabusTopics(data);
-        }
+    const fetchLiveTopics = () => {
+      const activeUrl = getAppsScriptUrl();
+      fetch('/api/syllabus-tracker?refresh=1', {
+        headers: { 'x-apps-script-url': activeUrl },
       })
-      .catch(() => {});
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (Array.isArray(data) && data.length > 0) {
+            setTopics(data);
+            saveLocalSyllabusTopics(data);
+            if (onSyllabusUpdated) onSyllabusUpdated(data);
+          }
+        })
+        .catch(() => {});
+    };
+    fetchLiveTopics();
+
+    const onStorage = (ev: StorageEvent) => {
+      if (ev.key === STORAGE_KEY) {
+        try {
+          const parsed = ev.newValue ? JSON.parse(ev.newValue) : null;
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setTopics(parsed);
+            if (onSyllabusUpdated) onSyllabusUpdated(parsed);
+          }
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', onStorage);
+
+    let ws: WebSocket | null = null;
+    try {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${proto}//${window.location.host}`);
+      ws.onmessage = (evt) => {
+        try {
+          const msg = JSON.parse(evt.data);
+          if (msg?.type === 'APP_DATA_UPDATED' && msg.entity === 'syllabus_tracker') {
+            fetchLiveTopics();
+          }
+        } catch {}
+      };
+    } catch {}
+
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      if (ws) {
+        try { ws.close(); } catch {}
+      }
+    };
   }, []);
 
   const targetTeacherObj = useMemo(() => {
@@ -749,6 +794,12 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
                     required
                     className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-slate-50 text-xs font-bold text-slate-800"
                   >
+                    {formClass && !['Nursery', 'LKG', 'UKG', 'Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10'].includes(formClass) && (
+                      <option value={formClass}>{formClass}</option>
+                    )}
+                    <option value="Nursery">Nursery</option>
+                    <option value="LKG">LKG</option>
+                    <option value="UKG">UKG</option>
                     <option value="Class 1">Class 1</option>
                     <option value="Class 2">Class 2</option>
                     <option value="Class 3">Class 3</option>

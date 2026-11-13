@@ -107,19 +107,42 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
     setIsRefreshingHolidays(false);
   };
 
-  // Fetch school holidays on mount
+  // Fetch fresh school holidays on mount + live WebSocket sync across tabs
   React.useEffect(() => {
-    const activeUrl = getAppsScriptUrl();
-    fetch('/api/school-holidays', {
-      headers: { 'x-apps-script-url': activeUrl },
-    })
-      .then((r) => (r.ok ? r.json() : []))
-      .then((data) => {
-        if (Array.isArray(data)) {
-          setHolidays(data);
-        }
+    const fetchHolidays = () => {
+      const activeUrl = getAppsScriptUrl();
+      fetch('/api/school-holidays?refresh=1', {
+        headers: { 'x-apps-script-url': activeUrl },
       })
-      .catch(() => {});
+        .then((r) => (r.ok ? r.json() : []))
+        .then((data) => {
+          if (Array.isArray(data)) {
+            setHolidays(data);
+          }
+        })
+        .catch(() => {});
+    };
+    fetchHolidays();
+
+    let ws: WebSocket | null = null;
+    try {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${proto}//${window.location.host}`);
+      ws.onmessage = (evt) => {
+        try {
+          const msg = JSON.parse(evt.data);
+          if (msg?.type === 'APP_DATA_UPDATED' && msg.entity === 'school_holidays') {
+            fetchHolidays();
+          }
+        } catch {}
+      };
+    } catch {}
+
+    return () => {
+      if (ws) {
+        try { ws.close(); } catch {}
+      }
+    };
   }, []);
 
   const getHolidayForDate = (dateYmd: string): SchoolHolidayRecord | null => {
