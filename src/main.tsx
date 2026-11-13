@@ -4,20 +4,11 @@ import App from './App.tsx';
 import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import './index.css';
 
-// Register Service Worker safely for background caching & sync
-if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker
-      .register('/sw.js')
-      .then((reg) => {
-        // Check for updates on every load
-        reg.update().catch(() => {});
-      })
-      .catch((err) => {
-        console.warn('ServiceWorker registration error:', err);
-      });
-  });
-}
+import { initPWAUpdater } from './utils/pwaUpdater';
+
+// Initialize PWA Service Worker & Live App Update Checker
+initPWAUpdater();
+
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

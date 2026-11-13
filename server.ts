@@ -15,6 +15,8 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 const PORT = 3000;
+const SERVER_BOOT_AT = new Date().toISOString();
+const SERVER_BOOT_VERSION = `srv-${SERVER_BOOT_AT.replace(/[-:.TZ]/g, '').slice(0, 14)}`;
 const TELEMETRY_CACHE_FILE = '/tmp/evs_bus_telemetry.json';
 const URL_CONFIG_FILE = '/tmp/evs_apps_script_url.txt';
 const DEFAULT_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwVy51K14qu6IXipAZXP4NspFcAUHpLcYv8-zjhkYnBlUI17TzGi_KaJU9TRmNT8D5vvQ/exec';
@@ -888,6 +890,31 @@ async function startServer() {
       buses: Object.keys(liveTelemetryStore),
       appsScriptUrl: currentAppsScriptUrl,
       wsClients: clients.size,
+    });
+  });
+
+  // Live App Version endpoint for installed PWA update detection
+  app.get('/api/app-version', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+
+    try {
+      const distVersionFile = path.join(process.cwd(), 'dist', 'version.json');
+      if (process.env.NODE_ENV === 'production' && fs.existsSync(distVersionFile)) {
+        const parsed = JSON.parse(fs.readFileSync(distVersionFile, 'utf-8'));
+        return res.json({
+          version: parsed?.version || SERVER_BOOT_VERSION,
+          builtAt: parsed?.builtAt || SERVER_BOOT_AT,
+          mode: 'production',
+        });
+      }
+    } catch {}
+
+    res.json({
+      version: SERVER_BOOT_VERSION,
+      builtAt: SERVER_BOOT_AT,
+      mode: process.env.NODE_ENV === 'production' ? 'production' : 'dev',
     });
   });
 
@@ -2860,6 +2887,13 @@ async function startServer() {
 
   // Vite middleware for development vs static build for production
   if (process.env.NODE_ENV !== 'production') {
+    app.use((req, res, next) => {
+      const p = req.path;
+      if (p === '/sw.js' || p === '/version.json' || p === '/' || p === '/index.html') {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      }
+      next();
+    });
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -2867,8 +2901,30 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    app.use(
+      express.static(distPath, {
+        setHeaders: (res, filePath) => {
+          const base = path.basename(filePath);
+          if (
+            base === 'sw.js' ||
+            base === 'version.json' ||
+            base === 'index.html' ||
+            base === 'manifest.webmanifest' ||
+            base === 'manifest.json'
+          ) {
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
+          } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+            res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+          }
+        },
+      })
+    );
     app.get('*', (_req, res) => {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

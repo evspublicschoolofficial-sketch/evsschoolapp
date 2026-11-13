@@ -1,12 +1,10 @@
-// EVS Public School - High-Performance PWA Service Worker
-// Enables 0.1-second instant app launch on mobile devices with Stale-While-Revalidate caching
+// EVS Public School - High-Performance PWA Service Worker with Live Update Support
+// Build version stamped automatically during production build
 
-const CACHE_NAME = 'evs-school-pwa-v8';
+const CACHE_NAME = 'evs-school-pwa-v9';
 
-// Static core assets to pre-cache on install
+// Static core assets to pre-cache on install (HTML is always fetched Network-First)
 const PRECACHE_ASSETS = [
-  '/',
-  '/index.html',
   '/manifest.webmanifest',
   '/favicon.png',
   '/icon.svg',
@@ -16,9 +14,26 @@ const PRECACHE_ASSETS = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_ASSETS)).catch(() => {})
+    caches.open(CACHE_NAME).then(async (cache) => {
+      await cache.addAll(PRECACHE_ASSETS).catch(() => {});
+      try {
+        const htmlRes = await fetch('/index.html', { cache: 'reload' });
+        if (htmlRes && htmlRes.ok) {
+          await cache.put('/index.html', htmlRes);
+        }
+      } catch {}
+    })
   );
-  self.skipWaiting();
+
+  // If no existing windows are controlled yet, activate immediately;
+  // otherwise let waiting worker notify the UI so user can click "Update App" cleanly.
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: false }).then((clientList) => {
+      if (!clientList || clientList.length === 0) {
+        return self.skipWaiting();
+      }
+    })
+  );
 });
 
 self.addEventListener('activate', (event) => {
@@ -35,12 +50,20 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Periodic background sync or message channel listener
+// Message channel listener (Notifications, GPS sync, and PWA Instant Update commands)
 self.addEventListener('message', (event) => {
   const data = event.data;
   if (!data) return;
 
-  if (data.type === 'PING') {
+  if (data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  } else if (data.type === 'CLEAR_ALL_CACHES') {
+    event.waitUntil(
+      caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k)))).then(() => {
+        event.source?.postMessage({ type: 'CACHES_CLEARED', timestamp: Date.now() });
+      })
+    );
+  } else if (data.type === 'PING') {
     event.source?.postMessage({ type: 'PONG', timestamp: Date.now() });
   } else if (data.type === 'STORE_LAST_LOCATION') {
     self.lastKnownLocation = data.payload;
@@ -130,20 +153,25 @@ self.addEventListener('sync', (event) => {
   }
 });
 
-// High-speed Fetch Handler with Network-First Navigation for Instant Updates
+// Fetch Handler: Strict Network-First for HTML & bypass for API/version checks
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
 
-  // Bypass API and WebSocket routes
-  if (url.pathname.startsWith('/api') || url.pathname.startsWith('/ws')) {
+  // Never intercept APIs, WebSockets, version metadata, or the service worker script itself
+  if (
+    url.pathname.startsWith('/api') ||
+    url.pathname.startsWith('/ws') ||
+    url.pathname === '/version.json' ||
+    url.pathname === '/sw.js'
+  ) {
     return;
   }
 
-  // CASE 1: HTML Document Navigation (Network-First to always deliver instant live updates)
+  // CASE 1: HTML Document Navigation (Always Network-First with cache: no-store)
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      fetch(event.request)
+      fetch(event.request, { cache: 'no-store' })
         .then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
             const clone = networkResponse.clone();
@@ -156,36 +184,39 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // CASE 2: Static Assets (JS, CSS, Images, Fonts, Icons)
-  // These are immutable with hashes (e.g. /assets/index-*.js) or static CDNs
+  // CASE 2: Hashed build assets (/assets/*) — Cache-first since filenames change on every build
+  if (url.pathname.startsWith('/assets/')) {
+    event.respondWith(
+      caches.match(event.request).then((cachedResponse) => {
+        if (cachedResponse) return cachedResponse;
+        return fetch(event.request).then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const clone = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
+          return networkResponse;
+        });
+      })
+    );
+    return;
+  }
+
+  // CASE 3: Icons, Fonts, Manifest, External CDNs — Stale-While-Revalidate
   const isStaticAsset =
-    url.pathname.startsWith('/assets/') ||
     url.pathname.endsWith('.js') ||
     url.pathname.endsWith('.css') ||
     url.pathname.endsWith('.woff2') ||
     url.pathname.endsWith('.png') ||
     url.pathname.endsWith('.jpg') ||
     url.pathname.endsWith('.svg') ||
+    url.pathname.endsWith('.webmanifest') ||
     url.hostname.includes('cdnjs.cloudflare.com') ||
     url.hostname.includes('fonts.gstatic.com');
 
   if (isStaticAsset) {
     event.respondWith(
       caches.match(event.request).then((cachedResponse) => {
-        if (cachedResponse) {
-          // Serve from cache immediately in 5ms, revalidate in background
-          fetch(event.request)
-            .then((networkResponse) => {
-              if (networkResponse && networkResponse.status === 200) {
-                caches.open(CACHE_NAME).then((cache) => cache.put(event.request, networkResponse));
-              }
-            })
-            .catch(() => {});
-          return cachedResponse;
-        }
-
-        // Not in cache yet: fetch from network and cache for next time
-        return fetch(event.request)
+        const networkFetch = fetch(event.request)
           .then((networkResponse) => {
             if (networkResponse && networkResponse.status === 200) {
               const clone = networkResponse.clone();
@@ -194,6 +225,8 @@ self.addEventListener('fetch', (event) => {
             return networkResponse;
           })
           .catch(() => cachedResponse);
+
+        return cachedResponse || networkFetch;
       })
     );
     return;

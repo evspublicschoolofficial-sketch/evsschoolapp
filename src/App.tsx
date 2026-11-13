@@ -13,6 +13,7 @@ import { computeStudentFeeMetrics, computeSchoolFeeTotals, normalizeStudentId, r
 import { realtimeSync } from './utils/realtimeSync';
 import { AppLanguage, getStoredLanguage, setStoredLanguage, TRANSLATIONS } from './utils/translations';
 import { NotificationPermissionBanner } from './components/NotificationPermissionBanner';
+import { PWAHeaderUpdateButton, PWAUpdateBanner } from './components/PWAUpdateBanner';
 import { checkAndNotifyNewNotices } from './utils/notificationService';
 
 // High-speed on-demand code splitting (React.lazy): Drops initial bundle size by ~85% for Parents on mobile!
@@ -6135,34 +6136,39 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 </div>
               </div>
 
-              {/* 1-Click Language Switcher: English Medium Default */}
-              <div className="flex items-center gap-1 bg-black/35 p-1 rounded-xl border border-white/20 shadow-xs ml-auto sm:ml-4 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => handleToggleLanguage('en')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
-                    currentLang === 'en'
-                      ? 'bg-amber-400 text-slate-950 shadow-md scale-102 ring-1 ring-amber-300'
-                      : 'text-slate-300 hover:text-white hover:bg-white/10'
-                  }`}
-                  title="English Medium Mode (Default)"
-                >
-                  <span className="text-sm">🇬🇧</span>
-                  <span>English</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleToggleLanguage('hi')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
-                    currentLang === 'hi'
-                      ? 'bg-amber-400 text-slate-950 shadow-md scale-102 ring-1 ring-amber-300'
-                      : 'text-slate-300 hover:text-white hover:bg-white/10'
-                  }`}
-                  title="हिन्दी मोड"
-                >
-                  <span className="text-sm">🇮🇳</span>
-                  <span>हिन्दी</span>
-                </button>
+              {/* Top-Bar App Update Button + 1-Click Language Switcher */}
+              <div className="flex items-center gap-1.5 sm:gap-2 ml-auto sm:ml-4 shrink-0">
+                <PWAHeaderUpdateButton lang={currentLang} />
+
+                {/* 1-Click Language Switcher: English Medium Default */}
+                <div className="flex items-center gap-1 bg-black/35 p-1 rounded-xl border border-white/20 shadow-xs shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleLanguage('en')}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
+                      currentLang === 'en'
+                        ? 'bg-amber-400 text-slate-950 shadow-md scale-102 ring-1 ring-amber-300'
+                        : 'text-slate-300 hover:text-white hover:bg-white/10'
+                    }`}
+                    title="English Medium Mode (Default)"
+                  >
+                    <span className="text-sm">🇬🇧</span>
+                    <span>English</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleToggleLanguage('hi')}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
+                      currentLang === 'hi'
+                        ? 'bg-amber-400 text-slate-950 shadow-md scale-102 ring-1 ring-amber-300'
+                        : 'text-slate-300 hover:text-white hover:bg-white/10'
+                    }`}
+                    title="हिन्दी मोड"
+                  >
+                    <span className="text-sm">🇮🇳</span>
+                    <span>हिन्दी</span>
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -6433,6 +6439,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
           </div>
         </div>
       </header>
+
+      {/* PWA NEW UPDATE BANNER (Visible automatically whenever GitHub/Server build changes) */}
+      <PWAUpdateBanner lang={currentLang} />
 
       {/* EMERGENCY SIREN ALERT TOP BANNER & POPUP MODAL */}
       <EmergencyAlertBanner

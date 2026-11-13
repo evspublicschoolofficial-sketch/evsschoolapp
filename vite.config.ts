@@ -1,5 +1,6 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
+import fs from 'fs';
 import path from 'path';
 import { defineConfig, Plugin } from 'vite';
 
@@ -90,9 +91,76 @@ function busTrackingApiPlugin(): Plugin {
   };
 }
 
-export default defineConfig(() => {
+function pwaBuildVersionPlugin(buildVersion: string, isBuild: boolean): Plugin {
+  const devVersion = `dev-${Date.now().toString(36)}`;
   return {
-    plugins: [react(), tailwindcss(), busTrackingApiPlugin()],
+    name: 'pwa-build-version-stamp',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (!req.url) return next();
+        const pathname = req.url.split('?')[0];
+        if (pathname === '/version.json') {
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+          res.statusCode = 200;
+          return res.end(
+            JSON.stringify({
+              version: devVersion,
+              mode: 'dev',
+              builtAt: new Date().toISOString(),
+            })
+          );
+        }
+        if (pathname === '/sw.js' || pathname === '/index.html') {
+          res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+        }
+        return next();
+      });
+    },
+    closeBundle() {
+      if (!isBuild) return;
+      const distDir = path.resolve(__dirname, 'dist');
+      if (!fs.existsSync(distDir)) return;
+
+      // 1. Write fresh dist/version.json matching __APP_BUILD_ID__
+      const versionPayload = {
+        version: buildVersion,
+        mode: 'production',
+        builtAt: new Date().toISOString(),
+      };
+      fs.writeFileSync(
+        path.join(distDir, 'version.json'),
+        JSON.stringify(versionPayload, null, 2),
+        'utf-8'
+      );
+
+      // 2. Stamp dist/sw.js CACHE_NAME so every GitHub/Cloud build triggers SW byte change
+      const swPath = path.join(distDir, 'sw.js');
+      if (fs.existsSync(swPath)) {
+        const rawSw = fs.readFileSync(swPath, 'utf-8');
+        const stampedSw = rawSw.replace(
+          /const CACHE_NAME\s*=\s*['"][^'"]+['"];/,
+          `const CACHE_NAME = 'evs-school-pwa-${buildVersion}';`
+        );
+        fs.writeFileSync(swPath, stampedSw, 'utf-8');
+      }
+    },
+  };
+}
+
+export default defineConfig(({ command }) => {
+  const isBuild = command === 'build';
+  const buildVersion = isBuild
+    ? process.env.APP_BUILD_ID ||
+      process.env.BUILD_VERSION ||
+      `${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}-${Math.random().toString(36).slice(2, 6)}`
+    : 'dev';
+
+  return {
+    define: {
+      __APP_BUILD_ID__: JSON.stringify(buildVersion),
+    },
+    plugins: [react(), tailwindcss(), busTrackingApiPlugin(), pwaBuildVersionPlugin(buildVersion, isBuild)],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
