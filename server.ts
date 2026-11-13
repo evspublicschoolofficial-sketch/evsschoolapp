@@ -217,6 +217,15 @@ function parseAppsScriptResponse(text: string): { ok: boolean; error?: string } 
   return { ok: false, error: trimmed.slice(0, 180) };
 }
 
+function resolveTargetAppsScriptUrl(req?: any): string {
+  const fromBody = typeof req?.body?.appsScriptUrl === 'string' ? req.body.appsScriptUrl.trim() : '';
+  if (fromBody.startsWith('https://script.google.com/macros/s/')) return fromBody;
+  const rawHeader = req?.headers?.['x-apps-script-url'];
+  const fromHeader = typeof rawHeader === 'string' ? rawHeader.trim() : '';
+  if (fromHeader.startsWith('https://script.google.com/macros/s/')) return fromHeader;
+  return currentAppsScriptUrl;
+}
+
 async function forwardToGoogleAppsScript(payload: any) {
   try {
     const targetUrl = (typeof payload?.appsScriptUrl === 'string' && payload.appsScriptUrl.trim().startsWith('https://script.google.com/macros/s/'))
@@ -237,7 +246,7 @@ async function forwardToGoogleAppsScript(payload: any) {
     if (formattedPayload.action === 'updateBusTracking') {
       try {
         const getUrl = `${targetUrl}?action=updateBusTracking&bus_id=${encodeURIComponent(formattedPayload.bus_id)}&driver_name=${encodeURIComponent(formattedPayload.driver_name)}&current_location=${encodeURIComponent(formattedPayload.current_location)}`;
-        const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(8000) });
+        const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(10000) });
         const gText = await gRes.text();
         if (gText.includes('success') || gText.includes('updated')) {
           return { ok: true, response: gText };
@@ -253,7 +262,7 @@ async function forwardToGoogleAppsScript(payload: any) {
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify(formattedPayload),
       redirect: 'follow',
-      signal: AbortSignal.timeout(8500),
+      signal: AbortSignal.timeout(12000),
     });
     const text = await res.text();
     const postCheck = parseAppsScriptResponse(text);
@@ -369,13 +378,14 @@ function normalizeSheetDate(val: any): string {
   return str.slice(0, 10);
 }
 
-async function syncTeacherPerformanceFromSheet(force = false): Promise<boolean> {
+async function syncTeacherPerformanceFromSheet(force = false, overrideUrl?: string): Promise<boolean> {
   const now = Date.now();
   if (!force && now - lastTpSheetSync < 12000) return false;
   lastTpSheetSync = now;
   try {
-    const url = `${currentAppsScriptUrl}?action=getTeacherPerformance&_t=${now}`;
-    const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(6000) });
+    const baseUrl = overrideUrl || currentAppsScriptUrl;
+    const url = `${baseUrl}?action=getTeacherPerformance&_t=${now}`;
+    const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(9000) });
     if (!res.ok) return false;
     const json: any = await res.json();
     if (json?.status === 'error') return false;
@@ -439,6 +449,7 @@ async function syncTeacherPerformanceFromSheet(force = false): Promise<boolean> 
           teacher_id: teacherId,
           teacher_name: String(obj.teacher_name ?? obj.Teacher_Name ?? '').trim(),
           assigned_class: String(obj.assigned_class ?? obj.Assigned_Class ?? '').trim(),
+          subject: String(obj.subject ?? obj.Subject ?? '').trim(),
           month: monthStr,
           academic_year: String(obj.academic_year ?? obj.Academic_Year ?? '2026-2027').trim(),
           syllabus_progress_score: syllabusScore,
@@ -474,13 +485,14 @@ async function syncTeacherPerformanceFromSheet(force = false): Promise<boolean> 
   }
 }
 
-async function syncSyllabusTrackerFromSheet(force = false): Promise<boolean> {
+async function syncSyllabusTrackerFromSheet(force = false, overrideUrl?: string): Promise<boolean> {
   const now = Date.now();
   if (!force && now - lastSyllabusSheetSync < 12000) return false;
   lastSyllabusSheetSync = now;
   try {
-    const url = `${currentAppsScriptUrl}?action=getSyllabusTracker&_t=${now}`;
-    const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(6000) });
+    const baseUrl = overrideUrl || currentAppsScriptUrl;
+    const url = `${baseUrl}?action=getSyllabusTracker&_t=${now}`;
+    const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(9000) });
     if (!res.ok) return false;
     const json: any = await res.json();
     if (json?.status === 'error') return false;
@@ -564,13 +576,14 @@ async function syncSyllabusTrackerFromSheet(force = false): Promise<boolean> {
   }
 }
 
-async function syncSchoolHolidaysFromSheet(force = false): Promise<boolean> {
+async function syncSchoolHolidaysFromSheet(force = false, overrideUrl?: string): Promise<boolean> {
   const now = Date.now();
   if (!force && now - lastHolidaySheetSync < 12000) return false;
   lastHolidaySheetSync = now;
   try {
-    const url = `${currentAppsScriptUrl}?action=getSchoolHolidays&_t=${now}`;
-    const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(6000) });
+    const baseUrl = overrideUrl || currentAppsScriptUrl;
+    const url = `${baseUrl}?action=getSchoolHolidays&_t=${now}`;
+    const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(9000) });
     if (!res.ok) return false;
     const json: any = await res.json();
     if (json?.status === 'error') return false;
@@ -1698,7 +1711,8 @@ async function startServer() {
   // Endpoints for Teacher Performance Tracking, Monthly Leaderboard & Teacher of the Year
   app.get('/api/teacher-performance', async (req, res) => {
     const force = req.query.refresh === '1' || req.query.sync === '1';
-    await syncTeacherPerformanceFromSheet(force);
+    const targetUrl = resolveTargetAppsScriptUrl(req);
+    await syncTeacherPerformanceFromSheet(force, targetUrl);
     res.json(teacherPerformanceStore);
   });
 
@@ -1708,6 +1722,7 @@ async function startServer() {
       if (!record || !record.teacher_id) {
         return res.status(400).json({ error: 'teacher_id is required' });
       }
+      const targetUrl = resolveTargetAppsScriptUrl(req);
 
       const idx = teacherPerformanceStore.findIndex(
         (r) => r.id === record.id || (r.teacher_id === record.teacher_id && r.month === record.month)
@@ -1723,6 +1738,7 @@ async function startServer() {
       const gasResult = await forwardToGoogleAppsScript({
         action: 'saveTeacherPerformance',
         record: JSON.stringify(record),
+        appsScriptUrl: targetUrl,
         ...record,
       });
 
@@ -1754,10 +1770,122 @@ async function startServer() {
     }
   });
 
+  // True 2-Way Push + Pull Sync for Teacher Performance
+  app.post('/api/teacher-performance/sync-all', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const demoSeedIds = new Set(['tp_2026_09_t1', 'tp_2026_09_t2', 'tp_2026_09_t3', 'tp_2026_09_t4']);
+      const localRecords = Array.isArray(req.body?.localRecords) ? req.body.localRecords : [];
+
+      for (const loc of localRecords) {
+        if (!loc || !loc.teacher_id || demoSeedIds.has(String(loc.id))) continue;
+        const existsIdx = teacherPerformanceStore.findIndex(
+          (r) => r.id === loc.id || (r.teacher_id === loc.teacher_id && r.month === loc.month)
+        );
+        if (existsIdx < 0) {
+          teacherPerformanceStore.unshift(loc);
+        }
+      }
+      saveTeacherPerformanceCache();
+
+      // 1. Inspect what is currently in Google Sheet
+      let sheetIds = new Set<string>();
+      let sheetKeys = new Set<string>();
+      let sheetReachable = true;
+      let fetchError = '';
+      try {
+        const sRes = await fetch(`${targetUrl}?action=getTeacherPerformance&_t=${Date.now()}`, {
+          redirect: 'follow',
+          signal: AbortSignal.timeout(9000),
+        });
+        const sText = await sRes.text();
+        if (!sRes.ok || sText.trim().startsWith('<')) {
+          sheetReachable = false;
+          fetchError = 'Apps Script Deployment अनुमति (Anyone) जांचें';
+        } else {
+          const sJson: any = JSON.parse(sText);
+          if (sJson?.status === 'error') {
+            sheetReachable = false;
+            fetchError = String(sJson.message || sJson.error || 'Apps Script error');
+          } else {
+            const rows: any[] = Array.isArray(sJson) ? sJson : Array.isArray(sJson?.records) ? sJson.records : [];
+            for (const row of rows) {
+              if (!row || Array.isArray(row)) continue;
+              const rid = String(row.id || '').trim();
+              const tid = String(row.teacher_id || '').trim();
+              const mo = normalizeSheetMonth(row.month);
+              if (rid) sheetIds.add(rid);
+              if (tid && mo) sheetKeys.add(`${tid}_${mo}`);
+            }
+          }
+        }
+      } catch (e: any) {
+        sheetReachable = false;
+        fetchError = e?.message || 'Google Sheet से कनेक्ट नहीं हो सका';
+      }
+
+      if (!sheetReachable) {
+        return res.json({
+          success: false,
+          pushed: 0,
+          failed: 1,
+          sheetCount: 0,
+          lastError: fetchError,
+          records: teacherPerformanceStore,
+        });
+      }
+
+      // 2. Push unsynced real records from server/app to Google Sheet
+      const toPush = teacherPerformanceStore.filter(
+        (r) => r && r.teacher_id && !demoSeedIds.has(String(r.id)) && !sheetIds.has(String(r.id)) && !sheetKeys.has(`${r.teacher_id}_${r.month}`)
+      );
+
+      let pushed = 0;
+      let failed = 0;
+      let lastError = '';
+      for (let i = 0; i < toPush.length; i += 3) {
+        const batch = toPush.slice(i, i + 3);
+        const results = await Promise.all(
+          batch.map((rec) =>
+            forwardToGoogleAppsScript({
+              action: 'saveTeacherPerformance',
+              record: JSON.stringify(rec),
+              appsScriptUrl: targetUrl,
+              ...rec,
+            })
+          )
+        );
+        for (const r of results) {
+          if (r.ok) pushed++;
+          else {
+            failed++;
+            if (!lastError) lastError = r.error || 'Sheet save error';
+          }
+        }
+      }
+
+      // 3. Pull refreshed records from Google Sheet
+      await syncTeacherPerformanceFromSheet(true, targetUrl);
+      const sheetCount = Math.max(sheetIds.size + pushed, teacherPerformanceStore.filter((r) => !demoSeedIds.has(String(r.id))).length);
+
+      res.json({
+        success: failed === 0,
+        pushed,
+        failed,
+        sheetCount,
+        lastError: lastError || undefined,
+        records: teacherPerformanceStore,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, pushed: 0, failed: 1, lastError: err?.message, records: teacherPerformanceStore });
+    }
+  });
+
   // Endpoints for Weekly & Monthly Syllabus Tracker & Progress Planning
   app.get('/api/syllabus-tracker', async (req, res) => {
     const force = req.query.refresh === '1' || req.query.sync === '1';
-    await syncSyllabusTrackerFromSheet(force);
+    const targetUrl = resolveTargetAppsScriptUrl(req);
+    await syncSyllabusTrackerFromSheet(force, targetUrl);
     const { teacher_id, month, class_name } = req.query;
     let filtered = syllabusTrackerStore;
     if (teacher_id) {
@@ -1778,6 +1906,7 @@ async function startServer() {
       if (!topic || !topic.teacher_id || !topic.topic_description) {
         return res.status(400).json({ error: 'teacher_id and topic_description are required' });
       }
+      const targetUrl = resolveTargetAppsScriptUrl(req);
 
       if (!topic.id) {
         topic.id = `syl_${(topic.month || '2026').replace('-', '_')}_${topic.teacher_id}_${Date.now()}`;
@@ -1795,6 +1924,7 @@ async function startServer() {
       const gasResult = await forwardToGoogleAppsScript({
         action: 'saveSyllabusTopic',
         topic: JSON.stringify(topic),
+        appsScriptUrl: targetUrl,
         ...topic,
       });
 
@@ -1826,13 +1956,116 @@ async function startServer() {
     }
   });
 
+  // True 2-Way Push + Pull Sync for Syllabus Tracker
+  app.post('/api/syllabus-tracker/sync-all', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const demoSeedIds = new Set(['syl_2026_09_sunita_1', 'syl_2026_09_sunita_2', 'syl_2026_09_sunita_3', 'syl_2026_09_sunita_4']);
+      const localTopics = Array.isArray(req.body?.localTopics) ? req.body.localTopics : [];
+
+      for (const loc of localTopics) {
+        if (!loc || !loc.topic_description || demoSeedIds.has(String(loc.id))) continue;
+        if (!syllabusTrackerStore.some((s) => s.id === loc.id)) {
+          syllabusTrackerStore.unshift(loc);
+        }
+      }
+      saveSyllabusTrackerCache();
+
+      let sheetIds = new Set<string>();
+      let sheetReachable = true;
+      let fetchError = '';
+      try {
+        const sRes = await fetch(`${targetUrl}?action=getSyllabusTracker&_t=${Date.now()}`, {
+          redirect: 'follow',
+          signal: AbortSignal.timeout(9000),
+        });
+        const sText = await sRes.text();
+        if (!sRes.ok || sText.trim().startsWith('<')) {
+          sheetReachable = false;
+          fetchError = 'Apps Script Deployment अनुमति (Anyone) जांचें';
+        } else {
+          const sJson: any = JSON.parse(sText);
+          if (sJson?.status === 'error') {
+            sheetReachable = false;
+            fetchError = String(sJson.message || sJson.error || 'Apps Script error');
+          } else {
+            const rows: any[] = Array.isArray(sJson) ? sJson : Array.isArray(sJson?.topics) ? sJson.topics : [];
+            for (const row of rows) {
+              if (!row || Array.isArray(row)) continue;
+              const tid = String(row.id || '').trim();
+              if (tid) sheetIds.add(tid);
+            }
+          }
+        }
+      } catch (e: any) {
+        sheetReachable = false;
+        fetchError = e?.message || 'Google Sheet से कनेक्ट नहीं हो सका';
+      }
+
+      if (!sheetReachable) {
+        return res.json({
+          success: false,
+          pushed: 0,
+          failed: 1,
+          sheetCount: 0,
+          lastError: fetchError,
+          topics: syllabusTrackerStore,
+        });
+      }
+
+      const toPush = syllabusTrackerStore.filter(
+        (t) => t && t.topic_description && !demoSeedIds.has(String(t.id)) && !sheetIds.has(String(t.id))
+      );
+
+      let pushed = 0;
+      let failed = 0;
+      let lastError = '';
+      for (let i = 0; i < toPush.length; i += 3) {
+        const batch = toPush.slice(i, i + 3);
+        const results = await Promise.all(
+          batch.map((topic) =>
+            forwardToGoogleAppsScript({
+              action: 'saveSyllabusTopic',
+              topic: JSON.stringify(topic),
+              appsScriptUrl: targetUrl,
+              ...topic,
+            })
+          )
+        );
+        for (const r of results) {
+          if (r.ok) pushed++;
+          else {
+            failed++;
+            if (!lastError) lastError = r.error || 'Sheet save error';
+          }
+        }
+      }
+
+      await syncSyllabusTrackerFromSheet(true, targetUrl);
+      const sheetCount = Math.max(sheetIds.size + pushed, syllabusTrackerStore.filter((t) => !demoSeedIds.has(String(t.id))).length);
+
+      res.json({
+        success: failed === 0,
+        pushed,
+        failed,
+        sheetCount,
+        lastError: lastError || undefined,
+        topics: syllabusTrackerStore,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, pushed: 0, failed: 1, lastError: err?.message, topics: syllabusTrackerStore });
+    }
+  });
+
   app.delete('/api/syllabus-tracker/:id', async (req, res) => {
     const id = req.params.id;
+    const targetUrl = resolveTargetAppsScriptUrl(req);
     syllabusTrackerStore = syllabusTrackerStore.filter((s) => s.id !== id);
     saveSyllabusTrackerCache();
     const gasResult = await forwardToGoogleAppsScript({
       action: 'deleteSyllabusTopic',
       id,
+      appsScriptUrl: targetUrl,
     });
     res.json({
       success: true,
@@ -1847,7 +2080,8 @@ async function startServer() {
   // Endpoints for School Holidays (Sunday ke alawa chhuttiyan)
   app.get('/api/school-holidays', async (req, res) => {
     const force = req.query.refresh === '1' || req.query.sync === '1';
-    await syncSchoolHolidaysFromSheet(force);
+    const targetUrl = resolveTargetAppsScriptUrl(req);
+    await syncSchoolHolidaysFromSheet(force, targetUrl);
     res.json(schoolHolidaysStore);
   });
 
@@ -1857,6 +2091,7 @@ async function startServer() {
       if (!holiday || !holiday.title || !holiday.date) {
         return res.status(400).json({ error: 'title and date are required' });
       }
+      const targetUrl = resolveTargetAppsScriptUrl(req);
 
       if (!holiday.id) {
         holiday.id = `hol_${holiday.date.replace(/-/g, '_')}_${Date.now()}`;
@@ -1876,6 +2111,7 @@ async function startServer() {
       const gasResult = await forwardToGoogleAppsScript({
         action: 'saveSchoolHoliday',
         holiday: JSON.stringify(holiday),
+        appsScriptUrl: targetUrl,
         ...holiday,
       });
 
@@ -1907,13 +2143,113 @@ async function startServer() {
     }
   });
 
+  // True 2-Way Push + Pull Sync for School Holidays
+  app.post('/api/school-holidays/sync-all', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const defaultIds = new Set(DEFAULT_SCHOOL_HOLIDAYS.map((d) => d.id));
+      const localHolidays = Array.isArray(req.body?.localHolidays) ? req.body.localHolidays : [];
+
+      for (const loc of localHolidays) {
+        if (!loc || !loc.title || !loc.date || defaultIds.has(String(loc.id))) continue;
+        if (!schoolHolidaysStore.some((h) => h.id === loc.id || (h.date === loc.date && h.title === loc.title))) {
+          schoolHolidaysStore.push(loc);
+        }
+      }
+      schoolHolidaysStore.sort((a, b) => a.date.localeCompare(b.date));
+      saveSchoolHolidaysCache();
+
+      let sheetIds = new Set<string>();
+      let sheetDateKeys = new Set<string>();
+      let sheetReachable = true;
+      let fetchError = '';
+      try {
+        const sRes = await fetch(`${targetUrl}?action=getSchoolHolidays&_t=${Date.now()}`, {
+          redirect: 'follow',
+          signal: AbortSignal.timeout(9000),
+        });
+        const sText = await sRes.text();
+        if (!sRes.ok || sText.trim().startsWith('<')) {
+          sheetReachable = false;
+          fetchError = 'Apps Script Deployment अनुमति (Anyone) जांचें';
+        } else {
+          const sJson: any = JSON.parse(sText);
+          if (sJson?.status === 'error') {
+            sheetReachable = false;
+            fetchError = String(sJson.message || sJson.error || 'Apps Script error');
+          } else {
+            const rows: any[] = Array.isArray(sJson) ? sJson : Array.isArray(sJson?.holidays) ? sJson.holidays : [];
+            for (const row of rows) {
+              if (!row || Array.isArray(row)) continue;
+              const hid = String(row.id || '').trim();
+              const hd = normalizeSheetDate(row.date);
+              if (hid) sheetIds.add(hid);
+              if (hd) sheetDateKeys.add(hd);
+            }
+          }
+        }
+      } catch (e: any) {
+        sheetReachable = false;
+        fetchError = e?.message || 'Google Sheet से कनेक्ट नहीं हो सका';
+      }
+
+      if (!sheetReachable) {
+        return res.json({
+          success: false,
+          pushed: 0,
+          failed: 1,
+          sheetCount: 0,
+          lastError: fetchError,
+          holidays: schoolHolidaysStore,
+        });
+      }
+
+      const toPush = schoolHolidaysStore.filter(
+        (h) => h && h.title && h.date && !defaultIds.has(String(h.id)) && !sheetIds.has(String(h.id)) && !sheetDateKeys.has(String(h.date))
+      );
+
+      let pushed = 0;
+      let failed = 0;
+      let lastError = '';
+      for (const hol of toPush) {
+        const r = await forwardToGoogleAppsScript({
+          action: 'saveSchoolHoliday',
+          holiday: JSON.stringify(hol),
+          appsScriptUrl: targetUrl,
+          ...hol,
+        });
+        if (r.ok) pushed++;
+        else {
+          failed++;
+          if (!lastError) lastError = r.error || 'Sheet save error';
+        }
+      }
+
+      await syncSchoolHolidaysFromSheet(true, targetUrl);
+      const sheetCount = Math.max(sheetIds.size + pushed, schoolHolidaysStore.filter((h) => !defaultIds.has(String(h.id))).length);
+
+      res.json({
+        success: failed === 0,
+        pushed,
+        failed,
+        sheetCount,
+        lastError: lastError || undefined,
+        holidays: schoolHolidaysStore,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, pushed: 0, failed: 1, lastError: err?.message, holidays: schoolHolidaysStore });
+    }
+  });
+
   app.delete('/api/school-holidays/:id', async (req, res) => {
     const id = req.params.id;
+    const targetUrl = resolveTargetAppsScriptUrl(req);
     schoolHolidaysStore = schoolHolidaysStore.filter((h) => h.id !== id);
     saveSchoolHolidaysCache();
     const gasResult = await forwardToGoogleAppsScript({
       action: 'deleteSchoolHoliday',
       id,
+      appsScriptUrl: targetUrl,
     });
     res.json({
       success: true,

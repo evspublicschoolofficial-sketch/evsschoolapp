@@ -12,6 +12,7 @@ import {
   MonthlyLeaderboardSummary,
   TeacherOfTheYearResult,
 } from '../types/teacherPerformance';
+import { getAppsScriptUrl } from './busTrackingService';
 
 export const PERFORMANCE_CACHE_KEY = 'evs_teacher_performance_records_v1';
 export const CURRENT_ACADEMIC_YEAR = '2026-2027';
@@ -827,10 +828,14 @@ export const syncPerformanceRecordToApi = async (
 
   // Send to Node Server API
   try {
+    const activeUrl = getAppsScriptUrl();
     const res = await fetch('/api/teacher-performance', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(record),
+      headers: {
+        'Content-Type': 'application/json',
+        'x-apps-script-url': activeUrl,
+      },
+      body: JSON.stringify({ ...record, appsScriptUrl: activeUrl }),
     });
     if (res.ok) {
       const data = await res.json();
@@ -850,7 +855,10 @@ export const syncPerformanceRecordToApi = async (
 
 export const fetchPerformanceRecordsFromApi = async (forceRefresh = false): Promise<TeacherPerformanceRecord[]> => {
   try {
-    const res = await fetch(`/api/teacher-performance${forceRefresh ? '?refresh=1' : ''}`);
+    const activeUrl = getAppsScriptUrl();
+    const res = await fetch(`/api/teacher-performance${forceRefresh ? '?refresh=1' : ''}`, {
+      headers: { 'x-apps-script-url': activeUrl },
+    });
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data) && data.length > 0) {
@@ -860,4 +868,61 @@ export const fetchPerformanceRecordsFromApi = async (forceRefresh = false): Prom
     }
   } catch {}
   return loadLocalPerformanceRecords();
+};
+
+export const syncAllPerformanceTwoWay = async (
+  localRecords: TeacherPerformanceRecord[]
+): Promise<{
+  success: boolean;
+  pushed: number;
+  failed: number;
+  sheetCount: number;
+  lastError?: string;
+  records: TeacherPerformanceRecord[];
+}> => {
+  const demoSeedIds = new Set(['tp_2026_09_t1', 'tp_2026_09_t2', 'tp_2026_09_t3', 'tp_2026_09_t4']);
+  const nonDemoLocal = localRecords.filter((r) => r && r.teacher_id && !demoSeedIds.has(String(r.id)));
+  try {
+    const activeUrl = getAppsScriptUrl();
+    const res = await fetch('/api/teacher-performance/sync-all', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-apps-script-url': activeUrl,
+      },
+      body: JSON.stringify({ localRecords: nonDemoLocal, appsScriptUrl: activeUrl }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const merged: TeacherPerformanceRecord[] = Array.isArray(data.records) && data.records.length > 0 ? data.records : localRecords;
+      if (Array.isArray(data.records) && data.records.length > 0) {
+        saveLocalPerformanceRecords(merged);
+      }
+      return {
+        success: Boolean(data.success),
+        pushed: Number(data.pushed || 0),
+        failed: Number(data.failed || 0),
+        sheetCount: Number(data.sheetCount || 0),
+        lastError: data.lastError,
+        records: merged,
+      };
+    }
+  } catch (err: any) {
+    return {
+      success: false,
+      pushed: 0,
+      failed: 1,
+      sheetCount: 0,
+      lastError: err?.message || 'नेटवर्क त्रुटि',
+      records: localRecords,
+    };
+  }
+  return {
+    success: false,
+    pushed: 0,
+    failed: 1,
+    sheetCount: 0,
+    lastError: 'सर्वर से उत्तर नहीं मिला',
+    records: localRecords,
+  };
 };

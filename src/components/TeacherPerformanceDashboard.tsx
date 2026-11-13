@@ -24,10 +24,12 @@ import {
   saveLocalPerformanceRecords,
   syncPerformanceRecordToApi,
   fetchPerformanceRecordsFromApi,
+  syncAllPerformanceTwoWay,
   autoCalculateTeacherMonthlyScoreFromAppData,
   autoEvaluateAllTeachersForMonth,
   AutoCalculationBreakdown,
 } from '../utils/teacherPerformanceEngine';
+import { getAppsScriptUrl } from '../utils/busTrackingService';
 import { TeacherSyllabusPlanner } from './TeacherSyllabusPlanner';
 
 interface TeacherPerformanceDashboardProps {
@@ -107,16 +109,52 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
 
   const handleSyncPerformanceFromSheet = async () => {
     setIsRefreshingSheet(true);
+    setSyncStatus('🔄 Google Sheet से 2-Way सिंक हो रहा है (लंबित डेटा भेजा जा रहा है)...');
     try {
-      const [fresh, sylRes] = await Promise.all([
-        fetchPerformanceRecordsFromApi(true),
-        fetch('/api/syllabus-tracker?refresh=1').then((r) => (r.ok ? r.json() : [])).catch(() => []),
+      const activeUrl = getAppsScriptUrl();
+      const sylDemoIds = new Set(['syl_2026_09_sunita_1', 'syl_2026_09_sunita_2', 'syl_2026_09_sunita_3', 'syl_2026_09_sunita_4']);
+      const localTopics = effectiveSyllabusTopics.filter((t) => t && t.topic_description && !sylDemoIds.has(String(t.id)));
+
+      const [tpSync, sylSync] = await Promise.all([
+        syncAllPerformanceTwoWay(records),
+        fetch('/api/syllabus-tracker/sync-all', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-apps-script-url': activeUrl,
+          },
+          body: JSON.stringify({ localTopics, appsScriptUrl: activeUrl }),
+        })
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null),
       ]);
-      if (fresh && fresh.length > 0) setRecords(fresh);
-      if (Array.isArray(sylRes) && sylRes.length > 0) setLoadedSyllabusTopics(sylRes);
-      setSyncStatus('🔄 Google Sheet से सभी शिक्षकों का ताज़ा डेटा सिंक हो गया!');
-      setTimeout(() => setSyncStatus(null), 3500);
-    } catch {}
+
+      if (tpSync.records && tpSync.records.length > 0) setRecords(tpSync.records);
+      if (sylSync && Array.isArray(sylSync.topics) && sylSync.topics.length > 0) {
+        setLoadedSyllabusTopics(sylSync.topics);
+      }
+
+      const totalPushed = (tpSync.pushed || 0) + Number(sylSync?.pushed || 0);
+      const totalFailed = (tpSync.failed || 0) + Number(sylSync?.failed || 0);
+      const errMsg = tpSync.lastError || sylSync?.lastError;
+
+      if (totalFailed > 0) {
+        setSyncStatus(`⚠️ ${totalPushed} रिकॉर्ड Sheet में गए, पर ${totalFailed} में त्रुटि: ${errMsg || 'Apps Script जांचें'}`);
+        setTimeout(() => setSyncStatus(null), 9000);
+      } else if (totalPushed > 0) {
+        setSyncStatus(`✅ 2-Way सिंक पूर्ण! ${totalPushed} लंबित रिकॉर्ड Google Sheet में भेजकर ताज़ा डेटा लोड किया गया!`);
+        setTimeout(() => setSyncStatus(null), 5000);
+      } else if ((tpSync.sheetCount || 0) + Number(sylSync?.sheetCount || 0) > 0) {
+        setSyncStatus(`🔄 Google Sheet से सभी ${tpSync.sheetCount} मूल्यांकन और ${Number(sylSync?.sheetCount || 0)} सिलेबस रिकॉर्ड पहले से सिंक हैं!`);
+        setTimeout(() => setSyncStatus(null), 4000);
+      } else {
+        setSyncStatus('🔄 Google Sheet कनेक्टेड है! नया मूल्यांकन जोड़ने या "ऑटो-मूल्यांकन" दबाने पर डेटा सीधे Sheet में जाएगा।');
+        setTimeout(() => setSyncStatus(null), 4500);
+      }
+    } catch {
+      setSyncStatus('⚠️ नेटवर्क त्रुटि: Google Sheet से सिंक नहीं हो सका');
+      setTimeout(() => setSyncStatus(null), 5000);
+    }
     setIsRefreshingSheet(false);
   };
 
@@ -235,13 +273,16 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
       setRecords(newAll);
       saveLocalPerformanceRecords(newAll);
 
-      // Background sync to server API
+      // Background sync to server API (in batches of 3 for fast Sheet sync)
       let syncedCount = 0;
       let firstSheetError = '';
-      for (const rec of updated) {
-        const res = await syncPerformanceRecordToApi(rec);
-        if (res.sheetSynced) syncedCount++;
-        else if (!firstSheetError && res.sheetError) firstSheetError = res.sheetError;
+      for (let i = 0; i < updated.length; i += 3) {
+        const batch = updated.slice(i, i + 3);
+        const results = await Promise.all(batch.map((rec) => syncPerformanceRecordToApi(rec)));
+        for (const res of results) {
+          if (res.sheetSynced) syncedCount++;
+          else if (!firstSheetError && res.sheetError) firstSheetError = res.sheetError;
+        }
       }
 
       if (syncedCount === updated.length) {

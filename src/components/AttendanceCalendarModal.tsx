@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Student, StudentBehaviorRecord, SchoolHolidayRecord } from '../types';
+import { getAppsScriptUrl } from '../utils/busTrackingService';
 
 interface AttendanceCalendarModalProps {
   isOpen?: boolean;
@@ -72,23 +73,46 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
 
   const handleSyncHolidaysFromSheet = async () => {
     setIsRefreshingHolidays(true);
+    setHolidaySyncMsg('🔄 Google Sheet "School_Holidays" से 2-Way सिंक हो रहा है...');
     try {
-      const r = await fetch('/api/school-holidays?refresh=1');
+      const activeUrl = getAppsScriptUrl();
+      const r = await fetch('/api/school-holidays/sync-all', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-apps-script-url': activeUrl,
+        },
+        body: JSON.stringify({ localHolidays: holidays, appsScriptUrl: activeUrl }),
+      });
       if (r.ok) {
         const data = await r.json();
-        if (Array.isArray(data)) {
-          setHolidays(data);
+        if (Array.isArray(data.holidays)) {
+          setHolidays(data.holidays);
         }
-        setHolidaySyncMsg('🔄 Google Sheet "School_Holidays" से ताज़ा अवकाश सूची सिंक हो गई!');
-        setTimeout(() => setHolidaySyncMsg(null), 3500);
+        if (data.failed > 0) {
+          setHolidaySyncMsg(`⚠️ ${data.pushed || 0} अवकाश Sheet में गए, पर ${data.failed} में त्रुटि: ${data.lastError || 'Code.gs जांचें'}`);
+          setTimeout(() => setHolidaySyncMsg(null), 9000);
+        } else if (data.pushed > 0) {
+          setHolidaySyncMsg(`✅ 2-Way सिंक पूर्ण! ${data.pushed} अवकाश Google Sheet "School_Holidays" में भेजे गए!`);
+          setTimeout(() => setHolidaySyncMsg(null), 5000);
+        } else {
+          setHolidaySyncMsg('🔄 Google Sheet "School_Holidays" से ताज़ा अवकाश सूची सिंक हो गई!');
+          setTimeout(() => setHolidaySyncMsg(null), 3500);
+        }
       }
-    } catch {}
+    } catch {
+      setHolidaySyncMsg('⚠️ नेटवर्क त्रुटि: Google Sheet से सिंक नहीं हो सका');
+      setTimeout(() => setHolidaySyncMsg(null), 5000);
+    }
     setIsRefreshingHolidays(false);
   };
 
   // Fetch school holidays on mount
   React.useEffect(() => {
-    fetch('/api/school-holidays')
+    const activeUrl = getAppsScriptUrl();
+    fetch('/api/school-holidays', {
+      headers: { 'x-apps-script-url': activeUrl },
+    })
       .then((r) => (r.ok ? r.json() : []))
       .then((data) => {
         if (Array.isArray(data)) {
@@ -127,10 +151,14 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
     setHolidays(updated);
 
     try {
+      const activeUrl = getAppsScriptUrl();
       const res = await fetch('/api/school-holidays', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newHoliday),
+        headers: {
+          'Content-Type': 'application/json',
+          'x-apps-script-url': activeUrl,
+        },
+        body: JSON.stringify({ ...newHoliday, appsScriptUrl: activeUrl }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data?.sheetSynced === false) {
@@ -153,7 +181,11 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
     const filtered = holidays.filter((h) => h.id !== id);
     setHolidays(filtered);
     try {
-      const res = await fetch(`/api/school-holidays/${id}`, { method: 'DELETE' });
+      const activeUrl = getAppsScriptUrl();
+      const res = await fetch(`/api/school-holidays/${id}`, {
+        method: 'DELETE',
+        headers: { 'x-apps-script-url': activeUrl },
+      });
       const data = await res.json().catch(() => ({}));
       if (data?.sheetSynced === false) {
         setHolidaySyncMsg(`⚠️ कैलेंडर से हटा, पर Google Sheet से नहीं: ${data.sheetError || 'Code.gs अपडेट करें'}`);
@@ -947,9 +979,23 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
 
         {/* Sync notification */}
         {holidaySyncMsg && (
-          <div className="px-6 py-2 bg-emerald-500 text-white text-xs font-black flex items-center justify-between animate-fadeIn">
+          <div
+            className={`px-6 py-2 text-xs font-black flex items-center justify-between animate-fadeIn ${
+              holidaySyncMsg.includes('⚠️')
+                ? 'bg-amber-500 text-slate-950'
+                : 'bg-emerald-500 text-white'
+            }`}
+          >
             <span>{holidaySyncMsg}</span>
-            <span className="text-[10px] bg-emerald-700/60 px-2 py-0.5 rounded">Google Sheets Synchronized</span>
+            <span
+              className={`text-[10px] px-2 py-0.5 rounded ${
+                holidaySyncMsg.includes('⚠️')
+                  ? 'bg-amber-700/20 text-slate-950'
+                  : 'bg-emerald-700/60 text-white'
+              }`}
+            >
+              {holidaySyncMsg.includes('⚠️') ? 'Sync Warning' : 'Google Sheets Synchronized'}
+            </span>
           </div>
         )}
 
