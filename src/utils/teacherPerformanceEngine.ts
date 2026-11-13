@@ -812,7 +812,7 @@ export const saveLocalPerformanceRecords = (records: TeacherPerformanceRecord[])
  */
 export const syncPerformanceRecordToApi = async (
   record: TeacherPerformanceRecord
-): Promise<{ success: boolean; message: string }> => {
+): Promise<{ success: boolean; sheetSynced?: boolean; sheetError?: string; message: string }> => {
   // Update local storage first
   const current = loadLocalPerformanceRecords();
   const index = current.findIndex((r) => r.id === record.id || (r.teacher_id === record.teacher_id && r.month === record.month));
@@ -834,13 +834,18 @@ export const syncPerformanceRecordToApi = async (
     });
     if (res.ok) {
       const data = await res.json();
-      return { success: true, message: data.message || 'Google Sheet में रिकॉर्ड सुरक्षित हो गया!' };
+      return {
+        success: true,
+        sheetSynced: data.sheetSynced,
+        sheetError: data.sheetError,
+        message: data.message || 'Google Sheet में रिकॉर्ड सुरक्षित हो गया!',
+      };
     }
   } catch (err: any) {
     console.warn('API sync warning:', err);
   }
 
-  return { success: true, message: 'स्थानीय रूप से सुरक्षित (Local Storage Updated)' };
+  return { success: true, sheetSynced: false, message: 'स्थानीय रूप से सुरक्षित (Local Storage Updated)' };
 };
 
 export const fetchPerformanceRecordsFromApi = async (forceRefresh = false): Promise<TeacherPerformanceRecord[]> => {

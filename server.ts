@@ -194,6 +194,29 @@ function saveSchoolHolidaysCache() {
   }
 }
 
+function parseAppsScriptResponse(text: string): { ok: boolean; error?: string } {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return { ok: false, error: 'Google Apps Script से खाली जवाब मिला' };
+  if (trimmed.startsWith('<')) {
+    return { ok: false, error: 'Apps Script ने JSON के बजाय HTML पेज लौटाया (Deployment permissions जांचें)' };
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && (parsed.status === 'error' || parsed.error)) {
+      return { ok: false, error: String(parsed.message || parsed.error || 'Apps Script error') };
+    }
+    if (parsed && (parsed.status === 'success' || parsed.success === true || parsed.updated || parsed.created)) {
+      return { ok: true };
+    }
+  } catch {
+    // Non-JSON text fallback
+  }
+  if (trimmed.toLowerCase().includes('success') || trimmed.toLowerCase().includes('updated')) {
+    return { ok: true };
+  }
+  return { ok: false, error: trimmed.slice(0, 180) };
+}
+
 async function forwardToGoogleAppsScript(payload: any) {
   try {
     const targetUrl = (typeof payload?.appsScriptUrl === 'string' && payload.appsScriptUrl.trim().startsWith('https://script.google.com/macros/s/'))
@@ -214,7 +237,7 @@ async function forwardToGoogleAppsScript(payload: any) {
     if (formattedPayload.action === 'updateBusTracking') {
       try {
         const getUrl = `${targetUrl}?action=updateBusTracking&bus_id=${encodeURIComponent(formattedPayload.bus_id)}&driver_name=${encodeURIComponent(formattedPayload.driver_name)}&current_location=${encodeURIComponent(formattedPayload.current_location)}`;
-        const gRes = await fetch(getUrl, { redirect: 'follow' });
+        const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(8000) });
         const gText = await gRes.text();
         if (gText.includes('success') || gText.includes('updated')) {
           return { ok: true, response: gText };
@@ -229,68 +252,82 @@ async function forwardToGoogleAppsScript(payload: any) {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify(formattedPayload),
+      redirect: 'follow',
+      signal: AbortSignal.timeout(8500),
     });
     const text = await res.text();
+    const postCheck = parseAppsScriptResponse(text);
+    if (res.ok && postCheck.ok) {
+      return { ok: true, response: text };
+    }
 
-    if (formattedPayload.action === 'addHomework' && (!res.ok || text.includes('error'))) {
+    if (formattedPayload.action === 'addHomework') {
       try {
         const getUrl = `${targetUrl}?action=addHomework&homework_id=${encodeURIComponent(formattedPayload.homework_id || '')}&date=${encodeURIComponent(formattedPayload.date || '')}&class_name=${encodeURIComponent(formattedPayload.class_name || formattedPayload.class || '')}&subject=${encodeURIComponent(formattedPayload.subject || '')}&detail=${encodeURIComponent(formattedPayload.detail || formattedPayload.Homework_Detail || '')}&teacher=${encodeURIComponent(formattedPayload.teacher || '')}`;
-        const gRes = await fetch(getUrl);
+        const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(8000) });
         const gText = await gRes.text();
-        if (gText.includes('success')) return { ok: true, response: gText };
+        const gCheck = parseAppsScriptResponse(gText);
+        if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
       } catch {}
-    } else if (formattedPayload.action === 'updateHomeworkTracker' && (!res.ok || text.includes('error'))) {
+    } else if (formattedPayload.action === 'updateHomeworkTracker') {
       try {
         const getUrl = `${targetUrl}?action=updateHomeworkTracker&record_id=${encodeURIComponent(formattedPayload.record_id || formattedPayload.id || '')}&student_id=${encodeURIComponent(formattedPayload.student_id || '')}&date=${encodeURIComponent(formattedPayload.date || '')}&class=${encodeURIComponent(formattedPayload.class || '')}&subject=${encodeURIComponent(formattedPayload.subject || '')}&status=${encodeURIComponent(formattedPayload.status || '')}`;
-        const gRes = await fetch(getUrl);
+        const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(8000) });
         const gText = await gRes.text();
-        if (gText.includes('success')) return { ok: true, response: gText };
+        const gCheck = parseAppsScriptResponse(gText);
+        if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
       } catch {}
-    } else if (formattedPayload.action === 'addBehavior' && (!res.ok || text.includes('error'))) {
+    } else if (formattedPayload.action === 'addBehavior') {
       try {
         const getUrl = `${targetUrl}?action=addBehavior&behavior_id=${encodeURIComponent(formattedPayload.behavior_id || '')}&student_id=${encodeURIComponent(formattedPayload.student_id || '')}&date=${encodeURIComponent(formattedPayload.date || '')}&class=${encodeURIComponent(formattedPayload.class || '')}&is_present=${encodeURIComponent(formattedPayload.is_present || 'Present')}&is_bathed=${encodeURIComponent(formattedPayload.is_bathed || 'Yes')}&nails_clean=${encodeURIComponent(formattedPayload.nails_clean || 'Yes')}&uniform_clean=${encodeURIComponent(formattedPayload.uniform_clean || 'Yes')}&discipline=${encodeURIComponent(formattedPayload.discipline || 'Good')}&good_manners=${encodeURIComponent(formattedPayload.good_manners || '')}&remark=${encodeURIComponent(formattedPayload.remark || '')}`;
-        const gRes = await fetch(getUrl);
+        const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(8000) });
         const gText = await gRes.text();
-        if (gText.includes('success')) return { ok: true, response: gText };
+        const gCheck = parseAppsScriptResponse(gText);
+        if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
       } catch {}
-    } else if (formattedPayload.action === 'saveRouteStops' && (!res.ok || text.includes('error') || text.includes('<!DOCTYPE'))) {
+    } else if (formattedPayload.action === 'saveRouteStops') {
       try {
         const getUrl = `${targetUrl}?action=saveRouteStops&route_id=${encodeURIComponent(formattedPayload.route_id || 'route-1')}&routeId=${encodeURIComponent(formattedPayload.route_id || 'route-1')}&stops=${encodeURIComponent(typeof formattedPayload.stops === 'string' ? formattedPayload.stops : JSON.stringify(formattedPayload.stops || []))}`;
-        const gRes = await fetch(getUrl, { redirect: 'follow' });
+        const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(8000) });
         const gText = await gRes.text();
-        if (gText.includes('success')) return { ok: true, response: gText };
+        const gCheck = parseAppsScriptResponse(gText);
+        if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
       } catch {}
-    } else if (formattedPayload.action === 'saveTeacherPerformance' && (!res.ok || text.includes('error') || text.includes('<!DOCTYPE'))) {
+    } else if (formattedPayload.action === 'saveTeacherPerformance') {
       try {
         const getUrl = `${targetUrl}?action=saveTeacherPerformance&record=${encodeURIComponent(typeof formattedPayload.record === 'string' ? formattedPayload.record : JSON.stringify(formattedPayload))}`;
-        const gRes = await fetch(getUrl, { redirect: 'follow' });
+        const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(8000) });
         const gText = await gRes.text();
-        if (gText.includes('success')) return { ok: true, response: gText };
+        const gCheck = parseAppsScriptResponse(gText);
+        if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
       } catch {}
-    } else if (formattedPayload.action === 'saveSyllabusTopic' && (!res.ok || text.includes('error') || text.includes('<!DOCTYPE'))) {
+    } else if (formattedPayload.action === 'saveSyllabusTopic') {
       try {
         const getUrl = `${targetUrl}?action=saveSyllabusTopic&topic=${encodeURIComponent(typeof formattedPayload.topic === 'string' ? formattedPayload.topic : JSON.stringify(formattedPayload))}`;
-        const gRes = await fetch(getUrl, { redirect: 'follow' });
+        const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(8000) });
         const gText = await gRes.text();
-        if (gText.includes('success')) return { ok: true, response: gText };
+        const gCheck = parseAppsScriptResponse(gText);
+        if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
       } catch {}
-    } else if (formattedPayload.action === 'saveSchoolHoliday' && (!res.ok || text.includes('error') || text.includes('<!DOCTYPE'))) {
+    } else if (formattedPayload.action === 'saveSchoolHoliday') {
       try {
         const getUrl = `${targetUrl}?action=saveSchoolHoliday&holiday=${encodeURIComponent(typeof formattedPayload.holiday === 'string' ? formattedPayload.holiday : JSON.stringify(formattedPayload))}`;
-        const gRes = await fetch(getUrl, { redirect: 'follow' });
+        const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(8000) });
         const gText = await gRes.text();
-        if (gText.includes('success')) return { ok: true, response: gText };
+        const gCheck = parseAppsScriptResponse(gText);
+        if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
       } catch {}
-    } else if ((formattedPayload.action === 'deleteSyllabusTopic' || formattedPayload.action === 'deleteSchoolHoliday') && (!res.ok || text.includes('error') || text.includes('<!DOCTYPE'))) {
+    } else if (formattedPayload.action === 'deleteSyllabusTopic' || formattedPayload.action === 'deleteSchoolHoliday') {
       try {
         const getUrl = `${targetUrl}?action=${encodeURIComponent(formattedPayload.action)}&id=${encodeURIComponent(formattedPayload.id || '')}`;
-        const gRes = await fetch(getUrl, { redirect: 'follow' });
+        const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(8000) });
         const gText = await gRes.text();
-        if (gText.includes('success')) return { ok: true, response: gText };
+        const gCheck = parseAppsScriptResponse(gText);
+        if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
       } catch {}
     }
 
-    return { ok: res.ok, response: text };
+    return { ok: false, error: postCheck.error || `HTTP ${res.status}`, response: text };
   } catch (err: any) {
     return { ok: false, error: err.message };
   }
@@ -548,19 +585,34 @@ async function syncSchoolHolidaysFromSheet(force = false): Promise<boolean> {
 
     if (rawRows.length === 0) return false;
 
+    const looksLikeDateValue = (val: any): boolean => {
+      if (!val) return false;
+      if (val instanceof Date) return true;
+      const s = String(val).trim();
+      return (
+        /^\d{4}-\d{2}-\d{2}/.test(s) ||
+        /^\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}/.test(s) ||
+        /GMT\+|India Standard Time|^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}/i.test(s)
+      );
+    };
+
     const parsed: any[] = [];
     if (Array.isArray(rawRows[0])) {
+      const hdr = rawRows[0].map((c: any) => String(c || '').trim().toLowerCase());
+      const headerDateFirst = hdr[1]?.includes('date') && (hdr[3]?.includes('title') || hdr[3]?.includes('name'));
       for (let i = 1; i < rawRows.length; i++) {
         const r = rawRows[i];
         if (!r || (!r[1] && !r[2])) continue;
-        const dateStr = normalizeSheetDate(r[2]);
-        if (!dateStr) continue;
-        const endStr = normalizeSheetDate(r[3]);
+        const rowDateFirst = headerDateFirst || (looksLikeDateValue(r[1]) && !looksLikeDateValue(r[3]));
+        const dateStr = normalizeSheetDate(rowDateFirst ? r[1] : r[2]);
+        if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) continue;
+        const endStr = normalizeSheetDate(rowDateFirst ? r[2] : r[3]);
+        const titleStr = String((rowDateFirst ? r[3] : r[1]) || 'अवकाश').trim();
         parsed.push({
           id: String(r[0] || `hol_${dateStr.replace(/-/g, '_')}_${i}`).trim(),
-          title: String(r[1] || 'अवकाश').trim(),
+          title: titleStr,
           date: dateStr,
-          end_date: endStr && endStr !== dateStr ? endStr : undefined,
+          end_date: endStr && /^\d{4}-\d{2}-\d{2}$/.test(endStr) && endStr !== dateStr ? endStr : undefined,
           category: String(r[4] || 'festival').trim(),
           description: String(r[5] || '').trim() || undefined,
           timestamp: r[6] ? String(r[6]) : new Date().toISOString(),
@@ -568,15 +620,20 @@ async function syncSchoolHolidaysFromSheet(force = false): Promise<boolean> {
       }
     } else {
       for (const obj of rawRows) {
-        const dateStr = normalizeSheetDate(obj.date ?? obj.Date);
-        const titleStr = String(obj.title ?? obj.Title ?? '').trim();
-        if (!dateStr || !titleStr) continue;
-        const endStr = normalizeSheetDate(obj.end_date ?? obj.End_Date);
+        const rawTitle = obj.title ?? obj.Title ?? '';
+        const rawDate = obj.date ?? obj.Date ?? '';
+        const rawEnd = obj.end_date ?? obj.End_Date ?? '';
+        // Handle sheet column layout ID | Date | End_Date | Title when Code.gs read fixed indices r[1], r[2], r[3]
+        const swapped = looksLikeDateValue(rawTitle) && !looksLikeDateValue(rawEnd);
+        const dateStr = normalizeSheetDate(swapped ? rawTitle : rawDate);
+        const endStr = normalizeSheetDate(swapped ? rawDate : rawEnd);
+        const titleStr = String(swapped ? rawEnd : rawTitle).trim();
+        if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr) || !titleStr) continue;
         parsed.push({
           id: String(obj.id ?? obj.Holiday_ID ?? `hol_${dateStr.replace(/-/g, '_')}`).trim(),
           title: titleStr,
           date: dateStr,
-          end_date: endStr && endStr !== dateStr ? endStr : undefined,
+          end_date: endStr && /^\d{4}-\d{2}-\d{2}$/.test(endStr) && endStr !== dateStr ? endStr : undefined,
           category: String(obj.category ?? obj.Category ?? 'festival').trim(),
           description: String(obj.description ?? obj.Description ?? '').trim() || undefined,
           timestamp: String(obj.timestamp ?? obj.Timestamp ?? new Date().toISOString()),
@@ -1663,11 +1720,11 @@ async function startServer() {
       saveTeacherPerformanceCache();
 
       // Forward to Google Apps Script (Teacher_Performance tab)
-      forwardToGoogleAppsScript({
+      const gasResult = await forwardToGoogleAppsScript({
         action: 'saveTeacherPerformance',
         record: JSON.stringify(record),
         ...record,
-      }).catch((e) => console.warn('Server forward teacher performance error:', e));
+      });
 
       // Broadcast update to all connected clients via WebSocket
       const broadcastMsg = JSON.stringify({
@@ -1685,7 +1742,11 @@ async function startServer() {
 
       res.json({
         success: true,
-        message: "Google Sheet 'Teacher_Performance' में शिक्षक प्रदर्शन सुरक्षित हो गया!",
+        sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : (gasResult.error || gasResult.response || 'Apps Script doPost में saveTeacherPerformance नहीं मिला'),
+        message: gasResult.ok
+          ? "Google Sheet 'Teacher_Performance' में शिक्षक प्रदर्शन सुरक्षित हो गया!"
+          : `⚠️ स्थानीय सर्वर में सेव हुआ, लेकिन Google Sheet में नहीं गया: ${gasResult.error || 'Apps Script doPost अपडेट करें'}`,
         record,
       });
     } catch (err: any) {
@@ -1731,11 +1792,11 @@ async function startServer() {
       saveSyllabusTrackerCache();
 
       // Forward to Google Apps Script (Syllabus_Tracker tab)
-      forwardToGoogleAppsScript({
+      const gasResult = await forwardToGoogleAppsScript({
         action: 'saveSyllabusTopic',
         topic: JSON.stringify(topic),
         ...topic,
-      }).catch((e) => console.warn('Server forward syllabus tracker error:', e));
+      });
 
       // Broadcast update via WebSocket
       const broadcastMsg = JSON.stringify({
@@ -1753,7 +1814,11 @@ async function startServer() {
 
       res.json({
         success: true,
-        message: "Google Sheet 'Syllabus_Tracker' में पाठ्यक्रम लक्ष्य सुरक्षित हो गया!",
+        sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : (gasResult.error || gasResult.response || 'Apps Script doPost में saveSyllabusTopic नहीं मिला'),
+        message: gasResult.ok
+          ? "Google Sheet 'Syllabus_Tracker' में पाठ्यक्रम लक्ष्य सुरक्षित हो गया!"
+          : `⚠️ स्थानीय सर्वर में सेव हुआ, लेकिन Google Sheet में नहीं गया: ${gasResult.error || 'Apps Script doPost अपडेट करें'}`,
         topic,
       });
     } catch (err: any) {
@@ -1761,15 +1826,22 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/syllabus-tracker/:id', (req, res) => {
+  app.delete('/api/syllabus-tracker/:id', async (req, res) => {
     const id = req.params.id;
     syllabusTrackerStore = syllabusTrackerStore.filter((s) => s.id !== id);
     saveSyllabusTrackerCache();
-    forwardToGoogleAppsScript({
+    const gasResult = await forwardToGoogleAppsScript({
       action: 'deleteSyllabusTopic',
       id,
-    }).catch(() => {});
-    res.json({ success: true, message: 'पाठ्यक्रम लक्ष्य हटा दिया गया' });
+    });
+    res.json({
+      success: true,
+      sheetSynced: gasResult.ok,
+      sheetError: gasResult.ok ? undefined : (gasResult.error || gasResult.response),
+      message: gasResult.ok
+        ? 'पाठ्यक्रम लक्ष्य Google Sheet से भी हटा दिया गया'
+        : `⚠️ ऐप से हटा, पर Google Sheet में नहीं: ${gasResult.error || 'Apps Script अपडेट करें'}`,
+    });
   });
 
   // Endpoints for School Holidays (Sunday ke alawa chhuttiyan)
@@ -1801,11 +1873,11 @@ async function startServer() {
       saveSchoolHolidaysCache();
 
       // Forward to Google Apps Script (School_Holidays tab)
-      forwardToGoogleAppsScript({
+      const gasResult = await forwardToGoogleAppsScript({
         action: 'saveSchoolHoliday',
         holiday: JSON.stringify(holiday),
         ...holiday,
-      }).catch((e) => console.warn('Server forward school holiday error:', e));
+      });
 
       // Broadcast update via WebSocket
       const broadcastMsg = JSON.stringify({
@@ -1823,7 +1895,11 @@ async function startServer() {
 
       res.json({
         success: true,
-        message: "Google Sheet 'School_Holidays' में अवकाश सुरक्षित हो गया!",
+        sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : (gasResult.error || gasResult.response || 'Apps Script doPost में saveSchoolHoliday नहीं मिला'),
+        message: gasResult.ok
+          ? "Google Sheet 'School_Holidays' में अवकाश सुरक्षित हो गया!"
+          : `⚠️ स्थानीय सर्वर में सेव हुआ, लेकिन Google Sheet में नहीं गया: ${gasResult.error || 'Apps Script doPost अपडेट करें'}`,
         holiday,
       });
     } catch (err: any) {
@@ -1831,15 +1907,22 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/school-holidays/:id', (req, res) => {
+  app.delete('/api/school-holidays/:id', async (req, res) => {
     const id = req.params.id;
     schoolHolidaysStore = schoolHolidaysStore.filter((h) => h.id !== id);
     saveSchoolHolidaysCache();
-    forwardToGoogleAppsScript({
+    const gasResult = await forwardToGoogleAppsScript({
       action: 'deleteSchoolHoliday',
       id,
-    }).catch(() => {});
-    res.json({ success: true, message: 'अवकाश हटा दिया गया' });
+    });
+    res.json({
+      success: true,
+      sheetSynced: gasResult.ok,
+      sheetError: gasResult.ok ? undefined : (gasResult.error || gasResult.response),
+      message: gasResult.ok
+        ? 'अवकाश Google Sheet से भी हटा दिया गया'
+        : `⚠️ ऐप से हटा, पर Google Sheet में नहीं: ${gasResult.error || 'Apps Script अपडेट करें'}`,
+    });
   });
 
   // Get list of deleted receipts

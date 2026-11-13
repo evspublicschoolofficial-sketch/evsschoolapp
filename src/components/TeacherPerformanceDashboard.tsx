@@ -86,6 +86,8 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
   const [editingRecord, setEditingRecord] = useState<TeacherPerformanceRecord | null>(null);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
+  const [copiedFullCode, setCopiedFullCode] = useState<boolean>(false);
+  const [fullCodeLoading, setFullCodeLoading] = useState<boolean>(false);
   const [certificateRecord, setCertificateRecord] = useState<TeacherPerformanceRecord | null>(null);
 
   // Form State for Entry Modal
@@ -234,12 +236,21 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
       saveLocalPerformanceRecords(newAll);
 
       // Background sync to server API
+      let syncedCount = 0;
+      let firstSheetError = '';
       for (const rec of updated) {
-        await syncPerformanceRecordToApi(rec);
+        const res = await syncPerformanceRecordToApi(rec);
+        if (res.sheetSynced) syncedCount++;
+        else if (!firstSheetError && res.sheetError) firstSheetError = res.sheetError;
       }
 
-      setSyncStatus(`⚡ शाबाश! ${updated.length} शिक्षकों का ${selectedMonth} हेतु ऐप डेटा से संपूर्ण ऑटो-मूल्यांकन पूर्ण व सुरक्षित!`);
-      setTimeout(() => setSyncStatus(null), 5000);
+      if (syncedCount === updated.length) {
+        setSyncStatus(`⚡ शाबाश! ${updated.length} शिक्षकों का ${selectedMonth} हेतु ऑटो-मूल्यांकन Google Sheet में भी सुरक्षित हो गया!`);
+        setTimeout(() => setSyncStatus(null), 5000);
+      } else {
+        setSyncStatus(`⚠️ ${updated.length} शिक्षकों की गणना ऐप में हो गई, लेकिन Google Sheet में नहीं गया (${firstSheetError || 'Code.gs doPost अपडेट करें'})`);
+        setTimeout(() => setSyncStatus(null), 9000);
+      }
     } catch (err) {
       console.error('Error auto evaluating teachers:', err);
     } finally {
@@ -289,9 +300,11 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
 
     setSyncStatus(result.message || '✅ सुरक्षित हो गया!');
     setTimeout(() => {
-      setSyncStatus(null);
       setIsModalOpen(false);
-    }, 1500);
+    }, result.sheetSynced === false ? 1800 : 1200);
+    setTimeout(() => {
+      setSyncStatus(null);
+    }, result.sheetSynced === false ? 9000 : 4000);
   };
 
   // Complete 2-Way Google Apps Script Snippet (doGet + doPost for all 3 Tabs)
@@ -309,7 +322,8 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
 */
 
 // ============================================================
-// 2) अपने Code.gs में function doPost(e) के अंदर यह जोड़ें:
+// 2) अपने Code.gs में function doPost(e) के अंदर यह जोड़ें
+// ⚠️ ध्यान दें: इसे "Unknown action" वाले return से ठीक ऊपर पेस्ट करें!
 // ============================================================
 /*
   if (action === "saveTeacherPerformance") return handleSaveTeacherPerformance(ss, data);
@@ -321,6 +335,7 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
 
 // ============================================================
 // 3) नीचे दिए सभी फंक्शन्स Code.gs के सबसे नीचे पेस्ट करें:
+// (School_Holidays अपने आप Date/Title कॉलम क्रम पहचान लेगा)
 // ============================================================
 
 function formatCellMonth_(val) {
@@ -338,7 +353,16 @@ function formatCellDate_(val) {
     return Utilities.formatDate(val, Session.getScriptTimeZone() || "Asia/Kolkata", "yyyy-MM-dd");
   }
   var s = String(val).trim();
-  return s.length >= 10 ? s.slice(0, 10) : s;
+  if (/^[0-9]{4}-[0-9]{2}-[0-9]{2}/.test(s)) return s.slice(0, 10);
+  return s;
+}
+
+function isHolidayDateFirst_(sheet) {
+  var lastCol = sheet.getLastColumn();
+  if (sheet.getLastRow() < 1 || lastCol < 4) return false;
+  var hdr = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  var colB = String(hdr[1] || "").toLowerCase();
+  return colB.indexOf("date") !== -1;
 }
 
 function handleGetTeacherPerformance(ss) {
@@ -410,15 +434,16 @@ function handleGetSchoolHolidays(ss) {
     return ContentService.createTextOutput(JSON.stringify({ status: "success", holidays: [] })).setMimeType(ContentService.MimeType.JSON);
   }
   var rows = sheet.getDataRange().getValues();
+  var dateFirst = isHolidayDateFirst_(sheet);
   var holidays = [];
   for (var i = 1; i < rows.length; i++) {
     var r = rows[i];
     if (!r[1] && !r[2]) continue;
     holidays.push({
       id: String(r[0] || ("hol_" + i)),
-      title: String(r[1] || ""),
-      date: formatCellDate_(r[2]),
-      end_date: formatCellDate_(r[3]),
+      title: String((dateFirst ? r[3] : r[1]) || ""),
+      date: formatCellDate_(dateFirst ? r[1] : r[2]),
+      end_date: formatCellDate_(dateFirst ? r[2] : r[3]),
       category: String(r[4] || "festival"),
       description: String(r[5] || ""),
       timestamp: String(r[6] || "")
@@ -466,7 +491,7 @@ function handleSaveSyllabusTopic(ss, data) {
   if (!sheet) {
     sheet = ss.insertSheet("Syllabus_Tracker");
     sheet.appendRow([
-      "Topic_ID", "Teacher_ID", "Teacher_Name", "Class_Name", "Subject",
+      "ID", "Teacher_ID", "Teacher_Name", "Class", "Subject",
       "Month", "Week_Number", "Week_Label", "Chapter_Title", "Topic_Description",
       "Planned_Date", "Target_Completion_Date", "Completed_Date", "Status", "Timestamp"
     ]);
@@ -493,19 +518,19 @@ function handleSaveSchoolHoliday(ss, data) {
   var sheet = ss.getSheetByName("School_Holidays");
   if (!sheet) {
     sheet = ss.insertSheet("School_Holidays");
-    sheet.appendRow(["Holiday_ID", "Title", "Date", "End_Date", "Category", "Description", "Timestamp"]);
+    sheet.appendRow(["ID", "Date", "End_Date", "Title", "Category", "Description", "Timestamp"]);
   }
   var h = data.holiday ? (typeof data.holiday === "string" ? JSON.parse(data.holiday) : data.holiday) : data;
   var holId = String(h.id || ("hol_" + Date.now()));
+  var dateFirst = isHolidayDateFirst_(sheet);
   var rows = sheet.getDataRange().getValues();
   var rowIndex = -1;
   for (var i = 1; i < rows.length; i++) {
     if (String(rows[i][0]) === holId) { rowIndex = i + 1; break; }
   }
-  var rowData = [
-    holId, h.title || "", "'" + String(h.date || ""), h.end_date ? ("'" + String(h.end_date)) : "",
-    h.category || "festival", h.description || "", new Date()
-  ];
+  var rowData = dateFirst
+    ? [holId, "'" + String(h.date || ""), h.end_date ? ("'" + String(h.end_date)) : "", h.title || "", h.category || "festival", h.description || "", new Date()]
+    : [holId, h.title || "", "'" + String(h.date || ""), h.end_date ? ("'" + String(h.end_date)) : "", h.category || "festival", h.description || "", new Date()];
   if (rowIndex > 0) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
   else sheet.appendRow(rowData);
   return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "Holiday saved!" })).setMimeType(ContentService.MimeType.JSON);
@@ -714,6 +739,20 @@ function handleDeleteRowById(ss, sheetName, id) {
           </select>
         </div>
       </div>
+
+      {/* Dashboard Sync Status Banner */}
+      {syncStatus && (
+        <div
+          className={`p-3.5 rounded-2xl border text-xs font-bold flex items-center gap-2.5 animate-fadeIn ${
+            syncStatus.includes('⚠️')
+              ? 'bg-amber-50 border-amber-300 text-amber-900'
+              : 'bg-emerald-50 border-emerald-300 text-emerald-800'
+          }`}
+        >
+          <i className={`fa-solid ${syncStatus.includes('⚠️') ? 'fa-triangle-exclamation text-amber-600' : 'fa-circle-check text-emerald-600'}`}></i>
+          <span>{syncStatus}</span>
+        </div>
+      )}
 
       {/* 3. TAB CONTENT */}
       {/* ========================================================================= */}
@@ -1273,6 +1312,56 @@ function handleDeleteRowById(ss, sheetName, id) {
             <p className="text-xs text-slate-600 mt-1">
               इस सिस्टम का डेटा आपकी गूगल स्प्रेडशीट में पूरी तरह स्वचालित रूप से सुरक्षित होता है।
             </p>
+          </div>
+
+          {/* 1-Click Complete Merged Code.gs Card */}
+          <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 border-2 border-emerald-300 rounded-2xl p-5 space-y-3 shadow-xs">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <span className="inline-block px-2.5 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-black uppercase tracking-wider mb-1.5">
+                  ✅ 100% तैयार पूरा कोड (All Functions Safe)
+                </span>
+                <h4 className="text-base font-black text-emerald-950">
+                  आपका पूरा एडिटेड Code.gs (2,496 लाइनें — बिना किसी पुराने फंक्शन को छेड़े)
+                </h4>
+                <p className="text-xs text-emerald-900 mt-0.5">
+                  इसे कॉपी करके Apps Script के <strong>Code.gs</strong> में पूरा बदल दें (<code>Ctrl+A</code> → <code>Ctrl+V</code> → <code>Ctrl+S</code>) और फिर <strong>Deploy → Manage deployments → Edit → New version → Deploy</strong> करें।
+                </p>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap shrink-0">
+                <button
+                  type="button"
+                  disabled={fullCodeLoading}
+                  onClick={async () => {
+                    setFullCodeLoading(true);
+                    try {
+                      const res = await fetch('/EVS_Complete_Code.gs.txt');
+                      const txt = await res.text();
+                      await navigator.clipboard.writeText(txt);
+                      setCopiedFullCode(true);
+                      setTimeout(() => setCopiedFullCode(false), 4000);
+                    } catch {
+                      setSyncStatus('⚠️ कृपया "फाइल डाउनलोड करें" बटन से Code.gs फाइल डाउनलोड करें।');
+                      setTimeout(() => setSyncStatus(null), 5000);
+                    } finally {
+                      setFullCodeLoading(false);
+                    }
+                  }}
+                  className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-md transition-all cursor-pointer flex items-center gap-2 disabled:opacity-60"
+                >
+                  <i className={`fa-solid ${copiedFullCode ? 'fa-check' : fullCodeLoading ? 'fa-spinner fa-spin' : 'fa-copy'}`}></i>
+                  <span>{copiedFullCode ? '✅ पूरा Code.gs कॉपी हो गया!' : 'पूरा Code.gs कॉपी करें'}</span>
+                </button>
+                <a
+                  href="/EVS_Complete_Code.gs.txt"
+                  download="EVS_Code_gs.txt"
+                  className="px-4 py-2.5 bg-white hover:bg-slate-50 text-emerald-900 border border-emerald-300 rounded-xl text-xs font-bold shadow-xs transition-all flex items-center gap-2"
+                >
+                  <i className="fa-solid fa-download"></i>
+                  <span>फाइल डाउनलोड करें</span>
+                </a>
+              </div>
+            </div>
           </div>
 
           {/* Schema Information Table */}

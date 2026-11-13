@@ -127,13 +127,19 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
     setHolidays(updated);
 
     try {
-      await fetch('/api/school-holidays', {
+      const res = await fetch('/api/school-holidays', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newHoliday),
       });
-      setHolidaySyncMsg('✅ अवकाश सफलतापूर्वक कैलेंडर व Google Sheet में सुरक्षित!');
-      setTimeout(() => setHolidaySyncMsg(null), 3500);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.sheetSynced === false) {
+        setHolidaySyncMsg(`⚠️ कैलेंडर में जुड़ा, लेकिन Google Sheet में नहीं गया (${data?.sheetError || 'Code.gs doPost में saveSchoolHoliday जोड़ें'})`);
+        setTimeout(() => setHolidaySyncMsg(null), 8000);
+      } else {
+        setHolidaySyncMsg('✅ अवकाश सफलतापूर्वक कैलेंडर व Google Sheet में सुरक्षित!');
+        setTimeout(() => setHolidaySyncMsg(null), 3500);
+      }
     } catch {}
 
     setHolidayTitle('');
@@ -147,9 +153,15 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
     const filtered = holidays.filter((h) => h.id !== id);
     setHolidays(filtered);
     try {
-      await fetch(`/api/school-holidays/${id}`, { method: 'DELETE' });
-      setHolidaySyncMsg('अवकाश हटा दिया गया');
-      setTimeout(() => setHolidaySyncMsg(null), 3000);
+      const res = await fetch(`/api/school-holidays/${id}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (data?.sheetSynced === false) {
+        setHolidaySyncMsg(`⚠️ कैलेंडर से हटा, पर Google Sheet से नहीं: ${data.sheetError || 'Code.gs अपडेट करें'}`);
+        setTimeout(() => setHolidaySyncMsg(null), 7000);
+      } else {
+        setHolidaySyncMsg('अवकाश हटा दिया गया');
+        setTimeout(() => setHolidaySyncMsg(null), 3000);
+      }
     } catch {}
   };
 

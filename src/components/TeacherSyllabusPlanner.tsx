@@ -249,13 +249,19 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
     const changedItem = updated.find((t) => t.id === topicId);
     if (changedItem) {
       try {
-        await fetch('/api/syllabus-tracker', {
+        const res = await fetch('/api/syllabus-tracker', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(changedItem),
         });
-        setSyncStatus(`स्थिति अपडेट: ${nextStatus === 'Completed' ? '✅ पूर्ण' : nextStatus === 'In_Progress' ? '🔄 प्रगति पर' : '⏳ लंबित'}`);
-        setTimeout(() => setSyncStatus(null), 3000);
+        const data = await res.json().catch(() => ({}));
+        if (data?.sheetSynced === false) {
+          setSyncStatus(`⚠️ स्थिति ऐप में बदली, पर Google Sheet में नहीं: ${data.sheetError || 'Code.gs doPost अपडेट करें'}`);
+          setTimeout(() => setSyncStatus(null), 7000);
+        } else {
+          setSyncStatus(`स्थिति अपडेट: ${nextStatus === 'Completed' ? '✅ पूर्ण' : nextStatus === 'In_Progress' ? '🔄 प्रगति पर' : '⏳ लंबित'}`);
+          setTimeout(() => setSyncStatus(null), 3000);
+        }
       } catch (e) {
         console.warn('Sync error:', e);
       }
@@ -304,14 +310,23 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
     if (onSyllabusUpdated) onSyllabusUpdated(updatedList);
 
     try {
-      await fetch('/api/syllabus-tracker', {
+      const res = await fetch('/api/syllabus-tracker', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newRecord),
       });
-      setSyncStatus('✅ साप्ताहिक पाठ्यक्रम लक्ष्य Google Sheet "Syllabus_Tracker" में सुरक्षित!');
-      setTimeout(() => setSyncStatus(null), 4000);
-    } catch {}
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.sheetSynced === false) {
+        setSyncStatus(`⚠️ लक्ष्य ऐप में जुड़ा, लेकिन Google Sheet में नहीं गया (${data?.sheetError || 'Code.gs doPost में saveSyllabusTopic जोड़ें'})`);
+        setTimeout(() => setSyncStatus(null), 8000);
+      } else {
+        setSyncStatus('✅ साप्ताहिक पाठ्यक्रम लक्ष्य Google Sheet "Syllabus_Tracker" में सुरक्षित!');
+        setTimeout(() => setSyncStatus(null), 4000);
+      }
+    } catch {
+      setSyncStatus('⚠️ नेटवर्क त्रुटि: केवल स्थानीय रूप से सुरक्षित');
+      setTimeout(() => setSyncStatus(null), 5000);
+    }
 
     // Reset Form
     setFormChapter('');
@@ -330,7 +345,12 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
     if (onSyllabusUpdated) onSyllabusUpdated(filtered);
 
     try {
-      await fetch(`/api/syllabus-tracker/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/syllabus-tracker/${id}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (data?.sheetSynced === false) {
+        setSyncStatus(`⚠️ लक्ष्य ऐप से हटा, पर Google Sheet से नहीं: ${data.sheetError || 'Code.gs अपडेट करें'}`);
+        setTimeout(() => setSyncStatus(null), 7000);
+      }
     } catch {}
   };
 
@@ -435,8 +455,14 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
 
       {/* Sync Status Banner */}
       {syncStatus && (
-        <div className="p-3 bg-emerald-50 border border-emerald-300 text-emerald-800 rounded-xl text-xs font-bold flex items-center gap-2 animate-fadeIn">
-          <i className="fa-solid fa-circle-check text-emerald-600"></i>
+        <div
+          className={`p-3 rounded-xl text-xs font-bold flex items-center gap-2 animate-fadeIn border ${
+            syncStatus.includes('⚠️')
+              ? 'bg-amber-50 border-amber-300 text-amber-900'
+              : 'bg-emerald-50 border-emerald-300 text-emerald-800'
+          }`}
+        >
+          <i className={`fa-solid ${syncStatus.includes('⚠️') ? 'fa-triangle-exclamation text-amber-600' : 'fa-circle-check text-emerald-600'}`}></i>
           <span>{syncStatus}</span>
         </div>
       )}

@@ -1,0 +1,2440 @@
+// ============================================================
+// E.V.S. PUBLIC SCHOOL - GOOGLE APPS SCRIPT (Code.gs)
+// Handles: Students, Homework, Fees, Behavior, & Bus Tracking
+// Spreadsheet ID: 1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU
+// ============================================================
+
+var SPREADSHEET_ID = "1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU";
+
+function getSpreadsheet() {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (ss) return ss;
+  } catch(e) {}
+  try {
+    return SpreadsheetApp.openById(SPREADSHEET_ID);
+  } catch(e) {}
+  return null;
+}
+
+/**
+ * 0. AUTO-INITIALIZE ON SPREADSHEET OPEN
+ * Triggered automatically every time any user opens the Google Sheet in browser.
+ * Adds custom automation menu & creates missing tabs (Fee_Master, School_Notices, etc.)
+ */
+function onOpen(e) {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.createMenu("🏫 EVS स्कूल ऑटोमेशन")
+      .addItem("⚡ सभी आवश्यक टैब स्वतः बनाएं (Auto-Create All Tabs)", "setupAllRequiredSheets")
+      .addItem("📋 फीस मास्टर टैब बनाएं (Create Fee_Master)", "menuCreateFeeMaster")
+      .addItem("📢 स्कूल नोटिस टैब बनाएं (Create School_Notices)", "menuCreateNotices")
+      .addSeparator()
+      .addItem("🔄 1 तारीख ऑटो-बिलिंग ट्रिगर इंस्टॉल करें (Install Trigger)", "setupMonthlyTrigger")
+      .addItem("⏮️ पिछले महीनों का बकाया बैकफिल करें (Backfill Past Dues)", "generatePastDues")
+      .addItem("📅 इस माह का मासिक शुल्क सृजित करें (Generate Dues)", "generateMonthlyDues")
+      .addToUi();
+  } catch(uiErr) {}
+
+  // Automatically check and create Fee_Master and School_Notices tabs on opening the sheet
+  try {
+    setupAllRequiredSheetsSilently();
+  } catch(silentErr) {}
+}
+
+function menuCreateFeeMaster() {
+  var ss = getSpreadsheet();
+  handleGetFeeMaster(ss);
+  try {
+    SpreadsheetApp.getUi().alert("✅ 'Fee_Master' टैब Google Sheet में सफलतापूर्वक बन गया है!");
+  } catch(e) {}
+}
+
+function menuCreateNotices() {
+  var ss = getSpreadsheet();
+  handleGetNotices(ss);
+  try {
+    SpreadsheetApp.getUi().alert("✅ 'School_Notices' टैब Google Sheet में सफलतापूर्वक बन गया है!");
+  } catch(e) {}
+}
+
+function setupAllRequiredSheetsSilently() {
+  var ss = getSpreadsheet();
+  if (!ss) return;
+  var feeSheet = ss.getSheetByName("Fee_Master") || ss.getSheetByName("FeeMaster") || ss.getSheetByName("Fee Master");
+  if (!feeSheet) handleGetFeeMaster(ss);
+  var notSheet = ss.getSheetByName("School_Notices") || ss.getSheetByName("Notices") || ss.getSheetByName("Notice");
+  if (!notSheet) handleGetNotices(ss);
+  var busSheet = ss.getSheetByName("Bus_Tracking");
+  if (!busSheet) {
+    busSheet = ss.insertSheet("Bus_Tracking");
+    busSheet.appendRow(["Bus_ID", "Driver_Name", "Current_Location", "Last_Updated"]);
+    busSheet.appendRow(["ecad7ddc", "Amjad", "30.056038, 77.419096", Utilities.formatDate(new Date(), "Asia/Kolkata", "dd/MM/yyyy HH:mm:ss")]);
+  }
+}
+/**
+ * EVS Public School - Teacher Performance Tracker
+ * Google Apps Script Handler
+ */
+function saveTeacherPerformanceRecord(data) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName("Teacher_Performance");
+  
+  // यदि शीट नहीं बनी है तो स्वतः बना दें
+  if (!sheet) {
+    sheet = ss.insertSheet("Teacher_Performance");
+    sheet.appendRow([
+      "ID", "Teacher_ID", "Teacher_Name", "Assigned_Class", "Subject",
+      "Month", "Academic_Year", "Syllabus_Progress_Score", "Student_Test_Score",
+      "Attendance_Log_Score", "Homework_Check_Score", "Punctuality_Discipline_Score",
+      "Monthly_Total_Score", "Grade", "Rank", "Evaluation_Date",
+      "Evaluated_By", "Remarks", "Timestamp"
+    ]);
+    sheet.getRange(1, 1, 1, 19).setFontWeight("bold").setBackground("#0c2340").setFontColor("#fbbf24");
+  }
+  
+  var id = data.id || ("TP_" + (data.month || "2026") + "_" + (data.teacher_id || "T"));
+  var teacherId = data.teacher_id || "";
+  var teacherName = data.teacher_name || "";
+  var assignedClass = data.assigned_class || "";
+  var subject = data.subject || "";
+  var month = data.month || "";
+  var academicYear = data.academic_year || "2026-2027";
+  
+  var syllabus = Number(data.syllabus_progress_score) || 0;
+  var test = Number(data.student_test_score) || 0;
+  var attendance = Number(data.attendance_log_score) || 0;
+  var homework = Number(data.homework_check_score) || 0;
+  var punctuality = Number(data.punctuality_discipline_score) || 0;
+  
+  var total = Math.round((syllabus + test + attendance + homework + punctuality) * 10) / 10;
+  
+  var grade = "D";
+  if (total >= 90) grade = "A+";
+  else if (total >= 80) grade = "A";
+  else if (total >= 70) grade = "B";
+  else if (total >= 60) grade = "C";
+  
+  var evalDate = data.evaluation_date || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd");
+  var evaluatedBy = data.evaluated_by || "Manager / Principal";
+  var remarks = data.remarks || "";
+  var timestamp = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  
+  // पुरानी एंट्री अपडेट करें या नई रो जोड़ें
+  var dataRows = sheet.getDataRange().getValues();
+  var foundRowIndex = -1;
+  for (var i = 1; i < dataRows.length; i++) {
+    if (dataRows[i][0] == id || (dataRows[i][1] == teacherId && dataRows[i][5] == month)) {
+      foundRowIndex = i + 1;
+      break;
+    }
+  }
+  
+  var rowValues = [
+    id, teacherId, teacherName, assignedClass, subject,
+    month, academicYear, syllabus, test,
+    attendance, homework, punctuality,
+    total, grade, data.rank || "", evalDate,
+    evaluatedBy, remarks, timestamp
+  ];
+  
+  if (foundRowIndex > 0) {
+    sheet.getRange(foundRowIndex, 1, 1, 19).setValues([rowValues]);
+  } else {
+    sheet.appendRow(rowValues);
+  }
+  
+  return { success: true, message: "Teacher Performance Saved!", total: total, grade: grade };
+}
+/**
+ * Syllabus Tracker Handler for Google Sheets
+ */
+function saveSyllabusTopicRecord(data) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName("Syllabus_Tracker");
+  
+  if (!sheet) {
+    sheet = ss.insertSheet("Syllabus_Tracker");
+    sheet.appendRow([
+      "ID", "Teacher_ID", "Teacher_Name", "Class", "Subject",
+      "Month", "Week_Number", "Week_Label", "Chapter_Title",
+      "Topic_Description", "Planned_Date", "Target_Completion_Date",
+      "Completed_Date", "Status", "Timestamp"
+    ]);
+    sheet.getRange(1, 1, 1, 15).setFontWeight("bold").setBackground("#0c2340").setFontColor("#fbbf24");
+  }
+  
+  var id = data.id || ("SYL_" + new Date().getTime());
+  var teacherId = data.teacher_id || "";
+  var teacherName = data.teacher_name || "";
+  var className = data.class_name || "";
+  var subject = data.subject || "";
+  var month = data.month || "";
+  var weekNumber = Number(data.week_number) || 1;
+  var weekLabel = data.week_label || ("सप्ताह " + weekNumber);
+  var chapter = data.chapter_title || "";
+  var topic = data.topic_description || "";
+  var plannedDate = data.planned_date || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd");
+  var targetDate = data.target_completion_date || "";
+  var completedDate = data.completed_date || "";
+  var status = data.status || "Pending";
+  var timestamp = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  
+  var rows = sheet.getDataRange().getValues();
+  var foundRow = -1;
+  for (var i = 1; i < rows.length; i++) {
+    if (rows[i][0] == id) {
+      foundRow = i + 1;
+      break;
+    }
+  }
+  
+  var rowData = [
+    id, teacherId, teacherName, className, subject,
+    month, weekNumber, weekLabel, chapter,
+    topic, plannedDate, targetDate,
+    completedDate, status, timestamp
+  ];
+  
+  if (foundRow > 0) {
+    sheet.getRange(foundRow, 1, 1, 15).setValues([rowData]);
+  } else {
+    sheet.appendRow(rowData);
+  }
+  
+  return { success: true, message: "Syllabus Topic Saved Successfully!" };
+}
+
+function saveSchoolHolidayRecord(sheetApp, holiday) {
+  var ss = sheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName("School_Holidays");
+  if (!sheet) {
+    sheet = ss.insertSheet("School_Holidays");
+    sheet.appendRow(["ID", "Date", "End_Date", "Title", "Category", "Description", "Created_At"]);
+  }
+  
+  // डुप्लीकेट चेक
+  var data = sheet.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(holiday.id) || String(data[i][1]) === String(holiday.date)) {
+      sheet.getRange(i + 1, 1, 1, 7).setValues([[
+        holiday.id, holiday.date, holiday.end_date || "", holiday.title, holiday.category || "festival", holiday.description || "", new Date().toISOString()
+      ]]);
+      return { success: true, updated: true };
+    }
+  }
+  
+  sheet.appendRow([
+    holiday.id, holiday.date, holiday.end_date || "", holiday.title, holiday.category || "festival", holiday.description || "", new Date().toISOString()
+  ]);
+  return { success: true, created: true };
+}
+
+/**
+ * Standalone runner: Run directly from Apps Script editor by selecting "setupAllRequiredSheets" and clicking Run!
+ */
+function setupAllRequiredSheets() {
+  var ss = getSpreadsheet();
+  if (!ss) {
+    return { status: "error", message: "Spreadsheet access failed. Check sheet permissions." };
+  }
+
+  var created = [];
+
+  // 1. Fee_Master
+  var feeMasterSheet = ss.getSheetByName("Fee_Master") || ss.getSheetByName("FeeMaster") || ss.getSheetByName("Fee Master");
+  if (!feeMasterSheet) {
+    handleGetFeeMaster(ss);
+    created.push("Fee_Master");
+  }
+
+  // 2. School_Notices
+  var noticesSheet = ss.getSheetByName("School_Notices") || ss.getSheetByName("Notices") || ss.getSheetByName("Notice");
+  if (!noticesSheet) {
+    handleGetNotices(ss);
+    created.push("School_Notices");
+  }
+
+  // 3. Bus_Tracking
+  var busSheet = ss.getSheetByName("Bus_Tracking");
+  if (!busSheet) {
+    busSheet = ss.insertSheet("Bus_Tracking");
+    busSheet.appendRow(["Bus_ID", "Driver_Name", "Current_Location", "Last_Updated"]);
+    busSheet.appendRow(["ecad7ddc", "Amjad", "30.056038, 77.419096", Utilities.formatDate(new Date(), "Asia/Kolkata", "dd/MM/yyyy HH:mm:ss")]);
+    created.push("Bus_Tracking");
+  }
+
+  // 4. Students
+  var studentsSheet = ss.getSheetByName("Students");
+  if (!studentsSheet) {
+    studentsSheet = ss.insertSheet("Students");
+    studentsSheet.appendRow([
+      "Student_ID", "Student_Name", "Father_Name", "Mother_Name", "Mobile_Number", "Parent_Mobile",
+      "Class", "Section", "Roll_Number", "Date_Of_Birth", "Address", "Transport_Required",
+      "Bus_Stop", "Route", "Fee_Category", "Monthly_Fee", "Admission_Date", "Session_Start_Month", "Status"
+    ]);
+    created.push("Students");
+  }
+
+  // 5. Fees
+  var feesSheet = ss.getSheetByName("Fees") || ss.getSheetByName("Fee_Collection");
+  if (!feesSheet) {
+    feesSheet = ss.insertSheet("Fees");
+    feesSheet.appendRow([
+      "Receipt_No", "Date", "Student_ID", "Student_Name", "Class", "Month",
+      "Total_Amount", "Amount_Paid", "Balance_Amount", "Payment_Mode", "Collected_By", "Remarks"
+    ]);
+    created.push("Fees");
+  }
+
+  // 6. Homework
+  var hwSheet = ss.getSheetByName("Homework");
+  if (!hwSheet) {
+    hwSheet = ss.insertSheet("Homework");
+    hwSheet.appendRow(["Date", "Class", "Subject", "Title", "Description", "Assigned_By", "Status"]);
+    created.push("Homework");
+  }
+
+  // 7. Behavior
+  var behSheet = ss.getSheetByName("Behavior") || ss.getSheetByName("Attendance");
+  if (!behSheet) {
+    behSheet = ss.insertSheet("Behavior");
+    behSheet.appendRow(["Date", "Student_ID", "Student_Name", "Class", "Roll_Number", "Is_Present", "Remark", "Teacher_Name"]);
+    created.push("Behavior");
+  }
+
+  var msg = created.length > 0
+    ? "✅ सफलतापूर्वक " + created.length + " नए टैब बनाए गए: " + created.join(", ")
+    : "✅ सभी आवश्यक टैब (Fee_Master, School_Notices, Students आदि) पहले से मौजूद हैं!";
+
+  try {
+    SpreadsheetApp.getUi().alert("🏫 EVS स्कूल ऑटोमेशन", msg, SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch(e) {}
+
+  return {
+    status: "success",
+    message: msg,
+    created: created,
+    totalRequiredChecked: 7
+  };
+}
+
+function doGet(e) {
+  var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : "";
+  var ss = getSpreadsheet();
+  
+  if (!ss) {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "error",
+      message: "Spreadsheet access failed. Check sheet permissions."
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  // 1. GET STUDENTS
+  if (action === "getStudents") {
+    var sheet = ss.getSheetByName("Students");
+    var data = sheet ? sheet.getDataRange().getValues() : [];
+    return ContentService.createTextOutput(JSON.stringify(data))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  
+  // 2. GET HOMEWORK
+  if (action === "getHomework") {
+    var sheet = ss.getSheetByName("Homework");
+    var data = sheet ? sheet.getDataRange().getValues() : [];
+    return ContentService.createTextOutput(JSON.stringify(data))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  
+  // 3. GET BUS TRACKING
+  if (action === "getBusTracking" || action === "getBus") {
+    var sheet = ss.getSheetByName("Bus_Tracking");
+    if (!sheet) {
+      sheet = ss.insertSheet("Bus_Tracking");
+      sheet.appendRow(["Bus_ID", "Driver_Name", "Current_Location", "Last_Updated"]);
+      sheet.appendRow(["ecad7ddc", "Amjad", "30.056038, 77.419096", Utilities.formatDate(new Date(), "Asia/Kolkata", "dd/MM/yyyy HH:mm:ss")]);
+    }
+    var data = sheet.getDataRange().getValues();
+    return ContentService.createTextOutput(JSON.stringify(data))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  // 4. TEST / PING ENDPOINT
+  if (action === "ping" || action === "test") {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      message: "EVS School Apps Script Web App is Online & Active!"
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  // 5. UPDATE BUS TRACKING VIA GET (FALLBACK)
+  if (action === "updateBusTracking" || action === "updateLocation") {
+    return handleUpdateBusTracking(ss, e.parameter || {});
+  }
+
+  // 6. AUTOMATIC MONTHLY FEE GENERATION VIA GET
+  if (action === "generateMonthlyDues" || action === "autoBill") {
+    var genResult = generateMonthlyDues();
+    return ContentService.createTextOutput(JSON.stringify(genResult))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  // 6B. PAST MONTHS DUES BACKFILL VIA GET
+  if (action === "generatePastDues" || action === "backfillDues") {
+    var pastResult = generatePastDues();
+    return ContentService.createTextOutput(JSON.stringify(pastResult))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  // 7. GET FEE MASTER (Option B: Auto-Creates Fee_Master sheet if not present)
+  if (action === "getFeeMaster") {
+    return handleGetFeeMaster(ss);
+  }
+
+  //for route map
+  if (action === 'getRouteStops') {
+  return handleGetRouteStops(e);
+ }
+  if (action === "saveRouteStops" || action === "addRouteStop" || action === "deleteRouteStop") {
+  return handleSaveRouteStops(e);
+}
+
+  // 8. GET NOTICES (Option B: Auto-Creates School_Notices sheet if not present)
+  if (action === "getNotices") {
+    return handleGetNotices(ss);
+  }
+
+  // 9. SETUP ALL REQUIRED SHEETS / AUTO-CREATE TABS
+  if (action === "setupAllSheets" || action === "setupDatabase" || action === "createAllSheets" || action === "initTabs") {
+    var setupRes = setupAllRequiredSheets();
+    return ContentService.createTextOutput(JSON.stringify(setupRes))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  if (action === "getTeacherPerformance") return handleGetTeacherPerformance(ss);
+  if (action === "getSyllabusTracker") return handleGetSyllabusTracker(ss);
+  if (action === "getSchoolHolidays") return handleGetSchoolHolidays(ss);
+  if (action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSyllabusTopic" || action === "deleteSchoolHoliday") {
+    return doPost(e);
+  }
+  if (action === "saveTeacherPerformance") return handleSaveTeacherPerformance(ss, data);
+  if (action === "saveSyllabusTopic") return handleSaveSyllabusTopic(ss, data);
+  if (action === "deleteSyllabusTopic") return handleDeleteRowById(ss, "Syllabus_Tracker", data.id);
+  if (action === "saveSchoolHoliday") return handleSaveSchoolHoliday(ss, data);
+  if (action === "deleteSchoolHoliday") return handleDeleteRowById(ss, "School_Holidays", data.id);
+
+  // 10. GET FALLBACK: Delegate write actions when called via GET query parameters
+  if (action === "saveFeeMaster" || action === "addHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass") {
+    return doPost(e);
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "error",
+    message: "Invalid Action: " + action
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function doPost(e) {
+  try {
+    var data = {};
+    if (e && e.postData && e.postData.contents) {
+      try {
+        data = JSON.parse(e.postData.contents);
+      } catch (parseErr) {
+        data = e.parameter || {};
+      }
+    } else if (e && e.parameter) {
+      data = e.parameter;
+    }
+
+    var action = data.action || (e && e.parameter && e.parameter.action) || "";
+    var ss = getSpreadsheet();
+
+    if (!ss) {
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "error",
+        message: "Spreadsheet access failed. Check sheet permissions."
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 1. ADD / UPDATE HOMEWORK (Deduplicated)
+    if (action === "addHomework") {
+      var sheet = ss.getSheetByName("Homework");
+      if (!sheet) sheet = ss.insertSheet("Homework");
+      if (sheet.getLastRow() === 0) {
+        sheet.appendRow(["Homework_ID", "Date", "Class", "Subject", "Homework_Detail", "Target_Type", "", "", "", "", "Teacher"]);
+      }
+      var hwId = String(data.homework_id || data.id || "HW-" + Date.now()).trim();
+      var hwDate = String(data.date || new Date().toISOString().split("T")[0]).trim();
+      var hwClass = String(data.class_name || data.class || "").trim();
+      var hwSubj = String(data.subject || "").trim();
+      var hwDetail = String(data.detail || data.Homework_Detail || "").trim();
+      var hwTeacher = String(data.teacher || "Faculty").trim();
+
+      var rows = sheet.getDataRange().getValues();
+      var foundRow = -1;
+      for (var r = 1; r < rows.length; r++) {
+        var rId = String(rows[r][0] || "").trim();
+        var rDate = String(rows[r][1] || "").trim();
+        var rClass = String(rows[r][2] || "").trim();
+        var rSubj = String(rows[r][3] || "").trim();
+        // Check ID match or (Date + Class + Subject) match
+        if ((hwId && rId.toLowerCase() === hwId.toLowerCase()) ||
+            (hwDate && rDate === hwDate && hwClass && rClass.toLowerCase() === hwClass.toLowerCase() && hwSubj && rSubj.toLowerCase() === hwSubj.toLowerCase())) {
+          foundRow = r + 1;
+          break;
+        }
+      }
+
+      if (foundRow > 0) {
+        sheet.getRange(foundRow, 1, 1, 11).setValues([[
+          hwId || rows[foundRow - 1][0],
+          hwDate,
+          hwClass,
+          hwSubj,
+          hwDetail,
+          "Whole Class",
+          "", "", "", "",
+          hwTeacher
+        ]]);
+      } else {
+        sheet.appendRow([
+          hwId,
+          hwDate,
+          hwClass,
+          hwSubj,
+          hwDetail,
+          "Whole Class",
+          "", "", "", "",
+          hwTeacher
+        ]);
+      }
+
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        message: "Homework Saved and Deduplicated Successfully!"
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 2. UPDATE BUS TRACKING (BUS LIVE LOCATION)
+    if (action === "updateBusTracking" || action === "updateLocation") {
+      return handleUpdateBusTracking(ss, data);
+    }
+    // 2. UPDATE route stop (BUS LIVE LOCATION)
+    if (action === 'saveRouteStops') {
+  return handleSaveRouteStops(postData);
+ }
+
+    // 3. ADD FEE RECORD (Supports Discount, Net Payable & Multi-Month Allocation)
+    if (action === "addFee") {
+      var sheet = ss.getSheetByName("Fee_Collection");
+      if (!sheet) {
+        sheet = ss.insertSheet("Fee_Collection");
+        sheet.appendRow([
+          "Receipt_Number", "Student_ID", "Date", "Fee_Type", "Month",
+          "Total_Amount", "Discount_Amount", "Net_Payable", "Amount_Paid",
+          "Balance_Amount", "Payment_Mode", "Received_By", "Allocations_Summary"
+        ]);
+      }
+      sheet.appendRow([
+        data.receipt_no || "REC-" + Date.now(),
+        data.student_id || "",
+        data.date || new Date().toISOString().split("T")[0],
+        data.fee_type || "Monthly",
+        data.month || "",
+        data.total_amount !== undefined ? Number(data.total_amount) : 0,
+        data.discount_amount !== undefined ? Number(data.discount_amount) : 0,
+        data.net_payable !== undefined ? Number(data.net_payable) : (Number(data.total_amount || 0) - Number(data.discount_amount || 0)),
+        data.amount_paid !== undefined ? Number(data.amount_paid) : 0,
+        data.balance_amount !== undefined ? Number(data.balance_amount) : 0,
+        data.payment_mode || "Cash",
+        data.received_by || "Manager",
+        data.allocations_summary || data.notes || ""
+      ]);
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        message: "Fee Record Saved Successfully!"
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 3B. EDIT FEE RECORD (Manager Edit)
+    if (action === "editFee") {
+      var sheet = ss.getSheetByName("Fee_Collection");
+      if (!sheet) {
+        return ContentService.createTextOutput(JSON.stringify({
+          status: "error",
+          message: "Fee_Collection sheet not found"
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
+      var targetReceipt = String(data.original_receipt_no || data.receipt_no || "").trim().toLowerCase();
+      var rows = sheet.getDataRange().getValues();
+      var foundRow = -1;
+      for (var r = 1; r < rows.length; r++) {
+        var rowRec = String(rows[r][0] || "").trim().toLowerCase();
+        if (rowRec === targetReceipt) {
+          foundRow = r + 1;
+          break;
+        }
+      }
+      if (foundRow !== -1) {
+        sheet.getRange(foundRow, 1, 1, 13).setValues([[
+          data.receipt_no || rows[foundRow - 1][0],
+          data.student_id || rows[foundRow - 1][1],
+          data.date || rows[foundRow - 1][2],
+          data.fee_type || rows[foundRow - 1][3],
+          data.month || rows[foundRow - 1][4],
+          data.total_amount !== undefined ? Number(data.total_amount) : rows[foundRow - 1][5],
+          data.discount_amount !== undefined ? Number(data.discount_amount) : 0,
+          data.net_payable !== undefined ? Number(data.net_payable) : (Number(data.total_amount || 0) - Number(data.discount_amount || 0)),
+          data.amount_paid !== undefined ? Number(data.amount_paid) : rows[foundRow - 1][8],
+          data.balance_amount !== undefined ? Number(data.balance_amount) : rows[foundRow - 1][9],
+          data.payment_mode || rows[foundRow - 1][10],
+          data.received_by || rows[foundRow - 1][11],
+          data.allocations_summary || data.notes || rows[foundRow - 1][12] || ""
+        ]]);
+        return ContentService.createTextOutput(JSON.stringify({
+          status: "success",
+          message: "Fee Record Updated in Sheet!"
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "not_found",
+        message: "Receipt #" + targetReceipt + " not found to edit"
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 3C. DELETE FEE RECORD (Manager Delete)
+    if (action === "deleteFee") {
+      var sheet = ss.getSheetByName("Fee_Collection");
+      if (!sheet) {
+        return ContentService.createTextOutput(JSON.stringify({
+          status: "error",
+          message: "Fee_Collection sheet not found"
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
+      var delReceipt = String(data.receipt_no || "").trim().toLowerCase();
+      var rows = sheet.getDataRange().getValues();
+      var deleted = false;
+      for (var r = rows.length - 1; r >= 1; r--) {
+        var rowRec = String(rows[r][0] || "").trim().toLowerCase();
+        if (rowRec === delReceipt) {
+          sheet.deleteRow(r + 1);
+          deleted = true;
+          break;
+        }
+      }
+      return ContentService.createTextOutput(JSON.stringify({
+        status: deleted ? "success" : "not_found",
+        message: deleted ? "Fee receipt deleted from sheet" : "Receipt not found in sheet"
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 3C. RUN PAST DUES BACKFILL (From student Session_Start_Month up to Current Month)
+    if (action === "generatePastDues" || action === "backfillDues") {
+      var backfillRes = generatePastDues();
+      return ContentService.createTextOutput(JSON.stringify(backfillRes))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 3D. RUN MONTHLY DUES TRIGGER (Manual trigger invoke)
+    if (action === "generateMonthlyDues" || action === "autoBill") {
+      var genRes = generateMonthlyDues();
+      return ContentService.createTextOutput(JSON.stringify(genRes))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 3E. SAVE FEE MASTER (Option B: Auto-Creates or Updates Fee_Master sheet)
+    if (action === "saveFeeMaster") {
+      return handleSaveFeeMaster(ss, data.configs || data);
+    }
+
+    // 3F. SYNC SCHOOL NOTICES (Option B: Auto-Creates or Updates School_Notices sheet)
+    if (action === "syncNotices" || action === "saveNotice") {
+      return handleSyncNotices(ss, data);
+    }
+
+    // 3G. SETUP ALL REQUIRED SHEETS / AUTO-CREATE TABS
+    if (action === "setupAllSheets" || action === "setupDatabase" || action === "createAllSheets" || action === "initTabs") {
+      var setupRes = setupAllRequiredSheets();
+      return ContentService.createTextOutput(JSON.stringify(setupRes))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 3H. ASSIGN TEACHER CLASS BY MANAGER
+    if (action === "assignTeacherClass" || action === "updateUserClass") {
+      var userSheet = ss.getSheetByName("Users");
+      if (userSheet) {
+        var uData = userSheet.getDataRange().getValues();
+        var targetUid = String(data.user_id || data.userId || data.username || "").trim().toLowerCase();
+        var newCls = String(data.assigned_class || data.class || data.Assigned_Class || "").trim();
+        for (var r = 1; r < uData.length; r++) {
+          var rowUid = String(uData[r][0] || "").trim().toLowerCase();
+          var rowUser = String(uData[r][2] || "").trim().toLowerCase();
+          var rowName = String(uData[r][4] || "").trim().toLowerCase();
+          if ((targetUid && (rowUid === targetUid || rowUser === targetUid)) || (targetUid && rowName === targetUid)) {
+            // Column 7 (G) is Assigned_Class
+            userSheet.getRange(r + 1, 7).setValue(newCls);
+            break;
+          }
+        }
+        return ContentService.createTextOutput(JSON.stringify({
+          status: "success",
+          message: "Teacher class updated in Users sheet successfully"
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
+    }
+
+    // 4. ADD / BATCH ADD BEHAVIOR & ATTENDANCE
+    if (action === "addBehavior" || action === "batchAddBehavior") {
+      var sheet = ss.getSheetByName("Student_Behavior");
+      if (!sheet) sheet = ss.insertSheet("Student_Behavior");
+      if (sheet.getLastRow() === 0) {
+        sheet.appendRow([
+          "Behavior_ID", "Student_ID", "Date", "Class",
+          "Is_Bathed", "Nails_Clean", "Uniform_clean",
+          "Good_Manners", "Discipline", "Is_Present", "Remark", "AI_Feedback"
+        ]);
+      }
+
+      var items = Array.isArray(data.records)
+        ? data.records
+        : Array.isArray(data.behavior)
+        ? data.behavior
+        : Array.isArray(data)
+        ? data
+        : [data];
+
+      var existingRows = sheet.getDataRange().getValues();
+      var keyMap = {};
+      for (var r = 1; r < existingRows.length; r++) {
+        var rowBId = String(existingRows[r][0] || "").trim().toLowerCase();
+        var rowSId = String(existingRows[r][1] || "").trim().toLowerCase();
+        var rowDate = String(existingRows[r][2] || "").trim();
+        if (rowBId) keyMap[rowBId] = r + 1;
+        if (rowSId && rowDate) keyMap[rowSId + "_" + rowDate] = r + 1;
+      }
+
+      for (var i = 0; i < items.length; i++) {
+        var it = items[i];
+        if (!it) continue;
+        var sId = String(it.student_id || it.Student_ID || "").trim();
+        if (!sId) continue;
+        var dt = String(it.date || it.Date || new Date().toISOString().split("T")[0]).trim();
+        var bId = String(it.behavior_id || it.Behavior_ID || ("BEH-" + sId + "-" + dt)).trim();
+        var cls = String(it.class || it.Class || "").trim();
+
+        var isPresStr = "Present";
+        if (it.is_present === false || String(it.is_present || "").toLowerCase() === "absent" || it.Is_Present === false) {
+          isPresStr = "Absent";
+        }
+
+        var isBathedStr = (it.is_bathed === false || String(it.is_bathed || "").toLowerCase() === "no") ? "No" : "Yes";
+        var nailsCleanStr = (it.nails_clean === false || String(it.nails_clean || "").toLowerCase() === "no") ? "No" : "Yes";
+        var uniformCleanStr = (it.uniform_clean === false || String(it.uniform_clean || "").toLowerCase() === "no") ? "No" : "Yes";
+        var disciplineStr = (it.discipline === false || String(it.discipline || "").toLowerCase() === "needs improvement") ? "Needs Improvement" : "Good";
+        var goodMannersStr = it.good_manners || it.Good_Manners || (isPresStr === "Absent" ? "लागू नहीं (अनुपस्थित)" : "उत्कृष्ट (Excellent)");
+        var remarkStr = String(it.remark || it.Remark || (isPresStr === "Absent" ? "आज छात्र विद्यालय में अनुपस्थित रहा।" : "कक्षा में उपस्थित, स्वच्छ व अनुशासित")).trim();
+        var feedbackStr = String(it.ai_feedback || it.AI_Feedback || "").trim();
+
+        var rowValues = [
+          bId, sId, dt, cls,
+          isBathedStr, nailsCleanStr, uniformCleanStr,
+          goodMannersStr, disciplineStr, isPresStr, remarkStr, feedbackStr
+        ];
+
+        var targetRow = keyMap[bId.toLowerCase()] || keyMap[sId.toLowerCase() + "_" + dt];
+        if (targetRow) {
+          sheet.getRange(targetRow, 1, 1, 12).setValues([rowValues]);
+        } else {
+          sheet.appendRow(rowValues);
+          keyMap[bId.toLowerCase()] = sheet.getLastRow();
+          keyMap[sId.toLowerCase() + "_" + dt] = sheet.getLastRow();
+        }
+      }
+
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        message: "Behavior & Attendance Records Saved Successfully in Google Sheet!"
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 5. UPDATE HOMEWORK TRACKER (In-place update & deduplicated)
+    if (action === "updateHomeworkTracker") {
+      var sheet = ss.getSheetByName("Homework_Tracker");
+      if (!sheet) sheet = ss.insertSheet("Homework_Tracker");
+      if (sheet.getLastRow() === 0) {
+        sheet.appendRow(["ID", "Date", "Class", "Student_ID", "Subject", "Last_homework_Status"]);
+      }
+
+      function cleanDateForCompare(dVal) {
+        if (!dVal) return "";
+        if (Object.prototype.toString.call(dVal) === '[object Date]') {
+          var y = dVal.getFullYear();
+          var m = ("0" + (dVal.getMonth() + 1)).slice(-2);
+          var d = ("0" + dVal.getDate()).slice(-2);
+          return y + "-" + m + "-" + d;
+        }
+        var s = String(dVal).trim();
+        var p = s.split(/[-/]/);
+        if (p.length === 3) {
+          if (p[2].length === 4) return p[2] + "-" + ("0" + p[1]).slice(-2) + "-" + ("0" + p[0]).slice(-2);
+          if (p[0].length === 4) return p[0] + "-" + ("0" + p[1]).slice(-2) + "-" + ("0" + p[2]).slice(-2);
+        }
+        return s;
+      }
+
+      var recId = String(data.record_id || data.id || "TRK-" + Date.now()).trim();
+      var sId = String(data.student_id || "").trim();
+      var curDate = String(data.date || new Date().toISOString().split("T")[0]).trim();
+      var compDate = cleanDateForCompare(curDate);
+      var curRawStatus = String(data.status || "Completed").trim();
+      var curStatus = /incom|pend|adhura|not/i.test(curRawStatus) ? "Incompleted" : "Completed";
+      var curClass = String(data.class || "").trim();
+      var curSubject = String(data.subject || "General").trim();
+
+      // Find all rows matching student and date to update the primary and delete duplicates
+      var rows = sheet.getDataRange().getValues();
+      var matchedRows = [];
+      for (var r = 1; r < rows.length; r++) {
+        var rowRecId = String(rows[r][0] || "").trim();
+        var rowDate = cleanDateForCompare(rows[r][1]);
+        var rowSId = String(rows[r][3] || "").trim();
+        if ((recId && rowRecId.toLowerCase() === recId.toLowerCase()) ||
+            (sId && rowSId.toLowerCase() === sId.toLowerCase() && (rowDate === compDate || !compDate))) {
+          matchedRows.push(r + 1);
+        }
+      }
+
+      if (matchedRows.length > 0) {
+        var primaryRow = matchedRows[0];
+        sheet.getRange(primaryRow, 6).setValue(curStatus);
+        if (curDate) sheet.getRange(primaryRow, 2).setValue(curDate);
+        if (curClass) sheet.getRange(primaryRow, 3).setValue(curClass);
+        if (curSubject) sheet.getRange(primaryRow, 5).setValue(curSubject);
+
+        // Delete any duplicate conflicting rows (from bottom to top) so only one row exists per student
+        for (var dIdx = matchedRows.length - 1; dIdx >= 1; dIdx--) {
+          sheet.deleteRow(matchedRows[dIdx]);
+        }
+      } else {
+        sheet.appendRow([recId, curDate, curClass, sId, curSubject, curStatus]);
+      }
+
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        message: "Homework Tracker Status Updated in Google Sheet (Deduplicated)!"
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 5B. BULK UPDATE HOMEWORK TRACKER
+    if (action === "bulkUpdateHomeworkTracker") {
+      var sheet = ss.getSheetByName("Homework_Tracker");
+      if (!sheet) sheet = ss.insertSheet("Homework_Tracker");
+      if (sheet.getLastRow() === 0) {
+        sheet.appendRow(["ID", "Date", "Class", "Student_ID", "Subject", "Last_homework_Status"]);
+      }
+
+      function cleanDateForCompare(dVal) {
+        if (!dVal) return "";
+        if (Object.prototype.toString.call(dVal) === '[object Date]') {
+          var y = dVal.getFullYear();
+          var m = ("0" + (dVal.getMonth() + 1)).slice(-2);
+          var d = ("0" + dVal.getDate()).slice(-2);
+          return y + "-" + m + "-" + d;
+        }
+        var s = String(dVal).trim();
+        var p = s.split(/[-/]/);
+        if (p.length === 3) {
+          if (p[2].length === 4) return p[2] + "-" + ("0" + p[1]).slice(-2) + "-" + ("0" + p[0]).slice(-2);
+          if (p[0].length === 4) return p[0] + "-" + ("0" + p[1]).slice(-2) + "-" + ("0" + p[2]).slice(-2);
+        }
+        return s;
+      }
+
+      var sIds = data.student_ids || [];
+      var curDate = String(data.date || new Date().toISOString().split("T")[0]).trim();
+      var compDate = cleanDateForCompare(curDate);
+      var curRawStatus = String(data.status || "Completed").trim();
+      var curStatus = /incom|pend|adhura|not/i.test(curRawStatus) ? "Incompleted" : "Completed";
+      var curClass = String(data.class || "").trim();
+      var curSubject = String(data.subject || "General").trim();
+
+      var rows = sheet.getDataRange().getValues();
+      var sIdMap = {};
+      for (var r = 1; r < rows.length; r++) {
+        var rowSId = String(rows[r][3] || "").trim().toLowerCase();
+        var rowDate = cleanDateForCompare(rows[r][1]);
+        if (rowDate === compDate || !compDate) {
+          if (!sIdMap[rowSId]) {
+            sIdMap[rowSId] = r + 1;
+          }
+        }
+      }
+
+      for (var i = 0; i < sIds.length; i++) {
+        var sid = String(sIds[i]).trim();
+        var lowerSid = sid.toLowerCase();
+        if (sIdMap[lowerSid]) {
+          sheet.getRange(sIdMap[lowerSid], 6).setValue(curStatus);
+          if (curClass) sheet.getRange(sIdMap[lowerSid], 3).setValue(curClass);
+          if (curSubject) sheet.getRange(sIdMap[lowerSid], 5).setValue(curSubject);
+        } else {
+          var recId = "TRK-" + sid + "-" + curDate;
+          sheet.appendRow([recId, curDate, curClass, sid, curSubject, curStatus]);
+          sIdMap[lowerSid] = sheet.getLastRow();
+        }
+      }
+
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        message: "Bulk Homework Tracker Status Updated in Google Sheet!"
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 6. ADD / UPDATE STUDENT (Students sheet with Session_Start_Month)
+    if (action === "addStudent") {
+      var sheet = ss.getSheetByName("Students");
+      if (!sheet) sheet = ss.insertSheet("Students");
+      var lastRow = sheet.getLastRow();
+      if (lastRow === 0) {
+        sheet.appendRow([
+          "Student_ID", "Admission_Number", "Roll_Number", "Student_Name", "Class",
+          "Father_Name", "Mother_Name", "Parent_Mobile", "Student_Photo", "Village/rRoute",
+          "Adhar_Card", "Adhar_Photo", "Balance_Amount", "Session_Start_Month", "QR code"
+        ]);
+        lastRow = 1;
+      }
+      
+      var lastCol = sheet.getLastColumn() || 15;
+      var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+
+      // Auto-add Session_Start_Month column header if not present in existing sheet
+      var hasStartMonthCol = false;
+      for (var hi = 0; hi < headers.length; hi++) {
+        var hStr = String(headers[hi] || "").trim().toLowerCase();
+        if (hStr.indexOf("start_month") !== -1 || hStr.indexOf("session_start") !== -1 || hStr.indexOf("start month") !== -1) {
+          hasStartMonthCol = true;
+          break;
+        }
+      }
+      if (!hasStartMonthCol) {
+        sheet.getRange(1, headers.length + 1).setValue("Session_Start_Month");
+        headers.push("Session_Start_Month");
+      }
+
+      var studentId = data.student_id || ("S-" + Date.now());
+      var qrFormula = '=IMAGE(CONCATENATE("https://api.qrserver.com/v1/create-qr-code/?data=", "' + studentId + '", "&size=250x250"))';
+      
+      var row = [];
+      for (var i = 0; i < headers.length; i++) {
+        var h = String(headers[i] || "").trim().toLowerCase();
+        if (h === "student_id" || h === "student id" || h === "id") {
+          row.push(studentId);
+        } else if (h === "admission_number" || h === "admission no" || h === "adm_no") {
+          row.push(data.admission_number || "");
+        } else if (h === "roll_number" || h === "roll no" || h === "roll") {
+          row.push(data.roll_number || "");
+        } else if (h === "student_name" || h === "name" || h === "student name") {
+          row.push(data.student_name || "");
+        } else if (h === "class") {
+          row.push(data.class || "");
+        } else if (h === "father_name" || h === "father name") {
+          row.push(data.father_name || "");
+        } else if (h === "mother_name" || h === "mother name") {
+          row.push(data.mother_name || "");
+        } else if (h === "parent_mobile" || h === "mobile" || h === "parent mobile" || h === "phone") {
+          row.push(data.parent_mobile || "");
+        } else if (h === "student_photo" || h === "photo") {
+          row.push(data.student_photo || "");
+        } else if (h.indexOf("village") !== -1 || h.indexOf("route") !== -1) {
+          row.push(data.village_route || data.village || "");
+        } else if (h.indexOf("balance") !== -1) {
+          row.push(data.balance_amount !== undefined ? Number(data.balance_amount) : 0);
+        } else if (h.indexOf("start_month") !== -1 || h.indexOf("session_start") !== -1 || h.indexOf("start month") !== -1 || h.indexOf("fee_start") !== -1) {
+          row.push(data.session_start_month || data.Session_Start_Month || "April");
+        } else if (h.indexOf("qr") !== -1) {
+          row.push(qrFormula);
+        } else {
+          row.push("");
+        }
+      }
+
+      // Check if studentId already exists to update row, or find target row
+      var targetRow = -1;
+      var currentLastRow = sheet.getLastRow();
+      if (currentLastRow > 1) {
+        var idValues = sheet.getRange(1, 1, currentLastRow, 1).getValues();
+        for (var r = 1; r < idValues.length; r++) {
+          var idVal = String(idValues[r][0] || "").trim().toLowerCase();
+          if (idVal && idVal === String(studentId).toLowerCase().trim()) {
+            targetRow = r + 1; // Update existing student row
+            break;
+          }
+        }
+      }
+      if (targetRow === -1 && currentLastRow > 1) {
+        var idValues = sheet.getRange(1, 1, currentLastRow, 1).getValues();
+        for (var r = 1; r < idValues.length; r++) {
+          var idVal = String(idValues[r][0] || "").trim();
+          if (!idVal) {
+            targetRow = r + 1;
+            break;
+          }
+        }
+      }
+      if (targetRow === -1) {
+        targetRow = currentLastRow === 0 ? 2 : currentLastRow + 1;
+      }
+
+      sheet.getRange(targetRow, 1, 1, row.length).setValues([row]);
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        message: "Student saved successfully to Students sheet!",
+        student_id: studentId,
+        row_number: targetRow
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 7. DELETE STUDENT
+    if (action === "deleteStudent") {
+      var sheet = ss.getSheetByName("Students");
+      if (!sheet) {
+        return ContentService.createTextOutput(JSON.stringify({
+          status: "error",
+          message: "Students sheet not found"
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
+      var studentId = String(data.student_id || data.studentId || "").trim();
+      var deleted = false;
+      var curRows = sheet.getLastRow();
+      if (studentId && curRows > 1) {
+        var idCol = sheet.getRange(1, 1, curRows, 1).getValues();
+        for (var i = curRows - 1; i >= 1; i--) {
+          if (String(idCol[i][0] || "").trim().toLowerCase() === studentId.toLowerCase()) {
+            sheet.deleteRow(i + 1);
+            deleted = true;
+          }
+        }
+      }
+      return ContentService.createTextOutput(JSON.stringify({
+        status: deleted ? "success" : "not_found",
+        message: deleted ? "Student deleted from sheet" : "Student not found in sheet",
+        student_id: studentId
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 8. RECORD / UPDATE STAFF ATTENDANCE (School QR Check-In & Check-Out)
+    if (action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "staffAttendance") {
+      return handleRecordStaffAttendance(ss, data);
+    }
+
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "error",
+      message: "Unknown action: " + action
+    })).setMimeType(ContentService.MimeType.JSON);
+
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "error",
+      message: err.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function handleUpdateBusTracking(ss, data) {
+  // If test ping, respond with success immediately
+  if (data.test_ping === true || data.test_ping === "true" || data.ping === true) {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      message: "Bus Tracking backend is online and ready to record locations!"
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  var sheet = ss.getSheetByName("Bus_Tracking");
+  if (!sheet) {
+    sheet = ss.insertSheet("Bus_Tracking");
+    sheet.appendRow(["Bus_ID", "Driver_Name", "Current_Location", "Last_Updated"]);
+  }
+
+  // Ensure header row exists
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(["Bus_ID", "Driver_Name", "Current_Location", "Last_Updated"]);
+  }
+
+  var busId = String(data.bus_id || data.busId || "ecad7ddc").trim();
+  var driverName = String(data.driver_name || data.driverName || "Amjad").trim();
+  var location = String(data.current_location || data.currentLocationStr || "").trim();
+  
+  // Current timestamp formatted in Indian Standard Time (IST)
+  var istTimestamp = Utilities.formatDate(new Date(), "Asia/Kolkata", "dd/MM/yyyy HH:mm:ss");
+
+  var rows = sheet.getDataRange().getValues();
+  var targetRow = -1;
+
+  for (var i = 1; i < rows.length; i++) {
+    var rowBus = String(rows[i][0] || "").trim();
+    var rowDriver = String(rows[i][1] || "").trim().toLowerCase();
+    if ((busId && rowBus.toLowerCase() === busId.toLowerCase()) ||
+        (driverName && rowDriver === driverName.toLowerCase())) {
+      targetRow = i + 1; // 1-based row index
+      break;
+    }
+  }
+
+  if (targetRow > 0) {
+    // Update existing row
+    if (location) sheet.getRange(targetRow, 3).setValue(location);
+    sheet.getRange(targetRow, 4).setValue(istTimestamp);
+    if (driverName) sheet.getRange(targetRow, 2).setValue(driverName);
+  } else {
+    // Append new bus row
+    sheet.appendRow([busId, driverName, location, istTimestamp]);
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Bus location updated in Bus_Tracking sheet successfully!",
+    bus_id: busId,
+    location: location,
+    updated_at: istTimestamp
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleRecordStaffAttendance(ss, data) {
+  var sheet = ss.getSheetByName("Staff_Attendance") || ss.getSheetByName("Staff_Attendance ") || ss.getSheetByName("Staff Attendance");
+  if (!sheet) {
+    sheet = ss.insertSheet("Staff_Attendance");
+  }
+
+  // Ensure header row exists
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow([
+      "ID", "Name", "User_ID", "Designation", "Date", "Check_In_Time", "Check_Out_Time",
+      "Status", "Late_Minutes", "Extra_Hours", "Method", "Location", "Remark", "Timestamp", "Check_Out_Timestamp"
+    ]);
+  }
+
+  var curDate = String(data.date || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd")).trim();
+  var userId = String(data.user_id || data.userId || "").trim().toLowerCase();
+  var userName = String(data.name || data.staff_name || "").trim().toLowerCase();
+  var isCheckOut = data.is_checkout === true || data.is_checkout === "true" || Boolean(data.check_out_time);
+  var istTimestamp = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+
+  var rows = sheet.getDataRange().getValues();
+  var foundRow = -1;
+
+  for (var r = 1; r < rows.length; r++) {
+    var rowDate = String(rows[r][4] || "");
+    if (rows[r][4] instanceof Date) {
+      rowDate = Utilities.formatDate(rows[r][4], "Asia/Kolkata", "yyyy-MM-dd");
+    } else {
+      rowDate = rowDate.trim().split("T")[0];
+    }
+    var rowUserId = String(rows[r][2] || "").trim().toLowerCase();
+    var rowName = String(rows[r][1] || "").trim().toLowerCase();
+
+    if (rowDate === curDate && ((userId && rowUserId === userId) || (userName && rowName === userName))) {
+      foundRow = r + 1;
+      break;
+    }
+  }
+
+  if (foundRow > 0) {
+    // Update existing row (e.g. Check-Out or update status/remark)
+    if (data.check_out_time || isCheckOut) {
+      sheet.getRange(foundRow, 7).setValue(data.check_out_time || Utilities.formatDate(new Date(), "Asia/Kolkata", "hh:mm a"));
+      sheet.getRange(foundRow, 15).setValue(istTimestamp);
+    }
+    if (data.status) sheet.getRange(foundRow, 8).setValue(data.status);
+    if (data.late_minutes !== undefined) sheet.getRange(foundRow, 9).setValue(Number(data.late_minutes));
+    if (data.extra_hours !== undefined) sheet.getRange(foundRow, 10).setValue(Number(data.extra_hours));
+    if (data.method) sheet.getRange(foundRow, 11).setValue(data.method);
+    if (data.location) sheet.getRange(foundRow, 12).setValue(data.location);
+    if (data.remark) sheet.getRange(foundRow, 13).setValue(data.remark);
+
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      message: "Staff attendance updated (Check-Out) in Google Sheet!",
+      row: foundRow,
+      action_type: "updated"
+    })).setMimeType(ContentService.MimeType.JSON);
+  } else {
+    // Append new attendance row
+    var recId = String(data.id || "STAFF-ATT-" + (userId || "STF") + "-" + curDate).trim();
+    var checkInTime = String(data.check_in_time || Utilities.formatDate(new Date(), "Asia/Kolkata", "hh:mm a")).trim();
+    var checkOutTime = data.check_out_time ? String(data.check_out_time).trim() : "";
+
+    sheet.appendRow([
+      recId,
+      data.name || "Staff Member",
+      data.user_id || "",
+      data.designation || "Teacher",
+      curDate,
+      checkInTime,
+      checkOutTime,
+      data.status || "Present",
+      data.late_minutes !== undefined ? Number(data.late_minutes) : 0,
+      data.extra_hours !== undefined ? Number(data.extra_hours) : 0,
+      data.method || "School QR Scan",
+      data.location || "School Campus Gate",
+      data.remark || "समय पर उपस्थित",
+      istTimestamp,
+      checkOutTime ? istTimestamp : ""
+    ]);
+
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      message: "Staff attendance recorded (Check-In) in Google Sheet!",
+      row: sheet.getLastRow(),
+      action_type: "inserted"
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// Academic Session Months order (April = 1 ... March = 12)
+var ACADEMIC_MONTHS = [
+  "April", "May", "June", "July", "August", "September",
+  "October", "November", "December", "January", "February", "March"
+];
+
+function getAcademicMonthIndex(monthStr) {
+  if (!monthStr) return 1; // Default to April (1)
+  var clean = String(monthStr).trim().toLowerCase();
+  for (var i = 0; i < ACADEMIC_MONTHS.length; i++) {
+    if (clean.indexOf(ACADEMIC_MONTHS[i].toLowerCase()) !== -1 || ACADEMIC_MONTHS[i].toLowerCase().indexOf(clean) !== -1) {
+      return i + 1;
+    }
+  }
+  return 1;
+}
+
+function getCurrentAcademicMonthIndex(date) {
+  var d = date || new Date();
+  var calMonth = d.getMonth(); // 0 = Jan ... 11 = Dec
+  // April (3) -> 1 ... Dec (11) -> 9, Jan (0) -> 10 ... Mar (2) -> 12
+  return calMonth >= 3 ? (calMonth - 2) : (calMonth + 10);
+}
+
+/**
+ * BACKEND FUNCTION: PAST MONTHS BACKFILL FUNCTION
+ * generatePastDues() backfills billing rows for all active students from their
+ * respective Session_Start_Month up to the current running month.
+ * LOGIC:
+ * 1. Loop through all active students in the Database.
+ * 2. Read each student's Session_Start_Month and monthly tuition fee.
+ * 3. Compare the academic month index (April = 1 ... March = 12) with current month index.
+ * 4. Append fee due records ONLY for months >= student's Session_Start_Month and <= Current_Month.
+ * 5. Ignore/skip all months prior to the student's Session_Start_Month.
+ */
+function generatePastDues() {
+  var ss = getSpreadsheet();
+  if (!ss) return { status: "error", message: "Spreadsheet not accessible" };
+
+  var studentsSheet = ss.getSheetByName("Students");
+  if (!studentsSheet) return { status: "error", message: "Students sheet not found" };
+
+  var feeSheet = ss.getSheetByName("Fee_Collection");
+  if (!feeSheet) {
+    feeSheet = ss.insertSheet("Fee_Collection");
+    feeSheet.appendRow([
+      "Receipt_Number", "Student_ID", "Date", "Fee_Type", "Month",
+      "Total_Amount", "Discount", "Amount_Paid", "Balance_Amount",
+      "Payment_Mode", "Received_By", "Remarks"
+    ]);
+  }
+
+  var today = new Date();
+  var curAcadIdx = getCurrentAcademicMonthIndex(today);
+  var curYear = today.getFullYear();
+  var dateStr = Utilities.formatDate(today, "Asia/Kolkata", "yyyy-MM-dd");
+
+  var feeMaster = {
+    'c1': 500, 'play': 500,
+    'c2': 600, 'nursery': 600, 'm1': 600,
+    'c3': 600, 'lkg': 600, 'm2': 600,
+    'c4': 600, 'ukg': 600, 'm3': 600,
+    'c5': 650, '1st': 650, '1': 650,
+    'c6': 650, '2nd': 650, '2': 650,
+    'c7': 650, '3rd': 650, '3': 650,
+    'c8': 700, '4th': 700, '4': 700,
+    'c9': 700, '5th': 700, '5': 700,
+    'c10': 800, '6th': 800, '6': 800,
+    'c11': 800, '7th': 800, '7': 800,
+    'c12': 850, '8th': 850, '8': 850
+  };
+
+  var studentsData = studentsSheet.getDataRange().getValues();
+  if (studentsData.length <= 1) return { status: "empty", count: 0, message: "No students in database" };
+
+  var headers = studentsData[0].map(function(h) { return String(h || "").trim().toLowerCase(); });
+  var idIdx = headers.indexOf("student_id");
+  if (idIdx === -1) idIdx = headers.indexOf("id");
+  var classIdx = headers.indexOf("class");
+  var monthlyFeeIdx = headers.indexOf("monthly_fee");
+  var startMonthIdx = -1;
+  for (var h = 0; h < headers.length; h++) {
+    if (headers[h].indexOf("start_month") !== -1 || headers[h].indexOf("session_start") !== -1 || headers[h].indexOf("start month") !== -1) {
+      startMonthIdx = h;
+      break;
+    }
+  }
+  var waiverIdx = headers.indexOf("fee_waiver");
+  if (waiverIdx === -1) waiverIdx = headers.indexOf("is_free_student");
+  var categoryIdx = headers.indexOf("category");
+  var remarkIdx = headers.indexOf("remark");
+
+  // Load existing fee collection records into a map to prevent duplicate billing
+  var feeData = feeSheet.getDataRange().getValues();
+  var existingBilledMap = {};
+  for (var f = 1; f < feeData.length; f++) {
+    var fSid = String(feeData[f][1] || "").trim().toLowerCase();
+    var fMonth = String(feeData[f][4] || "").trim().toLowerCase();
+    var fType = String(feeData[f][3] || "").trim().toLowerCase();
+    for (var m = 0; m < ACADEMIC_MONTHS.length; m++) {
+      if (fMonth.indexOf(ACADEMIC_MONTHS[m].toLowerCase()) !== -1 && (fType.indexOf("monthly") !== -1 || fType.indexOf("मासिक") !== -1 || fType.indexOf("tuition") !== -1 || fType.indexOf("due") !== -1)) {
+        existingBilledMap[fSid + "::" + (m + 1)] = true;
+      }
+    }
+  }
+
+  var rowsToAppend = [];
+  var totalBilledRows = 0;
+  var skippedStudentsCount = 0;
+
+  for (var i = 1; i < studentsData.length; i++) {
+    var row = studentsData[i];
+    var sId = idIdx !== -1 ? String(row[idIdx] || "").trim() : "";
+    if (!sId) continue;
+
+    // Check 100% Fee Waiver / Free Student
+    var isFree = false;
+    if (waiverIdx !== -1) {
+      var wVal = String(row[waiverIdx] || "").toLowerCase();
+      if (wVal === "true" || wVal === "yes" || wVal.indexOf("100") !== -1 || wVal.indexOf("free") !== -1 || wVal.indexOf("माफ") !== -1) {
+        isFree = true;
+      }
+    }
+    if (categoryIdx !== -1) {
+      var catVal = String(row[categoryIdx] || "").toLowerCase();
+      if (catVal.indexOf("rte") !== -1 || catVal.indexOf("free") !== -1 || catVal.indexOf("माफ") !== -1) {
+        isFree = true;
+      }
+    }
+    if (remarkIdx !== -1) {
+      var remVal = String(row[remarkIdx] || "").toLowerCase();
+      if (remVal.indexOf("फीस माफ") !== -1 || remVal.indexOf("100% waiver") !== -1) {
+        isFree = true;
+      }
+    }
+
+    if (isFree) {
+      skippedStudentsCount++;
+      continue;
+    }
+
+    // Determine student's Session_Start_Month
+    var studentStartMonthStr = startMonthIdx !== -1 ? String(row[startMonthIdx] || "").trim() : "";
+    if (!studentStartMonthStr) {
+      studentStartMonthStr = "April"; // Default to April if missing or blank
+    }
+    var studentStartMonthIdx = getAcademicMonthIndex(studentStartMonthStr);
+
+    // Determine monthly tuition fee
+    var sClass = classIdx !== -1 ? String(row[classIdx] || "").toLowerCase().trim() : "nursery";
+    var customFee = monthlyFeeIdx !== -1 ? Number(row[monthlyFeeIdx]) : 0;
+    var monthlyAmount = 600;
+
+    if (!isNaN(customFee) && customFee > 0) {
+      monthlyAmount = customFee;
+    } else if (feeMaster[sClass] !== undefined) {
+      monthlyAmount = feeMaster[sClass];
+    } else {
+      for (var k in feeMaster) {
+        if (sClass.indexOf(k) !== -1) {
+          monthlyAmount = feeMaster[k];
+          break;
+        }
+      }
+    }
+
+    // Loop through academic months from student's Session_Start_Month up to Current_Month
+    for (var mIdx = studentStartMonthIdx; mIdx <= curAcadIdx; mIdx++) {
+      var mapKey = sId.toLowerCase() + "::" + mIdx;
+      if (existingBilledMap[mapKey]) {
+        continue;
+      }
+
+      var monthName = ACADEMIC_MONTHS[mIdx - 1];
+      var monthYear = curYear;
+      if (today.getMonth() >= 3 && mIdx >= 10) {
+        monthYear = curYear + 1;
+      } else if (today.getMonth() < 3 && mIdx < 10) {
+        monthYear = curYear - 1;
+      }
+
+      var receiptNo = "BILL-" + monthYear + "-M" + mIdx + "-" + sId;
+      rowsToAppend.push([
+        receiptNo,                  // 0: Receipt_Number
+        sId,                        // 1: Student_ID
+        dateStr,                    // 2: Date
+        "Monthly Tuition Fee",      // 3: Fee_Type
+        monthName,                  // 4: Month
+        monthlyAmount,              // 5: Total_Amount (TOTAL FEE)
+        0,                          // 6: Discount
+        monthlyAmount,              // 7: Net_Payable / Extra
+        0,                          // 8: Amount_Paid (PAID: 0 for Due!)
+        monthlyAmount,              // 9: Balance_Amount (BALANCE: monthlyAmount!)
+        "Due",                      // 10: Payment_Mode (MODE: "Due")
+        "System Backfill",          // 11: Received_By
+        "generatePastDues"          // 12: Remarks
+      ]);
+
+      existingBilledMap[mapKey] = true;
+      totalBilledRows++;
+    }
+  }
+
+  if (rowsToAppend.length > 0) {
+    var startRow = feeSheet.getLastRow() + 1;
+    feeSheet.getRange(startRow, 1, rowsToAppend.length, 13).setValues(rowsToAppend);
+  }
+
+  var resultMsg = "generatePastDues completed: Appended " + totalBilledRows + " billing rows for months up to " + ACADEMIC_MONTHS[curAcadIdx - 1] + ". Skipped " + skippedStudentsCount + " free students.";
+  Logger.log(resultMsg);
+
+  return {
+    status: "success",
+    message: resultMsg,
+    billedRowsCount: totalBilledRows,
+    currentAcademicMonth: ACADEMIC_MONTHS[curAcadIdx - 1],
+    currentAcademicMonthIndex: curAcadIdx
+  };
+}
+
+/**
+ * AUTO-RECALCULATE DUES ON LOAD / getStudentDues
+ * When fetching student summary data, if no fee record exists for a student in the Fees sheet,
+ * automatically calls generatePastDues() to append missing monthly billing entries before returning response.
+ */
+function getStudentDues(studentId) {
+  var ss = getSpreadsheet();
+  if (!ss) return { status: "error", message: "Spreadsheet not accessible" };
+
+  var feeSheet = ss.getSheetByName("Fee_Collection");
+  if (!feeSheet) {
+    generatePastDues();
+    feeSheet = ss.getSheetByName("Fee_Collection");
+  }
+
+  var feeData = feeSheet.getDataRange().getValues();
+  var studentRecords = [];
+  var hasRecords = false;
+
+  for (var i = 1; i < feeData.length; i++) {
+    var rSid = String(feeData[i][1] || "").trim().toLowerCase();
+    if (rSid === String(studentId || "").trim().toLowerCase()) {
+      studentRecords.push(feeData[i]);
+      hasRecords = true;
+    }
+  }
+
+  if (!hasRecords) {
+    generatePastDues();
+    feeData = feeSheet.getDataRange().getValues();
+    for (var i = 1; i < feeData.length; i++) {
+      var rSid = String(feeData[i][1] || "").trim().toLowerCase();
+      if (rSid === String(studentId || "").trim().toLowerCase()) {
+        studentRecords.push(feeData[i]);
+      }
+    }
+  }
+
+  var totalPaid = 0;
+  var totalBilled = 0;
+  studentRecords.forEach(function(row) {
+    var paid = Number(row[7]) || 0;
+    var total = Number(row[5]) || 0;
+    totalPaid += paid;
+    totalBilled += total;
+  });
+
+  var pendingAmount = Math.max(0, totalBilled - totalPaid);
+
+  return {
+    status: "success",
+    studentId: studentId,
+    recordsCount: studentRecords.length,
+    totalBilled: totalBilled,
+    totalPaid: totalPaid,
+    pendingAmount: pendingAmount,
+    records: studentRecords
+  };
+}
+
+/**
+ * AUTOMATIC MONTHLY FEE GENERATION (APPS SCRIPT TRIGGER)
+ * Trigger: Runs automatically on the 1st of every month.
+ * Iterates through active students in 'Students' sheet.
+ * Checks:
+ * 1. Current_Running_Month >= Student's Session_Start_Month
+ * 2. Student is NOT marked as 100% Fee Waived/Free.
+ * If true, add the current month's due row; otherwise, skip.
+ */
+function generateMonthlyDues() {
+  var ss = getSpreadsheet();
+  if (!ss) {
+    Logger.log("Error: Spreadsheet not accessible.");
+    return { status: "error", message: "Spreadsheet not accessible" };
+  }
+
+  var studentsSheet = ss.getSheetByName("Students");
+  if (!studentsSheet) {
+    Logger.log("Error: 'Students' sheet not found.");
+    return { status: "error", message: "'Students' sheet not found" };
+  }
+
+  var feeSheet = ss.getSheetByName("Fee_Collection");
+  if (!feeSheet) {
+    feeSheet = ss.insertSheet("Fee_Collection");
+    feeSheet.appendRow([
+      "Receipt_Number", "Student_ID", "Date", "Fee_Type", "Month",
+      "Total_Amount", "Discount_Amount", "Net_Payable", "Amount_Paid",
+      "Balance_Amount", "Payment_Mode", "Received_By"
+    ]);
+  }
+
+  var today = new Date();
+  var curAcadIdx = getCurrentAcademicMonthIndex(today);
+  var curMonthName = ACADEMIC_MONTHS[curAcadIdx - 1];
+  var curYear = today.getFullYear();
+  var dateStr = Utilities.formatDate(today, "Asia/Kolkata", "yyyy-MM-dd");
+
+  var feeMaster = {
+    'c1': 500, 'play': 500,
+    'c2': 600, 'nursery': 600, 'm1': 600,
+    'c3': 600, 'lkg': 600, 'm2': 600,
+    'c4': 600, 'ukg': 600, 'm3': 600,
+    'c5': 650, '1st': 650, '1': 650,
+    'c6': 650, '2nd': 650, '2': 650,
+    'c7': 650, '3rd': 650, '3': 650,
+    'c8': 700, '4th': 700, '4': 700,
+    'c9': 700, '5th': 700, '5': 700,
+    'c10': 800, '6th': 800, '6': 800,
+    'c11': 800, '7th': 800, '7': 800,
+    'c12': 850, '8th': 850, '8': 850
+  };
+
+  var studentsData = studentsSheet.getDataRange().getValues();
+  if (studentsData.length <= 1) return { status: "empty", count: 0 };
+
+  var headers = studentsData[0].map(function(h) { return String(h || "").trim().toLowerCase(); });
+  var idIdx = headers.indexOf("student_id");
+  if (idIdx === -1) idIdx = headers.indexOf("id");
+  var classIdx = headers.indexOf("class");
+  var monthlyFeeIdx = headers.indexOf("monthly_fee");
+  var startMonthIdx = -1;
+  for (var h = 0; h < headers.length; h++) {
+    if (headers[h].indexOf("start_month") !== -1 || headers[h].indexOf("session_start") !== -1 || headers[h].indexOf("start month") !== -1) {
+      startMonthIdx = h;
+      break;
+    }
+  }
+  var waiverIdx = headers.indexOf("fee_waiver");
+  if (waiverIdx === -1) waiverIdx = headers.indexOf("is_free_student");
+  var categoryIdx = headers.indexOf("category");
+  var remarkIdx = headers.indexOf("remark");
+
+  // Load existing fee collection rows for this month to avoid duplicates
+  var feeData = feeSheet.getDataRange().getValues();
+  var billedThisMonth = {};
+  for (var f = 1; f < feeData.length; f++) {
+    var fStudentId = String(feeData[f][1] || "").trim().toLowerCase();
+    var fMonth = String(feeData[f][4] || "").trim().toLowerCase();
+    var fType = String(feeData[f][3] || "").trim().toLowerCase();
+    if (fMonth.indexOf(curMonthName.toLowerCase()) !== -1 && (fType.indexOf("monthly") !== -1 || fType.indexOf("मासिक") !== -1 || fType.indexOf("tuition") !== -1 || fType.indexOf("due") !== -1)) {
+      billedThisMonth[fStudentId] = true;
+    }
+  }
+
+  var generatedCount = 0;
+  var skippedFreeCount = 0;
+  var skippedNotStartedCount = 0;
+  var alreadyBilledCount = 0;
+  var rowsToAppend = [];
+
+  for (var i = 1; i < studentsData.length; i++) {
+    var row = studentsData[i];
+    var sId = idIdx !== -1 ? String(row[idIdx] || "").trim() : "";
+    if (!sId) continue;
+
+    // 1. Check if student has 100% Fee Waiver (Free Student)
+    var isFree = false;
+    if (waiverIdx !== -1) {
+      var wVal = String(row[waiverIdx] || "").toLowerCase();
+      if (wVal === "true" || wVal === "yes" || wVal.indexOf("100") !== -1 || wVal.indexOf("free") !== -1 || wVal.indexOf("माफ") !== -1) {
+        isFree = true;
+      }
+    }
+    if (categoryIdx !== -1) {
+      var catVal = String(row[categoryIdx] || "").toLowerCase();
+      if (catVal.indexOf("rte") !== -1 || catVal.indexOf("free") !== -1 || catVal.indexOf("माफ") !== -1) {
+        isFree = true;
+      }
+    }
+    if (remarkIdx !== -1) {
+      var remVal = String(row[remarkIdx] || "").toLowerCase();
+      if (remVal.indexOf("फीस माफ") !== -1 || remVal.indexOf("100% waiver") !== -1) {
+        isFree = true;
+      }
+    }
+
+    if (isFree) {
+      skippedFreeCount++;
+      continue;
+    }
+
+    // 2. Check: Current_Running_Month >= Student's Session_Start_Month
+    var studentStartMonthStr = startMonthIdx !== -1 ? String(row[startMonthIdx] || "").trim() : "April";
+    var studentStartMonthIdx = getAcademicMonthIndex(studentStartMonthStr);
+
+    if (curAcadIdx < studentStartMonthIdx) {
+      skippedNotStartedCount++;
+      continue;
+    }
+
+    // 3. Skip if already billed for this month
+    if (billedThisMonth[sId.toLowerCase()]) {
+      alreadyBilledCount++;
+      continue;
+    }
+
+    // 4. Determine Monthly Tuition amount
+    var sClass = classIdx !== -1 ? String(row[classIdx] || "").toLowerCase().trim() : "nursery";
+    var customFee = monthlyFeeIdx !== -1 ? Number(row[monthlyFeeIdx]) : 0;
+    var monthlyAmount = 600;
+
+    if (!isNaN(customFee) && customFee > 0) {
+      monthlyAmount = customFee;
+    } else if (feeMaster[sClass] !== undefined) {
+      monthlyAmount = feeMaster[sClass];
+    } else {
+      for (var k in feeMaster) {
+        if (sClass.indexOf(k) !== -1) {
+          monthlyAmount = feeMaster[k];
+          break;
+        }
+      }
+    }
+
+    var receiptNo = "BILL-" + curYear + "-M" + curAcadIdx + "-" + sId;
+    rowsToAppend.push([
+      receiptNo,                     // 0: Receipt_Number
+      sId,                           // 1: Student_ID
+      dateStr,                       // 2: Date
+      "Monthly Tuition Fee",         // 3: Fee_Type
+      curMonthName,                  // 4: Month
+      monthlyAmount,                 // 5: Total_Amount (TOTAL FEE)
+      0,                             // 6: Discount
+      monthlyAmount,                 // 7: Net_Payable / Extra
+      0,                             // 8: Amount_Paid (PAID: 0 for Due!)
+      monthlyAmount,                 // 9: Balance_Amount (BALANCE: monthlyAmount!)
+      "Due",                         // 10: Payment_Mode (MODE: "Due")
+      "System Auto-Bill",            // 11: Received_By
+      "Automated Monthly Bill (Due)" // 12: Remarks
+    ]);
+
+    billedThisMonth[sId.toLowerCase()] = true;
+    generatedCount++;
+  }
+
+  if (rowsToAppend.length > 0) {
+    var startRow = feeSheet.getLastRow() + 1;
+    feeSheet.getRange(startRow, 1, rowsToAppend.length, 13).setValues(rowsToAppend);
+  }
+
+  var msg = "generateMonthlyDues complete for " + curMonthName + " " + curYear +
+            ": Billed: " + generatedCount +
+            ", Skipped Free: " + skippedFreeCount +
+            ", Skipped Not-Started: " + skippedNotStartedCount +
+            ", Already Billed: " + alreadyBilledCount;
+  Logger.log(msg);
+
+  return {
+    status: "success",
+    message: msg,
+    month: curMonthName + " " + curYear,
+    generatedCount: generatedCount,
+    skippedFreeCount: skippedFreeCount,
+    skippedNotStartedCount: skippedNotStartedCount,
+    alreadyBilledCount: alreadyBilledCount
+  };
+}
+
+/**
+ * ONE-CLICK TRIGGER INSTALLER
+ * Sets up generateMonthlyDues() to execute on the 1st of every month at 01:00 AM.
+ */
+function installMonthlyFeeTrigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === "generateMonthlyDues") {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+
+  ScriptApp.newTrigger("generateMonthlyDues")
+    .timeBased()
+    .onMonthDay(1)
+    .atHour(1)
+    .create();
+
+  Logger.log("Trigger Installed: generateMonthlyDues will run on 1st of every month at 1:00 AM.");
+  return { status: "success", message: "Monthly Trigger installed for 1st of every month!" };
+}
+
+/**
+ * OPTION B: GET FEE MASTER (Strictly 4 Fees: Admission, Tuition, Exam, Books)
+ */
+function handleGetFeeMaster(ss) {
+  var sheet = ss.getSheetByName("Fee_Master") || ss.getSheetByName("FeeMaster") || ss.getSheetByName("Fee Master");
+  var defaultClasses = [
+    { key: "play", name: "Play Group", tuition: 350, admission: 1000, exam: 150, books: 1140 },
+    { key: "nursery", name: "Nursery (M1)", tuition: 350, admission: 1000, exam: 150, books: 1195 },
+    { key: "lkg", name: "L.K.G. (M2)", tuition: 350, admission: 1000, exam: 150, books: 1245 },
+    { key: "ukg", name: "U.K.G. (M3)", tuition: 350, admission: 1000, exam: 150, books: 1345 },
+    { key: "1st", name: "Class 1st", tuition: 400, admission: 1000, exam: 200, books: 2345 },
+    { key: "2nd", name: "Class 2nd", tuition: 400, admission: 1000, exam: 200, books: 2530 },
+    { key: "3rd", name: "Class 3rd", tuition: 400, admission: 1000, exam: 200, books: 2705 },
+    { key: "4th", name: "Class 4th", tuition: 450, admission: 1000, exam: 200, books: 2880 },
+    { key: "5th", name: "Class 5th", tuition: 450, admission: 1000, exam: 200, books: 3050 },
+    { key: "6th", name: "Class 6th", tuition: 500, admission: 1000, exam: 250, books: 3000 },
+    { key: "7th", name: "Class 7th", tuition: 500, admission: 1000, exam: 250, books: 3100 },
+    { key: "8th", name: "Class 8th", tuition: 500, admission: 1000, exam: 250, books: 3230 }
+  ];
+
+  if (!sheet) {
+    sheet = ss.insertSheet("Fee_Master");
+    sheet.appendRow(["Class", "Class-Name", "Admission_Fee", "Tuition_Fee", "Exam_Fee", "Books_Fee"]);
+    for (var i = 0; i < defaultClasses.length; i++) {
+      var d = defaultClasses[i];
+      sheet.appendRow([d.key, d.name, d.admission, d.tuition, d.exam, d.books]);
+    }
+  }
+
+  var range = sheet.getDataRange();
+  var values = range.getValues();
+  if (values.length < 2) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", configs: {} })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  var headers = values[0].map(function(h) { return String(h || "").toLowerCase().trim(); });
+  var classIdx = -1, admIdx = -1, tutIdx = -1, examIdx = -1, booksIdx = -1;
+  for (var hi = 0; hi < headers.length; hi++) {
+    var hName = headers[hi];
+    if (hName.indexOf("class") !== -1 && hName.indexOf("name") === -1 && classIdx === -1) classIdx = hi;
+    if (hName.indexOf("admission") !== -1 && admIdx === -1) admIdx = hi;
+    if ((hName.indexOf("tuition") !== -1 || hName.indexOf("tution") !== -1 || hName.indexOf("monthly") !== -1) && tutIdx === -1) tutIdx = hi;
+    if (hName.indexOf("exam") !== -1 && examIdx === -1) examIdx = hi;
+    if (hName.indexOf("book") !== -1 && booksIdx === -1) booksIdx = hi;
+  }
+  if (classIdx === -1) classIdx = 0;
+
+  var result = {};
+  for (var r = 1; r < values.length; r++) {
+    var row = values[r];
+    var rawKey = String(row[classIdx] || "").toLowerCase().trim();
+    if (!rawKey || rawKey === "class") continue;
+    var normK = normalizeFeeClassKey(rawKey);
+    result[normK] = {
+      admissionFee: admIdx !== -1 ? Number(row[admIdx]) || 1000 : 1000,
+      monthlyTuition: tutIdx !== -1 ? Number(row[tutIdx]) || 450 : 450,
+      examFee: examIdx !== -1 ? Number(row[examIdx]) || 200 : 200,
+      booksFee: booksIdx !== -1 ? Number(row[booksIdx]) || 2500 : 2500
+    };
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    source: "Fee_Master sheet",
+    configs: result
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * OPTION B: SAVE/UPDATE FEE MASTER SHEET (Strictly 4 Fees: Admission, Tuition, Exam, Books)
+ */
+function handleSaveFeeMaster(ss, configs) {
+  if (!configs || typeof configs !== "object") {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "error",
+      message: "No fee master configuration data provided."
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  var sheet = ss.getSheetByName("Fee_Master") || ss.getSheetByName("FeeMaster") || ss.getSheetByName("Fee Master");
+  var standardHeaders = ["Class", "Class-Name", "Admission_Fee", "Tuition_Fee", "Exam_Fee", "Books_Fee"];
+  
+  if (!sheet) {
+    sheet = ss.insertSheet("Fee_Master");
+    sheet.appendRow(standardHeaders);
+  }
+
+  // Inspect existing headers
+  var lastCol = Math.max(sheet.getLastColumn(), 6);
+  var headerValues = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  var headers = headerValues.map(function(h) { return String(h || "").toLowerCase().trim(); });
+
+  var classIdx = -1, nameIdx = -1, admIdx = -1, tutIdx = -1, examIdx = -1, booksIdx = -1;
+  for (var si = 0; si < headers.length; si++) {
+    var sH = headers[si];
+    if (sH.indexOf("class") !== -1 && sH.indexOf("name") === -1 && classIdx === -1) classIdx = si;
+    if (sH.indexOf("name") !== -1 && nameIdx === -1) nameIdx = si;
+    if (sH.indexOf("admission") !== -1 && admIdx === -1) admIdx = si;
+    if ((sH.indexOf("tuition") !== -1 || sH.indexOf("tution") !== -1 || sH.indexOf("monthly") !== -1) && tutIdx === -1) tutIdx = si;
+    if (sH.indexOf("exam") !== -1 && examIdx === -1) examIdx = si;
+    if (sH.indexOf("book") !== -1 && booksIdx === -1) booksIdx = si;
+  }
+
+  // If sheet had broken 11-column template with dummy Annual_Fee / Transport columns, clean it up!
+  var hasJunkCols = lastCol > 6 && (headers.indexOf("annual_fee") !== -1 || headers.indexOf("transport_auto_fee") !== -1 || headers.indexOf("uniform_fee") !== -1 || headers[5] === "" || headers[6] === "");
+  if (hasJunkCols || admIdx === -1 || tutIdx === -1) {
+    sheet.getRange(1, 1, 1, 6).setValues([standardHeaders]);
+    if (lastCol > 6) {
+      sheet.getRange(1, 7, sheet.getMaxRows(), lastCol - 6).clearContent();
+    }
+    classIdx = 0;
+    nameIdx = 1;
+    admIdx = 2;
+    tutIdx = 3;
+    examIdx = 4;
+    booksIdx = 5;
+    lastCol = 6;
+  }
+
+  var existingRows = sheet.getDataRange().getValues();
+  var keyToRow = {};
+  for (var r = 1; r < existingRows.length; r++) {
+    var rawK = String(existingRows[r][classIdx !== -1 ? classIdx : 0] || "").toLowerCase().trim();
+    if (rawK) {
+      var normK = normalizeFeeClassKey(rawK);
+      keyToRow[normK] = r + 1;
+      keyToRow[rawK] = r + 1;
+    }
+  }
+
+  var classNames = {
+    'play': 'PLAY', 'nursery': 'NURSERY (M1)', 'lkg': 'LKG (M2)', 'ukg': 'UKG (M3)',
+    '1st': '1ST', '2nd': '2ND', '3rd': '3RD', '4th': '4TH',
+    '5th': '5TH', '6th': '6TH', '7th': '7TH', '8th': '8TH'
+  };
+
+  var updatedCount = 0;
+  var insertedCount = 0;
+
+  for (var classKey in configs) {
+    var conf = configs[classKey];
+    if (!conf || typeof conf !== "object") continue;
+    var normKey = normalizeFeeClassKey(classKey);
+    var cName = conf.name || classNames[normKey] || classKey.toUpperCase();
+    var admVal = Number(conf.admissionFee !== undefined ? conf.admissionFee : 1000);
+    var tutVal = Number(conf.monthlyTuition !== undefined ? conf.monthlyTuition : 450);
+    var examVal = Number(conf.examFee !== undefined ? conf.examFee : 200);
+    var booksVal = Number(conf.booksFee !== undefined ? conf.booksFee : 2500);
+
+    var targetRow = keyToRow[normKey] || keyToRow[classKey.toLowerCase()];
+
+    if (targetRow) {
+      // Write specifically into the matched columns
+      if (classIdx !== -1) sheet.getRange(targetRow, classIdx + 1).setValue(normKey);
+      if (nameIdx !== -1) sheet.getRange(targetRow, nameIdx + 1).setValue(cName);
+      if (admIdx !== -1) sheet.getRange(targetRow, admIdx + 1).setValue(admVal);
+      if (tutIdx !== -1) sheet.getRange(targetRow, tutIdx + 1).setValue(tutVal);
+      if (examIdx !== -1) sheet.getRange(targetRow, examIdx + 1).setValue(examVal);
+      if (booksIdx !== -1) sheet.getRange(targetRow, booksIdx + 1).setValue(booksVal);
+      updatedCount++;
+    } else {
+      var newRow = [];
+      for (var c = 0; c < lastCol; c++) {
+        if (c === classIdx) newRow.push(normKey);
+        else if (c === nameIdx) newRow.push(cName);
+        else if (c === admIdx) newRow.push(admVal);
+        else if (c === tutIdx) newRow.push(tutVal);
+        else if (c === examIdx) newRow.push(examVal);
+        else if (c === booksIdx) newRow.push(booksVal);
+        else newRow.push("");
+      }
+      sheet.appendRow(newRow);
+      insertedCount++;
+    }
+  }
+
+  // Clear any extra columns beyond column 6 (cleans up stray Annual_Fee, 500, 1200, 800, 50)
+  var totalCols = sheet.getLastColumn();
+  if (totalCols > 6) {
+    sheet.getRange(1, 7, sheet.getMaxRows(), totalCols - 6).clearContent();
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Fee_Master sheet updated cleanly! (Only 4 fees: Admission, Tuition, Exam, Books • " + updatedCount + " updated, " + insertedCount + " added)"
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function normalizeFeeClassKey(s) {
+  if (!s) return "";
+  var str = String(s).toLowerCase().trim();
+  if (str.indexOf("play") !== -1 || str === "c1") return "play";
+  if (str.indexOf("nursery") !== -1 || str.indexOf("m1") !== -1 || str === "c2") return "nursery";
+  if (str.indexOf("lkg") !== -1 || str.indexOf("m2") !== -1 || str === "c3") return "lkg";
+  if (str.indexOf("ukg") !== -1 || str.indexOf("m3") !== -1 || str === "c4") return "ukg";
+  if (str.indexOf("1st") !== -1 || str === "1" || str === "c5") return "1st";
+  if (str.indexOf("2nd") !== -1 || str === "2" || str === "c6") return "2nd";
+  if (str.indexOf("3rd") !== -1 || str === "3" || str === "c7") return "3rd";
+  if (str.indexOf("4th") !== -1 || str === "4" || str === "c8") return "4th";
+  if (str.indexOf("5th") !== -1 || str === "5" || str === "c9") return "5th";
+  if (str.indexOf("6th") !== -1 || str === "6" || str === "c10") return "6th";
+  if (str.indexOf("7th") !== -1 || str === "7" || str === "c11") return "7th";
+  if (str.indexOf("8th") !== -1 || str === "8" || str === "c12") return "8th";
+  return str;
+}
+
+/**
+ * OPTION B: GET NOTICES (Auto-Creates School_Notices sheet if not present)
+ */
+function handleGetNotices(ss) {
+  var sheet = ss.getSheetByName("School_Notices");
+  if (!sheet) {
+    sheet = ss.insertSheet("School_Notices");
+    sheet.appendRow([
+      "Notice_ID", "Date", "Category", "Title", "Description", "Target_Class", "Issued_By", "Is_Pinned", "Is_Emergency", "Created_At"
+    ]);
+    sheet.appendRow([
+      "not-01",
+      Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd"),
+      "general",
+      "सत्र 2026-27 फीस स्ट्रक्चर व दिशानिर्देश",
+      "विद्यालय के सभी वर्गों (Play, Nursery, Primary, Middle) का नया फीस स्ट्रक्चर जारी कर दिया गया है।",
+      "All",
+      "प्रधानाचार्य (Principal)",
+      "TRUE",
+      "FALSE",
+      Utilities.formatDate(new Date(), "Asia/Kolkata", "dd/MM/yyyy HH:mm")
+    ]);
+  }
+
+  var rows = sheet.getDataRange().getValues();
+  var noticesList = [];
+  if (rows.length > 1) {
+    for (var r = 1; r < rows.length; r++) {
+      var row = rows[r];
+      var id = String(row[0] || "").trim();
+      if (!id) continue;
+      noticesList.push({
+        id: id,
+        date: String(row[1] || "").trim(),
+        category: String(row[2] || "general").toLowerCase().trim(),
+        title: String(row[3] || "").trim(),
+        description: String(row[4] || "").trim(),
+        targetClass: String(row[5] || "All").trim(),
+        issuedBy: String(row[6] || "Management").trim(),
+        isPinned: String(row[7] || "").toUpperCase() === "TRUE",
+        isEmergency: String(row[8] || "").toUpperCase() === "TRUE"
+      });
+    }
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    notices: noticesList
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * OPTION B: SYNC NOTICES TO School_Notices SHEET
+ */
+function handleSyncNotices(ss, data) {
+  var sheet = ss.getSheetByName("School_Notices");
+  if (!sheet) {
+    sheet = ss.insertSheet("School_Notices");
+    sheet.appendRow([
+      "Notice_ID", "Date", "Category", "Title", "Description", "Target_Class", "Issued_By", "Is_Pinned", "Is_Emergency", "Created_At"
+    ]);
+  }
+
+  var notices = data.notices;
+  var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "dd/MM/yyyy HH:mm:ss");
+
+  if (Array.isArray(notices)) {
+    if (sheet.getLastRow() > 1) {
+      sheet.deleteRows(2, sheet.getLastRow() - 1);
+    }
+    var rowsToInsert = [];
+    for (var i = 0; i < notices.length; i++) {
+      var n = notices[i];
+      if (!n || !n.title) continue;
+      rowsToInsert.push([
+        n.id || ("not-" + Date.now().toString().slice(-6) + i),
+        n.date || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd"),
+        n.category || "general",
+        n.title || "",
+        n.description || "",
+        n.targetClass || "All",
+        n.issuedBy || "स्कूल प्रबंधन",
+        n.isPinned ? "TRUE" : "FALSE",
+        n.isEmergency ? "TRUE" : "FALSE",
+        nowStr
+      ]);
+    }
+    if (rowsToInsert.length > 0) {
+      sheet.getRange(2, 1, rowsToInsert.length, 10).setValues(rowsToInsert);
+    }
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      message: "School_Notices sheet synchronized with " + rowsToInsert.length + " notices!",
+      count: rowsToInsert.length,
+      updatedAt: nowStr
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  var nObj = data.notice || data;
+  var singleRow = [
+    nObj.id || ("not-" + Date.now().toString().slice(-6)),
+    nObj.date || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd"),
+    nObj.category || "general",
+    nObj.title || "",
+    nObj.description || "",
+    nObj.targetClass || "All",
+    nObj.issuedBy || "स्कूल प्रबंधन",
+    nObj.isPinned ? "TRUE" : "FALSE",
+    nObj.isEmergency ? "TRUE" : "FALSE",
+    nowStr
+  ];
+  sheet.appendRow(singleRow);
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Single notice appended to School_Notices sheet!",
+    notice_id: singleRow[0]
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+  // ==========================================
+// 🚌 ROUTE STOPS ADD-ON (स्टॉपेज ट्रैकिंग मॉड्यूल)
+// ==========================================
+
+function handleGetRouteStops(e) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Route_Stops");
+    if (!sheet) {
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        stops: []
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    var data = sheet.getDataRange().getValues();
+    if (data.length <= 1) {
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        stops: []
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    var stops = [];
+    for (var i = 1; i < data.length; i++) {
+      var row = data[i];
+      if (row[0]) {
+        stops.push({
+          id: String(row[0]),
+          name: String(row[1] || ""),
+          lat: Number(row[2]) || 0,
+          lng: Number(row[3]) || 0,
+          order: Number(row[4]) || i,
+          pickupTime: String(row[5] || ""),
+          dropTime: String(row[6] || ""),
+          studentsCount: Number(row[7]) || 0,
+          vanId: String(row[8] || "van-1"),
+          village: String(row[9] || "")
+        });
+      }
+    }
+    
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      stops: stops
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "error",
+      message: err.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function handleSaveRouteStops(postData) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Route_Stops");
+    if (!sheet) {
+      sheet = ss.insertSheet("Route_Stops");
+      sheet.appendRow([
+        "Stop_ID", "Stop_Name", "Latitude", "Longitude",
+        "Sequence_Order", "Morning_Pickup_Time", "Evening_Drop_Time",
+        "Students_Count", "Van_ID", "Village_Area", "Last_Updated"
+      ]);
+      sheet.getRange(1, 1, 1, 11).setFontWeight("bold").setBackground("#d9ead3");
+    }
+    
+    var stops = postData.stops || [];
+    var vanId = postData.vanId || "van-1";
+    var timestamp = new Date().toISOString();
+    
+    var existingData = sheet.getDataRange().getValues();
+    var rowsToKeep = [];
+    if (existingData.length > 0) {
+      rowsToKeep.push(existingData[0]); // Header
+      for (var r = 1; r < existingData.length; r++) {
+        var rowVanId = String(existingData[r][8] || "van-1");
+        if (rowVanId !== vanId) {
+          rowsToKeep.push(existingData[r]);
+        }
+      }
+    }
+    
+    var newRows = [];
+    for (var i = 0; i < stops.length; i++) {
+      var s = stops[i];
+      newRows.push([
+        s.id || ("stop_" + (i + 1)),
+        s.name || "",
+        s.lat || 0,
+        s.lng || 0,
+        s.order !== undefined ? s.order : (i + 1),
+        s.pickupTime || "",
+        s.dropTime || "",
+        s.studentsCount || 0,
+        s.vanId || vanId,
+        s.village || "",
+        timestamp
+      ]);
+    }
+    
+    sheet.clearContents();
+    var finalData = rowsToKeep.concat(newRows);
+    if (finalData.length > 0) {
+      sheet.getRange(1, 1, finalData.length, finalData[0].length).setValues(finalData);
+    }
+    
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      message: stops.length + " स्टॉपेज Route_Stops में सुरक्षित हो गए!",
+      count: stops.length
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "error",
+      message: err.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+function handleSaveRouteStops(arg1, arg2) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) ss = SpreadsheetApp.openById("1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU");
+    var sheet = ss.getSheetByName("Route_Stops");
+    if (!sheet) {
+      sheet = ss.insertSheet("Route_Stops");
+      sheet.appendRow(["Stop_ID", "Route_ID", "Stop_Name", "Sequence_Order", "Latitude", "Longitude", "Morning_Time", "Evening_Time", "Village_Name", "Student_Count", "Notes"]);
+      sheet.getRange(1, 1, 1, 11).setFontWeight("bold").setBackground("#d9ead3");
+    }
+
+    var e = (arg2 !== undefined) ? arg2 : arg1;
+    var params = {};
+    if (e) {
+      if (e.parameter) {
+        for (var p in e.parameter) params[p] = e.parameter[p];
+      }
+      if (e.postData && e.postData.contents) {
+        try {
+          var body = JSON.parse(e.postData.contents);
+          for (var b in body) params[b] = body[b];
+        } catch(err) {}
+      }
+      if (!e.parameter && !e.postData) {
+        for (var k in e) params[k] = e[k];
+      }
+    }
+
+    var routeId = String(params.route_id || params.routeId || "route-1").trim();
+    var stops = [];
+    if (Array.isArray(params.stops)) {
+      stops = params.stops;
+    } else if (typeof params.stops === "string") {
+      try { stops = JSON.parse(params.stops); } catch(err) { stops = []; }
+    }
+
+    if ((!stops || stops.length === 0) && (params.stop_name || params.name || params.lat)) {
+      stops = [{
+        id: params.stop_id || params.id || ("stop-" + Date.now().toString().slice(-6)),
+        name: params.stop_name || params.name || "Stop",
+        sequence: Number(params.sequence || params.sequence_order || 1),
+        lat: Number(params.lat || params.latitude || 0),
+        lng: Number(params.lng || params.longitude || 0),
+        morningTime: params.morning_time || params.morningTime || "07:30 AM",
+        eveningTime: params.evening_time || params.eveningTime || "02:30 PM",
+        villageName: params.village_name || params.villageName || "",
+        studentCount: Number(params.student_count || params.studentCount || 0),
+        notes: params.notes || ""
+      }];
+    }
+
+    var existingData = sheet.getDataRange().getValues();
+    var headerRow = existingData.length > 0 ? existingData[0] : ["Stop_ID", "Route_ID", "Stop_Name", "Sequence_Order", "Latitude", "Longitude", "Morning_Time", "Evening_Time", "Village_Name", "Student_Count", "Notes"];
+
+    var otherRoutesRows = [];
+    for (var r = 1; r < existingData.length; r++) {
+      var row = existingData[r];
+      var rRoute = String(row[1] || "").trim();
+      if (rRoute && rRoute.toLowerCase() !== routeId.toLowerCase()) {
+        otherRoutesRows.push(row);
+      }
+    }
+
+    var thisRouteRows = [];
+    for (var i = 0; i < stops.length; i++) {
+      var st = stops[i];
+      if (!st) continue;
+      thisRouteRows.push([
+        String(st.id || ("stop-" + (i + 1))),
+        routeId,
+        String(st.name || ("स्टॉप " + (i + 1))),
+        Number(st.sequence || (i + 1)),
+        Number(st.lat || 0),
+        Number(st.lng || 0),
+        String(st.morningTime || st.scheduledTime || ""),
+        String(st.eveningTime || ""),
+        String(st.villageName || ""),
+        Number(st.studentCount || 0),
+        String(st.notes || "")
+      ]);
+    }
+
+    sheet.clearContents();
+    var allRows = [headerRow].concat(otherRoutesRows).concat(thisRouteRows);
+    if (allRows.length > 0) {
+      sheet.getRange(1, 1, allRows.length, allRows[0].length).setValues(allRows);
+    }
+
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      message: "Route stops saved successfully!",
+      count: stops.length
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "error",
+      message: err.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+function formatCellMonth_(val) {
+  if (!val) return "";
+  if (Object.prototype.toString.call(val) === "[object Date]") {
+    return Utilities.formatDate(val, Session.getScriptTimeZone() || "Asia/Kolkata", "yyyy-MM");
+  }
+  var s = String(val).trim();
+  return s.length >= 7 ? s.slice(0, 7) : s;
+}
+
+function formatCellDate_(val) {
+  if (!val) return "";
+  if (Object.prototype.toString.call(val) === "[object Date]") {
+    return Utilities.formatDate(val, Session.getScriptTimeZone() || "Asia/Kolkata", "yyyy-MM-dd");
+  }
+  var s = String(val).trim();
+  return s.length >= 10 ? s.slice(0, 10) : s;
+}
+
+function handleGetTeacherPerformance(ss) {
+  var sheet = ss.getSheetByName("Teacher_Performance");
+  if (!sheet) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", records: [] })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var records = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r[0] && !r[1]) continue;
+    records.push({
+      id: String(r[0] || ("tp_" + i)),
+      teacher_id: String(r[1] || ""),
+      teacher_name: String(r[2] || ""),
+      assigned_class: String(r[3] || ""),
+      month: formatCellMonth_(r[4]),
+      academic_year: String(r[5] || "2026-2027"),
+      syllabus_progress_score: Number(r[6] || 0),
+      student_test_score: Number(r[7] || 0),
+      attendance_logging_score: Number(r[8] || 0),
+      homework_evaluation_score: Number(r[9] || 0),
+      punctuality_discipline_score: Number(r[10] || 0),
+      monthly_total_score: Number(r[11] || 0),
+      grade: String(r[12] || "B"),
+      evaluated_by: String(r[13] || "Principal / Manager"),
+      remarks: String(r[14] || ""),
+      timestamp: String(r[15] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", records: records })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetSyllabusTracker(ss) {
+  var sheet = ss.getSheetByName("Syllabus_Tracker");
+  if (!sheet) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", topics: [] })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var topics = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r[0] && !r[8] && !r[9]) continue;
+    topics.push({
+      id: String(r[0] || ("syl_" + i)),
+      teacher_id: String(r[1] || ""),
+      teacher_name: String(r[2] || ""),
+      class_name: String(r[3] || ""),
+      subject: String(r[4] || ""),
+      month: formatCellMonth_(r[5]),
+      week_number: Number(r[6] || 1),
+      week_label: String(r[7] || ""),
+      chapter_title: String(r[8] || ""),
+      topic_description: String(r[9] || ""),
+      planned_date: formatCellDate_(r[10]),
+      target_completion_date: formatCellDate_(r[11]),
+      completed_date: formatCellDate_(r[12]),
+      status: String(r[13] || "Pending"),
+      timestamp: String(r[14] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", topics: topics })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetSchoolHolidays(ss) {
+  var sheet = ss.getSheetByName("School_Holidays");
+  if (!sheet) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", holidays: [] })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var holidays = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r[1] && !r[2]) continue;
+    holidays.push({
+      id: String(r[0] || ("hol_" + i)),
+      title: String(r[1] || ""),
+      date: formatCellDate_(r[2]),
+      end_date: formatCellDate_(r[3]),
+      category: String(r[4] || "festival"),
+      description: String(r[5] || ""),
+      timestamp: String(r[6] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", holidays: holidays })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveTeacherPerformance(ss, data) {
+  var sheet = ss.getSheetByName("Teacher_Performance");
+  if (!sheet) {
+    sheet = ss.insertSheet("Teacher_Performance");
+    sheet.appendRow([
+      "Record_ID", "Teacher_ID", "Teacher_Name", "Assigned_Class",
+      "Month", "Academic_Year", "Syllabus_Score_30", "Test_Score_25",
+      "Attendance_Score_15", "Homework_Score_15", "Punctuality_Score_15",
+      "Total_Score_100", "Grade", "Evaluated_By", "Remarks", "Timestamp"
+    ]);
+  }
+  var rec = data.record ? (typeof data.record === "string" ? JSON.parse(data.record) : data.record) : data;
+  var recordId = String(rec.id || ("tp_" + rec.month + "_" + rec.teacher_id));
+  var rows = sheet.getDataRange().getValues();
+  var rowIndex = -1;
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]) === recordId || (String(rows[i][1]) === String(rec.teacher_id) && formatCellMonth_(rows[i][4]) === String(rec.month))) {
+      rowIndex = i + 1;
+      break;
+    }
+  }
+  var rowData = [
+    recordId, rec.teacher_id || "", rec.teacher_name || "", rec.assigned_class || "",
+    "'" + String(rec.month || ""), rec.academic_year || "2026-2027",
+    Number(rec.syllabus_progress_score || 0), Number(rec.student_test_score || 0),
+    Number(rec.attendance_logging_score || 0), Number(rec.homework_evaluation_score || 0),
+    Number(rec.punctuality_discipline_score || 0), Number(rec.monthly_total_score || 0),
+    rec.grade || "B", rec.evaluated_by || "Principal / Manager", rec.remarks || "", new Date()
+  ];
+  if (rowIndex > 0) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
+  else sheet.appendRow(rowData);
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "Teacher performance saved!" })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveSyllabusTopic(ss, data) {
+  var sheet = ss.getSheetByName("Syllabus_Tracker");
+  if (!sheet) {
+    sheet = ss.insertSheet("Syllabus_Tracker");
+    sheet.appendRow([
+      "Topic_ID", "Teacher_ID", "Teacher_Name", "Class_Name", "Subject",
+      "Month", "Week_Number", "Week_Label", "Chapter_Title", "Topic_Description",
+      "Planned_Date", "Target_Completion_Date", "Completed_Date", "Status", "Timestamp"
+    ]);
+  }
+  var t = data.topic ? (typeof data.topic === "string" ? JSON.parse(data.topic) : data.topic) : data;
+  var topicId = String(t.id || ("syl_" + Date.now()));
+  var rows = sheet.getDataRange().getValues();
+  var rowIndex = -1;
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]) === topicId) { rowIndex = i + 1; break; }
+  }
+  var rowData = [
+    topicId, t.teacher_id || "", t.teacher_name || "", t.class_name || "", t.subject || "",
+    "'" + String(t.month || ""), Number(t.week_number || 1), t.week_label || "",
+    t.chapter_title || "", t.topic_description || "", t.planned_date || "",
+    t.target_completion_date || "", t.completed_date || "", t.status || "Pending", new Date()
+  ];
+  if (rowIndex > 0) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
+  else sheet.appendRow(rowData);
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "Syllabus topic saved!" })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveSchoolHoliday(ss, data) {
+  var sheet = ss.getSheetByName("School_Holidays");
+  if (!sheet) {
+    sheet = ss.insertSheet("School_Holidays");
+    sheet.appendRow(["Holiday_ID", "Title", "Date", "End_Date", "Category", "Description", "Timestamp"]);
+  }
+  var h = data.holiday ? (typeof data.holiday === "string" ? JSON.parse(data.holiday) : data.holiday) : data;
+  var holId = String(h.id || ("hol_" + Date.now()));
+  var rows = sheet.getDataRange().getValues();
+  var rowIndex = -1;
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]) === holId) { rowIndex = i + 1; break; }
+  }
+  var rowData = [
+    holId, h.title || "", "'" + String(h.date || ""), h.end_date ? ("'" + String(h.end_date)) : "",
+    h.category || "festival", h.description || "", new Date()
+  ];
+  if (rowIndex > 0) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
+  else sheet.appendRow(rowData);
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "Holiday saved!" })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleDeleteRowById(ss, sheetName, id) {
+  var sheet = ss.getSheetByName(sheetName);
+  if (!sheet || !id) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "success" })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  for (var i = rows.length - 1; i >= 1; i--) {
+    if (String(rows[i][0]) === String(id)) {
+      sheet.deleteRow(i + 1);
+      break;
+    }
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", deleted: id })).setMimeType(ContentService.MimeType.JSON);
+}
