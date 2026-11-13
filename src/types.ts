@@ -122,3 +122,35 @@ export interface StaffAttendanceRecord {
   timestamp: number;
   created_at: string;
 }
+
+export interface SyllabusTopicRecord {
+  id: string; // e.g. "syl_2026_09_sunita_1"
+  teacher_id: string;
+  teacher_name: string;
+  class_name: string;
+  subject: string;
+  month: string; // "2026-09"
+  week_number: number; // 1, 2, 3, 4, 5
+  week_label?: string; // "सप्ताह 1 (1 से 7 तारीख)"
+  chapter_title: string; // e.g. "Chapter 4: भिन्न (Fractions)"
+  topic_description: string; // e.g. "अभ्यास 4.1 और 4.2: भिन्नों का जोड़ व घटाव"
+  planned_date: string; // YYYY-MM-DD
+  target_completion_date: string; // YYYY-MM-DD
+  completed_date?: string;
+  status: 'Pending' | 'In_Progress' | 'Completed';
+  verification_remarks?: string;
+  created_at?: string;
+  timestamp?: string;
+}
+
+export interface SchoolHolidayRecord {
+  id: string; // e.g. "hol_2026_10_02_gandhi"
+  title: string; // e.g. "गांधी जयंती (Gandhi Jayanti)"
+  date: string; // YYYY-MM-DD
+  end_date?: string; // Optional end date for multi-day breaks
+  category: 'festival' | 'national' | 'weather' | 'order' | 'vacation';
+  description?: string;
+  created_by?: string;
+  created_at?: string;
+  timestamp?: string;
+}

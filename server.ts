@@ -5,6 +5,15 @@ import fs from 'fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer as createViteServer } from 'vite';
 
+// Global resilience handlers to prevent unexpected process exit
+process.on('uncaughtException', (err) => {
+  console.error('[Process] Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Process] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
 const PORT = 3000;
 const TELEMETRY_CACHE_FILE = '/tmp/evs_bus_telemetry.json';
 const URL_CONFIG_FILE = '/tmp/evs_apps_script_url.txt';
@@ -102,6 +111,89 @@ function saveRouteStopsCache() {
   }
 }
 
+const TEACHER_PERFORMANCE_FILE = '/tmp/evs_teacher_performance.json';
+let teacherPerformanceStore: any[] = [];
+try {
+  if (fs.existsSync(TEACHER_PERFORMANCE_FILE)) {
+    const raw = fs.readFileSync(TEACHER_PERFORMANCE_FILE, 'utf-8');
+    teacherPerformanceStore = JSON.parse(raw) || [];
+  }
+} catch (e) {
+  teacherPerformanceStore = [];
+}
+
+function saveTeacherPerformanceCache() {
+  try {
+    fs.writeFileSync(TEACHER_PERFORMANCE_FILE, JSON.stringify(teacherPerformanceStore, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Could not write teacher performance cache file:', e);
+  }
+}
+
+// =========================================================================
+// SYLLABUS TRACKER PERSISTENCE & GOOGLE SHEET "Syllabus_Tracker" SYNC
+// =========================================================================
+const SYLLABUS_TRACKER_FILE = '/tmp/evs_syllabus_tracker.json';
+let syllabusTrackerStore: any[] = [];
+try {
+  if (fs.existsSync(SYLLABUS_TRACKER_FILE)) {
+    const rawSyl = fs.readFileSync(SYLLABUS_TRACKER_FILE, 'utf-8');
+    syllabusTrackerStore = JSON.parse(rawSyl) || [];
+  }
+} catch (e) {
+  syllabusTrackerStore = [];
+}
+
+function saveSyllabusTrackerCache() {
+  try {
+    fs.writeFileSync(SYLLABUS_TRACKER_FILE, JSON.stringify(syllabusTrackerStore, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Could not write syllabus tracker cache file:', e);
+  }
+}
+
+// =========================================================================
+// SCHOOL HOLIDAYS (SUNDAY KE ALAWA CHHUTTIYAN) & "School_Holidays" SYNC
+// =========================================================================
+const HOLIDAYS_FILE = '/tmp/evs_school_holidays.json';
+const DEFAULT_SCHOOL_HOLIDAYS = [
+  { id: 'hol_1', title: 'स्वतंत्रता दिवस (Independence Day)', date: '2026-08-15', category: 'national', description: 'राष्ट्रीय अवकाश • ध्वजारोहण' },
+  { id: 'hol_2', title: 'रक्षाबंधन (Raksha Bandhan)', date: '2026-08-28', category: 'festival', description: 'त्योहार अवकाश' },
+  { id: 'hol_3', title: 'श्री कृष्ण जन्माष्टमी (Janmashtami)', date: '2026-09-04', category: 'festival', description: 'त्योहार अवकाश' },
+  { id: 'hol_4', title: 'गांधी जयंती (Gandhi Jayanti)', date: '2026-10-02', category: 'national', description: 'राष्ट्रीय अवकाश' },
+  { id: 'hol_5', title: 'दशहरा / विजयादशमी (Dussehra)', date: '2026-10-20', category: 'festival', description: 'त्योहार अवकाश' },
+  { id: 'hol_6', title: 'दीपावली व गोवर्धन पूजा (Diwali Vacation)', date: '2026-11-01', end_date: '2026-11-03', category: 'festival', description: 'दीपावली पर्व अवकाश' },
+  { id: 'hol_7', title: 'भाई दूज (Bhai Dooj)', date: '2026-11-05', category: 'festival', description: 'त्योहार अवकाश' },
+  { id: 'hol_8', title: 'गुरु नानक जयंती (Guru Nanak Jayanti)', date: '2026-11-25', category: 'festival', description: 'त्योहार अवकाश' },
+  { id: 'hol_9', title: 'क्रिसमस (Christmas Day)', date: '2026-12-25', category: 'festival', description: 'त्योहार अवकाश' },
+  { id: 'hol_10', title: 'शीतकालीन अवकाश (Winter Vacation)', date: '2026-12-31', end_date: '2027-01-05', category: 'vacation', description: 'अत्यधिक ठंड के कारण अवकाश' },
+  { id: 'hol_11', title: 'गणतंत्र दिवस (Republic Day)', date: '2027-01-26', category: 'national', description: 'राष्ट्रीय अवकाश • ध्वजारोहण समारोह' },
+  { id: 'hol_12', title: 'महाशिवरात्रि (Maha Shivratri)', date: '2027-02-15', category: 'festival', description: 'त्योहार अवकाश' },
+  { id: 'hol_13', title: 'होली अवकाश (Holi Festival)', date: '2027-03-22', end_date: '2027-03-24', category: 'festival', description: 'रंगोत्सव होली अवकाश' },
+  { id: 'hol_14', title: 'ईद-उल-फितर (Eid-ul-Fitr)', date: '2027-03-30', category: 'festival', description: 'ईद पर्व अवकाश' },
+];
+
+let schoolHolidaysStore: any[] = [];
+try {
+  if (fs.existsSync(HOLIDAYS_FILE)) {
+    const rawH = fs.readFileSync(HOLIDAYS_FILE, 'utf-8');
+    schoolHolidaysStore = JSON.parse(rawH) || DEFAULT_SCHOOL_HOLIDAYS;
+  } else {
+    schoolHolidaysStore = DEFAULT_SCHOOL_HOLIDAYS;
+    fs.writeFileSync(HOLIDAYS_FILE, JSON.stringify(schoolHolidaysStore, null, 2), 'utf-8');
+  }
+} catch (e) {
+  schoolHolidaysStore = DEFAULT_SCHOOL_HOLIDAYS;
+}
+
+function saveSchoolHolidaysCache() {
+  try {
+    fs.writeFileSync(HOLIDAYS_FILE, JSON.stringify(schoolHolidaysStore, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Could not write school holidays cache file:', e);
+  }
+}
+
 async function forwardToGoogleAppsScript(payload: any) {
   try {
     const targetUrl = (typeof payload?.appsScriptUrl === 'string' && payload.appsScriptUrl.trim().startsWith('https://script.google.com/macros/s/'))
@@ -164,6 +256,13 @@ async function forwardToGoogleAppsScript(payload: any) {
     } else if (formattedPayload.action === 'saveRouteStops' && (!res.ok || text.includes('error') || text.includes('<!DOCTYPE'))) {
       try {
         const getUrl = `${targetUrl}?action=saveRouteStops&route_id=${encodeURIComponent(formattedPayload.route_id || 'route-1')}&routeId=${encodeURIComponent(formattedPayload.route_id || 'route-1')}&stops=${encodeURIComponent(typeof formattedPayload.stops === 'string' ? formattedPayload.stops : JSON.stringify(formattedPayload.stops || []))}`;
+        const gRes = await fetch(getUrl, { redirect: 'follow' });
+        const gText = await gRes.text();
+        if (gText.includes('success')) return { ok: true, response: gText };
+      } catch {}
+    } else if (formattedPayload.action === 'saveTeacherPerformance' && (!res.ok || text.includes('error') || text.includes('<!DOCTYPE'))) {
+      try {
+        const getUrl = `${targetUrl}?action=saveTeacherPerformance&record=${encodeURIComponent(typeof formattedPayload.record === 'string' ? formattedPayload.record : JSON.stringify(formattedPayload))}`;
         const gRes = await fetch(getUrl, { redirect: 'follow' });
         const gText = await gRes.text();
         if (gText.includes('success')) return { ok: true, response: gText };
@@ -331,13 +430,16 @@ async function startServer() {
 
   // Handle WebSocket upgrade
   server.on('upgrade', (request, socket, head) => {
-    const pathname = new URL(request.url || '', `http://${request.headers.host}`).pathname;
-    if (pathname === '/ws/location') {
-      wss.handleUpgrade(request, socket, head, (ws) => {
-        wss.emit('connection', ws, request);
-      });
-    } else {
-      // Allow other upgrades (e.g. Vite HMR if any) to pass through
+    try {
+      const host = request.headers.host || 'localhost';
+      const pathname = new URL(request.url || '', `http://${host}`).pathname;
+      if (pathname === '/ws/location') {
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          wss.emit('connection', ws, request);
+        });
+      }
+    } catch {
+      // Ignore invalid upgrade attempts cleanly
     }
   });
 
@@ -1207,6 +1309,196 @@ async function startServer() {
     res.json({ success: true, assignments: updated });
   });
 
+  // Endpoints for Teacher Performance Tracking, Monthly Leaderboard & Teacher of the Year
+  app.get('/api/teacher-performance', (_req, res) => {
+    res.json(teacherPerformanceStore);
+  });
+
+  app.post('/api/teacher-performance', async (req, res) => {
+    try {
+      const record = req.body;
+      if (!record || !record.teacher_id) {
+        return res.status(400).json({ error: 'teacher_id is required' });
+      }
+
+      const idx = teacherPerformanceStore.findIndex(
+        (r) => r.id === record.id || (r.teacher_id === record.teacher_id && r.month === record.month)
+      );
+      if (idx >= 0) {
+        teacherPerformanceStore[idx] = { ...teacherPerformanceStore[idx], ...record, timestamp: new Date().toISOString() };
+      } else {
+        teacherPerformanceStore.unshift({ ...record, timestamp: new Date().toISOString() });
+      }
+      saveTeacherPerformanceCache();
+
+      // Forward to Google Apps Script (Teacher_Performance tab)
+      forwardToGoogleAppsScript({
+        action: 'saveTeacherPerformance',
+        record: JSON.stringify(record),
+        ...record,
+      }).catch((e) => console.warn('Server forward teacher performance error:', e));
+
+      // Broadcast update to all connected clients via WebSocket
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'teacher_performance',
+        action: 'update',
+        details: { teacherId: record.teacher_id, month: record.month },
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(broadcastMsg);
+        }
+      }
+
+      res.json({
+        success: true,
+        message: "Google Sheet 'Teacher_Performance' में शिक्षक प्रदर्शन सुरक्षित हो गया!",
+        record,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Error saving teacher performance' });
+    }
+  });
+
+  // Endpoints for Weekly & Monthly Syllabus Tracker & Progress Planning
+  app.get('/api/syllabus-tracker', (req, res) => {
+    const { teacher_id, month, class_name } = req.query;
+    let filtered = syllabusTrackerStore;
+    if (teacher_id) {
+      filtered = filtered.filter((s) => s.teacher_id === teacher_id);
+    }
+    if (month) {
+      filtered = filtered.filter((s) => s.month === month);
+    }
+    if (class_name) {
+      filtered = filtered.filter((s) => s.class_name === class_name);
+    }
+    res.json(filtered);
+  });
+
+  app.post('/api/syllabus-tracker', async (req, res) => {
+    try {
+      const topic = req.body;
+      if (!topic || !topic.teacher_id || !topic.topic_description) {
+        return res.status(400).json({ error: 'teacher_id and topic_description are required' });
+      }
+
+      if (!topic.id) {
+        topic.id = `syl_${(topic.month || '2026').replace('-', '_')}_${topic.teacher_id}_${Date.now()}`;
+      }
+
+      const idx = syllabusTrackerStore.findIndex((s) => s.id === topic.id);
+      if (idx >= 0) {
+        syllabusTrackerStore[idx] = { ...syllabusTrackerStore[idx], ...topic, timestamp: new Date().toISOString() };
+      } else {
+        syllabusTrackerStore.unshift({ ...topic, timestamp: new Date().toISOString() });
+      }
+      saveSyllabusTrackerCache();
+
+      // Forward to Google Apps Script (Syllabus_Tracker tab)
+      forwardToGoogleAppsScript({
+        action: 'saveSyllabusTopic',
+        topic: JSON.stringify(topic),
+        ...topic,
+      }).catch((e) => console.warn('Server forward syllabus tracker error:', e));
+
+      // Broadcast update via WebSocket
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'syllabus_tracker',
+        action: 'update',
+        details: { teacherId: topic.teacher_id, month: topic.month, id: topic.id },
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(broadcastMsg);
+        }
+      }
+
+      res.json({
+        success: true,
+        message: "Google Sheet 'Syllabus_Tracker' में पाठ्यक्रम लक्ष्य सुरक्षित हो गया!",
+        topic,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Error saving syllabus tracker record' });
+    }
+  });
+
+  app.delete('/api/syllabus-tracker/:id', (req, res) => {
+    const id = req.params.id;
+    syllabusTrackerStore = syllabusTrackerStore.filter((s) => s.id !== id);
+    saveSyllabusTrackerCache();
+    res.json({ success: true, message: 'पाठ्यक्रम लक्ष्य हटा दिया गया' });
+  });
+
+  // Endpoints for School Holidays (Sunday ke alawa chhuttiyan)
+  app.get('/api/school-holidays', (_req, res) => {
+    res.json(schoolHolidaysStore);
+  });
+
+  app.post('/api/school-holidays', async (req, res) => {
+    try {
+      const holiday = req.body;
+      if (!holiday || !holiday.title || !holiday.date) {
+        return res.status(400).json({ error: 'title and date are required' });
+      }
+
+      if (!holiday.id) {
+        holiday.id = `hol_${holiday.date.replace(/-/g, '_')}_${Date.now()}`;
+      }
+
+      const idx = schoolHolidaysStore.findIndex((h) => h.id === holiday.id || (h.date === holiday.date && h.title === holiday.title));
+      if (idx >= 0) {
+        schoolHolidaysStore[idx] = { ...schoolHolidaysStore[idx], ...holiday, timestamp: new Date().toISOString() };
+      } else {
+        schoolHolidaysStore.push({ ...holiday, timestamp: new Date().toISOString() });
+      }
+      // Sort chronologically by date
+      schoolHolidaysStore.sort((a, b) => a.date.localeCompare(b.date));
+      saveSchoolHolidaysCache();
+
+      // Forward to Google Apps Script (School_Holidays tab)
+      forwardToGoogleAppsScript({
+        action: 'saveSchoolHoliday',
+        holiday: JSON.stringify(holiday),
+        ...holiday,
+      }).catch((e) => console.warn('Server forward school holiday error:', e));
+
+      // Broadcast update via WebSocket
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'school_holidays',
+        action: 'update',
+        details: { id: holiday.id, title: holiday.title, date: holiday.date },
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(broadcastMsg);
+        }
+      }
+
+      res.json({
+        success: true,
+        message: "Google Sheet 'School_Holidays' में अवकाश सुरक्षित हो गया!",
+        holiday,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Error saving holiday' });
+    }
+  });
+
+  app.delete('/api/school-holidays/:id', (req, res) => {
+    const id = req.params.id;
+    schoolHolidaysStore = schoolHolidaysStore.filter((h) => h.id !== id);
+    saveSchoolHolidaysCache();
+    res.json({ success: true, message: 'अवकाश हटा दिया गया' });
+  });
+
   // Get list of deleted receipts
   app.get('/api/deleted-receipts', (_req, res) => {
     res.json({ receipts: getDeletedReceipts() });
@@ -1748,7 +2040,7 @@ async function startServer() {
   const syncBusTrackingFromSheet = async () => {
     try {
       const url = `${currentAppsScriptUrl}?action=getBusTracking&_t=${Date.now()}`;
-      const response = await fetch(url);
+      const response = await fetch(url, { signal: AbortSignal.timeout(6000) });
       if (response.ok) {
         const data = await response.json();
         if (Array.isArray(data) && data.length > 1) {
@@ -1856,12 +2148,36 @@ async function startServer() {
     } catch {}
   };
 
-  syncBusTrackingFromSheet();
-  setInterval(syncBusTrackingFromSheet, 5000);
+  server.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`[Server] Port ${PORT} already in use, exiting cleanly.`);
+      process.exit(1);
+    } else {
+      console.error('[Server] Server error:', err);
+    }
+  });
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${PORT} with WebSocket /ws/location`);
+    // Defer sheet sync slightly so dev server pre-warming health checks get immediate 200 OK
+    setTimeout(() => {
+      syncBusTrackingFromSheet();
+      setInterval(syncBusTrackingFromSheet, 5000);
+    }, 3000);
   });
+
+  const handleShutdown = () => {
+    try {
+      server.close(() => process.exit(0));
+    } catch {
+      process.exit(0);
+    }
+  };
+  process.on('SIGTERM', handleShutdown);
+  process.on('SIGINT', handleShutdown);
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error('[Server] Fatal startup error:', err);
+  process.exit(1);
+});

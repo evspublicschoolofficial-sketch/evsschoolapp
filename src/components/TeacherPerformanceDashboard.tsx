@@ -1,0 +1,1497 @@
+import React, { useState, useMemo, useEffect } from 'react';
+import {
+  SchoolUser,
+  Homework,
+  HomeworkTrackerRecord,
+  StaffAttendanceRecord,
+  StudentBehaviorRecord,
+  Student,
+  SyllabusTopicRecord,
+} from '../types';
+import {
+  TeacherPerformanceRecord,
+  MonthlyLeaderboardSummary,
+  TeacherOfTheYearResult,
+} from '../types/teacherPerformance';
+import {
+  ACADEMIC_MONTHS,
+  CURRENT_ACADEMIC_YEAR,
+  calculateMonthlyScore,
+  computeMonthlyLeaderboard,
+  computeTeacherOfTheYear,
+  loadLocalPerformanceRecords,
+  saveLocalPerformanceRecords,
+  syncPerformanceRecordToApi,
+  fetchPerformanceRecordsFromApi,
+  autoCalculateTeacherMonthlyScoreFromAppData,
+  autoEvaluateAllTeachersForMonth,
+  AutoCalculationBreakdown,
+} from '../utils/teacherPerformanceEngine';
+import { TeacherSyllabusPlanner } from './TeacherSyllabusPlanner';
+
+interface TeacherPerformanceDashboardProps {
+  users?: SchoolUser[];
+  managerName?: string;
+  onClose?: () => void;
+  initialTab?: 'leaderboard' | 'annual' | 'records' | 'setup' | 'syllabus';
+  isTeacherView?: boolean;
+  loggedTeacherId?: string;
+  homeworkList?: Homework[];
+  homeworkTrackerList?: HomeworkTrackerRecord[];
+  staffAttendanceList?: StaffAttendanceRecord[];
+  behaviorList?: StudentBehaviorRecord[];
+  students?: Student[];
+  syllabusTopics?: SyllabusTopicRecord[];
+}
+
+export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardProps> = ({
+  users = [],
+  managerName = 'प्रबंधक (Principal / Manager)',
+  onClose,
+  initialTab = 'leaderboard',
+  isTeacherView = false,
+  loggedTeacherId,
+  homeworkList = [],
+  homeworkTrackerList = [],
+  staffAttendanceList = [],
+  behaviorList = [],
+  students = [],
+  syllabusTopics = [],
+}) => {
+  // Filter active teachers from users list
+  const teachers = useMemo(() => {
+    return users.filter(
+      (u) =>
+        !u.Designation ||
+        u.Designation.toLowerCase().includes('teacher') ||
+        u.Designation.toLowerCase().includes('शिक्षक') ||
+        u.Designation.toLowerCase().includes('staff')
+    );
+  }, [users]);
+
+  const [records, setRecords] = useState<TeacherPerformanceRecord[]>(() => loadLocalPerformanceRecords());
+  const [activeTab, setActiveTab] = useState<'leaderboard' | 'annual' | 'records' | 'setup' | 'syllabus'>(initialTab);
+  const [selectedMonth, setSelectedMonth] = useState<string>('2026-09');
+  const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
+  const [editingRecord, setEditingRecord] = useState<TeacherPerformanceRecord | null>(null);
+  const [syncStatus, setSyncStatus] = useState<string | null>(null);
+  const [copiedCode, setCopiedCode] = useState<boolean>(false);
+  const [certificateRecord, setCertificateRecord] = useState<TeacherPerformanceRecord | null>(null);
+
+  // Form State for Entry Modal
+  const [formTeacherId, setFormTeacherId] = useState<string>('');
+  const [formMonth, setFormMonth] = useState<string>('2026-09');
+  const [formSyllabus, setFormSyllabus] = useState<number>(25);
+  const [formTest, setFormTest] = useState<number>(20);
+  const [formAttendance, setFormAttendance] = useState<number>(14);
+  const [formHomework, setFormHomework] = useState<number>(14);
+  const [formPunctuality, setFormPunctuality] = useState<number>(14);
+  const [formRemarks, setFormRemarks] = useState<string>('');
+  const [autoBreakdown, setAutoBreakdown] = useState<AutoCalculationBreakdown | null>(null);
+  const [isAutoCalculatingAll, setIsAutoCalculatingAll] = useState<boolean>(false);
+
+  // Fetch fresh records on mount
+  useEffect(() => {
+    fetchPerformanceRecordsFromApi().then((fresh) => {
+      if (fresh && fresh.length > 0) setRecords(fresh);
+    });
+  }, []);
+
+  // Compute Live Calculated Monthly Score for Modal
+  const liveScore = useMemo(() => {
+    return calculateMonthlyScore({
+      syllabusProgress: formSyllabus,
+      studentTest: formTest,
+      attendanceLogging: formAttendance,
+      homeworkEvaluation: formHomework,
+      punctualityDiscipline: formPunctuality,
+    });
+  }, [formSyllabus, formTest, formAttendance, formHomework, formPunctuality]);
+
+  // Compute Monthly Leaderboard
+  const monthlySummary: MonthlyLeaderboardSummary = useMemo(() => {
+    return computeMonthlyLeaderboard(records, selectedMonth, teachers);
+  }, [records, selectedMonth, teachers]);
+
+  // Compute Teacher of the Year
+  const annualSummary: TeacherOfTheYearResult = useMemo(() => {
+    return computeTeacherOfTheYear(records, CURRENT_ACADEMIC_YEAR);
+  }, [records]);
+
+  // Open modal for new entry or edit
+  const handleOpenEvaluationModal = (existing?: TeacherPerformanceRecord) => {
+    setAutoBreakdown(null);
+    if (existing) {
+      setEditingRecord(existing);
+      setFormTeacherId(existing.teacher_id);
+      setFormMonth(existing.month || selectedMonth);
+      setFormSyllabus(existing.syllabus_progress_score || 0);
+      setFormTest(existing.student_test_score || 0);
+      setFormAttendance(existing.attendance_logging_score || 0);
+      setFormHomework(existing.homework_evaluation_score || 0);
+      setFormPunctuality(existing.punctuality_discipline_score || 0);
+      setFormRemarks(existing.remarks || '');
+    } else {
+      setEditingRecord(null);
+      const defaultTeacher = teachers[0]?.User_ID || '';
+      setFormTeacherId(defaultTeacher);
+      setFormMonth(selectedMonth);
+      setFormSyllabus(26);
+      setFormTest(21);
+      setFormAttendance(14);
+      setFormHomework(14);
+      setFormPunctuality(14);
+      setFormRemarks('');
+    }
+    setIsModalOpen(true);
+  };
+
+  // 1-Click Auto-Calculation from App Database for Modal
+  const handleRunAutoCalculationForModal = () => {
+    const teacher = teachers.find((t) => t.User_ID === formTeacherId) || teachers[0];
+    if (!teacher) return;
+    const res = autoCalculateTeacherMonthlyScoreFromAppData({
+      teacher,
+      month: formMonth,
+      homeworkList,
+      homeworkTrackerList,
+      staffAttendanceList,
+      behaviorList,
+      students,
+      syllabusTopics,
+      evaluatedBy: managerName,
+    });
+    setFormSyllabus(res.record.syllabus_progress_score);
+    setFormTest(res.record.student_test_score);
+    setFormAttendance(res.record.attendance_logging_score);
+    setFormHomework(res.record.homework_evaluation_score);
+    setFormPunctuality(res.record.punctuality_discipline_score);
+    setFormRemarks(res.record.remarks || '');
+    setAutoBreakdown(res.breakdown);
+    setSyncStatus(`🤖 ${teacher.Name} के लिए ऐप डेटा से सभी 5 पैरामीटर ऑटो-कैलकुलेट हो गए!`);
+    setTimeout(() => setSyncStatus(null), 4500);
+  };
+
+  // 1-Click Auto-Evaluate ALL teachers in school for selected month
+  const handleAutoEvaluateAllTeachers = async () => {
+    if (teachers.length === 0) return;
+    setIsAutoCalculatingAll(true);
+    try {
+      const updated = autoEvaluateAllTeachersForMonth({
+        teachers,
+        month: selectedMonth,
+        homeworkList,
+        homeworkTrackerList,
+        staffAttendanceList,
+        behaviorList,
+        students,
+        syllabusTopics,
+        evaluatedBy: managerName,
+      });
+
+      // Merge with existing records of other months
+      const existingOtherMonths = records.filter((r) => r.month !== selectedMonth);
+      const newAll = [...updated, ...existingOtherMonths];
+      setRecords(newAll);
+      saveLocalPerformanceRecords(newAll);
+
+      // Background sync to server API
+      for (const rec of updated) {
+        await syncPerformanceRecordToApi(rec);
+      }
+
+      setSyncStatus(`⚡ शाबाश! ${updated.length} शिक्षकों का ${selectedMonth} हेतु ऐप डेटा से संपूर्ण ऑटो-मूल्यांकन पूर्ण व सुरक्षित!`);
+      setTimeout(() => setSyncStatus(null), 5000);
+    } catch (err) {
+      console.error('Error auto evaluating teachers:', err);
+    } finally {
+      setIsAutoCalculatingAll(false);
+    }
+  };
+
+  // Save Evaluation
+  const handleSaveEvaluation = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const selectedTeacherObj = teachers.find((t) => t.User_ID === formTeacherId) || teachers[0];
+    const teacherName = selectedTeacherObj?.Name || 'शिक्षक';
+    const assignedClass = selectedTeacherObj?.Assigned_Class || '';
+
+    const newRecord: TeacherPerformanceRecord = {
+      id: editingRecord?.id || `tp_${formMonth.replace('-', '_')}_${formTeacherId}`,
+      teacher_id: formTeacherId,
+      teacher_name: teacherName,
+      assigned_class: assignedClass,
+      month: formMonth,
+      academic_year: CURRENT_ACADEMIC_YEAR,
+      syllabus_progress_score: Number(formSyllabus),
+      student_test_score: Number(formTest),
+      attendance_logging_score: Number(formAttendance),
+      homework_evaluation_score: Number(formHomework),
+      punctuality_discipline_score: Number(formPunctuality),
+      monthly_total_score: liveScore.totalScore,
+      grade: liveScore.grade,
+      evaluation_date: new Date().toISOString().split('T')[0],
+      evaluated_by: managerName,
+      remarks: formRemarks,
+      timestamp: new Date().toISOString(),
+    };
+
+    setSyncStatus('Google Sheet में सिंक किया जा रहा है...');
+    const result = await syncPerformanceRecordToApi(newRecord);
+
+    setRecords((prev) => {
+      const idx = prev.findIndex((r) => r.id === newRecord.id);
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = newRecord;
+        return copy;
+      }
+      return [newRecord, ...prev];
+    });
+
+    setSyncStatus(result.message || '✅ सुरक्षित हो गया!');
+    setTimeout(() => {
+      setSyncStatus(null);
+      setIsModalOpen(false);
+    }, 1500);
+  };
+
+  // Google Apps Script Snippet to Display to User
+  const appsScriptCode = `// ============================================================
+// E.V.S. PUBLIC SCHOOL - TEACHER PERFORMANCE APPS SCRIPT HANDLER
+// इस कोड को अपनी Google Apps Script में function doPost(e) के अंदर जोड़ें:
+// ============================================================
+
+function handleTeacherPerformance(e) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheetName = "Teacher_Performance";
+  var sheet = ss.getSheetByName(sheetName);
+  
+  // यदि टैब मौजूद नहीं है तो स्वचालित रूप से हेडर के साथ बनाएँ
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+    sheet.appendRow([
+      "Record_ID", "Teacher_ID", "Teacher_Name", "Assigned_Class",
+      "Month", "Academic_Year", "Syllabus_Score_30", "Test_Score_25",
+      "Attendance_Score_15", "Homework_Score_15", "Punctuality_Score_15",
+      "Total_Score_100", "Grade", "Evaluated_By", "Remarks", "Timestamp"
+    ]);
+    sheet.getRange(1, 1, 1, 16).setFontWeight("bold").setBackground("#0c2340").setFontColor("#fde047");
+  }
+
+  var data = e.parameter.record ? JSON.parse(e.parameter.record) : e.parameter;
+  var recordId = data.id || ("tp_" + data.month + "_" + data.teacher_id);
+  
+  // मौजूदा रिकॉर्ड खोजें या नया जोड़ें
+  var rows = sheet.getDataRange().getValues();
+  var rowIndex = -1;
+  for (var i = 1; i < rows.length; i++) {
+    if (rows[i][0] == recordId || (rows[i][1] == data.teacher_id && rows[i][4] == data.month)) {
+      rowIndex = i + 1;
+      break;
+    }
+  }
+
+  var rowData = [
+    recordId,
+    data.teacher_id || "",
+    data.teacher_name || "",
+    data.assigned_class || "",
+    data.month || "",
+    data.academic_year || "2026-2027",
+    Number(data.syllabus_progress_score || 0),
+    Number(data.student_test_score || 0),
+    Number(data.attendance_logging_score || 0),
+    Number(data.homework_evaluation_score || 0),
+    Number(data.punctuality_discipline_score || 0),
+    Number(data.monthly_total_score || 0),
+    data.grade || "B",
+    data.evaluated_by || "Principal / Manager",
+    data.remarks || "",
+    new Date()
+  ];
+
+  if (rowIndex > 0) {
+    sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
+  } else {
+    sheet.appendRow(rowData);
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Teacher performance record saved successfully in Teacher_Performance tab!"
+  })).setMimeType(ContentService.MimeType.JSON);
+}`;
+
+  return (
+    <div className="space-y-6">
+      {/* 1. TOP HEADER BANNER */}
+      <div className="bg-gradient-to-r from-[#0c2340] via-[#163a6f] to-[#0c2340] rounded-3xl p-6 sm:p-8 text-white shadow-xl border-2 border-amber-400/40 relative overflow-hidden">
+        {/* Background Decorative Crest */}
+        <div className="absolute -right-8 -bottom-8 opacity-10 pointer-events-none text-9xl">
+          <i className="fa-solid fa-trophy"></i>
+        </div>
+
+        <div className="relative z-10 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
+          <div>
+            <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-amber-400 text-slate-950 font-black text-xs uppercase tracking-wider mb-3 shadow-md">
+              <i className="fa-solid fa-crown text-amber-900"></i>
+              <span>E.V.S. Academic Excellence System</span>
+            </div>
+            <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white flex items-center gap-3">
+              <span>शिक्षक प्रदर्शन एवं मासिक लीडरबोर्ड</span>
+              <span className="text-amber-400 text-xl font-normal hidden sm:inline">|</span>
+              <span className="text-amber-300 text-lg font-bold hidden sm:inline">Teacher of the Year</span>
+            </h2>
+            <p className="text-slate-300 text-sm mt-1.5 max-w-2xl leading-relaxed">
+              5 प्रमुख मापदंडों (कुल 100 अंक) पर स्वचालित मासिक मूल्यांकन, लाइव लीडरबोर्ड रैंकिंग और वार्षिक 'Teacher of the Year' चयन प्रणाली। डेटा सीधे Google Sheet में सुरक्षित होता है।
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2.5 flex-wrap">
+            {!isTeacherView && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleAutoEvaluateAllTeachers}
+                  disabled={isAutoCalculatingAll}
+                  className="px-4 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-extrabold text-sm rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-2 border border-emerald-300 transform active:scale-95"
+                  title="स्कूल ऐप डेटाबेस (हाजिरी, होमवर्क, QR स्कैन) से सभी शिक्षकों का 1-क्लिक ऑटो-मूल्यांकन करें"
+                >
+                  <i className={`fa-solid ${isAutoCalculatingAll ? 'fa-spinner fa-spin' : 'fa-wand-magic-sparkles text-amber-300'}`}></i>
+                  <span>{isAutoCalculatingAll ? 'ऑटो-गणना चालू है...' : '⚡ ऐप डेटा से सभी का ऑटो-मूल्यांकन'}</span>
+                </button>
+
+                <button
+                  onClick={() => handleOpenEvaluationModal()}
+                  className="px-5 py-2.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black text-sm rounded-xl shadow-lg shadow-amber-500/25 flex items-center gap-2 transition-all transform active:scale-95 cursor-pointer"
+                >
+                  <i className="fa-solid fa-plus-circle text-base"></i>
+                  <span>नया मासिक मूल्यांकन दर्ज करें</span>
+                </button>
+              </>
+            )}
+
+            <button
+              onClick={() => setActiveTab('annual')}
+              className="px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white font-bold text-sm rounded-xl border border-white/20 backdrop-blur-sm flex items-center gap-2 transition-all cursor-pointer"
+            >
+              <i className="fa-solid fa-award text-amber-400 text-base"></i>
+              <span>Teacher of the Year</span>
+            </button>
+
+            {onClose && (
+              <button
+                onClick={onClose}
+                className="p-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl border border-white/20 transition-all cursor-pointer"
+                title="बंद करें"
+              >
+                <i className="fa-solid fa-xmark text-lg"></i>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* 5 Parameters Weightage Strip */}
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 mt-6 pt-5 border-t border-white/15 text-xs">
+          <div className="bg-white/10 rounded-xl p-2.5 border border-white/10">
+            <span className="text-slate-300 block text-[11px]">1. पाठ्यक्रम प्रगति</span>
+            <strong className="text-amber-300 text-sm font-black">अधिकतम 30 अंक</strong>
+          </div>
+          <div className="bg-white/10 rounded-xl p-2.5 border border-white/10">
+            <span className="text-slate-300 block text-[11px]">2. छात्र टेस्ट परिणाम</span>
+            <strong className="text-amber-300 text-sm font-black">अधिकतम 25 अंक</strong>
+          </div>
+          <div className="bg-white/10 rounded-xl p-2.5 border border-white/10">
+            <span className="text-slate-300 block text-[11px]">3. उपस्थिति व ऐप लॉग्स</span>
+            <strong className="text-amber-300 text-sm font-black">अधिकतम 15 अंक</strong>
+          </div>
+          <div className="bg-white/10 rounded-xl p-2.5 border border-white/10">
+            <span className="text-slate-300 block text-[11px]">4. होमवर्क व कॉपी चेकिंग</span>
+            <strong className="text-amber-300 text-sm font-black">अधिकतम 15 अंक</strong>
+          </div>
+          <div className="bg-white/10 rounded-xl p-2.5 border border-white/10">
+            <span className="text-slate-300 block text-[11px]">5. पाबंदी व अनुशासन</span>
+            <strong className="text-amber-300 text-sm font-black">अधिकतम 15 अंक</strong>
+          </div>
+        </div>
+      </div>
+
+      {/* 2. TAB CONTROLS & MONTH SELECTOR */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
+        <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-xl">
+          <button
+            onClick={() => setActiveTab('leaderboard')}
+            className={`px-4 py-2 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center gap-2 ${
+              activeTab === 'leaderboard'
+                ? 'bg-[#0c2340] text-amber-400 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <i className="fa-solid fa-ranking-star"></i>
+            <span>मासिक लीडरबोर्ड</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('annual')}
+            className={`px-4 py-2 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center gap-2 ${
+              activeTab === 'annual'
+                ? 'bg-[#0c2340] text-amber-400 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <i className="fa-solid fa-trophy"></i>
+            <span>Teacher of the Year</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('records')}
+            className={`px-4 py-2 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center gap-2 ${
+              activeTab === 'records'
+                ? 'bg-[#0c2340] text-amber-400 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <i className="fa-solid fa-table-list"></i>
+            <span>सभी प्रविष्टियाँ ({records.length})</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('syllabus')}
+            className={`px-3 py-2 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
+              activeTab === 'syllabus'
+                ? 'bg-[#0c2340] text-amber-400 shadow-sm ring-2 ring-amber-400/50'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <i className="fa-solid fa-book-open-reader text-amber-500"></i>
+            <span>वीकली सिलेबस ट्रैकर (30 Pts)</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('setup')}
+            className={`px-3 py-2 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
+              activeTab === 'setup'
+                ? 'bg-[#0c2340] text-amber-400 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <i className="fa-solid fa-file-code"></i>
+            <span>शीट कोड (Apps Script)</span>
+          </button>
+        </div>
+
+        {/* Month Selector Dropdown */}
+        <div className="flex items-center gap-2">
+          <label className="text-xs font-bold text-slate-500 whitespace-nowrap">
+            <i className="fa-regular fa-calendar-check mr-1.5 text-blue-900"></i>
+            मूल्यांकन माह:
+          </label>
+          <select
+            value={selectedMonth}
+            onChange={(e) => setSelectedMonth(e.target.value)}
+            className="px-3.5 py-1.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-extrabold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-900 cursor-pointer"
+          >
+            {ACADEMIC_MONTHS.map((m) => (
+              <option key={m.key} value={m.key}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* 3. TAB CONTENT */}
+      {/* ========================================================================= */}
+      {/* TAB 1: MONTHLY LEADERBOARD WITH PODIUM & DETAILED TABLE                   */}
+      {/* ========================================================================= */}
+      {activeTab === 'leaderboard' && (
+        <div className="space-y-6">
+          {/* Top 3 Winner Podium View */}
+          {monthlySummary.rankings.length >= 2 && (
+            <div className="bg-gradient-to-b from-slate-900 via-[#0c2340] to-slate-950 p-6 sm:p-8 rounded-3xl border-2 border-amber-400/40 shadow-xl text-white">
+              <div className="text-center mb-6">
+                <span className="text-xs uppercase tracking-widest text-amber-400 font-black">
+                  ✦ {ACADEMIC_MONTHS.find((m) => m.key === selectedMonth)?.label || selectedMonth} के शीर्ष शिक्षक ✦
+                </span>
+                <h3 className="text-2xl font-black text-white mt-1">मासिक प्रदर्शन पोडियम (Top 3 Podium)</h3>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-end max-w-4xl mx-auto pt-4 pb-2">
+                {/* 2nd Place (Silver) */}
+                {monthlySummary.rankings[1] && (
+                  <div className="order-2 md:order-1 flex flex-col items-center bg-white/5 border border-slate-400/30 rounded-2xl p-5 hover:bg-white/10 transition-all text-center">
+                    <div className="w-16 h-16 rounded-full bg-slate-300 text-slate-900 border-4 border-slate-200 flex items-center justify-center font-black text-2xl shadow-lg mb-3">
+                      🥈
+                    </div>
+                    <span className="px-2.5 py-0.5 rounded-full bg-slate-300 text-slate-950 font-black text-[10px] uppercase mb-1">
+                      Rank #2 • Silver
+                    </span>
+                    <h4 className="text-base font-bold text-white">{monthlySummary.rankings[1].teacher_name}</h4>
+                    <span className="text-xs text-slate-300">{monthlySummary.rankings[1].assigned_class || 'शिक्षक'}</span>
+                    <div className="mt-3 px-3 py-1 bg-white/10 rounded-xl border border-white/10 font-mono text-lg font-black text-amber-300">
+                      {monthlySummary.rankings[1].monthly_total_score} <span className="text-xs text-slate-400">/ 100</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* 1st Place (Gold Winner - Elevated Center) */}
+                {monthlySummary.rankings[0] && (
+                  <div className="order-1 md:order-2 flex flex-col items-center bg-gradient-to-b from-amber-500/20 via-amber-400/10 to-transparent border-2 border-amber-400 rounded-3xl p-6 shadow-2xl text-center transform md:-translate-y-4">
+                    <div className="text-3xl mb-1 animate-bounce">👑</div>
+                    <div className="w-20 h-20 rounded-full bg-gradient-to-br from-amber-300 via-amber-400 to-amber-500 text-slate-950 border-4 border-amber-200 flex items-center justify-center font-black text-3xl shadow-xl shadow-amber-500/30 mb-3">
+                      🥇
+                    </div>
+                    <span className="px-3 py-1 rounded-full bg-amber-400 text-slate-950 font-black text-xs uppercase tracking-wide mb-1.5 shadow-md">
+                      माह का सर्वश्रेष्ठ शिक्षक (#1 Gold)
+                    </span>
+                    <h4 className="text-lg font-extrabold text-amber-200">{monthlySummary.rankings[0].teacher_name}</h4>
+                    <span className="text-xs text-slate-200">{monthlySummary.rankings[0].assigned_class || 'शिक्षक'}</span>
+                    <div className="mt-3 px-4 py-1.5 bg-amber-400/20 rounded-2xl border border-amber-400/40 font-mono text-2xl font-black text-amber-300">
+                      {monthlySummary.rankings[0].monthly_total_score} <span className="text-xs text-slate-300">/ 100</span>
+                    </div>
+                    <span className="mt-2 text-[11px] text-amber-300/80 font-semibold italic">
+                      "{monthlySummary.rankings[0].remarks || 'उत्कृष्ट प्रदर्शन'}"
+                    </span>
+                  </div>
+                )}
+
+                {/* 3rd Place (Bronze) */}
+                {monthlySummary.rankings[2] && (
+                  <div className="order-3 flex flex-col items-center bg-white/5 border border-amber-700/40 rounded-2xl p-5 hover:bg-white/10 transition-all text-center">
+                    <div className="w-16 h-16 rounded-full bg-amber-700 text-amber-100 border-4 border-amber-600 flex items-center justify-center font-black text-2xl shadow-lg mb-3">
+                      🥉
+                    </div>
+                    <span className="px-2.5 py-0.5 rounded-full bg-amber-700 text-amber-100 font-black text-[10px] uppercase mb-1">
+                      Rank #3 • Bronze
+                    </span>
+                    <h4 className="text-base font-bold text-white">{monthlySummary.rankings[2].teacher_name}</h4>
+                    <span className="text-xs text-slate-300">{monthlySummary.rankings[2].assigned_class || 'शिक्षक'}</span>
+                    <div className="mt-3 px-3 py-1 bg-white/10 rounded-xl border border-white/10 font-mono text-lg font-black text-amber-300">
+                      {monthlySummary.rankings[2].monthly_total_score} <span className="text-xs text-slate-400">/ 100</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Full Ranked Table */}
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-5 sm:p-6 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <h3 className="text-base font-black text-slate-900 flex items-center gap-2">
+                  <i className="fa-solid fa-list-ol text-blue-900"></i>
+                  <span>मासिक स्कोर एवं पैरामीटर विश्लेषण ({selectedMonth})</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  कुल {monthlySummary.rankings.length} शिक्षक मूल्यांकित • विद्यालय औसत स्कोर: {monthlySummary.averageSchoolScore}/100
+                </p>
+              </div>
+
+              {!isTeacherView && (
+                <button
+                  onClick={() => handleOpenEvaluationModal()}
+                  className="px-3.5 py-1.5 bg-[#0c2340] text-amber-400 font-bold text-xs rounded-xl hover:bg-slate-800 transition-all cursor-pointer flex items-center gap-1.5 self-start sm:self-auto"
+                >
+                  <i className="fa-solid fa-plus"></i>
+                  <span>इस माह का स्कोर दर्ज करें</span>
+                </button>
+              )}
+            </div>
+
+            {monthlySummary.rankings.length === 0 ? (
+              <div className="p-12 text-center">
+                <div className="w-16 h-16 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center text-3xl mx-auto mb-3">
+                  <i className="fa-regular fa-clipboard"></i>
+                </div>
+                <h4 className="text-base font-bold text-slate-800">इस माह का कोई मूल्यांकन नहीं मिला</h4>
+                <p className="text-xs text-slate-500 max-w-md mx-auto mt-1 mb-4">
+                  {selectedMonth} के लिए अभी किसी शिक्षक का स्कोर दर्ज नहीं किया गया है।
+                </p>
+                {!isTeacherView && (
+                  <button
+                    onClick={() => handleOpenEvaluationModal()}
+                    className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer"
+                  >
+                    + पहला मूल्यांकन दर्ज करें
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="bg-slate-100 text-slate-700 font-black border-b border-slate-200 uppercase text-[10px] tracking-wider">
+                      <th className="py-3 px-4">रैंक</th>
+                      <th className="py-3 px-4">शिक्षक का नाम</th>
+                      <th className="py-3 px-3 text-center" title="पाठ्यक्रम प्रगति (अधिकतम 30 अंक)">
+                        पाठ्यक्रम (30)
+                      </th>
+                      <th className="py-3 px-3 text-center" title="छात्र टेस्ट परिणाम (अधिकतम 25 अंक)">
+                        टेस्ट (25)
+                      </th>
+                      <th className="py-3 px-3 text-center" title="उपस्थिति व ऐप लॉग्स (अधिकतम 15 अंक)">
+                        उपस्थिति (15)
+                      </th>
+                      <th className="py-3 px-3 text-center" title="होमवर्क व कॉपी चेकिंग (अधिकतम 15 अंक)">
+                        होमवर्क (15)
+                      </th>
+                      <th className="py-3 px-3 text-center" title="पाबंदी व अनुशासन (अधिकतम 15 अंक)">
+                        अनुशासन (15)
+                      </th>
+                      <th className="py-3 px-4 text-center">कुल स्कोर</th>
+                      <th className="py-3 px-3 text-center">ग्रेड</th>
+                      <th className="py-3 px-4 text-right">कार्य</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {monthlySummary.rankings.map((rec) => {
+                      const isTop1 = rec.rank === 1;
+                      const isTop2 = rec.rank === 2;
+                      const isTop3 = rec.rank === 3;
+
+                      return (
+                        <tr
+                          key={rec.id}
+                          className={`hover:bg-slate-50/80 transition-colors ${
+                            isTop1 ? 'bg-amber-50/40 font-semibold' : ''
+                          }`}
+                        >
+                          {/* Rank Badge */}
+                          <td className="py-3.5 px-4 font-black">
+                            <span
+                              className={`w-7 h-7 rounded-full inline-flex items-center justify-center font-mono text-xs ${
+                                isTop1
+                                  ? 'bg-amber-400 text-slate-950 shadow-sm font-extrabold'
+                                  : isTop2
+                                  ? 'bg-slate-300 text-slate-900 font-bold'
+                                  : isTop3
+                                  ? 'bg-amber-700 text-white font-bold'
+                                  : 'bg-slate-100 text-slate-600'
+                              }`}
+                            >
+                              {rec.rank}
+                            </span>
+                          </td>
+
+                          {/* Teacher Name */}
+                          <td className="py-3.5 px-4">
+                            <div className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+                              <span>{rec.teacher_name}</span>
+                              {isTop1 && <span className="text-amber-500 text-xs" title="मासिक विजेता">👑</span>}
+                            </div>
+                            <span className="text-[11px] text-slate-500 block">
+                              {rec.assigned_class || 'शिक्षक'} {rec.subject ? `• ${rec.subject}` : ''}
+                            </span>
+                          </td>
+
+                          {/* Syllabus (30) */}
+                          <td className="py-3.5 px-3 text-center">
+                            <span className="font-mono font-bold text-slate-800">
+                              {rec.syllabus_progress_score}
+                            </span>
+                            <div className="w-12 h-1.5 bg-slate-100 rounded-full mx-auto mt-1 overflow-hidden">
+                              <div
+                                className="h-full bg-blue-600 rounded-full"
+                                style={{ width: `${(rec.syllabus_progress_score / 30) * 100}%` }}
+                              ></div>
+                            </div>
+                          </td>
+
+                          {/* Test (25) */}
+                          <td className="py-3.5 px-3 text-center">
+                            <span className="font-mono font-bold text-slate-800">
+                              {rec.student_test_score}
+                            </span>
+                            <div className="w-12 h-1.5 bg-slate-100 rounded-full mx-auto mt-1 overflow-hidden">
+                              <div
+                                className="h-full bg-emerald-600 rounded-full"
+                                style={{ width: `${(rec.student_test_score / 25) * 100}%` }}
+                              ></div>
+                            </div>
+                          </td>
+
+                          {/* Attendance (15) */}
+                          <td className="py-3.5 px-3 text-center">
+                            <span className="font-mono font-bold text-slate-800">
+                              {rec.attendance_logging_score}
+                            </span>
+                            <div className="w-12 h-1.5 bg-slate-100 rounded-full mx-auto mt-1 overflow-hidden">
+                              <div
+                                className="h-full bg-violet-600 rounded-full"
+                                style={{ width: `${(rec.attendance_logging_score / 15) * 100}%` }}
+                              ></div>
+                            </div>
+                          </td>
+
+                          {/* Homework (15) */}
+                          <td className="py-3.5 px-3 text-center">
+                            <span className="font-mono font-bold text-slate-800">
+                              {rec.homework_evaluation_score}
+                            </span>
+                            <div className="w-12 h-1.5 bg-slate-100 rounded-full mx-auto mt-1 overflow-hidden">
+                              <div
+                                className="h-full bg-amber-600 rounded-full"
+                                style={{ width: `${(rec.homework_evaluation_score / 15) * 100}%` }}
+                              ></div>
+                            </div>
+                          </td>
+
+                          {/* Discipline (15) */}
+                          <td className="py-3.5 px-3 text-center">
+                            <span className="font-mono font-bold text-slate-800">
+                              {rec.punctuality_discipline_score}
+                            </span>
+                            <div className="w-12 h-1.5 bg-slate-100 rounded-full mx-auto mt-1 overflow-hidden">
+                              <div
+                                className="h-full bg-teal-600 rounded-full"
+                                style={{ width: `${(rec.punctuality_discipline_score / 15) * 100}%` }}
+                              ></div>
+                            </div>
+                          </td>
+
+                          {/* Total Score (100) */}
+                          <td className="py-3.5 px-4 text-center">
+                            <span className="font-mono text-base font-black text-blue-950">
+                              {rec.monthly_total_score}
+                            </span>
+                            <span className="text-[10px] text-slate-400 block font-normal">/ 100</span>
+                          </td>
+
+                          {/* Grade */}
+                          <td className="py-3.5 px-3 text-center">
+                            <span
+                              className={`px-2.5 py-1 rounded-md text-[11px] font-black uppercase inline-block ${
+                                rec.grade === 'A+'
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                  : rec.grade === 'A'
+                                  ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                                  : rec.grade === 'B'
+                                  ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                                  : 'bg-rose-100 text-rose-800 border border-rose-300'
+                              }`}
+                            >
+                              {rec.grade}
+                            </span>
+                          </td>
+
+                          {/* Actions */}
+                          <td className="py-3.5 px-4 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => setCertificateRecord(rec)}
+                                className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                                title="सर्टिफिकेट देखें"
+                              >
+                                📜 प्रमाणपत्र
+                              </button>
+
+                              {!isTeacherView && (
+                                <button
+                                  onClick={() => handleOpenEvaluationModal(rec)}
+                                  className="p-1.5 hover:bg-slate-200 text-slate-600 hover:text-slate-900 rounded-lg transition-all cursor-pointer"
+                                  title="एडिट करें"
+                                >
+                                  <i className="fa-solid fa-pen-to-square"></i>
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB 2: TEACHER OF THE YEAR (ANNUAL SELECTION ENGINE)                      */}
+      {/* ========================================================================= */}
+      {activeTab === 'annual' && (
+        <div className="space-y-6">
+          {annualSummary.winner ? (
+            <div className="bg-gradient-to-br from-amber-50 via-yellow-100/50 to-amber-100 p-8 sm:p-10 rounded-3xl border-3 border-amber-400 shadow-2xl relative overflow-hidden">
+              {/* Background celebration confetti graphics */}
+              <div className="absolute right-4 top-4 text-7xl opacity-20 pointer-events-none">
+                🏆
+              </div>
+
+              <div className="max-w-3xl mx-auto text-center space-y-4">
+                <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 text-white font-black text-xs uppercase tracking-widest shadow-md">
+                  <span>👑 E.V.S. PUBLIC SCHOOL ANNUAL HONOUR 👑</span>
+                </div>
+
+                <h3 className="text-3xl sm:text-4xl font-extrabold text-[#0c2340] tracking-tight">
+                  TEACHER OF THE YEAR {CURRENT_ACADEMIC_YEAR}
+                </h3>
+                <p className="text-sm text-slate-700 max-w-xl mx-auto font-medium">
+                  पूरे शैक्षणिक सत्र (12 माह) में निरंतर सर्वोच्च औसत स्कोर, अनुकरणीय अनुशासन और छात्रों की शैक्षणिक प्रगति के आधार पर स्वचालित रूप से चयनित:
+                </p>
+
+                {/* Winner Card Centerpiece */}
+                <div className="bg-white/90 backdrop-blur-md p-6 sm:p-8 rounded-3xl border-2 border-amber-300 shadow-xl max-w-lg mx-auto mt-6">
+                  <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-amber-400 via-amber-300 to-yellow-200 border-4 border-amber-400 flex items-center justify-center text-4xl shadow-xl mx-auto mb-4">
+                    🥇
+                  </div>
+
+                  <h4 className="text-2xl font-black text-slate-900">{annualSummary.winner.teacher_name}</h4>
+                  <p className="text-sm font-bold text-blue-900 mt-0.5">
+                    {annualSummary.winner.assigned_class || 'वरिष्ठ शिक्षक'}
+                  </p>
+
+                  <div className="grid grid-cols-2 gap-3 mt-6 text-left">
+                    <div className="bg-amber-50 p-3 rounded-2xl border border-amber-200">
+                      <span className="text-[11px] text-slate-600 font-bold block">वार्षिक औसत स्कोर</span>
+                      <strong className="text-2xl font-black text-blue-950 font-mono">
+                        {annualSummary.winner.annualAverageScore} <span className="text-xs text-slate-500">/ 100</span>
+                      </strong>
+                    </div>
+
+                    <div className="bg-amber-50 p-3 rounded-2xl border border-amber-200">
+                      <span className="text-[11px] text-slate-600 font-bold block">मूल्यांकित कुल माह</span>
+                      <strong className="text-2xl font-black text-emerald-700 font-mono">
+                        {annualSummary.winner.totalMonthsEvaluated} माह
+                      </strong>
+                    </div>
+
+                    <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
+                      <span className="text-[11px] text-slate-600 font-bold block">सर्वोच्च मासिक स्कोर</span>
+                      <strong className="text-lg font-black text-amber-700 font-mono">
+                        {annualSummary.winner.highestMonthScore}/100
+                      </strong>
+                    </div>
+
+                    <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
+                      <span className="text-[11px] text-slate-600 font-bold block">स्थिरता रेटिंग (Consistency)</span>
+                      <strong className="text-xs font-black text-emerald-800 block mt-1">
+                        {annualSummary.winner.consistencyRating}
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="mt-6 flex items-center justify-center gap-3">
+                    <button
+                      onClick={() => setCertificateRecord(annualSummary.winner!.records[0])}
+                      className="px-5 py-2.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black text-xs rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-2"
+                    >
+                      <i className="fa-solid fa-award"></i>
+                      <span>प्रशस्ति पत्र (Award Certificate) प्रिंट करें</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-white p-12 text-center rounded-3xl border border-slate-200">
+              <i className="fa-solid fa-trophy text-4xl text-slate-300 mb-3"></i>
+              <h4 className="text-base font-bold text-slate-800">वार्षिक डेटा अभी पर्याप्त नहीं है</h4>
+              <p className="text-xs text-slate-500 mt-1">
+                कम से कम एक शिक्षक का मासिक मूल्यांकन दर्ज करने के बाद वार्षिक 'Teacher of the Year' रैंकिंग सक्रिय हो जाएगी।
+              </p>
+            </div>
+          )}
+
+          {/* Annual Standings Table */}
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 sm:p-6">
+            <h3 className="text-base font-black text-slate-900 mb-4 flex items-center gap-2">
+              <i className="fa-solid fa-award text-amber-600"></i>
+              <span>वार्षिक रैंकिंग एवं औसत स्कोर तालिका ({CURRENT_ACADEMIC_YEAR})</span>
+            </h3>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="bg-slate-100 text-slate-700 font-black border-b border-slate-200 uppercase text-[10px] tracking-wider">
+                    <th className="py-3 px-4">वार्षिक रैंक</th>
+                    <th className="py-3 px-4">शिक्षक का नाम</th>
+                    <th className="py-3 px-3 text-center">कक्षा</th>
+                    <th className="py-3 px-3 text-center">मूल्यांकित माह</th>
+                    <th className="py-3 px-3 text-center">वार्षिक औसत स्कोर (100)</th>
+                    <th className="py-3 px-3 text-center">ग्रेड</th>
+                    <th className="py-3 px-4 text-center">स्थिरता रेटिंग</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {annualSummary.allAnnualRankings.map((item) => (
+                    <tr key={item.teacher_id} className="hover:bg-slate-50/80 transition-colors">
+                      <td className="py-3.5 px-4 font-black">
+                        <span
+                          className={`w-7 h-7 rounded-full inline-flex items-center justify-center font-mono text-xs ${
+                            item.rank === 1
+                              ? 'bg-amber-400 text-slate-950 font-black shadow-sm'
+                              : 'bg-slate-100 text-slate-700 font-bold'
+                          }`}
+                        >
+                          {item.rank === 1 ? '👑 1' : item.rank}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 font-bold text-slate-900 text-sm">
+                        {item.teacher_name}
+                      </td>
+                      <td className="py-3.5 px-3 text-center text-slate-600">
+                        {item.assigned_class || '—'}
+                      </td>
+                      <td className="py-3.5 px-3 text-center font-mono font-bold text-slate-700">
+                        {item.totalMonthsEvaluated} माह
+                      </td>
+                      <td className="py-3.5 px-3 text-center font-mono text-base font-black text-blue-900">
+                        {item.annualAverageScore}
+                      </td>
+                      <td className="py-3.5 px-3 text-center">
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-blue-100 text-blue-800">
+                          {item.grade}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 text-center text-emerald-700 font-bold text-[11px]">
+                        {item.consistencyRating}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB 3: ALL RECORDS ARCHIVE                                                */}
+      {/* ========================================================================= */}
+      {activeTab === 'records' && (
+        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 sm:p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-base font-black text-slate-900 flex items-center gap-2">
+              <i className="fa-solid fa-database text-blue-900"></i>
+              <span>सभी दर्ज मासिक प्रविष्टियाँ ({records.length})</span>
+            </h3>
+
+            {!isTeacherView && (
+              <button
+                onClick={() => handleOpenEvaluationModal()}
+                className="px-3.5 py-1.5 bg-[#0c2340] text-amber-400 font-bold text-xs rounded-xl hover:bg-slate-800 transition-all cursor-pointer flex items-center gap-1.5"
+              >
+                <i className="fa-solid fa-plus"></i>
+                <span>नई प्रविष्टि</span>
+              </button>
+            )}
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="bg-slate-100 text-slate-700 font-black border-b border-slate-200 uppercase text-[10px]">
+                  <th className="py-2.5 px-3">माह</th>
+                  <th className="py-2.5 px-3">शिक्षक</th>
+                  <th className="py-2.5 px-3 text-center">पाठ्यक्रम (30)</th>
+                  <th className="py-2.5 px-3 text-center">टेस्ट (25)</th>
+                  <th className="py-2.5 px-3 text-center">उपस्थिति (15)</th>
+                  <th className="py-2.5 px-3 text-center">होमवर्क (15)</th>
+                  <th className="py-2.5 px-3 text-center">अनुशासन (15)</th>
+                  <th className="py-2.5 px-3 text-center">कुल (100)</th>
+                  <th className="py-2.5 px-3 text-center">ग्रेड</th>
+                  <th className="py-2.5 px-3">मूल्यांकनकर्ता</th>
+                  <th className="py-2.5 px-3 text-right">कार्य</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {records.map((r) => (
+                  <tr key={r.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="py-2.5 px-3 font-mono font-bold text-blue-900">{r.month}</td>
+                    <td className="py-2.5 px-3 font-bold text-slate-800">{r.teacher_name}</td>
+                    <td className="py-2.5 px-3 text-center font-mono">{r.syllabus_progress_score}</td>
+                    <td className="py-2.5 px-3 text-center font-mono">{r.student_test_score}</td>
+                    <td className="py-2.5 px-3 text-center font-mono">{r.attendance_logging_score}</td>
+                    <td className="py-2.5 px-3 text-center font-mono">{r.homework_evaluation_score}</td>
+                    <td className="py-2.5 px-3 text-center font-mono">{r.punctuality_discipline_score}</td>
+                    <td className="py-2.5 px-3 text-center font-mono font-black text-blue-950 text-sm">
+                      {r.monthly_total_score}
+                    </td>
+                    <td className="py-2.5 px-3 text-center font-bold">{r.grade}</td>
+                    <td className="py-2.5 px-3 text-slate-500 text-[11px]">{r.evaluated_by}</td>
+                    <td className="py-2.5 px-3 text-right">
+                      {!isTeacherView && (
+                        <button
+                          onClick={() => handleOpenEvaluationModal(r)}
+                          className="text-blue-900 hover:text-blue-700 font-bold cursor-pointer"
+                        >
+                          एडिट
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB 4: TEACHER WEEKLY SYLLABUS PLANNER & TRACKER                          */}
+      {/* ========================================================================= */}
+      {activeTab === 'syllabus' && (
+        <TeacherSyllabusPlanner
+          allTeachers={teachers}
+          currentUser={teachers.find((t) => t.User_ID === loggedTeacherId)}
+          isManager={!isTeacherView}
+        />
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB 5: GOOGLE SHEET & APPS SCRIPT SETUP GUIDE                             */}
+      {/* ========================================================================= */}
+      {activeTab === 'setup' && (
+        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 sm:p-8 space-y-6">
+          <div>
+            <h3 className="text-xl font-extrabold text-slate-900 flex items-center gap-2.5">
+              <i className="fa-solid fa-file-code text-blue-900"></i>
+              <span>Google Sheet 'Teacher_Performance' टैब व Apps Script सेटअप</span>
+            </h3>
+            <p className="text-xs text-slate-600 mt-1">
+              इस सिस्टम का डेटा आपकी गूगल स्प्रेडशीट में पूरी तरह स्वचालित रूप से सुरक्षित होता है।
+            </p>
+          </div>
+
+          {/* Schema Information Table */}
+          <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-3">
+            <h4 className="text-sm font-black text-slate-900">📋 Google Sheet टैब का नाम: Teacher_Performance</h4>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200 font-mono">1. Record_ID</div>
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200 font-mono">2. Teacher_ID</div>
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200 font-mono">3. Teacher_Name</div>
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200 font-mono">4. Assigned_Class</div>
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200 font-mono">5. Month</div>
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200 font-mono">6. Academic_Year</div>
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200 font-mono">7. Syllabus_Score_30</div>
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200 font-mono">8. Test_Score_25</div>
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200 font-mono">9. Attendance_Score_15</div>
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200 font-mono">10. Homework_Score_15</div>
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200 font-mono">11. Punctuality_Score_15</div>
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200 font-mono">12. Total_Score_100</div>
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200 font-mono">13. Grade</div>
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200 font-mono">14. Evaluated_By</div>
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200 font-mono">15. Remarks</div>
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200 font-mono">16. Timestamp</div>
+            </div>
+          </div>
+
+          {/* Copyable Apps Script Code Block */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-bold text-slate-700">Apps Script Code (Copy & Paste):</span>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(appsScriptCode);
+                  setCopiedCode(true);
+                  setTimeout(() => setCopiedCode(false), 2500);
+                }}
+                className="px-3 py-1 bg-blue-900 hover:bg-blue-800 text-white rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
+              >
+                <i className={`fa-solid ${copiedCode ? 'fa-check text-emerald-400' : 'fa-copy'}`}></i>
+                <span>{copiedCode ? 'कॉपी हो गया!' : 'कोड कॉपी करें'}</span>
+              </button>
+            </div>
+            <pre className="bg-slate-900 text-amber-300 p-4 rounded-2xl text-xs font-mono overflow-x-auto max-h-96 leading-relaxed border border-slate-800">
+              {appsScriptCode}
+            </pre>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 4. EVALUATION ENTRY / EDIT MODAL                                          */}
+      {/* ========================================================================= */}
+      {isModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border-2 border-amber-400 overflow-hidden my-8 animate-in fade-in zoom-in-95 duration-200">
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-[#0c2340] to-[#163a6f] text-white p-5 sm:p-6 flex items-center justify-between">
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-wider text-amber-400 block mb-1">
+                  {editingRecord ? '✏️ मूल्यांकन संशोधित करें' : '➕ नया शिक्षक मूल्यांकन'}
+                </span>
+                <h3 className="text-lg sm:text-xl font-extrabold text-white">
+                  5-पैरामीटर प्रदर्शन मूल्यांकन प्रविष्टि
+                </h3>
+              </div>
+              <button
+                onClick={() => setIsModalOpen(false)}
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center cursor-pointer transition-all"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEvaluation} className="p-5 sm:p-6 space-y-5">
+              {/* Teacher & Month Selection */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    शिक्षक का चयन करें (Teacher):
+                  </label>
+                  <select
+                    value={formTeacherId}
+                    onChange={(e) => setFormTeacherId(e.target.value)}
+                    required
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-slate-50 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-900 cursor-pointer"
+                  >
+                    {teachers.map((t) => (
+                      <option key={t.User_ID} value={t.User_ID}>
+                        {t.Name} ({t.Assigned_Class || 'शिक्षक'})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    मूल्यांकन माह (Month):
+                  </label>
+                  <select
+                    value={formMonth}
+                    onChange={(e) => setFormMonth(e.target.value)}
+                    required
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-slate-50 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-900 cursor-pointer"
+                  >
+                    {ACADEMIC_MONTHS.map((m) => (
+                      <option key={m.key} value={m.key}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* 1-Click Auto Calculate from App Data Button */}
+              <div className="bg-gradient-to-r from-amber-50 to-blue-50 p-3.5 rounded-2xl border border-amber-200 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-amber-400 text-slate-900 flex items-center justify-center font-black shadow-xs shrink-0">
+                    <i className="fa-solid fa-wand-magic-sparkles text-sm"></i>
+                  </div>
+                  <div>
+                    <strong className="text-xs font-black text-slate-800 block">
+                      ऐप डेटा से स्वतः स्कोर भरें (Auto-Calculate from App)
+                    </strong>
+                    <span className="text-[11px] text-slate-600 block leading-tight">
+                      स्टाफ QR चेक-इन, छात्र उपस्थिति रजिस्टर, होमवर्क अपलोड व कॉपी चेकिंग से गणना करें
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleRunAutoCalculationForModal}
+                  className="w-full sm:w-auto px-4 py-2 bg-gradient-to-r from-blue-900 to-indigo-900 hover:from-blue-800 hover:to-indigo-800 text-amber-300 font-extrabold text-xs rounded-xl shadow-sm transition-all cursor-pointer flex items-center justify-center gap-1.5 shrink-0 border border-amber-400/30"
+                >
+                  <i className="fa-solid fa-bolt text-amber-400"></i>
+                  <span>ऑटो-कैलकुलेट करें</span>
+                </button>
+              </div>
+
+              {/* Auto Breakdown Details Banner if generated */}
+              {autoBreakdown && (
+                <div className="bg-emerald-50 border border-emerald-300 p-3.5 rounded-2xl text-[11px] text-emerald-950 space-y-1.5 shadow-xs animate-fadeIn">
+                  <div className="font-extrabold flex items-center gap-1.5 text-emerald-900 text-xs">
+                    <i className="fa-solid fa-circle-check text-emerald-600"></i>
+                    <span>ऐप डेटाबेस विश्लेषण परिणाम (Live App Provenance):</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 text-[11px]">
+                    <div className="bg-white/80 p-2 rounded-lg border border-emerald-200">
+                      <span className="font-bold text-slate-700 block">📚 1. पाठ्यक्रम प्रगति (30)</span>
+                      <span className="text-emerald-800">{autoBreakdown.syllabus.detail}</span>
+                    </div>
+                    <div className="bg-white/80 p-2 rounded-lg border border-emerald-200">
+                      <span className="font-bold text-slate-700 block">📊 2. टेस्ट परिणाम (25)</span>
+                      <span className="text-emerald-800">{autoBreakdown.test.detail}</span>
+                    </div>
+                    <div className="bg-white/80 p-2 rounded-lg border border-emerald-200">
+                      <span className="font-bold text-slate-700 block">📝 3. छात्र हाजिरी लॉग (15)</span>
+                      <span className="text-emerald-800">{autoBreakdown.attendance.detail}</span>
+                    </div>
+                    <div className="bg-white/80 p-2 rounded-lg border border-emerald-200">
+                      <span className="font-bold text-slate-700 block">✍️ 4. होमवर्क व कॉपियां (15)</span>
+                      <span className="text-emerald-800">{autoBreakdown.homework.detail}</span>
+                    </div>
+                    <div className="bg-white/80 p-2 rounded-lg border border-emerald-200 sm:col-span-2">
+                      <span className="font-bold text-slate-700 block">⏰ 5. QR समयबद्धता व अनुशासन (15)</span>
+                      <span className="text-emerald-800">{autoBreakdown.punctuality.detail}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 5 Parameters Input Sliders */}
+              <div className="bg-slate-50 p-4 sm:p-5 rounded-2xl border border-slate-200 space-y-4">
+                {/* 1. Syllabus Progress */}
+                <div>
+                  <div className="flex justify-between items-center text-xs mb-1">
+                    <span className="font-extrabold text-slate-800">
+                      1. पाठ्यक्रम प्रगति (Syllabus Progress)
+                    </span>
+                    <span className="font-mono font-black text-blue-900 bg-blue-100 px-2 py-0.5 rounded-md">
+                      {formSyllabus} / 30 अंक
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="30"
+                    step="0.5"
+                    value={formSyllabus}
+                    onChange={(e) => setFormSyllabus(parseFloat(e.target.value))}
+                    className="w-full accent-blue-900 cursor-pointer"
+                  />
+                  <div className="flex justify-between text-[10px] text-slate-400">
+                    <span>0 अंक (0% प्रगति)</span>
+                    <span>15 अंक (50% प्रगति)</span>
+                    <span>30 अंक (100% लक्ष्य पूर्ण)</span>
+                  </div>
+                </div>
+
+                {/* 2. Student Test Results */}
+                <div>
+                  <div className="flex justify-between items-center text-xs mb-1">
+                    <span className="font-extrabold text-slate-800">
+                      2. छात्र टेस्ट परिणाम (Student Test Results)
+                    </span>
+                    <span className="font-mono font-black text-emerald-900 bg-emerald-100 px-2 py-0.5 rounded-md">
+                      {formTest} / 25 अंक
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="25"
+                    step="0.5"
+                    value={formTest}
+                    onChange={(e) => setFormTest(parseFloat(e.target.value))}
+                    className="w-full accent-emerald-600 cursor-pointer"
+                  />
+                  <div className="flex justify-between text-[10px] text-slate-400">
+                    <span>0 अंक (कमजोर)</span>
+                    <span>12.5 अंक (औसत)</span>
+                    <span>25 अंक (सर्वश्रेष्ठ परिणाम)</span>
+                  </div>
+                </div>
+
+                {/* 3. Student Attendance Logging */}
+                <div>
+                  <div className="flex justify-between items-center text-xs mb-1">
+                    <span className="font-extrabold text-slate-800">
+                      3. छात्र उपस्थिति व ऐप लॉग्स (Student Attendance & App Logs)
+                    </span>
+                    <span className="font-mono font-black text-violet-900 bg-violet-100 px-2 py-0.5 rounded-md">
+                      {formAttendance} / 15 अंक
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="15"
+                    step="0.5"
+                    value={formAttendance}
+                    onChange={(e) => setFormAttendance(parseFloat(e.target.value))}
+                    className="w-full accent-violet-600 cursor-pointer"
+                  />
+                  <div className="flex justify-between text-[10px] text-slate-400">
+                    <span>0 अंक (अनियमित लॉग)</span>
+                    <span>7.5 अंक (सामान्य)</span>
+                    <span>15 अंक (शत-प्रतिशत समय पर हाज़िरी)</span>
+                  </div>
+                </div>
+
+                {/* 4. Homework & Notebook Evaluation */}
+                <div>
+                  <div className="flex justify-between items-center text-xs mb-1">
+                    <span className="font-extrabold text-slate-800">
+                      4. होमवर्क व कॉपी चेकिंग (Homework & Notebook Evaluation)
+                    </span>
+                    <span className="font-mono font-black text-amber-900 bg-amber-100 px-2 py-0.5 rounded-md">
+                      {formHomework} / 15 अंक
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="15"
+                    step="0.5"
+                    value={formHomework}
+                    onChange={(e) => setFormHomework(parseFloat(e.target.value))}
+                    className="w-full accent-amber-600 cursor-pointer"
+                  />
+                  <div className="flex justify-between text-[10px] text-slate-400">
+                    <span>0 अंक (चेकिंग नहीं)</span>
+                    <span>7.5 अंक (साप्ताहिक)</span>
+                    <span>15 अंक (दैनिक नियमबद्ध चेकिंग)</span>
+                  </div>
+                </div>
+
+                {/* 5. Punctuality & Discipline */}
+                <div>
+                  <div className="flex justify-between items-center text-xs mb-1">
+                    <span className="font-extrabold text-slate-800">
+                      5. समय की पाबंदी व अनुशासन (Punctuality & Discipline)
+                    </span>
+                    <span className="font-mono font-black text-teal-900 bg-teal-100 px-2 py-0.5 rounded-md">
+                      {formPunctuality} / 15 अंक
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="15"
+                    step="0.5"
+                    value={formPunctuality}
+                    onChange={(e) => setFormPunctuality(parseFloat(e.target.value))}
+                    className="w-full accent-teal-600 cursor-pointer"
+                  />
+                  <div className="flex justify-between text-[10px] text-slate-400">
+                    <span>0 अंक (विलंब आगमन)</span>
+                    <span>7.5 अंक (संतोषजनक)</span>
+                    <span>15 अंक (सदा समय पर व आदर्श अनुशासन)</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Total Calculated Score Live Display */}
+              <div className="bg-gradient-to-r from-slate-900 to-[#0c2340] text-white p-4 rounded-2xl flex items-center justify-between border border-amber-400/50">
+                <div>
+                  <span className="text-[11px] text-amber-300 font-bold block uppercase tracking-wider">
+                    कुल स्वचालित मासिक स्कोर (Monthly Total)
+                  </span>
+                  <span className="text-2xl font-black font-mono text-white">
+                    {liveScore.totalScore} <span className="text-sm text-slate-400 font-normal">/ 100</span>
+                  </span>
+                </div>
+                <div className="text-right">
+                  <span className="text-[11px] text-slate-300 block font-bold">निर्धारित ग्रेड:</span>
+                  <span
+                    className={`px-3 py-1 rounded-lg text-sm font-black uppercase inline-block ${
+                      liveScore.grade === 'A+'
+                        ? 'bg-emerald-500 text-slate-950 font-extrabold'
+                        : liveScore.grade === 'A'
+                        ? 'bg-blue-400 text-slate-950 font-bold'
+                        : 'bg-amber-400 text-slate-950 font-bold'
+                    }`}
+                  >
+                    Grade {liveScore.grade}
+                  </span>
+                </div>
+              </div>
+
+              {/* Remarks */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  प्रबंधक / प्रधानाचार्य रिमार्क (Remarks / Feedback):
+                </label>
+                <textarea
+                  value={formRemarks}
+                  onChange={(e) => setFormRemarks(e.target.value)}
+                  placeholder="शिक्षक के प्रदर्शन पर टिप्पणी अथवा सुधार के निर्देश..."
+                  rows={2}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-slate-50 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-900"
+                />
+              </div>
+
+              {syncStatus && (
+                <div className="p-3 bg-amber-50 text-amber-900 border border-amber-300 rounded-xl text-xs font-bold flex items-center gap-2">
+                  <i className="fa-solid fa-spinner fa-spin"></i>
+                  <span>{syncStatus}</span>
+                </div>
+              )}
+
+              {/* Form Buttons */}
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setIsModalOpen(false)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer transition-all"
+                >
+                  रद्द करें
+                </button>
+
+                <button
+                  type="submit"
+                  className="px-6 py-2.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black text-xs rounded-xl shadow-md cursor-pointer transition-all flex items-center gap-2"
+                >
+                  <i className="fa-solid fa-cloud-arrow-up"></i>
+                  <span>स्कोर सुरक्षित करें एवं Google Sheet सिंक करें</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 5. OFFICIAL CERTIFICATE MODAL (Printable Award)                           */}
+      {/* ========================================================================= */}
+      {certificateRecord && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl max-w-xl w-full p-8 shadow-2xl border-4 border-amber-400 relative text-center space-y-4 my-8">
+            <button
+              onClick={() => setCertificateRecord(null)}
+              className="absolute right-4 top-4 w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center cursor-pointer"
+            >
+              ✕
+            </button>
+
+            <div className="w-16 h-16 rounded-2xl bg-amber-400 text-[#0c2340] flex items-center justify-center text-3xl mx-auto shadow-lg shadow-amber-400/30">
+              🏅
+            </div>
+
+            <div className="space-y-1">
+              <span className="text-[10px] font-black uppercase tracking-widest text-amber-600 block">
+                E.V.S. PUBLIC SCHOOL • CHILKANA SULTANPUR
+              </span>
+              <h3 className="text-2xl font-black text-[#0c2340]">
+                शिक्षक प्रदर्शन उत्कृष्टता प्रमाण-पत्र
+              </h3>
+              <p className="text-xs text-slate-500">Certificate of Academic Excellence</p>
+            </div>
+
+            <div className="p-5 bg-amber-50/60 rounded-2xl border border-amber-200 space-y-2 text-xs">
+              <p className="text-slate-700">
+                यह प्रमाणित किया जाता है कि शिक्षक{' '}
+                <strong className="text-base text-blue-950 font-black">{certificateRecord.teacher_name}</strong>{' '}
+                ({certificateRecord.assigned_class || 'शिक्षक'}) ने माह{' '}
+                <strong className="text-blue-900 font-bold">{certificateRecord.month}</strong> में 5 प्रमुख मापदंडों में
+                सराहनीय कार्य करते हुए कुल{' '}
+                <strong className="font-mono font-black text-amber-700 text-sm">
+                  {certificateRecord.monthly_total_score}/100
+                </strong>{' '}
+                अंक एवं ग्रेड <strong className="font-black text-emerald-800">{certificateRecord.grade}</strong> अर्जित किया है।
+              </p>
+            </div>
+
+            <div className="flex justify-between items-end pt-6 border-t border-slate-200 text-xs">
+              <div className="text-left">
+                <span className="block text-[10px] text-slate-400">दिनांक:</span>
+                <span className="font-bold text-slate-700">{certificateRecord.evaluation_date}</span>
+              </div>
+              <div className="text-right">
+                <div className="h-8 border-b border-slate-400 w-32 mb-1 mx-auto"></div>
+                <span className="font-bold text-slate-800 block">प्रधानाचार्य / प्रबंधक</span>
+                <span className="text-[10px] text-slate-400 block">ई.वी.एस. पब्लिक स्कूल</span>
+              </div>
+            </div>
+
+            <button
+              onClick={() => window.print()}
+              className="w-full py-2.5 bg-blue-900 hover:bg-blue-800 text-white font-bold text-xs rounded-xl shadow-md cursor-pointer transition-all flex items-center justify-center gap-2"
+            >
+              <i className="fa-solid fa-print"></i>
+              <span>सर्टिफिकेट प्रिंट करें (Print Certificate)</span>
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default TeacherPerformanceDashboard;

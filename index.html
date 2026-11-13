@@ -28,6 +28,11 @@
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <link rel="manifest" href="/manifest.webmanifest" />
 
+    <!-- DNS Prefetch for faster CDN resolution on mobile 4G/3G -->
+    <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com" />
+    <link rel="dns-prefetch" href="https://fonts.googleapis.com" />
+    <link rel="dns-prefetch" href="https://fonts.gstatic.com" />
+
     <!-- FontAwesome 6 Free CDN -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
     <!-- Google Fonts for Scholarly Typography -->
@@ -38,12 +43,13 @@
   <body class="bg-slate-50 text-slate-900 antialiased selection:bg-amber-400 selection:text-slate-950">
     <div id="root">
       <div style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #0c2340; color: #ffffff; font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif; text-align: center; padding: 24px;">
-        <div style="width: 64px; height: 64px; border-radius: 16px; background: #fde047; color: #0c2340; display: flex; align-items: center; justify-content: center; font-size: 28px; margin-bottom: 20px; font-weight: 900; box-shadow: 0 10px 25px rgba(253, 224, 71, 0.25);">
+        <div style="width: 64px; height: 64px; border-radius: 16px; background: #fde047; color: #0c2340; display: flex; align-items: center; justify-content: center; font-size: 28px; margin-bottom: 16px; font-weight: 900; box-shadow: 0 10px 25px rgba(253, 224, 71, 0.25);">
           🏫
         </div>
-        <div style="font-size: 20px; font-weight: 800; letter-spacing: -0.5px; margin-bottom: 6px;">E.V.S. PUBLIC SCHOOL</div>
-        <div style="font-size: 13px; color: #93c5fd; margin-bottom: 24px;">चिलकाना सुल्तानपुर, सहारनपुर</div>
-        <div style="display: inline-block; width: 36px; height: 36px; border: 3px solid rgba(255,255,255,0.2); border-top-color: #fde047; border-radius: 50%; animation: evsSpin 0.9s linear infinite;"></div>
+        <div style="font-size: 20px; font-weight: 800; letter-spacing: -0.5px; margin-bottom: 4px;">E.V.S. PUBLIC SCHOOL</div>
+        <div style="font-size: 13px; color: #93c5fd; margin-bottom: 20px;">चिलकाना सुल्तानपुर, सहारनपुर</div>
+        <div style="display: inline-block; width: 32px; height: 32px; border: 3px solid rgba(255,255,255,0.2); border-top-color: #fde047; border-radius: 50%; animation: evsSpin 0.9s linear infinite; margin-bottom: 12px;"></div>
+        <div style="font-size: 11px; color: #fde047; font-weight: 600; letter-spacing: 0.3px;">पोर्टल तेज़ी से खुल रहा है...</div>
         <style>@keyframes evsSpin { to { transform: rotate(360deg); } }</style>
       </div>
     </div>

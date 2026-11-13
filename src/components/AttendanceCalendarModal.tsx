@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Student, StudentBehaviorRecord } from '../types';
+import { Student, StudentBehaviorRecord, SchoolHolidayRecord } from '../types';
 
 interface AttendanceCalendarModalProps {
   isOpen?: boolean;
@@ -55,7 +55,85 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
     dateStr: string;
     record?: StudentBehaviorRecord;
     isSunday: boolean;
+    holiday?: SchoolHolidayRecord | null;
   } | null>(null);
+
+  // School Holidays State (Sunday ke alawa chhuttiyan)
+  const [holidays, setHolidays] = useState<SchoolHolidayRecord[]>([]);
+  const [isHolidayModalOpen, setIsHolidayModalOpen] = useState<boolean>(false);
+  const [holidayTitle, setHolidayTitle] = useState<string>('');
+  const [holidayDate, setHolidayDate] = useState<string>('');
+  const [holidayEndDate, setHolidayEndDate] = useState<string>('');
+  const [holidayCategory, setHolidayCategory] = useState<'festival' | 'national' | 'weather' | 'order' | 'vacation'>('festival');
+  const [holidayDescription, setHolidayDescription] = useState<string>('');
+  const [holidaySyncMsg, setHolidaySyncMsg] = useState<string | null>(null);
+
+  // Fetch school holidays on mount
+  React.useEffect(() => {
+    fetch('/api/school-holidays')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => {
+        if (Array.isArray(data)) {
+          setHolidays(data);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const getHolidayForDate = (dateYmd: string): SchoolHolidayRecord | null => {
+    for (const h of holidays) {
+      if (!h.date) continue;
+      if (h.date === dateYmd) return h;
+      if (h.end_date && dateYmd >= h.date && dateYmd <= h.end_date) {
+        return h;
+      }
+    }
+    return null;
+  };
+
+  const handleSaveHoliday = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!holidayTitle.trim() || !holidayDate) return;
+
+    const newHoliday: SchoolHolidayRecord = {
+      id: `hol_${holidayDate.replace(/-/g, '_')}_${Date.now()}`,
+      title: holidayTitle.trim(),
+      date: holidayDate,
+      end_date: holidayEndDate ? holidayEndDate : undefined,
+      category: holidayCategory,
+      description: holidayDescription.trim() || undefined,
+      created_at: new Date().toISOString(),
+    };
+
+    const updated = [...holidays, newHoliday].sort((a, b) => a.date.localeCompare(b.date));
+    setHolidays(updated);
+
+    try {
+      await fetch('/api/school-holidays', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newHoliday),
+      });
+      setHolidaySyncMsg('✅ अवकाश सफलतापूर्वक कैलेंडर व Google Sheet में सुरक्षित!');
+      setTimeout(() => setHolidaySyncMsg(null), 3500);
+    } catch {}
+
+    setHolidayTitle('');
+    setHolidayDate('');
+    setHolidayEndDate('');
+    setHolidayDescription('');
+  };
+
+  const handleDeleteHoliday = async (id: string) => {
+    if (!confirm('क्या आप इस अवकाश को हटाना चाहते हैं?')) return;
+    const filtered = holidays.filter((h) => h.id !== id);
+    setHolidays(filtered);
+    try {
+      await fetch(`/api/school-holidays/${id}`, { method: 'DELETE' });
+      setHolidaySyncMsg('अवकाश हटा दिया गया');
+      setTimeout(() => setHolidaySyncMsg(null), 3000);
+    } catch {}
+  };
 
   // Sync mode if initialMode changes
   React.useEffect(() => {
@@ -163,6 +241,7 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
   let presentDaysCount = 0;
   let absentDaysCount = 0;
   let sundaysCount = 0;
+  let holidaysCount = 0;
 
   const calendarDays = [];
   // Pad blank days before the 1st
@@ -180,12 +259,16 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
     const key3 = `${day}/${currentMonth + 1}/${currentYear}`;
 
     const record = recordsByDate.get(key1) || recordsByDate.get(key2) || recordsByDate.get(key3);
+    const holiday = getHolidayForDate(key1);
 
-    let status: 'present' | 'absent' | 'sunday' | 'unmarked' = 'unmarked';
+    let status: 'present' | 'absent' | 'sunday' | 'holiday' | 'unmarked' = 'unmarked';
 
     if (isSunday) {
       status = 'sunday';
       sundaysCount++;
+    } else if (holiday) {
+      status = 'holiday';
+      holidaysCount++;
     } else if (record) {
       if (record.Is_Present) {
         status = 'present';
@@ -203,6 +286,7 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
       isSunday,
       record,
       status,
+      holiday,
     });
   }
 
@@ -305,6 +389,20 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Holiday manager button (Accessible to School Admin / Teachers) */}
+          {!isParentView && (
+            <button
+              type="button"
+              onClick={() => setIsHolidayModalOpen(true)}
+              className="px-3 py-1.5 rounded-xl font-black text-xs bg-amber-400 hover:bg-amber-300 text-slate-950 flex items-center gap-1.5 shadow-sm transition-all cursor-pointer active:scale-95"
+              title="रविवार के अलावा त्योहार, शीतकालीन व सरकारी छुट्टियां जोड़ें"
+            >
+              <span className="text-sm">🌴</span>
+              <span className="hidden sm:inline">छुट्टियां जोड़ें / देखें</span>
+              <span className="sm:hidden">छुट्टियां</span>
+            </button>
+          )}
+
           {/* Tab switch buttons (Only for Teachers / Managers, hidden for Parents) */}
           {!isParentView && (
             <div className="bg-white/10 p-1 rounded-xl flex items-center gap-1 text-xs">
@@ -436,6 +534,17 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
                     >
                       आज (Today)
                     </button>
+                    {!isParentView && (
+                      <button
+                        type="button"
+                        onClick={() => setIsHolidayModalOpen(true)}
+                        className="ml-2 px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 text-xs font-black shadow-xs cursor-pointer flex items-center gap-1.5 transition-all"
+                        title="रविवार के अलावा स्कूल छुट्टियाँ व त्योहार अवकाश जोड़ें"
+                      >
+                        <i className="fa-solid fa-calendar-plus text-slate-950"></i>
+                        <span>🌴 अवकाश जोड़ें / कैलेंडर</span>
+                      </button>
+                    )}
                   </div>
 
                   {effectiveStudent && (
@@ -450,8 +559,8 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
                   )}
                 </div>
 
-                {/* 4 Stat Badges */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-4">
+                {/* 5 Stat Badges */}
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-4">
                   <div className="bg-white border border-slate-200 rounded-xl p-3 text-center shadow-2xs">
                     <div className="text-[11px] font-bold text-slate-500 uppercase">कुल कार्यदिवस</div>
                     <div className="text-xl font-black text-slate-900 mt-0.5">{workingDays} दिन</div>
@@ -464,7 +573,11 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
                     <div className="text-[11px] font-bold text-rose-800 uppercase">अनुपस्थित (Absent)</div>
                     <div className="text-xl font-black text-rose-900 mt-0.5">{absentDaysCount} दिन</div>
                   </div>
-                  <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-center shadow-2xs">
+                  <div className="bg-amber-50 border border-amber-300 rounded-xl p-3 text-center shadow-2xs">
+                    <div className="text-[11px] font-bold text-amber-800 uppercase">🌴 स्कूल अवकाश</div>
+                    <div className="text-xl font-black text-amber-900 mt-0.5">{holidaysCount} दिन</div>
+                  </div>
+                  <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-center shadow-2xs col-span-2 sm:col-span-1">
                     <div className="text-[11px] font-bold text-blue-900 uppercase">हाजिरी प्रतिशत</div>
                     <div className="text-xl font-black text-blue-950 mt-0.5">{attendancePercentage}%</div>
                   </div>
@@ -505,6 +618,7 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
                             dateStr: dateKey,
                             record,
                             isSunday,
+                            holiday: item.holiday,
                           })
                         }
                         className={`h-14 sm:h-16 rounded-xl p-1.5 flex flex-col justify-between transition-all cursor-pointer border select-none ${
@@ -518,13 +632,15 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
                             ? 'bg-rose-50/90 border-rose-300 hover:bg-rose-100 text-rose-950'
                             : status === 'sunday'
                             ? 'bg-slate-100 border-slate-200 text-slate-400'
+                            : status === 'holiday'
+                            ? 'bg-amber-100/90 border-amber-300 hover:bg-amber-200/90 text-amber-950 shadow-2xs'
                             : 'bg-white border-slate-200 hover:border-slate-300 text-slate-700'
                         }`}
                       >
                         <div className="flex items-center justify-between">
                           <span
                             className={`text-xs font-black ${
-                              isSunday ? 'text-rose-500' : 'text-slate-900'
+                              isSunday ? 'text-rose-500' : status === 'holiday' ? 'text-amber-800' : 'text-slate-900'
                             }`}
                           >
                             {day}
@@ -539,6 +655,11 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
                               ✕
                             </span>
                           )}
+                          {status === 'holiday' && (
+                            <span className="w-4 h-4 rounded-full bg-amber-500 text-slate-950 flex items-center justify-center text-[9px] font-black" title={item.holiday?.title}>
+                              🌴
+                            </span>
+                          )}
                         </div>
 
                         <div className="text-[10px] font-extrabold truncate">
@@ -550,6 +671,11 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
                           )}
                           {status === 'sunday' && (
                             <span className="text-slate-400">रविवार</span>
+                          )}
+                          {status === 'holiday' && (
+                            <span className="text-amber-900 font-black truncate block text-[9px]" title={item.holiday?.title}>
+                              🌴 {item.holiday?.title || 'अवकाश'}
+                            </span>
                           )}
                           {status === 'unmarked' && (
                             <span className="text-slate-300">—</span>
@@ -572,6 +698,8 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
                       className={`px-2.5 py-0.5 rounded-full font-black text-xs ${
                         selectedDayDetail.isSunday
                           ? 'bg-slate-200 text-slate-700'
+                          : selectedDayDetail.holiday
+                          ? 'bg-amber-400 text-slate-950'
                           : selectedDayDetail.record?.Is_Present
                           ? 'bg-emerald-600 text-white'
                           : selectedDayDetail.record
@@ -580,14 +708,30 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
                       }`}
                     >
                       {selectedDayDetail.isSunday
-                        ? 'रविवार (Sunday Holiday)'
+                        ? 'रविवार (Sunday Off)'
+                        : selectedDayDetail.holiday
+                        ? `🌴 ${selectedDayDetail.holiday.title}`
                         : selectedDayDetail.record?.Is_Present
-                        ? '🟢 उपस्थित (Present)'
+                        ? 'उपस्थित (Present)'
                         : selectedDayDetail.record
-                        ? '🔴 अनुपस्थित (Absent)'
-                        : 'विवरण उपलब्ध नहीं'}
+                        ? 'अनुपस्थित (Absent)'
+                        : 'हाजिरी दर्ज नहीं है'}
                     </span>
                   </div>
+
+                  {selectedDayDetail.holiday && (
+                    <div className="p-3 bg-amber-100/90 rounded-xl border border-amber-300 text-amber-950 space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-base">🌴</span>
+                        <strong className="text-xs font-black">
+                          स्कूल अवकाश: {selectedDayDetail.holiday.title}
+                        </strong>
+                      </div>
+                      <p className="text-[11px] text-amber-800 leading-relaxed">
+                        {selectedDayDetail.holiday.description || 'इस दिन स्कूल में सार्वजनिक/त्योहार अवकाश घोषित रहा। छात्रों की अनुपस्थिति नहीं गिनी गई।'}
+                      </p>
+                    </div>
+                  )}
 
                   {selectedDayDetail.record ? (
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
@@ -739,18 +883,257 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
       </div>
   );
 
+  const holidayModal = isHolidayModalOpen ? (
+    <div
+      onClick={(e) => {
+        if (e.target === e.currentTarget) setIsHolidayModalOpen(false);
+      }}
+      className="fixed inset-0 z-[120] flex items-center justify-center p-3 sm:p-5 bg-slate-950/85 backdrop-blur-md overflow-y-auto animate-fadeIn"
+    >
+      <div className="relative w-full max-w-4xl bg-white rounded-3xl shadow-2xl border border-amber-200 overflow-hidden my-auto flex flex-col max-h-[92vh]">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-amber-600 via-amber-500 to-amber-700 px-6 py-4 text-slate-950 flex items-center justify-between shrink-0 shadow-md">
+          <div className="flex items-center gap-3">
+            <span className="w-10 h-10 rounded-2xl bg-slate-950 text-amber-400 flex items-center justify-center font-black text-xl shadow-md">
+              🌴
+            </span>
+            <div>
+              <h3 className="font-black text-base sm:text-lg text-slate-950">
+                स्कूल अवकाश व छुट्टियां प्रबंधन (School Holiday Calendar)
+              </h3>
+              <p className="text-xs text-amber-950 font-medium">
+                रविवार के अतिरिक्त त्योहार, मौसम (शीतकालीन/ग्रीष्मकालीन) व डीएम आदेश अवकाश दर्ज करें।
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsHolidayModalOpen(false)}
+            className="w-9 h-9 rounded-xl bg-slate-950/20 hover:bg-slate-950/30 text-slate-950 flex items-center justify-center font-black cursor-pointer transition-colors"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Sync notification */}
+        {holidaySyncMsg && (
+          <div className="px-6 py-2 bg-emerald-500 text-white text-xs font-black flex items-center justify-between animate-fadeIn">
+            <span>{holidaySyncMsg}</span>
+            <span className="text-[10px] bg-emerald-700/60 px-2 py-0.5 rounded">Google Sheets Synchronized</span>
+          </div>
+        )}
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* Form Column */}
+            <div className="lg:col-span-5 bg-amber-50/60 border border-amber-200 rounded-2xl p-4 sm:p-5 space-y-4">
+              <div className="flex items-center gap-2 border-b border-amber-200 pb-2">
+                <span className="text-amber-800 font-black text-sm">➕ नया अवकाश जोड़ें</span>
+              </div>
+
+              <form onSubmit={handleSaveHoliday} className="space-y-3.5 text-xs">
+                <div>
+                  <label className="block font-black text-slate-800 mb-1">
+                    अवकाश का नाम (Holiday Title) *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={holidayTitle}
+                    onChange={(e) => setHolidayTitle(e.target.value)}
+                    placeholder="उदा. दीपावली अवकाश, ईद, शीतकालीन अवकाश"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-bold text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block font-black text-slate-800 mb-1">
+                      तारीख (Date) *
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={holidayDate}
+                      onChange={(e) => setHolidayDate(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-bold text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-black text-slate-800 mb-1">
+                      अंतिम तारीख (Optional)
+                    </label>
+                    <input
+                      type="date"
+                      value={holidayEndDate}
+                      onChange={(e) => setHolidayEndDate(e.target.value)}
+                      placeholder="यदि कई दिनों का अवकाश हो"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-bold text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-black text-slate-800 mb-1">
+                    श्रेणी (Category)
+                  </label>
+                  <select
+                    value={holidayCategory}
+                    onChange={(e) => setHolidayCategory(e.target.value as any)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-bold text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-amber-500 cursor-pointer"
+                  >
+                    <option value="festival">त्योहार (Festival)</option>
+                    <option value="national">राष्ट्रीय पर्व (National Holiday)</option>
+                    <option value="weather">मौसम / शीतकालीन / ग्रीष्मकालीन (Weather)</option>
+                    <option value="admin">प्रशासनिक / डीएम आदेश (DM / Govt Order)</option>
+                    <option value="other">अन्य अवकाश (Other)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-black text-slate-800 mb-1">
+                    विवरण या आदेश संदर्भ (Description)
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={holidayDescription}
+                    onChange={(e) => setHolidayDescription(e.target.value)}
+                    placeholder="उदा. डीएम कार्यालय आदेशानुसार अत्यधिक ठंड के कारण कक्षा 1 से 8 तक अवकाश।"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-medium text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-2.5 bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-black rounded-xl shadow-md transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-98"
+                >
+                  <i className="fa-solid fa-floppy-disk"></i>
+                  <span>कैलेंडर में अवकाश जोड़ें (Save Holiday)</span>
+                </button>
+              </form>
+
+              <div className="p-3 bg-amber-100/70 border border-amber-300 rounded-xl text-[11px] text-amber-900 leading-relaxed">
+                💡 <strong>अटेंडेंस सुरक्षा:</strong> इस सूची में दर्ज दिन स्कूल कैलेंडर में <strong>🌴 पीले रंग</strong> में दिखते हैं। इन दिनों पर किसी छात्र या अध्यापक को अनुपस्थित (Absent) नहीं माना जाता।
+              </div>
+            </div>
+
+            {/* List Column */}
+            <div className="lg:col-span-7 space-y-3">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                <span className="font-black text-slate-900 text-sm flex items-center gap-1.5">
+                  <span>📅 दर्ज अवकाश सूची ({holidays.length} छुट्टियां)</span>
+                </span>
+                <span className="text-[11px] font-bold text-slate-500">
+                  Google Sheet: <code className="bg-slate-100 text-blue-900 px-1 py-0.5 rounded">School_Holidays</code>
+                </span>
+              </div>
+
+              {holidays.length === 0 ? (
+                <div className="text-center py-12 bg-slate-50 border border-dashed border-slate-300 rounded-2xl p-6">
+                  <p className="font-bold text-slate-600 text-sm">अभी कोई गैर-रविवार अवकाश दर्ज नहीं है।</p>
+                  <p className="text-xs text-slate-400 mt-1">बाएं फॉर्म से त्योहार या सरकारी आदेश अनुसार अवकाश जोड़ें।</p>
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-[460px] overflow-y-auto pr-1">
+                  {holidays.map((h) => {
+                    const isRange = Boolean(h.end_date && h.end_date !== h.date);
+                    return (
+                      <div
+                        key={h.id}
+                        className="bg-white border border-slate-200 hover:border-amber-300 rounded-2xl p-3.5 shadow-2xs hover:shadow-md transition-all flex items-start justify-between gap-3"
+                      >
+                        <div className="space-y-1 min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="px-2 py-0.5 rounded-lg bg-amber-100 border border-amber-300 text-amber-950 font-black text-xs font-mono">
+                              📅 {h.date} {isRange ? `➔ ${h.end_date}` : ''}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                                h.category === 'national'
+                                  ? 'bg-blue-100 text-blue-800'
+                                  : h.category === 'weather'
+                                  ? 'bg-cyan-100 text-cyan-800'
+                                  : h.category === 'admin'
+                                  ? 'bg-purple-100 text-purple-800'
+                                  : 'bg-amber-100 text-amber-800'
+                              }`}
+                            >
+                              {h.category === 'national'
+                                ? 'राष्ट्रीय पर्व'
+                                : h.category === 'weather'
+                                ? 'मौसम / शीतकालीन'
+                                : h.category === 'admin'
+                                ? 'डीएम / प्रशासनिक'
+                                : 'त्योहार'}
+                            </span>
+                          </div>
+
+                          <h5 className="font-black text-slate-900 text-sm leading-snug">
+                            🌴 {h.title}
+                          </h5>
+
+                          {h.description && (
+                            <p className="text-xs text-slate-600 leading-relaxed">
+                              {h.description}
+                            </p>
+                          )}
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteHoliday(h.id)}
+                          className="w-8 h-8 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 flex items-center justify-center shrink-0 cursor-pointer transition-colors"
+                          title="इस अवकाश को हटाएं"
+                        >
+                          <i className="fa-solid fa-trash-can text-xs"></i>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="bg-slate-50 px-6 py-3 border-t border-slate-200 flex items-center justify-between text-xs text-slate-600 shrink-0">
+          <span className="font-medium">
+            ✅ स्कूल हॉलिडे डेटाबेस ई.वी.एस. पब्लिक स्कूल सर्वर व Google Sheet से स्वचालित रूप से लिंक रहता है।
+          </span>
+          <button
+            type="button"
+            onClick={() => setIsHolidayModalOpen(false)}
+            className="px-4 py-1.5 bg-[#0c2340] text-amber-300 rounded-xl font-bold cursor-pointer hover:bg-[#10316b]"
+          >
+            पूर्ण (Done)
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   if (embedded) {
-    return calendarBody;
+    return (
+      <>
+        {calendarBody}
+        {holidayModal}
+      </>
+    );
   }
 
   return (
-    <div
-      onClick={(e) => {
-        if (e.target === e.currentTarget && onClose) onClose();
-      }}
-      className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-5 bg-slate-950/80 backdrop-blur-sm overflow-y-auto animate-fadeIn"
-    >
-      {calendarBody}
-    </div>
+    <>
+      <div
+        onClick={(e) => {
+          if (e.target === e.currentTarget && onClose) onClose();
+        }}
+        className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-5 bg-slate-950/80 backdrop-blur-sm overflow-y-auto animate-fadeIn"
+      >
+        {calendarBody}
+      </div>
+      {holidayModal}
+    </>
   );
 };
