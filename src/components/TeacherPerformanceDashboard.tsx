@@ -7,6 +7,7 @@ import {
   StudentBehaviorRecord,
   Student,
   SyllabusTopicRecord,
+  WeeklyTestRecord,
 } from '../types';
 import {
   TeacherPerformanceRecord,
@@ -32,12 +33,13 @@ import {
 import { getAppsScriptUrl } from '../utils/busTrackingService';
 import { directGetFromSheet, dualSyncWriteToSheet } from '../utils/sheetDirectSync';
 import { TeacherSyllabusPlanner } from './TeacherSyllabusPlanner';
+import { WeeklySubjectTestManager, loadLocalWeeklyTests } from './WeeklySubjectTestManager';
 
 interface TeacherPerformanceDashboardProps {
   users?: SchoolUser[];
   managerName?: string;
   onClose?: () => void;
-  initialTab?: 'leaderboard' | 'annual' | 'records' | 'setup' | 'syllabus';
+  initialTab?: 'leaderboard' | 'annual' | 'records' | 'setup' | 'syllabus' | 'weekly_tests';
   isTeacherView?: boolean;
   loggedTeacherId?: string;
   homeworkList?: Homework[];
@@ -46,6 +48,7 @@ interface TeacherPerformanceDashboardProps {
   behaviorList?: StudentBehaviorRecord[];
   students?: Student[];
   syllabusTopics?: SyllabusTopicRecord[];
+  weeklyTests?: WeeklyTestRecord[];
   classMap?: Record<string, string>;
 }
 
@@ -62,6 +65,7 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
   behaviorList = [],
   students = [],
   syllabusTopics = [],
+  weeklyTests = [],
   classMap,
 }) => {
   // Filter active teachers from users list (exclude drivers/parents/non-teaching transport staff)
@@ -83,7 +87,10 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
 
   const [records, setRecords] = useState<TeacherPerformanceRecord[]>(() => loadLocalPerformanceRecords());
   const [loadedSyllabusTopics, setLoadedSyllabusTopics] = useState<SyllabusTopicRecord[]>(syllabusTopics);
-  const [activeTab, setActiveTab] = useState<'leaderboard' | 'annual' | 'records' | 'setup' | 'syllabus'>(initialTab);
+  const [loadedWeeklyTests, setLoadedWeeklyTests] = useState<WeeklyTestRecord[]>(() =>
+    weeklyTests.length > 0 ? weeklyTests : loadLocalWeeklyTests()
+  );
+  const [activeTab, setActiveTab] = useState<'leaderboard' | 'annual' | 'records' | 'setup' | 'syllabus' | 'weekly_tests'>(initialTab);
   const [selectedMonth, setSelectedMonth] = useState<string>(() => getDefaultAcademicMonth());
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [editingRecord, setEditingRecord] = useState<TeacherPerformanceRecord | null>(null);
@@ -107,6 +114,7 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
   const [isRefreshingSheet, setIsRefreshingSheet] = useState<boolean>(false);
 
   const effectiveSyllabusTopics = syllabusTopics.length > 0 ? syllabusTopics : loadedSyllabusTopics;
+  const effectiveWeeklyTests = weeklyTests.length > 0 ? weeklyTests : loadedWeeklyTests;
 
   const handleSyncPerformanceFromSheet = async () => {
     setIsRefreshingSheet(true);
@@ -220,11 +228,28 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
           })
           .catch(() => {});
       }
+      if (weeklyTests.length === 0) {
+        fetch('/api/weekly-tests?refresh=1', {
+          headers: { 'x-apps-script-url': activeUrl },
+          signal: AbortSignal.timeout(10000),
+        })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((data) => {
+            if (Array.isArray(data) && data.length > 0) {
+              setLoadedWeeklyTests(data);
+            }
+          })
+          .catch(() => {});
+      }
     };
     loadFresh();
 
     const onStorage = (ev: StorageEvent) => {
-      if (ev.key === 'evs_teacher_performance_records_v1' || ev.key === 'evs_syllabus_planner_records_v1') {
+      if (
+        ev.key === 'evs_teacher_performance_records_v1' ||
+        ev.key === 'evs_syllabus_planner_records_v1' ||
+        ev.key === 'evs_weekly_subject_tests_v1'
+      ) {
         loadFresh();
       }
     };
@@ -237,7 +262,10 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
       ws.onmessage = (evt) => {
         try {
           const msg = JSON.parse(evt.data);
-          if (msg?.type === 'APP_DATA_UPDATED' && (msg.entity === 'teacher_performance' || msg.entity === 'syllabus_tracker')) {
+          if (
+            msg?.type === 'APP_DATA_UPDATED' &&
+            (msg.entity === 'teacher_performance' || msg.entity === 'syllabus_tracker' || msg.entity === 'weekly_tests')
+          ) {
             loadFresh();
           }
         } catch {}
@@ -250,7 +278,7 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
         try { ws.close(); } catch {}
       }
     };
-  }, [syllabusTopics.length]);
+  }, [syllabusTopics.length, weeklyTests.length]);
 
   // Compute Live Calculated Monthly Score for Modal
   const liveScore = useMemo(() => {
@@ -314,6 +342,7 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
       behaviorList,
       students,
       syllabusTopics: effectiveSyllabusTopics,
+      weeklyTests: effectiveWeeklyTests,
       classMap,
       evaluatedBy: managerName,
     });
@@ -342,6 +371,7 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
         behaviorList,
         students,
         syllabusTopics: effectiveSyllabusTopics,
+        weeklyTests: effectiveWeeklyTests,
         classMap,
         evaluatedBy: managerName,
       });
@@ -775,7 +805,7 @@ function handleDeleteRowById(ss, sheetName, id) {
 
       {/* 2. TAB CONTROLS & MONTH SELECTOR */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
-        <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-xl">
+        <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-100 rounded-xl">
           <button
             onClick={() => setActiveTab('leaderboard')}
             className={`px-4 py-2 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center gap-2 ${
@@ -822,6 +852,18 @@ function handleDeleteRowById(ss, sheetName, id) {
           >
             <i className="fa-solid fa-book-open-reader text-amber-500"></i>
             <span>वीकली सिलेबस ट्रैकर (30 Pts)</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('weekly_tests')}
+            className={`px-3 py-2 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
+              activeTab === 'weekly_tests'
+                ? 'bg-[#0c2340] text-amber-400 shadow-sm ring-2 ring-amber-400/50'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <i className="fa-solid fa-file-pen text-emerald-500"></i>
+            <span>वीकली विषय टेस्ट (25 Pts)</span>
           </button>
 
           <button
@@ -969,6 +1011,41 @@ function handleDeleteRowById(ss, sheetName, id) {
                 </button>
               )}
             </div>
+
+            {/* Alert if old cached auto-score shows test > 0 without any Weekly Subject Test */}
+            {!isTeacherView &&
+              monthlySummary.rankings.some(
+                (r) =>
+                  r.student_test_score > 0 &&
+                  String(r.remarks || '').includes('लाइव ऐप डेटा स्कोर:') &&
+                  !effectiveWeeklyTests.some(
+                    (wt) =>
+                      (wt.month || String(wt.test_date || '').slice(0, 7)) === selectedMonth &&
+                      String(wt.teacher_id || '').toLowerCase() === String(r.teacher_id || '').toLowerCase()
+                  )
+              ) && (
+                <div className="mx-5 mt-4 p-3.5 rounded-2xl bg-amber-50 border border-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950">
+                  <div className="flex items-start gap-2.5">
+                    <i className="fa-solid fa-circle-info text-amber-600 text-base mt-0.5"></i>
+                    <div>
+                      <strong className="font-black block">
+                        पुराने टेस्ट स्कोर को वास्तविक साप्ताहिक विषय टेस्ट (Weekly Subject Test) से रीसेट/अपडेट करें:
+                      </strong>
+                      <span className="text-amber-900">
+                        पिछले ऑटो-मूल्यांकन में टेस्ट अंक व्यवहार/होमवर्क लॉग से जुड़े थे। अब जब तक <strong>वीकली विषय टेस्ट</strong> दर्ज न हो, टेस्ट स्कोर <strong>0</strong> रहेगा।
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleAutoEvaluateAllTeachers}
+                    disabled={isAutoCalculatingAll}
+                    className="px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs shadow-xs cursor-pointer shrink-0 transition"
+                  >
+                    {isAutoCalculatingAll ? 'गणना हो रही...' : '🔄 अभी ताज़ा री-कैलकुलेट करें'}
+                  </button>
+                </div>
+              )}
 
             {monthlySummary.rankings.length === 0 ? (
               <div className="p-12 text-center">
@@ -1413,6 +1490,23 @@ function handleDeleteRowById(ss, sheetName, id) {
           )}
           isManager={!isTeacherView}
           onSyllabusUpdated={(updated) => setLoadedSyllabusTopics(updated)}
+        />
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB 4B: WEEKLY SUBJECT TEST MANAGER (25 POINTS REAL TEST ENGINE)          */}
+      {/* ========================================================================= */}
+      {activeTab === 'weekly_tests' && (
+        <WeeklySubjectTestManager
+          allTeachers={teachers}
+          students={students}
+          classMap={classMap}
+          currentUser={teachers.find(
+            (t) =>
+              (loggedTeacherId && (String(t.User_ID) === String(loggedTeacherId) || String(t.Username) === String(loggedTeacherId)))
+          )}
+          isManager={!isTeacherView}
+          onTestsUpdated={(updated) => setLoadedWeeklyTests(updated)}
         />
       )}
 

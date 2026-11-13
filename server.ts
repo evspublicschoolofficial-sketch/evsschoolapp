@@ -155,6 +155,28 @@ function saveSyllabusTrackerCache() {
 }
 
 // =========================================================================
+// WEEKLY SUBJECT TESTS PERSISTENCE & GOOGLE SHEET "Weekly_Tests" SYNC
+// =========================================================================
+const WEEKLY_TESTS_FILE = '/tmp/evs_weekly_tests.json';
+let weeklyTestsStore: any[] = [];
+try {
+  if (fs.existsSync(WEEKLY_TESTS_FILE)) {
+    const rawWt = fs.readFileSync(WEEKLY_TESTS_FILE, 'utf-8');
+    weeklyTestsStore = JSON.parse(rawWt) || [];
+  }
+} catch {
+  weeklyTestsStore = [];
+}
+
+function saveWeeklyTestsCache() {
+  try {
+    fs.writeFileSync(WEEKLY_TESTS_FILE, JSON.stringify(weeklyTestsStore, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Could not write weekly tests cache file:', e);
+  }
+}
+
+// =========================================================================
 // SCHOOL HOLIDAYS (SUNDAY KE ALAWA CHHUTTIYAN) & "School_Holidays" SYNC
 // =========================================================================
 const HOLIDAYS_FILE = '/tmp/evs_school_holidays.json';
@@ -336,7 +358,19 @@ async function forwardToGoogleAppsScript(payload: any) {
         const gCheck = parseAppsScriptResponse(gText);
         if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
       } catch {}
-    } else if (formattedPayload.action === 'deleteSyllabusTopic' || formattedPayload.action === 'deleteSchoolHoliday') {
+    } else if (formattedPayload.action === 'saveWeeklyTest') {
+      try {
+        const getUrl = `${targetUrl}?action=saveWeeklyTest&record=${encodeURIComponent(typeof formattedPayload.record === 'string' ? formattedPayload.record : JSON.stringify(formattedPayload))}`;
+        const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(8000) });
+        const gText = await gRes.text();
+        const gCheck = parseAppsScriptResponse(gText);
+        if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
+      } catch {}
+    } else if (
+      formattedPayload.action === 'deleteSyllabusTopic' ||
+      formattedPayload.action === 'deleteSchoolHoliday' ||
+      formattedPayload.action === 'deleteWeeklyTest'
+    ) {
       try {
         const getUrl = `${targetUrl}?action=${encodeURIComponent(formattedPayload.action)}&id=${encodeURIComponent(formattedPayload.id || '')}`;
         const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(8000) });
@@ -358,6 +392,7 @@ async function forwardToGoogleAppsScript(payload: any) {
 let lastTpSheetSync = 0;
 let lastSyllabusSheetSync = 0;
 let lastHolidaySheetSync = 0;
+let lastWeeklyTestSheetSync = 0;
 
 function normalizeSheetMonth(val: any): string {
   if (!val) return '';
@@ -581,6 +616,99 @@ async function syncSyllabusTrackerFromSheet(force = false, overrideUrl?: string)
     );
     syllabusTrackerStore = [...localPending, ...parsed];
     saveSyllabusTrackerCache();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function syncWeeklyTestsFromSheet(force = false, overrideUrl?: string): Promise<boolean> {
+  const now = Date.now();
+  if (!force && now - lastWeeklyTestSheetSync < 2500) return false;
+  lastWeeklyTestSheetSync = now;
+  try {
+    const baseUrl = overrideUrl || currentAppsScriptUrl;
+    const url = `${baseUrl}?action=getWeeklyTests&_t=${now}`;
+    const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(9000) });
+    if (!res.ok) return false;
+    const text = await res.text();
+    if (!text || text.trim().startsWith('<')) return false;
+    const json: any = JSON.parse(text);
+    if (json?.status === 'error') return false;
+
+    const rawRows: any[] = Array.isArray(json)
+      ? json
+      : Array.isArray(json?.tests)
+      ? json.tests
+      : Array.isArray(json?.records)
+      ? json.records
+      : [];
+
+    const parsed: any[] = [];
+    if (rawRows.length > 0 && Array.isArray(rawRows[0])) {
+      for (let i = 1; i < rawRows.length; i++) {
+        const r = rawRows[i];
+        if (!r || (!r[0] && !r[9] && !r[10])) continue;
+        const testDate = normalizeSheetDate(r[7]) || new Date().toISOString().slice(0, 10);
+        const monthStr = normalizeSheetMonth(r[5]) || testDate.slice(0, 7);
+        parsed.push({
+          id: String(r[0] || `wt_${i}`).trim(),
+          test_session_id: String(r[1] || '').trim(),
+          teacher_id: String(r[2] || '').trim(),
+          teacher_name: String(r[3] || '').trim(),
+          class_name: String(r[4] || '').trim(),
+          month: monthStr,
+          week_number: Number(r[6] || 1),
+          test_date: testDate,
+          subject: String(r[8] || '').trim(),
+          topic_name: String(r[9] || '').trim(),
+          student_id: String(r[10] || '').trim(),
+          student_name: String(r[11] || '').trim(),
+          max_marks: Number(r[12] || 20),
+          marks_obtained: Number(r[13] || 0),
+          attendance_status: String(r[14] || 'Present').trim() === 'Absent' ? 'Absent' : 'Present',
+          remarks: String(r[15] || '').trim(),
+          timestamp: r[16] ? String(r[16]) : new Date().toISOString(),
+          _sheetSynced: true,
+        });
+      }
+    } else {
+      for (const obj of rawRows) {
+        if (!obj || (!obj.student_id && !obj.student_name && !obj.Student_ID && !obj.Student_Name)) continue;
+        const testDate = normalizeSheetDate(obj.test_date ?? obj.Test_Date) || new Date().toISOString().slice(0, 10);
+        const monthStr = normalizeSheetMonth(obj.month ?? obj.Month) || testDate.slice(0, 7);
+        parsed.push({
+          id: String(obj.id ?? obj.ID ?? `wt_${testDate}_${obj.student_id || 's'}`).trim(),
+          test_session_id: String(obj.test_session_id ?? obj.Session_ID ?? '').trim(),
+          teacher_id: String(obj.teacher_id ?? obj.Teacher_ID ?? '').trim(),
+          teacher_name: String(obj.teacher_name ?? obj.Teacher_Name ?? '').trim(),
+          class_name: String(obj.class_name ?? obj.Class ?? '').trim(),
+          month: monthStr,
+          week_number: Number(obj.week_number ?? obj.Week_Number ?? 1),
+          test_date: testDate,
+          subject: String(obj.subject ?? obj.Subject ?? '').trim(),
+          topic_name: String(obj.topic_name ?? obj.Topic ?? '').trim(),
+          student_id: String(obj.student_id ?? obj.Student_ID ?? '').trim(),
+          student_name: String(obj.student_name ?? obj.Student_Name ?? '').trim(),
+          max_marks: Number(obj.max_marks ?? obj.Max_Marks ?? 20),
+          marks_obtained: Number(obj.marks_obtained ?? obj.Marks_Obtained ?? 0),
+          attendance_status:
+            String(obj.attendance_status ?? obj.Status ?? 'Present').trim() === 'Absent' ? 'Absent' : 'Present',
+          remarks: String(obj.remarks ?? obj.Remarks ?? '').trim(),
+          timestamp: String(obj.timestamp ?? obj.Timestamp ?? new Date().toISOString()),
+          _sheetSynced: true,
+        });
+      }
+    }
+
+    const sheetIds = new Set(parsed.map((p) => p.id));
+    const localPending = weeklyTestsStore.filter(
+      (loc) =>
+        !sheetIds.has(loc.id) &&
+        (loc._sheetSynced !== true || (loc.timestamp && Date.now() - new Date(loc.timestamp).getTime() < 45000))
+    );
+    weeklyTestsStore = [...localPending, ...parsed];
+    saveWeeklyTestsCache();
     return true;
   } catch {
     return false;
@@ -2151,6 +2279,159 @@ async function startServer() {
     });
   });
 
+  // Endpoints for Weekly Subject Tests & Student Test Marks (25-pt Teacher Parameter)
+  app.get('/api/weekly-tests', async (req, res) => {
+    const force = req.query.refresh === '1' || req.query.sync === '1';
+    const targetUrl = resolveTargetAppsScriptUrl(req);
+    await syncWeeklyTestsFromSheet(force, targetUrl);
+    const { teacher_id, month, class_name } = req.query;
+    let filtered = weeklyTestsStore;
+    if (teacher_id) {
+      filtered = filtered.filter((t) => String(t.teacher_id) === String(teacher_id));
+    }
+    if (month) {
+      filtered = filtered.filter((t) => String(t.month) === String(month));
+    }
+    if (class_name) {
+      filtered = filtered.filter((t) => String(t.class_name) === String(class_name));
+    }
+    res.json(filtered);
+  });
+
+  app.post('/api/weekly-tests', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const batchInput: any[] = Array.isArray(req.body?.records)
+        ? req.body.records
+        : req.body
+        ? [req.body]
+        : [];
+      const validRecords = batchInput.filter((r) => r && (r.student_id || r.student_name));
+      if (validRecords.length === 0) {
+        return res.status(400).json({ error: 'Valid weekly test record(s) required' });
+      }
+
+      const nowIso = new Date().toISOString();
+      const savedRecords: any[] = [];
+      for (const rec of validRecords) {
+        const rid = String(
+          rec.id || `wt_${(rec.month || '2026').replace('-', '_')}_${rec.student_id || 's'}_${Date.now()}`
+        ).trim();
+        const normalized = { ...rec, id: rid, timestamp: nowIso };
+        const idx = weeklyTestsStore.findIndex((w) => w.id === rid);
+        if (idx >= 0) {
+          weeklyTestsStore[idx] = { ...weeklyTestsStore[idx], ...normalized };
+        } else {
+          weeklyTestsStore.unshift(normalized);
+        }
+        savedRecords.push(normalized);
+      }
+      saveWeeklyTestsCache();
+
+      let sheetSynced = false;
+      let sheetError = '';
+      const batchRes = await forwardToGoogleAppsScript({
+        action: 'saveWeeklyTestsBatch',
+        records: JSON.stringify(savedRecords),
+        appsScriptUrl: targetUrl,
+      });
+
+      if (batchRes.ok) {
+        sheetSynced = true;
+      } else {
+        sheetError = batchRes.error || batchRes.response || 'Apps Script doPost में saveWeeklyTestsBatch / saveWeeklyTest नहीं मिला';
+        if (savedRecords.length === 1) {
+          const singleRes = await forwardToGoogleAppsScript({
+            action: 'saveWeeklyTest',
+            record: JSON.stringify(savedRecords[0]),
+            appsScriptUrl: targetUrl,
+            ...savedRecords[0],
+          });
+          if (singleRes.ok) {
+            sheetSynced = true;
+            sheetError = '';
+          }
+        }
+      }
+
+      if (sheetSynced) {
+        const savedSet = new Set(savedRecords.map((s) => s.id));
+        weeklyTestsStore.forEach((w) => {
+          if (savedSet.has(w.id)) w._sheetSynced = true;
+        });
+        saveWeeklyTestsCache();
+      }
+
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'weekly_tests',
+        action: 'update',
+        details: { count: savedRecords.length },
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) client.send(broadcastMsg);
+      }
+
+      res.json({
+        success: true,
+        sheetSynced,
+        sheetError: sheetSynced ? undefined : sheetError,
+        message: sheetSynced
+          ? `Google Sheet 'Weekly_Tests' में ${savedRecords.length} टेस्ट प्रविष्टियाँ सुरक्षित हो गईं!`
+          : `⚠️ ऐप में सेव हुआ, पर Sheet में नहीं गया: ${sheetError}`,
+        records: savedRecords,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Error saving weekly test records' });
+    }
+  });
+
+  app.delete('/api/weekly-tests/:id', async (req, res) => {
+    const id = req.params.id;
+    const targetUrl = resolveTargetAppsScriptUrl(req);
+    let gasResult: { ok: boolean; error?: string; response?: string } = { ok: false };
+
+    if (id.startsWith('session:')) {
+      const sessId = id.slice('session:'.length);
+      const removed = weeklyTestsStore.filter((w) => w.test_session_id === sessId);
+      weeklyTestsStore = weeklyTestsStore.filter((w) => w.test_session_id !== sessId);
+      saveWeeklyTestsCache();
+      for (const r of removed) {
+        gasResult = await forwardToGoogleAppsScript({
+          action: 'deleteWeeklyTest',
+          id: r.id,
+          appsScriptUrl: targetUrl,
+        });
+      }
+    } else {
+      weeklyTestsStore = weeklyTestsStore.filter((w) => w.id !== id);
+      saveWeeklyTestsCache();
+      gasResult = await forwardToGoogleAppsScript({
+        action: 'deleteWeeklyTest',
+        id,
+        appsScriptUrl: targetUrl,
+      });
+    }
+
+    const broadcastMsg = JSON.stringify({
+      type: 'APP_DATA_UPDATED',
+      entity: 'weekly_tests',
+      action: 'delete',
+      details: { id },
+      timestamp: Date.now(),
+    });
+    for (const client of clients) {
+      if (client.readyState === WebSocket.OPEN) client.send(broadcastMsg);
+    }
+
+    res.json({
+      success: true,
+      sheetSynced: gasResult.ok,
+      message: gasResult.ok ? 'Weekly test deleted from sheet' : 'Deleted locally',
+    });
+  });
+
   // Endpoints for School Holidays (Sunday ke alawa chhuttiyan)
   app.get('/api/school-holidays', async (req, res) => {
     const force = req.query.refresh === '1' || req.query.sync === '1';
@@ -3060,6 +3341,7 @@ async function startServer() {
       syncTeacherPerformanceFromSheet(true).catch(() => {});
       syncSyllabusTrackerFromSheet(true).catch(() => {});
       syncSchoolHolidaysFromSheet(true).catch(() => {});
+      syncWeeklyTestsFromSheet(true).catch(() => {});
     }, 3000);
   });
 

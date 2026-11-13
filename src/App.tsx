@@ -38,6 +38,7 @@ const SchoolQRCodeModal = React.lazy(() => import('./components/SchoolQRCodeModa
 const ManagerOverviewModals = React.lazy(() => import('./components/ManagerOverviewModals').then((m) => ({ default: m.ManagerOverviewModals })));
 const TeacherPerformanceDashboard = React.lazy(() => import('./components/TeacherPerformanceDashboard').then((m) => ({ default: m.TeacherPerformanceDashboard })));
 const TeacherSyllabusPlanner = React.lazy(() => import('./components/TeacherSyllabusPlanner').then((m) => ({ default: m.TeacherSyllabusPlanner })));
+const WeeklySubjectTestManager = React.lazy(() => import('./components/WeeklySubjectTestManager').then((m) => ({ default: m.WeeklySubjectTestManager })));
 
 // Non-inlined static asset paths (prevents 1.4 MB image bloat inside main JS bundle)
 const studentFarahPhoto = '/assets/student_farah_1789483069291.jpg';
@@ -1645,10 +1646,10 @@ export default function App() {
   const [teacherLoginError, setTeacherLoginError] = useState<string | null>(null);
   const [teacherLoginSubmitting, setTeacherLoginSubmitting] = useState<boolean>(false);
   const [showTeacherPassword, setShowTeacherPassword] = useState<boolean>(false);
-  const [teacherPortalTab, setTeacherPortalTab] = useState<'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior' | 'staff_attendance' | 'performance' | 'syllabus'>(() => {
+  const [teacherPortalTab, setTeacherPortalTab] = useState<'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior' | 'staff_attendance' | 'performance' | 'syllabus' | 'weekly_tests'>(() => {
     try {
       const saved = localStorage.getItem('evs_teacher_portal_tab');
-      if (saved && ['upload', 'tracker', 'submissions', 'notices', 'behavior', 'staff_attendance', 'performance', 'syllabus'].includes(saved)) {
+      if (saved && ['upload', 'tracker', 'submissions', 'notices', 'behavior', 'staff_attendance', 'performance', 'syllabus', 'weekly_tests'].includes(saved)) {
         return saved as any;
       }
     } catch {}
@@ -3132,7 +3133,7 @@ export default function App() {
   }, [staffAttendanceList, teacherUser, managerUser]);
 
   // Switch tabs in Teacher Portal with automatic tab-specific data refresh
-  const handleSelectTeacherTab = (tab: 'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior' | 'staff_attendance' | 'performance' | 'syllabus') => {
+  const handleSelectTeacherTab = (tab: 'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior' | 'staff_attendance' | 'performance' | 'syllabus' | 'weekly_tests') => {
     setTeacherPortalTab(tab);
     if (tab === 'tracker') {
       fetchHomeworkTracker(false, true);
@@ -9927,6 +9928,19 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 <span className="px-1.5 py-0.5 text-[10px] bg-amber-400/20 text-amber-300 font-black rounded-md">30 Pts</span>
               </button>
 
+              <button
+                onClick={() => handleSelectTeacherTab('weekly_tests')}
+                className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                  teacherPortalTab === 'weekly_tests'
+                    ? 'bg-[#0c2340] text-amber-300 shadow-sm ring-2 ring-amber-400/50'
+                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                }`}
+              >
+                <i className="fa-solid fa-file-pen text-emerald-400"></i>
+                <span>{currentLang === 'en' ? 'Weekly Subject Test' : 'वीकली विषय टेस्ट'}</span>
+                <span className="px-1.5 py-0.5 text-[10px] bg-emerald-400/20 text-emerald-300 font-black rounded-md">25 Pts</span>
+              </button>
+
               {/* Universal Student Finder & QR Scanner button */}
               <button
                 type="button"
@@ -11240,6 +11254,26 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 <TeacherSyllabusPlanner
                   currentUser={teacherUser}
                   allTeachers={usersList}
+                  isManager={false}
+                />
+              </Suspense>
+            )}
+
+            {/* TAB 9: WEEKLY SUBJECT TEST & STUDENT TEST MARKS (25 PTS) */}
+            {teacherPortalTab === 'weekly_tests' && (
+              <Suspense
+                fallback={
+                  <div className="bg-white rounded-3xl p-12 text-center text-slate-500 font-bold border border-slate-200">
+                    <i className="fa-solid fa-circle-notch fa-spin text-amber-500 mr-2 text-2xl"></i>
+                    <span>साप्ताहिक विषय टेस्ट ट्रैकर लोड हो रहा है...</span>
+                  </div>
+                }
+              >
+                <WeeklySubjectTestManager
+                  currentUser={teacherUser}
+                  allTeachers={usersList}
+                  students={students}
+                  classMap={classMap}
                   isManager={false}
                 />
               </Suspense>

@@ -154,3 +154,24 @@ export interface SchoolHolidayRecord {
   created_at?: string;
   timestamp?: string;
 }
+
+export interface WeeklyTestRecord {
+  id: string;
+  test_session_id?: string;
+  teacher_id: string;
+  teacher_name: string;
+  class_name: string;
+  subject: string;
+  month: string; // YYYY-MM
+  week_number: number; // 1..4
+  test_date: string; // YYYY-MM-DD
+  topic_name: string;
+  student_id: string;
+  student_name: string;
+  max_marks: number;
+  marks_obtained: number;
+  attendance_status?: 'Present' | 'Absent';
+  remarks?: string;
+  timestamp?: string;
+}
+

@@ -413,7 +413,8 @@ function doGet(e) {
   if (action === "getTeacherPerformance") return handleGetTeacherPerformance(ss);
   if (action === "getSyllabusTracker") return handleGetSyllabusTracker(ss);
   if (action === "getSchoolHolidays") return handleGetSchoolHolidays(ss);
-  if (action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSyllabusTopic" || action === "deleteSchoolHoliday") {
+  if (action === "getWeeklyTests") return handleGetWeeklyTests(ss);
+  if (action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "saveSchoolHoliday" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteSyllabusTopic" || action === "deleteSchoolHoliday" || action === "deleteWeeklyTest") {
     return doPost(e);
   }
 
@@ -1022,12 +1023,15 @@ function doPost(e) {
       return handleRecordStaffAttendance(ss, data);
     }
 
-    // 9. TEACHER PERFORMANCE, SYLLABUS TRACKER & SCHOOL HOLIDAYS (WRITE + DELETE)
+    // 9. TEACHER PERFORMANCE, SYLLABUS TRACKER, SCHOOL HOLIDAYS & WEEKLY TESTS (WRITE + DELETE)
     if (action === "saveTeacherPerformance") return handleSaveTeacherPerformance(ss, data);
     if (action === "saveSyllabusTopic") return handleSaveSyllabusTopic(ss, data);
     if (action === "deleteSyllabusTopic") return handleDeleteRowById(ss, "Syllabus_Tracker", data.id);
     if (action === "saveSchoolHoliday") return handleSaveSchoolHoliday(ss, data);
     if (action === "deleteSchoolHoliday") return handleDeleteRowById(ss, "School_Holidays", data.id);
+    if (action === "saveWeeklyTest") return handleSaveWeeklyTest(ss, data);
+    if (action === "saveWeeklyTestsBatch") return handleSaveWeeklyTestsBatch(ss, data);
+    if (action === "deleteWeeklyTest") return handleDeleteRowById(ss, "Weekly_Tests", data.id);
 
     return ContentService.createTextOutput(JSON.stringify({
       status: "error",
@@ -2493,3 +2497,86 @@ function handleDeleteRowById(ss, sheetName, id) {
   }
   return ContentService.createTextOutput(JSON.stringify({ status: "success", deleted: id })).setMimeType(ContentService.MimeType.JSON);
 }
+
+function getOrCreateWeeklyTestsSheet_(ss) {
+  var sheet = ss.getSheetByName("Weekly_Tests");
+  if (!sheet) {
+    sheet = ss.insertSheet("Weekly_Tests");
+    sheet.appendRow([
+      "ID", "Session_ID", "Teacher_ID", "Teacher_Name", "Class", "Month",
+      "Week_Number", "Test_Date", "Subject", "Topic", "Student_ID", "Student_Name",
+      "Max_Marks", "Marks_Obtained", "Status", "Remarks", "Timestamp"
+    ]);
+  }
+  return sheet;
+}
+
+function handleGetWeeklyTests(ss) {
+  var sheet = ss.getSheetByName("Weekly_Tests");
+  if (!sheet) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", tests: [] })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var tests = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r[0] && !r[10] && !r[11]) continue;
+    tests.push({
+      id: String(r[0] || ("wt_" + i)),
+      test_session_id: String(r[1] || ""),
+      teacher_id: String(r[2] || ""),
+      teacher_name: String(r[3] || ""),
+      class_name: String(r[4] || ""),
+      month: formatCellMonth_(r[5]),
+      week_number: Number(r[6] || 1),
+      test_date: formatCellDate_(r[7]),
+      subject: String(r[8] || ""),
+      topic_name: String(r[9] || ""),
+      student_id: String(r[10] || ""),
+      student_name: String(r[11] || ""),
+      max_marks: Number(r[12] || 20),
+      marks_obtained: Number(r[13] || 0),
+      attendance_status: String(r[14] || "Present") === "Absent" ? "Absent" : "Present",
+      remarks: String(r[15] || ""),
+      timestamp: String(r[16] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", tests: tests })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function upsertWeeklyTestRow_(sheet, existingRows, rec) {
+  var recId = String(rec.id || ("wt_" + Date.now()));
+  var rowIndex = -1;
+  for (var i = 1; i < existingRows.length; i++) {
+    if (String(existingRows[i][0]) === recId) { rowIndex = i + 1; break; }
+  }
+  var rowData = [
+    recId, rec.test_session_id || "", rec.teacher_id || "", rec.teacher_name || "",
+    rec.class_name || "", "'" + String(rec.month || ""), Number(rec.week_number || 1),
+    rec.test_date ? ("'" + String(rec.test_date)) : "", rec.subject || "", rec.topic_name || "",
+    rec.student_id || "", rec.student_name || "", Number(rec.max_marks || 20),
+    Number(rec.marks_obtained || 0), rec.attendance_status || "Present", rec.remarks || "", new Date()
+  ];
+  if (rowIndex > 0) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
+  else sheet.appendRow(rowData);
+}
+
+function handleSaveWeeklyTest(ss, data) {
+  var sheet = getOrCreateWeeklyTestsSheet_(ss);
+  var rec = data.record ? (typeof data.record === "string" ? JSON.parse(data.record) : data.record) : data;
+  var existingRows = sheet.getDataRange().getValues();
+  upsertWeeklyTestRow_(sheet, existingRows, rec);
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "Weekly test saved!" })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveWeeklyTestsBatch(ss, data) {
+  var sheet = getOrCreateWeeklyTestsSheet_(ss);
+  var list = data.records ? (typeof data.records === "string" ? JSON.parse(data.records) : data.records) : [];
+  if (!Array.isArray(list)) list = [list];
+  var existingRows = sheet.getDataRange().getValues();
+  for (var i = 0; i < list.length; i++) {
+    if (list[i]) upsertWeeklyTestRow_(sheet, existingRows, list[i]);
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", saved: list.length, message: "Weekly tests batch saved!" })).setMimeType(ContentService.MimeType.JSON);
+}
+

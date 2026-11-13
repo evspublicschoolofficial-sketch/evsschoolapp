@@ -6,6 +6,7 @@ import {
   StaffAttendanceRecord,
   Student,
   SyllabusTopicRecord,
+  WeeklyTestRecord,
 } from '../types';
 import {
   TeacherPerformanceRecord,
@@ -345,6 +346,7 @@ export const autoCalculateTeacherMonthlyScoreFromAppData = (params: {
   behaviorList?: StudentBehaviorRecord[];
   students?: Student[];
   syllabusTopics?: SyllabusTopicRecord[];
+  weeklyTests?: WeeklyTestRecord[];
   classMap?: Record<string, string>;
   evaluatedBy?: string;
 }): AutoCalculationResult => {
@@ -358,6 +360,7 @@ export const autoCalculateTeacherMonthlyScoreFromAppData = (params: {
     behaviorList = [],
     students = [],
     syllabusTopics = [],
+    weeklyTests = [],
     classMap,
     evaluatedBy = 'AI Auto Engine (App Database)',
   } = params;
@@ -460,7 +463,8 @@ export const autoCalculateTeacherMonthlyScoreFromAppData = (params: {
   }
 
   // -------------------------------------------------------------
-  // PARAMETER 2: Student Test & Academic Performance (Max 25 Points)
+  // PARAMETER 2: Weekly Subject Test Results (Max 25 Points)
+  // Computed STRICTLY from actual WeeklyTestRecord entries (never from behavior or attendance logs!)
   // -------------------------------------------------------------
   const classTracker = homeworkTrackerList.filter((t) => {
     const ymd = normalizeDateYmd(t.Date);
@@ -472,26 +476,47 @@ export const autoCalculateTeacherMonthlyScoreFromAppData = (params: {
     return ymd.startsWith(month) && recordMatchesTeacherClass(b.Class, b.Student_ID);
   });
 
+  const teacherMonthTests = weeklyTests.filter((wt) => {
+    if (!wt) return false;
+    const wtMonth = (wt.month || normalizeDateYmd(wt.test_date).slice(0, 7) || '').trim();
+    if (wtMonth !== month) return false;
+    const wtTid = String(wt.teacher_id || '').trim().toLowerCase();
+    const matchesTeacher =
+      (teacherIdLower && wtTid === teacherIdLower) ||
+      (teacherUsernameLower && wtTid === teacherUsernameLower) ||
+      matchesTeacherIdentity(wt.teacher_name);
+    if (matchesTeacher) return true;
+    return recordMatchesTeacherClass(wt.class_name, wt.student_id);
+  });
+
   let testScore: number;
   let testPercent: number;
   let testDetail: string;
 
-  if (classTracker.length > 0) {
-    const completedCount = classTracker.filter((t) => t.Last_homework_Status === 'Completed').length;
-    testPercent = Math.round((completedCount / classTracker.length) * 100);
+  if (teacherMonthTests.length > 0) {
+    const presentEntries = teacherMonthTests.filter((t) => t.attendance_status !== 'Absent');
+    const basisEntries = presentEntries.length > 0 ? presentEntries : teacherMonthTests;
+    let sumObtained = 0;
+    let sumMax = 0;
+    for (const entry of basisEntries) {
+      const mx = Math.max(1, Number(entry.max_marks) || 0);
+      const ob = Math.max(0, Math.min(mx, Number(entry.marks_obtained) || 0));
+      sumObtained += ob;
+      sumMax += mx;
+    }
+    const uniqueSessions = new Set(
+      teacherMonthTests.map(
+        (t) => t.test_session_id || `${normalizeDateYmd(t.test_date)}_${normalizeClassKey(t.class_name)}_${String(t.subject || '').trim().toLowerCase()}`
+      )
+    ).size;
+
+    testPercent = sumMax > 0 ? Math.min(100, Math.round((sumObtained / sumMax) * 100)) : 0;
     testScore = Math.min(25, Math.round(((testPercent / 100) * 25) * 10) / 10);
-    testDetail = `कक्षा असाइनमेंट/टेस्ट पूर्णता दर: ${testPercent}% (${completedCount}/${classTracker.length})`;
-  } else if (classBehavior.length > 0) {
-    const goodCount = classBehavior.filter((b) => b.Discipline !== false && b.Is_Present !== false).length;
-    testPercent = Math.round((goodCount / classBehavior.length) * 100);
-    testScore = Math.min(25, Math.round(((testPercent / 100) * 22) * 10) / 10);
-    testDetail = `कक्षा शैक्षणिक सहभागिता दर: ${testPercent}% (${goodCount}/${classBehavior.length} लॉग्स)`;
+    testDetail = `साप्ताहिक विषय टेस्ट: ${uniqueSessions} टेस्ट, ${presentEntries.length} छात्र औसत ${testPercent}%`;
   } else {
     testPercent = 0;
     testScore = 0;
-    testDetail = taughtClassKeys.size === 0
-      ? 'शिक्षक को कोई कक्षा असाइन नहीं है (कक्षा असाइन करें)'
-      : 'इस माह कक्षा का कोई टेस्ट/असाइनमेंट रिकॉर्ड नहीं मिला';
+    testDetail = 'इस माह अभी कोई साप्ताहिक विषय टेस्ट (Weekly Subject Test) दर्ज नहीं है';
   }
 
   // -------------------------------------------------------------
@@ -678,6 +703,7 @@ export const autoEvaluateAllTeachersForMonth = (params: {
   behaviorList?: StudentBehaviorRecord[];
   students?: Student[];
   syllabusTopics?: SyllabusTopicRecord[];
+  weeklyTests?: WeeklyTestRecord[];
   classMap?: Record<string, string>;
   evaluatedBy?: string;
 }): TeacherPerformanceRecord[] => {
