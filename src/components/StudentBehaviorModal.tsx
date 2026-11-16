@@ -163,8 +163,8 @@ export const StudentBehaviorModal: React.FC<StudentBehaviorModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs animate-fadeIn">
-      <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 flex flex-col max-h-[92vh] overflow-hidden">
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-start justify-center p-3 sm:p-4 backdrop-blur-xs overflow-y-auto animate-fadeIn">
+      <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 my-auto flex flex-col max-h-[92vh] overflow-hidden">
         {/* Header */}
         <div className="bg-gradient-to-r from-[#0c2340] via-[#10316b] to-[#0c2340] px-4 py-3.5 text-white flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2.5">

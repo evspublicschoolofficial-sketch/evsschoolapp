@@ -83,10 +83,10 @@ export const SchoolQRCodeModal: React.FC<SchoolQRCodeModalProps> = ({
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3 sm:p-4 backdrop-blur-sm overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/75 p-3 sm:p-4 backdrop-blur-sm overflow-y-auto">
       <div
         className={`bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden transition-all duration-300 w-full ${
-          isFullscreen ? 'fixed inset-2 max-w-none h-[calc(100vh-16px)] z-50 flex flex-col' : 'max-w-xl'
+          isFullscreen ? 'fixed inset-2 max-w-none h-[calc(100vh-16px)] z-50 flex flex-col' : 'max-w-xl my-auto max-h-[92vh] overflow-y-auto'
         }`}
       >
         {/* Modal Header */}

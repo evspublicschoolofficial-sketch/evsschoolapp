@@ -307,7 +307,7 @@ export const StudentHomeworkQRTrackerModal: React.FC<StudentHomeworkQRTrackerMod
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs overflow-y-auto animate-fadeIn">
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-start justify-center p-3 sm:p-4 backdrop-blur-xs overflow-y-auto animate-fadeIn">
       <div className="bg-white rounded-3xl max-w-2xl w-full my-auto shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]">
         {/* Top Header Banner */}
         <div className="bg-gradient-to-r from-[#0c2340] via-[#10316b] to-[#0c2340] px-5 py-4 text-white flex items-center justify-between shrink-0">

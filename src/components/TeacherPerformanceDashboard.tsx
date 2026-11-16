@@ -1625,10 +1625,10 @@ function handleDeleteRowById(ss, sheetName, id) {
       {/* 4. EVALUATION ENTRY / EDIT MODAL                                          */}
       {/* ========================================================================= */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border-2 border-amber-400 overflow-hidden my-8 animate-in fade-in zoom-in-95 duration-200">
+        <div className="fixed inset-0 z-50 flex items-start justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border-2 border-amber-400 overflow-hidden my-auto max-h-[92vh] flex flex-col animate-in fade-in zoom-in-95 duration-200">
             {/* Modal Header */}
-            <div className="bg-gradient-to-r from-[#0c2340] to-[#163a6f] text-white p-5 sm:p-6 flex items-center justify-between">
+            <div className="bg-gradient-to-r from-[#0c2340] to-[#163a6f] text-white p-5 sm:p-6 flex items-center justify-between shrink-0">
               <div>
                 <span className="text-[10px] font-black uppercase tracking-wider text-amber-400 block mb-1">
                   {editingRecord ? '✏️ मूल्यांकन संशोधित करें' : '➕ नया शिक्षक मूल्यांकन'}
@@ -1638,14 +1638,15 @@ function handleDeleteRowById(ss, sheetName, id) {
                 </h3>
               </div>
               <button
+                type="button"
                 onClick={() => setIsModalOpen(false)}
-                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center cursor-pointer transition-all"
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center cursor-pointer transition-all shrink-0"
               >
                 ✕
               </button>
             </div>
 
-            <form onSubmit={handleSaveEvaluation} className="p-5 sm:p-6 space-y-5">
+            <form onSubmit={handleSaveEvaluation} className="p-5 sm:p-6 space-y-5 flex-1 overflow-y-auto">
               {/* Teacher & Month Selection */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
@@ -1949,8 +1950,8 @@ function handleDeleteRowById(ss, sheetName, id) {
       {/* 5. OFFICIAL CERTIFICATE MODAL (Printable Award)                           */}
       {/* ========================================================================= */}
       {certificateRecord && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-xs">
-          <div className="bg-white rounded-3xl max-w-xl w-full p-8 shadow-2xl border-4 border-amber-400 relative text-center space-y-4 my-8">
+        <div className="fixed inset-0 z-50 flex items-start justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-xl w-full p-6 sm:p-8 shadow-2xl border-4 border-amber-400 relative text-center space-y-4 my-auto max-h-[92vh] overflow-y-auto">
             <button
               onClick={() => setCertificateRecord(null)}
               className="absolute right-4 top-4 w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center cursor-pointer"

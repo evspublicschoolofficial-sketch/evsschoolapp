@@ -161,10 +161,10 @@ export const SchoolLocationModal: React.FC<SchoolLocationModalProps> = ({
   const isInside = liveDistance !== null ? liveDistance <= (currentConfig.radiusMeters || 2500) : false;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 sm:p-4 backdrop-blur-sm overflow-y-auto">
-      <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden w-full max-w-lg transition-all animate-fadeIn">
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/80 p-3 sm:p-4 backdrop-blur-sm overflow-y-auto">
+      <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden w-full max-w-lg my-auto max-h-[92vh] flex flex-col transition-all animate-fadeIn">
         {/* Header */}
-        <div className="bg-[#0c2340] text-white p-4 sm:p-5 flex items-center justify-between">
+        <div className="bg-[#0c2340] text-white p-4 sm:p-5 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center font-bold text-lg shadow-md">
               <i className="fa-solid fa-location-dot"></i>

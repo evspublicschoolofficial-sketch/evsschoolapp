@@ -11512,7 +11512,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 onClick={(e) => {
                   if (e.target === e.currentTarget) setIsManagerMenuOpen(false);
                 }}
-                className="fixed inset-0 z-[120] flex items-center justify-center p-3 sm:p-5 bg-slate-950/80 backdrop-blur-sm overflow-y-auto animate-fadeIn"
+                className="fixed inset-0 z-[120] flex items-start justify-center p-3 sm:p-5 bg-slate-950/80 backdrop-blur-sm overflow-y-auto animate-fadeIn"
               >
                 <div className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden my-auto flex flex-col max-h-[90vh]">
                   {/* Header */}
@@ -13333,8 +13333,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       {/* STUDENT DETAIL MODAL                                                      */}
       {/* ========================================================================= */}
       {selectedStudentDetail && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 relative animate-fadeIn">
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-3 sm:p-4 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 relative my-auto max-h-[92vh] overflow-y-auto animate-fadeIn">
             <button
               onClick={() => setSelectedStudentDetail(null)}
               className="absolute top-4 right-4 text-slate-400 hover:text-slate-700 text-lg cursor-pointer"
@@ -13715,7 +13715,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
       {/* Classroom Bulk Attendance Register Modal */}
       {bulkAttendanceModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-start justify-center p-2 sm:p-4 overflow-y-auto">
           <div className="bg-white rounded-3xl max-w-5xl w-full max-h-[92vh] overflow-y-auto shadow-2xl border border-slate-200 p-4 sm:p-6 my-auto animate-scaleUp">
             <ClassroomBulkAttendanceRegister
               students={students}
@@ -13831,8 +13831,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       {/* STUDENT QR CODE PREVIEW MODAL                                             */}
       {/* ========================================================================= */}
       {previewQRStudent && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 relative animate-fadeIn">
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-start justify-center p-3 sm:p-4 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 relative my-auto max-h-[92vh] overflow-y-auto animate-fadeIn">
             <button
               onClick={() => setPreviewQRStudent(null)}
               className="absolute top-4 right-4 text-slate-400 hover:text-slate-700 text-lg cursor-pointer"
@@ -13896,8 +13896,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       {/* HOMEWORK DETAIL MODAL                                                     */}
       {/* ========================================================================= */}
       {selectedHomeworkDetail && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 relative animate-fadeIn">
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-3 sm:p-4 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 relative my-auto max-h-[92vh] overflow-y-auto animate-fadeIn">
             <button
               onClick={() => setSelectedHomeworkDetail(null)}
               className="absolute top-4 right-4 text-slate-400 hover:text-slate-700 text-lg cursor-pointer"
@@ -13983,8 +13983,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       {/* DELETE HOMEWORK CONFIRMATION MODAL                                        */}
       {/* ========================================================================= */}
       {homeworkToDelete && (
-        <div className="fixed inset-0 z-60 bg-black/60 flex items-center justify-center p-4 backdrop-blur-xs animate-fadeIn">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 relative">
+        <div className="fixed inset-0 z-60 bg-black/60 flex items-start justify-center p-3 sm:p-4 backdrop-blur-xs overflow-y-auto animate-fadeIn">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 relative my-auto max-h-[92vh] overflow-y-auto">
             <button
               onClick={() => {
                 if (!isDeletingHomework) setHomeworkToDelete(null);
@@ -14087,8 +14087,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       {/* DELETE STUDENT CONFIRMATION MODAL                                         */}
       {/* ========================================================================= */}
       {studentToDelete && (
-        <div className="fixed inset-0 z-60 bg-black/60 flex items-center justify-center p-4 backdrop-blur-xs animate-fadeIn">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 relative">
+        <div className="fixed inset-0 z-60 bg-black/60 flex items-start justify-center p-3 sm:p-4 backdrop-blur-xs overflow-y-auto animate-fadeIn">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 relative my-auto max-h-[92vh] overflow-y-auto">
             <button
               onClick={() => {
                 if (!isDeletingStudent) setStudentToDelete(null);
@@ -14193,8 +14193,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       {/* HOMEWORK MEDIA (IMAGE / PDF) LIGHTBOX MODAL                               */}
       {/* ========================================================================= */}
       {activeMediaModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-2 sm:p-4 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-slate-900 rounded-2xl max-w-4xl w-full flex flex-col max-h-[95vh] shadow-2xl border border-slate-700 overflow-hidden text-white">
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-start justify-center p-2 sm:p-4 backdrop-blur-sm overflow-y-auto animate-fadeIn">
+          <div className="bg-slate-900 rounded-2xl max-w-4xl w-full flex flex-col my-auto max-h-[92vh] shadow-2xl border border-slate-700 overflow-hidden text-white">
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-3 bg-slate-950/80 border-b border-slate-800">
               <div className="flex items-center gap-2.5 min-w-0">

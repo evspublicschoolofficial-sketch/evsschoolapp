@@ -874,8 +874,8 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
 
       {/* MANUAL CHECK-IN MODAL (FOR MANAGER OR EMERGENCIES) */}
       {manualModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/75 p-3 sm:p-4 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4 my-auto max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-2 border-b border-slate-200">
               <h3 className="font-bold text-base text-slate-900">
                 मैनुअल स्टाफ हाजिरी दर्ज करें (Manual Check-In)

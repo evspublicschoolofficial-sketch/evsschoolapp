@@ -85,10 +85,10 @@ export const SchoolShiftSettingsModal: React.FC<SchoolShiftSettingsModalProps> =
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 sm:p-4 backdrop-blur-sm overflow-y-auto">
-      <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden w-full max-w-2xl transition-all animate-fadeIn my-auto">
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/80 p-3 sm:p-4 backdrop-blur-sm overflow-y-auto">
+      <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden w-full max-w-2xl max-h-[92vh] flex flex-col transition-all animate-fadeIn my-auto">
         {/* Header */}
-        <div className="bg-[#0c2340] text-white p-5 sm:p-6 flex items-center justify-between">
+        <div className="bg-[#0c2340] text-white p-5 sm:p-6 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center font-bold text-xl shadow-md">
               <i className="fa-solid fa-business-time"></i>

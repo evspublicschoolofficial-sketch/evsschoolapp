@@ -180,10 +180,10 @@ export const EmergencyAlertBanner: React.FC<EmergencyAlertBannerProps> = ({
 
       {/* FULL ANNOUNCEMENT POPUP MODAL */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center p-3 sm:p-5 bg-slate-950/85 backdrop-blur-md overflow-y-auto animate-fadeIn">
-          <div className="w-full max-w-xl bg-white rounded-3xl shadow-2xl border-4 border-indigo-500 overflow-hidden my-auto animate-bounce-short">
+        <div className="fixed inset-0 z-[120] flex items-start justify-center p-3 sm:p-5 bg-slate-950/85 backdrop-blur-md overflow-y-auto animate-fadeIn">
+          <div className="w-full max-w-xl bg-white rounded-3xl shadow-2xl border-4 border-indigo-500 overflow-y-auto my-auto max-h-[92vh] flex flex-col animate-bounce-short">
             {/* Header with pleasant announcement theme */}
-            <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 text-white px-5 sm:px-6 py-4 flex items-center justify-between">
+            <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 text-white px-5 sm:px-6 py-4 flex items-center justify-between shrink-0">
               <div className="flex items-center gap-3">
                 <div className="w-12 h-12 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center text-2xl font-black shadow-md animate-pulse">
                   <i className="fa-solid fa-bullhorn text-blue-900"></i>

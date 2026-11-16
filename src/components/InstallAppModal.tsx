@@ -65,9 +65,9 @@ export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClos
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-slate-950/75 backdrop-blur-sm animate-fadeIn">
+    <div className="fixed inset-0 z-[100] flex items-start justify-center p-3 sm:p-4 bg-slate-950/75 backdrop-blur-sm overflow-y-auto animate-fadeIn">
       <div 
-        className="bg-white rounded-3xl shadow-2xl max-w-lg w-full max-h-[92vh] flex flex-col overflow-hidden border-2 border-amber-400 animate-scaleUp"
+        className="bg-white rounded-3xl shadow-2xl max-w-lg w-full my-auto max-h-[92vh] flex flex-col overflow-hidden border-2 border-amber-400 animate-scaleUp"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

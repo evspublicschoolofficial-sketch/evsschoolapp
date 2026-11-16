@@ -530,10 +530,10 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-3 sm:p-4 backdrop-blur-sm overflow-y-auto">
-      <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden w-full max-w-lg transition-all">
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/85 p-3 sm:p-4 backdrop-blur-sm overflow-y-auto">
+      <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-y-auto w-full max-w-lg my-auto max-h-[92vh] flex flex-col transition-all">
         {/* Header */}
-        <div className="bg-[#0c2340] text-white p-4 sm:p-5 flex items-center justify-between">
+        <div className="bg-[#0c2340] text-white p-4 sm:p-5 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
             <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black shadow-md ${
               autoScanMode === 'checkout'

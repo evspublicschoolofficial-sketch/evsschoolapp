@@ -2588,8 +2588,8 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
 
       {/* Edit Fee Record Modal for Manager */}
       {editingFee && (
-        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs animate-fadeIn overflow-y-auto">
-          <div className="bg-white rounded-2xl max-w-xl w-full overflow-hidden shadow-2xl border border-slate-200 my-auto max-h-[95vh] flex flex-col">
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-start justify-center p-3 sm:p-4 backdrop-blur-xs animate-fadeIn overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-xl w-full overflow-hidden shadow-2xl border border-slate-200 my-auto max-h-[92vh] flex flex-col">
             {/* Modal Header */}
             <div className="bg-[#0c2340] px-5 py-4 text-white flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2.5">
@@ -2851,8 +2851,8 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
 
       {/* Delete Fee Confirmation Modal for Manager */}
       {deletingFee && (
-        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs animate-fadeIn overflow-y-auto">
-          <div className="bg-white rounded-2xl max-w-md w-full overflow-hidden shadow-2xl border border-slate-200 my-auto">
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-start justify-center p-3 sm:p-4 backdrop-blur-xs animate-fadeIn overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-md w-full overflow-hidden shadow-2xl border border-slate-200 my-auto max-h-[92vh] flex flex-col">
             {/* Modal Header */}
             <div className="bg-rose-700 px-5 py-4 text-white flex items-center justify-between">
               <div className="flex items-center gap-2.5">
@@ -2963,7 +2963,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
 
       {/* Google Apps Script Monthly Dues Trigger Code Modal */}
       {showAppsScriptModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-xs animate-fadeIn overflow-y-auto">
+        <div className="fixed inset-0 z-50 flex items-start justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-xs animate-fadeIn overflow-y-auto">
           <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border border-slate-200 overflow-hidden my-auto max-h-[92vh] flex flex-col">
             <div className="bg-gradient-to-r from-[#0c2340] to-indigo-950 px-5 py-4 text-white flex items-center justify-between shrink-0">
               <div className="flex items-center gap-3">

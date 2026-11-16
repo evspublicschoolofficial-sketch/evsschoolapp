@@ -142,11 +142,11 @@ export const OfficialFeeReceiptModal: React.FC<OfficialFeeReceiptModalProps> = (
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-950/80 backdrop-blur-sm overflow-y-auto animate-fadeIn">
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-3 sm:p-5 bg-slate-950/80 backdrop-blur-sm overflow-y-auto animate-fadeIn">
       {/* Printable Receipt Container */}
-      <div className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden my-auto">
+      <div className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden my-auto max-h-[92vh] flex flex-col">
         {/* Top Control Bar (Hidden on print) */}
-        <div className="print:hidden bg-gradient-to-r from-[#0c2340] via-[#10316b] to-[#0c2340] px-5 py-3.5 text-white flex items-center justify-between">
+        <div className="print:hidden bg-gradient-to-r from-[#0c2340] via-[#10316b] to-[#0c2340] px-5 py-3.5 text-white flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2.5">
             <span className="w-8 h-8 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center font-black text-sm shadow-md">
               <i className="fa-solid fa-receipt"></i>
@@ -190,7 +190,7 @@ export const OfficialFeeReceiptModal: React.FC<OfficialFeeReceiptModalProps> = (
         </div>
 
         {/* The Official Receipt Body (Print Target) */}
-        <div id="school-official-receipt-print-area" className="p-6 sm:p-8 bg-white text-slate-900 font-sans relative">
+        <div id="school-official-receipt-print-area" className="p-6 sm:p-8 bg-white text-slate-900 font-sans relative flex-1 overflow-y-auto">
           {/* Subtle Watermark Stamp */}
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-4 select-none">
             <div className="text-center transform -rotate-12 border-8 border-slate-900 rounded-3xl p-8">

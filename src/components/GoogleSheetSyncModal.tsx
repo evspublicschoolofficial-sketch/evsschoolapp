@@ -150,11 +150,11 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
   return (
     <div
       id="google-sheet-sync-modal"
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/70 backdrop-blur-xs animate-in fade-in duration-200"
+      className="fixed inset-0 z-50 flex items-start justify-center p-3 sm:p-4 bg-black/70 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-200"
     >
-      <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-2xl max-h-[92vh] flex flex-col overflow-hidden">
+      <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-2xl my-auto max-h-[92vh] flex flex-col overflow-hidden">
         {/* Modal Header */}
-        <div className="p-4 sm:p-5 bg-gradient-to-r from-blue-900 to-indigo-950 text-white flex items-center justify-between">
+        <div className="p-4 sm:p-5 bg-gradient-to-r from-blue-900 to-indigo-950 text-white flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-emerald-500/20 border border-emerald-400/40 flex items-center justify-center text-emerald-400 text-lg">
               <i className="fa-solid fa-file-excel"></i>

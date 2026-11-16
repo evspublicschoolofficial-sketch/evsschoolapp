@@ -699,9 +699,9 @@ export const SchoolNoticeBoard: React.FC<SchoolNoticeBoardProps> = ({
           onClick={(e) => {
             if (e.target === e.currentTarget) setNoticeToDelete(null);
           }}
-          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn"
+          className="fixed inset-0 z-[100] flex items-start justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-sm overflow-y-auto animate-fadeIn"
         >
-          <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden">
+          <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-y-auto my-auto max-h-[92vh]">
             <div className="p-6 text-center space-y-3">
               <div className="w-14 h-14 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center text-2xl mx-auto shadow-xs">
                 <i className="fa-solid fa-trash-can"></i>
@@ -749,9 +749,9 @@ export const SchoolNoticeBoard: React.FC<SchoolNoticeBoardProps> = ({
 
       {/* Modal for Adding New Notice (Manager / Teacher) */}
       {isAddModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
-          <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden">
-            <div className="bg-[#0c2340] px-5 py-4 text-white flex items-center justify-between">
+        <div className="fixed inset-0 z-50 flex items-start justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-sm overflow-y-auto animate-fadeIn">
+          <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-y-auto my-auto max-h-[92vh] flex flex-col">
+            <div className="bg-[#0c2340] px-5 py-4 text-white flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2">
                 <i className="fa-solid fa-bullhorn text-amber-400"></i>
                 <h4 className="font-extrabold text-sm sm:text-base text-amber-300">

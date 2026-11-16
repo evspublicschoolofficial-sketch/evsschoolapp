@@ -858,9 +858,9 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
 
       {/* 5. ADD / EDIT SYLLABUS GOAL MODAL */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border-2 border-amber-400 overflow-hidden my-8 animate-in fade-in zoom-in-95 duration-200">
-            <div className="bg-gradient-to-r from-[#0c2340] to-[#163a6f] text-white p-5 flex items-center justify-between">
+        <div className="fixed inset-0 z-50 flex items-start justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border-2 border-amber-400 overflow-hidden my-auto max-h-[92vh] flex flex-col animate-in fade-in zoom-in-95 duration-200">
+            <div className="bg-gradient-to-r from-[#0c2340] to-[#163a6f] text-white p-5 flex items-center justify-between shrink-0">
               <div>
                 <span className="text-[10px] font-black uppercase tracking-wider text-amber-400 block mb-0.5">
                   📚 साप्ताहिक पाठ्यक्रम योजना
@@ -870,14 +870,15 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
                 </h3>
               </div>
               <button
+                type="button"
                 onClick={() => setShowAddModal(false)}
-                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center cursor-pointer"
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center cursor-pointer shrink-0"
               >
                 ✕
               </button>
             </div>
 
-            <form onSubmit={handleSaveTopicGoal} className="p-5 space-y-4">
+            <form onSubmit={handleSaveTopicGoal} className="p-5 space-y-4 flex-1 overflow-y-auto">
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">कक्षा (Class):</label>

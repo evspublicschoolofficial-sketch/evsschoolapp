@@ -933,8 +933,8 @@ export const WeeklySubjectTestManager: React.FC<WeeklySubjectTestManagerProps> =
 
       {/* 4. NEW WEEKLY SUBJECT TEST ENTRY MODAL */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center p-3 sm:p-4 bg-slate-950/75 backdrop-blur-xs overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-3xl w-full shadow-2xl border-2 border-amber-400 overflow-hidden my-6 flex flex-col max-h-[92vh]">
+        <div className="fixed inset-0 z-[110] flex items-start justify-center p-3 sm:p-4 bg-slate-950/75 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-3xl w-full shadow-2xl border-2 border-amber-400 overflow-hidden my-auto flex flex-col max-h-[92vh]">
             <div className="bg-gradient-to-r from-[#0c2340] to-[#163a6f] text-white p-5 flex items-center justify-between shrink-0">
               <div>
                 <span className="text-[10px] font-black uppercase tracking-wider text-amber-400 block">

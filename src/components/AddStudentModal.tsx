@@ -372,8 +372,8 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-xs animate-fadeIn">
-      <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-2xl max-h-[92vh] flex flex-col overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-xs overflow-y-auto animate-fadeIn">
+      <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-2xl max-h-[92vh] my-auto flex flex-col overflow-hidden">
         {/* Modal Header */}
         <div className="bg-gradient-to-r from-[#0c2340] via-[#10316b] to-[#0c2340] text-white p-5 px-6 flex items-center justify-between shrink-0 border-b-2 border-amber-400">
           <div className="flex items-center gap-3">

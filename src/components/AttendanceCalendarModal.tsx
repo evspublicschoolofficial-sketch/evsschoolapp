@@ -1083,7 +1083,7 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
       onClick={(e) => {
         if (e.target === e.currentTarget) setIsHolidayModalOpen(false);
       }}
-      className="fixed inset-0 z-[120] flex items-center justify-center p-3 sm:p-5 bg-slate-950/85 backdrop-blur-md overflow-y-auto animate-fadeIn"
+      className="fixed inset-0 z-[120] flex items-start justify-center p-3 sm:p-5 bg-slate-950/85 backdrop-blur-md overflow-y-auto animate-fadeIn"
     >
       <div className="relative w-full max-w-4xl bg-white rounded-3xl shadow-2xl border border-amber-200 overflow-hidden my-auto flex flex-col max-h-[92vh]">
         {/* Header */}
@@ -1350,7 +1350,7 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
         onClick={(e) => {
           if (e.target === e.currentTarget && onClose) onClose();
         }}
-        className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-5 bg-slate-950/80 backdrop-blur-sm overflow-y-auto animate-fadeIn"
+        className="fixed inset-0 z-[100] flex items-start justify-center p-3 sm:p-5 bg-slate-950/80 backdrop-blur-sm overflow-y-auto animate-fadeIn"
       >
         {calendarBody}
       </div>

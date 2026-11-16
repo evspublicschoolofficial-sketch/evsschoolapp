@@ -24,7 +24,7 @@ interface ManagerOverviewModalsProps {
   onOpenAttendanceCalendar?: (student?: Student) => void;
 }
 
-export type ManagerModalType = 'totalStudents' | 'feesOverview' | 'absentToday' | 'faultyBehavior' | null;
+export type ManagerModalType = 'totalStudents' | 'feesOverview' | 'attendanceOverview' | 'absentToday' | 'faultyBehavior' | null;
 
 export const getStudentPhone = (student?: any): string => {
   if (!student) return '';
@@ -231,6 +231,130 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
   // Effective absent count for summary card
   const effectiveAbsentCount = todayAttendanceRecords.length > 0 ? todayAbsentRecords.length : recentAbsentRecords.length;
 
+  // 3B. Today's Overall & Class-wise Attendance Overview (% Present vs % Absent)
+  const todayStatusByStudent = useMemo(() => {
+    const map = new Map<
+      string,
+      { studentId: string; isPresent: boolean; classId: string; record: StudentBehaviorRecord }
+    >();
+    todayAttendanceRecords.forEach((rec) => {
+      const cleanId = String(rec.Student_ID || '').trim().toLowerCase();
+      if (!cleanId) return;
+      const st = studentMap.get(cleanId);
+      const isPresent = rec.Is_Present !== false;
+      map.set(cleanId, {
+        studentId: rec.Student_ID,
+        isPresent,
+        classId: String(st?.Class || rec.Class || '').trim(),
+        record: rec,
+      });
+    });
+    return map;
+  }, [todayAttendanceRecords, studentMap]);
+
+  const todayAttendanceOverview = useMemo(() => {
+    let presentCount = 0;
+    let absentCount = 0;
+
+    todayStatusByStudent.forEach((entry) => {
+      if (entry.isPresent) presentCount += 1;
+      else absentCount += 1;
+    });
+
+    const markedCount = presentCount + absentCount;
+    const presentPercent = markedCount > 0 ? Math.round((presentCount / markedCount) * 1000) / 10 : 0;
+    const absentPercent = markedCount > 0 ? Math.round((100 - presentPercent) * 10) / 10 : 0;
+    const coveragePercent =
+      totalStudentsCount > 0 ? Math.min(100, Math.round((markedCount / totalStudentsCount) * 1000) / 10) : 0;
+
+    const classStatsMap = new Map<
+      string,
+      {
+        classKey: string;
+        className: string;
+        enrolledCount: number;
+        presentCount: number;
+        absentCount: number;
+      }
+    >();
+
+    const ensureClassBucket = (rawClass: string) => {
+      const cleanKey = String(rawClass || '').trim() || 'Unassigned';
+      const resolvedLabel = cleanKey === 'Unassigned' ? 'Unassigned' : getClassName(cleanKey) || cleanKey;
+      const normKey = resolvedLabel.toLowerCase();
+      if (!classStatsMap.has(normKey)) {
+        classStatsMap.set(normKey, {
+          classKey: cleanKey,
+          className: resolvedLabel,
+          enrolledCount: 0,
+          presentCount: 0,
+          absentCount: 0,
+        });
+      }
+      return classStatsMap.get(normKey)!;
+    };
+
+    students.forEach((st) => {
+      const bucket = ensureClassBucket(String(st.Class || ''));
+      bucket.enrolledCount += 1;
+    });
+
+    todayStatusByStudent.forEach((entry) => {
+      const bucket = ensureClassBucket(entry.classId);
+      if (entry.isPresent) bucket.presentCount += 1;
+      else bucket.absentCount += 1;
+    });
+
+    const classBreakdown = Array.from(classStatsMap.values())
+      .map((item) => {
+        const marked = item.presentCount + item.absentCount;
+        const presentPct = marked > 0 ? Math.round((item.presentCount / marked) * 1000) / 10 : 0;
+        const absentPct = marked > 0 ? Math.round((100 - presentPct) * 10) / 10 : 0;
+        return {
+          ...item,
+          markedCount: marked,
+          unmarkedCount: Math.max(0, item.enrolledCount - marked),
+          presentPct,
+          absentPct,
+        };
+      })
+      .sort((a, b) => {
+        const numA = parseInt(String(a.className).replace(/\D/g, ''), 10);
+        const numB = parseInt(String(b.className).replace(/\D/g, ''), 10);
+        if (!isNaN(numA) && !isNaN(numB) && numA !== numB) return numA - numB;
+        return a.className.localeCompare(b.className, undefined, { numeric: true });
+      });
+
+    return {
+      presentCount,
+      absentCount,
+      markedCount,
+      unmarkedCount: Math.max(0, totalStudentsCount - markedCount),
+      presentPercent,
+      absentPercent,
+      coveragePercent,
+      classBreakdown,
+    };
+  }, [todayStatusByStudent, students, totalStudentsCount, classMap]);
+
+  const filteredClassAttendance = useMemo(() => {
+    const term = searchTerm.toLowerCase().trim();
+    return todayAttendanceOverview.classBreakdown.filter((item) => {
+      const matchSearch =
+        !term ||
+        item.className.toLowerCase().includes(term) ||
+        item.classKey.toLowerCase().includes(term) ||
+        `class ${item.className}`.toLowerCase().includes(term);
+
+      const matchClass =
+        classFilter === 'all' ||
+        item.classKey.toLowerCase() === classFilter.toLowerCase() ||
+        item.className.toLowerCase() === getClassName(classFilter).toLowerCase();
+
+      return matchSearch && matchClass;
+    });
+  }, [todayAttendanceOverview.classBreakdown, searchTerm, classFilter, classMap]);
+
   // 4. Faulty Behaviour Students Metrics
   const isFaultyRecord = (rec: StudentBehaviorRecord): { isFaulty: boolean; issue: string } => {
     const issues: string[] = [];
@@ -400,8 +524,8 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
 
   return (
     <>
-      {/* 4 DYNAMIC SUMMARY CARDS IN MANAGER DASHBOARD HEADER */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* 5 DYNAMIC SUMMARY CARDS IN MANAGER DASHBOARD HEADER */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
         {/* CARD 1: TOTAL STUDENTS */}
         <button
           type="button"
@@ -413,7 +537,7 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
             <div className="w-11 h-11 rounded-xl bg-blue-100 text-blue-900 flex items-center justify-center text-lg font-bold shadow-2xs group-hover:scale-105 transition-transform">
               <i className="fa-solid fa-user-graduate"></i>
             </div>
-            <span className="text-[10px] font-bold text-blue-800 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200">
+            <span className="text-[11px] font-semibold text-blue-800">
               {activeClassCount} Classes Active
             </span>
           </div>
@@ -422,7 +546,7 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
             <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
               Total Students (कुल छात्र)
             </span>
-            <div className="flex items-baseline gap-2 mt-0.5">
+            <div className="flex items-baseline gap-2 mt-0.5 tabular-nums">
               <span className="text-2xl sm:text-3xl font-black text-slate-900">
                 {loadingStudents ? '...' : totalStudentsCount}
               </span>
@@ -447,7 +571,7 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
             <div className="w-11 h-11 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center text-lg font-bold shadow-2xs group-hover:scale-105 transition-transform">
               <i className="fa-solid fa-file-invoice-dollar"></i>
             </div>
-            <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+            <span className="text-[11px] font-semibold text-emerald-800">
               ₹ Accounts Live
             </span>
           </div>
@@ -456,18 +580,18 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
             <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
               Fees Overview (शुल्क सारांश)
             </span>
-            <div className="flex items-baseline gap-2 mt-0.5">
+            <div className="flex items-baseline gap-2 mt-0.5 tabular-nums">
               <span className="text-xl sm:text-2xl font-black text-emerald-700">
                 {loadingFees ? '...' : `₹${formatIndianCurrency(schoolFeeTotals.totalCollected)}`}
               </span>
               <span className="text-[11px] text-slate-500 font-semibold">Total Collected</span>
             </div>
-            <div className="mt-1 text-xs text-slate-600 font-medium flex items-center gap-1.5 flex-wrap">
+            <div className="mt-1 text-xs text-slate-600 font-medium flex items-center gap-1.5 flex-wrap tabular-nums">
               <span className="text-rose-600 font-bold">₹{formatIndianCurrency(totalPendingAmount)}</span>
               <span>Pending Dues</span>
               {schoolFeeTotals.totalAdvance > 0 && (
-                <span className="text-purple-700 font-bold text-[10px] bg-purple-50 px-1.5 py-0.2 rounded border border-purple-200">
-                  ₹{formatIndianCurrency(schoolFeeTotals.totalAdvance)} Advance
+                <span className="text-purple-700 font-bold text-[10px]">
+                  · ₹{formatIndianCurrency(schoolFeeTotals.totalAdvance)} Advance
                 </span>
               )}
             </div>
@@ -479,7 +603,84 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
           </div>
         </button>
 
-        {/* CARD 3: ABSENT STUDENTS TODAY */}
+        {/* CARD 3: ATTENDANCE OVERVIEW (TODAY'S PRESENT vs ABSENT %) */}
+        <button
+          type="button"
+          id="manager-card-attendance-overview"
+          onClick={() => setActiveModal('attendanceOverview')}
+          className="group relative bg-white hover:bg-teal-50/40 p-4 rounded-2xl shadow-xs hover:shadow-md border border-slate-200/90 hover:border-teal-300 transition-all text-left cursor-pointer flex flex-col justify-between"
+        >
+          <div className="flex items-start justify-between gap-2">
+            <div className="w-11 h-11 rounded-xl bg-teal-100 text-teal-800 flex items-center justify-center text-lg font-bold shadow-2xs group-hover:scale-105 transition-transform">
+              <i className="fa-solid fa-chart-pie"></i>
+            </div>
+            <span className="text-[11px] font-semibold text-teal-800 tabular-nums">
+              {todayDmy}
+            </span>
+          </div>
+
+          <div className="mt-3">
+            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
+              Attendance Overview (उपस्थिति दर)
+            </span>
+            {loadingBehavior ? (
+              <div className="text-xl font-black text-slate-400 mt-1">...</div>
+            ) : (
+              <>
+                <div className="flex items-baseline justify-between gap-2 mt-0.5 tabular-nums">
+                  <div>
+                    <span className="text-2xl sm:text-[26px] font-black text-emerald-700">
+                      {todayAttendanceOverview.presentPercent}%
+                    </span>
+                    <span className="text-[11px] font-bold text-emerald-700 ml-1">Present</span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-sm sm:text-base font-extrabold text-rose-600">
+                      {todayAttendanceOverview.absentPercent}%
+                    </span>
+                    <span className="text-[11px] font-semibold text-rose-600 ml-1">Absent</span>
+                  </div>
+                </div>
+
+                {/* Split Percentage Bar */}
+                <div
+                  className="mt-2 h-2 w-full bg-slate-100 rounded-full overflow-hidden flex"
+                  aria-label={`Present ${todayAttendanceOverview.presentPercent}%, Absent ${todayAttendanceOverview.absentPercent}%`}
+                >
+                  {todayAttendanceOverview.markedCount > 0 && (
+                    <>
+                      <div
+                        className="bg-emerald-600 h-full transition-all duration-300"
+                        style={{ width: `${todayAttendanceOverview.presentPercent}%` }}
+                      />
+                      <div
+                        className="bg-rose-500 h-full transition-all duration-300"
+                        style={{ width: `${todayAttendanceOverview.absentPercent}%` }}
+                      />
+                    </>
+                  )}
+                </div>
+
+                <div className="mt-1.5 text-[11px] text-slate-500 font-medium tabular-nums">
+                  {todayAttendanceOverview.markedCount > 0 ? (
+                    <span>
+                      {todayAttendanceOverview.presentCount} P · {todayAttendanceOverview.absentCount} A ({todayAttendanceOverview.markedCount}/{totalStudentsCount} Marked)
+                    </span>
+                  ) : (
+                    <span>आज की हाजिरी अभी दर्ज नहीं ({totalStudentsCount} छात्र)</span>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs text-teal-800 font-bold group-hover:text-teal-950">
+            <span>Class-wise Present %</span>
+            <i className="fa-solid fa-arrow-right text-[11px] group-hover:translate-x-1 transition-transform"></i>
+          </div>
+        </button>
+
+        {/* CARD 4: ABSENT STUDENTS TODAY */}
         <button
           type="button"
           id="manager-card-absent-today"
@@ -490,8 +691,8 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
             <div className="w-11 h-11 rounded-xl bg-rose-100 text-rose-800 flex items-center justify-center text-lg font-bold shadow-2xs group-hover:scale-105 transition-transform">
               <i className="fa-solid fa-user-xmark"></i>
             </div>
-            <span className="text-[10px] font-bold text-rose-800 bg-rose-50 px-2 py-0.5 rounded-full border border-rose-200">
-              Today's Absentees
+            <span className="text-[11px] font-semibold text-rose-800">
+              Today&apos;s Absentees
             </span>
           </div>
 
@@ -499,7 +700,7 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
             <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
               Absent Students Today (अनुपस्थित)
             </span>
-            <div className="flex items-baseline gap-2 mt-0.5">
+            <div className="flex items-baseline gap-2 mt-0.5 tabular-nums">
               <span className="text-2xl sm:text-3xl font-black text-rose-600">
                 {loadingBehavior ? '...' : effectiveAbsentCount}
               </span>
@@ -510,12 +711,12 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
           </div>
 
           <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs text-rose-700 font-bold group-hover:text-rose-900">
-            <span>View & Call Parents</span>
+            <span>View &amp; Call Parents</span>
             <i className="fa-solid fa-arrow-right text-[11px] group-hover:translate-x-1 transition-transform"></i>
           </div>
         </button>
 
-        {/* CARD 4: FAULTY BEHAVIOUR STUDENTS */}
+        {/* CARD 5: FAULTY BEHAVIOUR STUDENTS */}
         <button
           type="button"
           id="manager-card-faulty-behavior"
@@ -526,16 +727,16 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
             <div className="w-11 h-11 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center text-lg font-bold shadow-2xs group-hover:scale-105 transition-transform">
               <i className="fa-solid fa-triangle-exclamation"></i>
             </div>
-            <span className="text-[10px] font-bold text-amber-900 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
-              Requires Action / Caution
+            <span className="text-[11px] font-semibold text-amber-900">
+              Requires Caution
             </span>
           </div>
 
           <div className="mt-3">
             <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
-              Faulty Behaviour Students (शिकायत/अनुशासन)
+              Faulty Behaviour (शिकायत/अनुशासन)
             </span>
-            <div className="flex items-baseline gap-2 mt-0.5">
+            <div className="flex items-baseline gap-2 mt-0.5 tabular-nums">
               <span className="text-2xl sm:text-3xl font-black text-amber-700">
                 {loadingBehavior ? '...' : faultyBehaviorRecords.length}
               </span>
@@ -557,19 +758,20 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
         <div
           role="dialog"
           aria-modal="true"
-          className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 animate-fadeIn"
+          className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-start justify-center p-3 sm:p-5 animate-fadeIn"
           onClick={() => setActiveModal(null)}
         >
           <div
-            className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden animate-scaleUp text-slate-800"
+            className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-4xl max-h-[92vh] my-auto flex flex-col overflow-hidden animate-scaleUp text-slate-800"
             onClick={(e) => e.stopPropagation()}
           >
             {/* MODAL HEADER */}
-            <div className="px-5 py-4 bg-gradient-to-r from-[#0c2340] via-[#10316b] to-[#0c2340] text-white flex items-center justify-between gap-4 border-b-2 border-amber-400">
+            <div className="px-5 py-4 bg-gradient-to-r from-[#0c2340] via-[#10316b] to-[#0c2340] text-white flex items-center justify-between gap-4 border-b-2 border-amber-400 shrink-0">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center text-lg font-black shrink-0">
                   {activeModal === 'totalStudents' && <i className="fa-solid fa-users"></i>}
                   {activeModal === 'feesOverview' && <i className="fa-solid fa-file-invoice-dollar"></i>}
+                  {activeModal === 'attendanceOverview' && <i className="fa-solid fa-chart-pie"></i>}
                   {activeModal === 'absentToday' && <i className="fa-solid fa-user-xmark"></i>}
                   {activeModal === 'faultyBehavior' && <i className="fa-solid fa-triangle-exclamation"></i>}
                 </div>
@@ -577,12 +779,14 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                   <h3 className="text-base sm:text-lg font-extrabold text-white">
                     {activeModal === 'totalStudents' && 'Enrolled Students Directory (कुल छात्र)'}
                     {activeModal === 'feesOverview' && 'School Fees Overview (फीस सारांश)'}
+                    {activeModal === 'attendanceOverview' && "Today's Attendance Overview (आज की कक्षावार उपस्थिति)"}
                     {activeModal === 'absentToday' && 'Absent Students Today (आज अनुपस्थित छात्र)'}
                     {activeModal === 'faultyBehavior' && 'Faulty Behaviour & Caution Records (आचरण व अनुशासन)'}
                   </h3>
-                  <p className="text-xs text-amber-200/90">
+                  <p className="text-xs text-amber-200/90 tabular-nums">
                     {activeModal === 'totalStudents' && `Total ${students.length} students enrolled across ${activeClassCount} classes`}
                     {activeModal === 'feesOverview' && `Collected ₹${formatIndianCurrency(totalCollectedThisMonth)} · Pending ₹${formatIndianCurrency(totalPendingAmount)}`}
+                    {activeModal === 'attendanceOverview' && `${todayDmy} · Present ${todayAttendanceOverview.presentPercent}% vs Absent ${todayAttendanceOverview.absentPercent}% (${todayAttendanceOverview.markedCount}/${totalStudentsCount} Marked)`}
                     {activeModal === 'absentToday' && `${effectiveAbsentCount} students absent · Call parents directly`}
                     {activeModal === 'faultyBehavior' && `${faultyBehaviorRecords.length} students flagged for behavioral caution`}
                   </p>
@@ -593,7 +797,7 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveModal(null)}
-                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer"
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer shrink-0"
                 title="बंद करें (Close)"
                 aria-label="Close Modal"
               >
@@ -1132,6 +1336,178 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                     </div>
                   )}
                 </>
+              )}
+
+              {/* ================================================================= */}
+              {/* MODAL 2B: ATTENDANCE OVERVIEW (TODAY'S PRESENT vs ABSENT %)       */}
+              {/* ================================================================= */}
+              {activeModal === 'attendanceOverview' && (
+                <div className="space-y-4">
+                  {/* Overall Day Summary */}
+                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div>
+                        <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                          आज का विद्यालय उपस्थिति अनुपात ({todayDmy})
+                        </div>
+                        <div className="text-sm font-extrabold text-slate-900 mt-0.5 tabular-nums">
+                          {todayAttendanceOverview.markedCount > 0
+                            ? `${todayAttendanceOverview.presentCount} उपस्थित · ${todayAttendanceOverview.absentCount} अनुपस्थित (${todayAttendanceOverview.markedCount}/${totalStudentsCount} चिह्नित)`
+                            : `आज (${todayDmy}) की हाजिरी अभी दर्ज नहीं हुई है`}
+                        </div>
+                      </div>
+                      {onOpenAttendanceCalendar && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onOpenAttendanceCalendar();
+                            setActiveModal(null);
+                          }}
+                          className="px-3.5 py-2 bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors self-start sm:self-auto shrink-0"
+                        >
+                          <i className="fa-solid fa-calendar-check text-amber-400"></i>
+                          <span>मासिक कैलेंडर खोलें</span>
+                        </button>
+                      )}
+                    </div>
+
+                    {/* KPI Metrics Strip */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 tabular-nums">
+                      <div className="bg-white border border-emerald-200 rounded-xl p-3">
+                        <div className="text-[11px] font-semibold text-emerald-700">Present % (उपस्थित)</div>
+                        <div className="text-2xl font-black text-emerald-700 mt-0.5">
+                          {todayAttendanceOverview.presentPercent}%
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          {todayAttendanceOverview.presentCount} Students
+                        </div>
+                      </div>
+                      <div className="bg-white border border-rose-200 rounded-xl p-3">
+                        <div className="text-[11px] font-semibold text-rose-700">Absent % (अनुपस्थित)</div>
+                        <div className="text-2xl font-black text-rose-600 mt-0.5">
+                          {todayAttendanceOverview.absentPercent}%
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          {todayAttendanceOverview.absentCount} Students
+                        </div>
+                      </div>
+                      <div className="bg-white border border-slate-200 rounded-xl p-3">
+                        <div className="text-[11px] font-semibold text-slate-600">Marked Today (चिह्नित)</div>
+                        <div className="text-2xl font-black text-slate-900 mt-0.5">
+                          {todayAttendanceOverview.markedCount}
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          {todayAttendanceOverview.coveragePercent}% Coverage
+                        </div>
+                      </div>
+                      <div className="bg-white border border-slate-200 rounded-xl p-3">
+                        <div className="text-[11px] font-semibold text-slate-600">Pending (शेष छात्र)</div>
+                        <div className="text-2xl font-black text-amber-700 mt-0.5">
+                          {todayAttendanceOverview.unmarkedCount}
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          Out of {totalStudentsCount} Enrolled
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Visual Stacked Bar */}
+                    <div>
+                      <div className="flex items-center justify-between text-[11px] font-bold mb-1 tabular-nums">
+                        <span className="text-emerald-700">
+                          Present: {todayAttendanceOverview.presentPercent}%
+                        </span>
+                        <span className="text-rose-600">
+                          Absent: {todayAttendanceOverview.absentPercent}%
+                        </span>
+                      </div>
+                      <div className="h-3 w-full bg-slate-200 rounded-full overflow-hidden flex">
+                        {todayAttendanceOverview.markedCount > 0 && (
+                          <>
+                            <div
+                              className="bg-emerald-600 h-full transition-all duration-300"
+                              style={{ width: `${todayAttendanceOverview.presentPercent}%` }}
+                            />
+                            <div
+                              className="bg-rose-500 h-full transition-all duration-300"
+                              style={{ width: `${todayAttendanceOverview.absentPercent}%` }}
+                            />
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Class-wise Breakdown */}
+                  {filteredClassAttendance.length === 0 ? (
+                    <div className="text-center py-10 text-slate-400">
+                      <i className="fa-solid fa-chalkboard text-4xl mb-3"></i>
+                      <p className="font-semibold text-sm">कोई कक्षा रिकॉर्ड नहीं मिला</p>
+                      <p className="text-xs mt-1">खोज शब्द या कक्षा फ़िल्टर बदलकर देखें।</p>
+                    </div>
+                  ) : (
+                    <div className="border border-slate-200 rounded-2xl overflow-hidden bg-white">
+                      <div className="px-4 py-2.5 bg-slate-100 border-b border-slate-200 flex items-center justify-between text-xs font-bold text-slate-700">
+                        <span>कक्षावार उपस्थिति विश्लेषण (Class-wise Present vs Absent %)</span>
+                        <span className="tabular-nums">{filteredClassAttendance.length} Classes</span>
+                      </div>
+                      <div className="divide-y divide-slate-100">
+                        {filteredClassAttendance.map((cls) => (
+                          <div
+                            key={cls.className}
+                            className="p-3.5 sm:px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50/70 transition-colors"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <h4 className="font-extrabold text-sm text-slate-900">
+                                  Class {cls.className}
+                                </h4>
+                                <span className="text-xs text-slate-500 tabular-nums">
+                                  · {cls.enrolledCount} Enrolled · {cls.markedCount} Marked
+                                  {cls.unmarkedCount > 0 ? ` · ${cls.unmarkedCount} Pending` : ''}
+                                </span>
+                              </div>
+                              <div className="mt-2 h-2 w-full max-w-md bg-slate-100 rounded-full overflow-hidden flex">
+                                {cls.markedCount > 0 && (
+                                  <>
+                                    <div
+                                      className="bg-emerald-600 h-full"
+                                      style={{ width: `${cls.presentPct}%` }}
+                                    />
+                                    <div
+                                      className="bg-rose-500 h-full"
+                                      style={{ width: `${cls.absentPct}%` }}
+                                    />
+                                  </>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-4 shrink-0 tabular-nums text-right">
+                              <div>
+                                <div className="text-sm font-black text-emerald-700">
+                                  {cls.presentPct}%
+                                </div>
+                                <div className="text-[11px] text-slate-500">
+                                  Present ({cls.presentCount})
+                                </div>
+                              </div>
+                              <div className="h-7 w-px bg-slate-200" />
+                              <div>
+                                <div className="text-sm font-black text-rose-600">
+                                  {cls.absentPct}%
+                                </div>
+                                <div className="text-[11px] text-slate-500">
+                                  Absent ({cls.absentCount})
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
 
               {/* ================================================================= */}

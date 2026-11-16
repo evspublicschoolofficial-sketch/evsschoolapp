@@ -535,7 +535,7 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs animate-fadeIn overflow-y-auto">
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-start justify-center p-3 sm:p-4 backdrop-blur-xs animate-fadeIn overflow-y-auto">
       <div className="bg-white rounded-2xl max-w-xl w-full overflow-hidden shadow-2xl border border-slate-200 my-auto max-h-[95vh] flex flex-col">
         {/* Modal Header */}
         <div className="bg-[#0c2340] px-5 py-4 text-white flex items-center justify-between shrink-0">

@@ -669,10 +669,10 @@ export const TeacherHomeworkChecker: React.FC<TeacherHomeworkCheckerProps> = ({
       {/* DEDICATED FULL-SCREEN INTERACTIVE HOMEWORK CHECKER MODAL */}
       {/* ============================================================== */}
       {isCheckerModalOpen && activeHomework && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto animate-fadeIn">
-          <div className="bg-white w-full max-w-3xl rounded-3xl shadow-2xl border-2 border-amber-400/50 overflow-hidden flex flex-col max-h-[95vh] my-auto">
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-start justify-center p-2 sm:p-4 overflow-y-auto animate-fadeIn">
+          <div className="bg-white w-full max-w-3xl rounded-3xl shadow-2xl border-2 border-amber-400/50 overflow-hidden flex flex-col max-h-[92vh] my-auto">
             {/* Modal Top Bar */}
-            <div className="bg-[#0c2340] text-white p-4 sm:p-5 flex items-center justify-between gap-3 border-b border-amber-400/30">
+            <div className="bg-[#0c2340] text-white p-4 sm:p-5 flex items-center justify-between gap-3 border-b border-amber-400/30 shrink-0">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center text-lg font-black shrink-0 shadow-md">
                   <i className="fa-solid fa-list-check"></i>
