@@ -14,7 +14,7 @@ import { StudentRecordForScan } from './StudentQRScannerModal';
 import { FeeCollectionRecord } from './AddFeeModal';
 import { OfficialFeeReceiptModal } from './OfficialFeeReceiptModal';
 import { FeeMasterModal } from './FeeMasterModal';
-import { Student } from '../types';
+import { Student, UpiPaymentRequest, UpiSettings } from '../types';
 import {
   computeStudentFeeMetrics,
   computeSchoolFeeTotals,
@@ -22,6 +22,17 @@ import {
   calculateStudentSummary,
 } from '../utils/feeCalculation';
 import { APPS_SCRIPT_FEE_CODE } from '../utils/feeMaster';
+import {
+  DEFAULT_UPI_SETTINGS,
+  loadLocalUpiSettings,
+  fetchUpiSettingsFromServer,
+  saveUpiSettingsToServer,
+  fetchUpiPaymentsFromServer,
+  verifyUpiPaymentOnServer,
+  subscribeUpiUpdates,
+  compressReceiptImageFile,
+} from '../utils/upiFeeHelper';
+import { openWhatsappAlert, buildFeeDueReminderMessage } from '../utils/whatsappReminders';
 
 // Academic session months mapping (April through March)
 const ACADEMIC_MONTHS = [
@@ -264,6 +275,7 @@ interface ManagerFeeDashboardProps {
   onClearBalance?: (student: StudentRecordForScan, currentDue: number) => void;
   onEditFee?: (updatedRecord: FeeCollectionRecord, originalReceiptNo: string) => Promise<void> | void;
   onDeleteFee?: (receiptNo: string, studentId: string) => Promise<boolean | void> | void;
+  onApproveUpiPayment?: (newRec: FeeCollectionRecord, sendWhatsApp: boolean) => Promise<void> | void;
 }
 
 export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
@@ -281,11 +293,12 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
   onClearBalance,
   onEditFee,
   onDeleteFee,
+  onApproveUpiPayment,
 }) => {
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [classFilter, setClassFilter] = useState<string>('all');
   const [selectedStudent, setSelectedStudent] = useState<StudentRecordForScan | null>(initialSelectedStudent);
-  const [activeViewMode, setActiveViewMode] = useState<'trends' | 'student' | 'allLedger'>('trends');
+  const [activeViewMode, setActiveViewMode] = useState<'trends' | 'student' | 'allLedger' | 'upiQueue'>('trends');
   const [ledgerSearch, setLedgerSearch] = useState<string>('');
   const [ledgerClassFilter, setLedgerClassFilter] = useState<string>('all');
   const [copiedReceipt, setCopiedReceipt] = useState<string | null>(null);
@@ -293,6 +306,20 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
     student: Student;
     fee: FeeCollectionRecord;
   } | null>(null);
+
+  // Feature 6: School UPI Settings & Parent Online Payment Verification Queue
+  const [upiSettings, setUpiSettings] = useState<UpiSettings>(() => loadLocalUpiSettings());
+  const [upiSettingsForm, setUpiSettingsForm] = useState<UpiSettings>(() => loadLocalUpiSettings());
+  const [showUpiSettingsModal, setShowUpiSettingsModal] = useState<boolean>(false);
+  const [savingUpiSettings, setSavingUpiSettings] = useState<boolean>(false);
+  const [upiPayments, setUpiPayments] = useState<UpiPaymentRequest[]>([]);
+  const [upiStatusFilter, setUpiStatusFilter] = useState<'Pending' | 'Approved' | 'Rejected' | 'all'>('Pending');
+  const [upiSearchTerm, setUpiSearchTerm] = useState<string>('');
+  const [verifyingUpiId, setVerifyingUpiId] = useState<string | null>(null);
+  const [rejectingUpiId, setRejectingUpiId] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState<string>('');
+  const [upiScreenshotPreview, setUpiScreenshotPreview] = useState<string | null>(null);
+  const [upiActionBanner, setUpiActionBanner] = useState<string | null>(null);
 
   // Edit Fee Modal State for Manager
   const [editingFee, setEditingFee] = useState<FeeCollectionRecord | null>(null);
@@ -329,6 +356,128 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
       setActiveViewMode('student');
     }
   }, [initialSelectedStudent]);
+
+  // Load & subscribe to UPI Settings and Parent Online Fee Proofs
+  React.useEffect(() => {
+    fetchUpiSettingsFromServer()
+      .then((s) => {
+        setUpiSettings(s);
+        setUpiSettingsForm(s);
+      })
+      .catch(() => {});
+    fetchUpiPaymentsFromServer().then(setUpiPayments).catch(() => {});
+
+    const unsub = subscribeUpiUpdates((kind) => {
+      if (kind === 'settings' || kind === 'all') {
+        fetchUpiSettingsFromServer().then((s) => {
+          setUpiSettings(s);
+          setUpiSettingsForm(s);
+        }).catch(() => {});
+      }
+      if (kind === 'payments' || kind === 'all') {
+        fetchUpiPaymentsFromServer().then(setUpiPayments).catch(() => {});
+      }
+    });
+    return unsub;
+  }, []);
+
+  const pendingUpiCount = useMemo(
+    () => upiPayments.filter((p) => p.status === 'Pending').length,
+    [upiPayments]
+  );
+
+  const filteredUpiPayments = useMemo(() => {
+    const q = upiSearchTerm.trim().toLowerCase();
+    return upiPayments.filter((p) => {
+      const matchStatus = upiStatusFilter === 'all' || p.status === upiStatusFilter;
+      const matchSearch =
+        !q ||
+        String(p.studentName || '').toLowerCase().includes(q) ||
+        String(p.studentId || '').toLowerCase().includes(q) ||
+        String(p.utrNumber || '').toLowerCase().includes(q) ||
+        String(p.payerName || '').toLowerCase().includes(q);
+      return matchStatus && matchSearch;
+    });
+  }, [upiPayments, upiStatusFilter, upiSearchTerm]);
+
+  const handleApproveUpiSubmission = async (pay: UpiPaymentRequest, sendWhatsApp: boolean) => {
+    setVerifyingUpiId(pay.id);
+    setUpiActionBanner(null);
+    try {
+      const receiptNo = `UPI-${Date.now().toString().slice(-6)}`;
+      const verifyRes = await verifyUpiPaymentOnServer({
+        id: pay.id,
+        status: 'Approved',
+        receiptNumber: receiptNo,
+        verifiedBy: managerName,
+      });
+
+      if (!verifyRes.success) {
+        setUpiActionBanner(`⚠️ सत्यापन विफल: ${verifyRes.error || 'Error'}`);
+        return;
+      }
+
+      const matchedStudent = students.find(
+        (s) => String(s.Student_ID || '').trim().toLowerCase() === String(pay.studentId || '').trim().toLowerCase()
+      );
+      const currentBal = matchedStudent
+        ? computeStudentFeeMetrics(matchedStudent, feeRecords).dueBalance
+        : 0;
+      const nextBal = Math.max(0, currentBal - Number(pay.amount || 0));
+
+      const newFeeRec: FeeCollectionRecord = {
+        Receipt_Number: receiptNo,
+        Student_ID: pay.studentId,
+        Date: pay.paymentDate || new Date().toISOString().split('T')[0],
+        Fee_Type: pay.feeType || 'Monthly Tuition Fee',
+        Month: pay.month || 'Current',
+        Total_Amount: Number(pay.amount || 0),
+        Discount_Amount: 0,
+        Net_Payable: Number(pay.amount || 0),
+        Amount_Paid: Number(pay.amount || 0),
+        Balance_Amount: nextBal,
+        Payment_Mode: `UPI (${pay.paymentApp || 'Online'})`,
+        Received_By: managerName,
+        Notes: `UTR: ${pay.utrNumber}${pay.payerName ? ` · Payer: ${pay.payerName}` : ''}`,
+      };
+
+      if (onApproveUpiPayment) {
+        await onApproveUpiPayment(newFeeRec, sendWhatsApp);
+      }
+
+      const latest = await fetchUpiPaymentsFromServer();
+      setUpiPayments(latest);
+      setUpiActionBanner(
+        `✅ ${pay.studentName} के ₹${Number(pay.amount).toLocaleString('en-IN')} सत्यापित होकर पक्की रसीद #${receiptNo} जारी हो गई!`
+      );
+      setTimeout(() => setUpiActionBanner(null), 6000);
+    } finally {
+      setVerifyingUpiId(null);
+    }
+  };
+
+  const handleRejectUpiSubmission = async (pay: UpiPaymentRequest) => {
+    setVerifyingUpiId(pay.id);
+    setUpiActionBanner(null);
+    try {
+      const verifyRes = await verifyUpiPaymentOnServer({
+        id: pay.id,
+        status: 'Rejected',
+        managerNote: rejectReason.trim() || 'UTR / भुगतान विवरण मेल नहीं खाया',
+        verifiedBy: managerName,
+      });
+      if (verifyRes.success) {
+        setRejectingUpiId(null);
+        setRejectReason('');
+        const latest = await fetchUpiPaymentsFromServer();
+        setUpiPayments(latest);
+        setUpiActionBanner(`❌ ${pay.studentName} (UTR: ${pay.utrNumber}) अस्वीकृत किया गया।`);
+        setTimeout(() => setUpiActionBanner(null), 5000);
+      }
+    } finally {
+      setVerifyingUpiId(null);
+    }
+  };
 
   // Robust date parser supporting Google Visualization Date(Y,M,D), ISO strings, and Indian formats
   const parseGVizOrStandardDate = (dateVal: any): Date | null => {
@@ -1012,6 +1161,19 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
 
             <button
               type="button"
+              onClick={() => {
+                setUpiSettingsForm(upiSettings);
+                setShowUpiSettingsModal(true);
+              }}
+              className="px-3.5 py-2.5 bg-emerald-500/20 hover:bg-emerald-500/35 text-emerald-200 border border-emerald-400/40 font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer transition-all active:scale-95"
+              title="स्कूल का UPI ID व QR पेमेंट सेटअप करें"
+            >
+              <i className="fa-solid fa-qrcode text-emerald-300"></i>
+              <span>UPI QR सेटिंग्स</span>
+            </button>
+
+            <button
+              type="button"
               onClick={onRefreshFees}
               disabled={loadingFees}
               className="px-3.5 py-2.5 bg-white/10 hover:bg-white/20 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors"
@@ -1166,6 +1328,23 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
             >
               <i className="fa-solid fa-book text-xs"></i>
               <span>समस्त स्कूल लेजर</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveViewMode('upiQueue')}
+              className={`px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                activeViewMode === 'upiQueue'
+                  ? 'bg-[#0c2340] text-amber-300 shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+              }`}
+            >
+              <i className="fa-solid fa-mobile-screen-button text-xs"></i>
+              <span>💳 UPI सत्यापन</span>
+              {pendingUpiCount > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-rose-600 text-white text-[10px] font-black">
+                  {pendingUpiCount}
+                </span>
+              )}
             </button>
           </div>
         </div>
@@ -1900,6 +2079,27 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                     <span>व्हाट्सएप विवरण</span>
                   </button>
 
+                  {studentFeeSummary.isDue && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const msg = buildFeeDueReminderMessage({
+                          studentName: selectedStudent.Student_Name || selectedStudent.Student_ID,
+                          className: getClassName(selectedStudent.Class),
+                          studentId: selectedStudent.Student_ID,
+                          fatherName: selectedStudent.Father_Name,
+                          pendingAmount: studentFeeSummary.balance,
+                        });
+                        openWhatsappAlert(selectedStudent.Parent_Mobile, msg);
+                      }}
+                      className="px-3.5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs"
+                      title="बकाया फीस जमा करने हेतु अभिभावक को 1-क्लिक रिमाइंडर भेजें"
+                    >
+                      <i className="fa-brands fa-whatsapp text-sm"></i>
+                      <span>बकाया रिमाइंडर</span>
+                    </button>
+                  )}
+
                   <button
                     type="button"
                     onClick={handlePrintStatement}
@@ -2586,6 +2786,277 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
         </div>
       )}
 
+      {/* 5. VIEW MODE: FEATURE 6 — UPI ONLINE PAYMENT VERIFICATION QUEUE */}
+      {activeViewMode === 'upiQueue' && (
+        <div className="px-6 pb-6 space-y-5 animate-fadeIn">
+          {/* Header Banner */}
+          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div>
+              <h3 className="text-base sm:text-lg font-black text-slate-900 flex items-center gap-2">
+                <i className="fa-solid fa-mobile-screen-button text-emerald-600"></i>
+                <span>अभिभावक UPI भुगतान सत्यापन कतार (Online Fee Verification)</span>
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                अभिभावकों द्वारा Parent Portal से भेजे गए UTR नंबर व स्क्रीनशॉट जांचें और 1-क्लिक में पक्की रसीद जारी करें।
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="text-xs px-3 py-1.5 rounded-xl bg-white border border-slate-200 font-semibold text-slate-700">
+                स्कूल UPI ID:{' '}
+                <span className="font-mono font-bold text-[#0c2340]">
+                  {upiSettings.upiId || 'सेट नहीं है'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setUpiSettingsForm(upiSettings);
+                  setShowUpiSettingsModal(true);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
+              >
+                <i className="fa-solid fa-gear"></i>
+                <span>UPI QR बदलें / सेट करें</span>
+              </button>
+            </div>
+          </div>
+
+          {upiActionBanner && (
+            <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-300 text-emerald-900 text-xs font-bold flex items-center justify-between">
+              <span>{upiActionBanner}</span>
+              <button
+                type="button"
+                onClick={() => setUpiActionBanner(null)}
+                className="text-emerald-700 hover:text-emerald-950 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
+          {/* Filter Toolbar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex flex-wrap gap-1.5 bg-slate-100 p-1 rounded-xl text-xs font-bold">
+              {(['Pending', 'Approved', 'Rejected', 'all'] as const).map((st) => {
+                const count =
+                  st === 'all'
+                    ? upiPayments.length
+                    : upiPayments.filter((p) => p.status === st).length;
+                const label =
+                  st === 'Pending'
+                    ? 'लंबित (Pending)'
+                    : st === 'Approved'
+                    ? 'स्वीकृत (Approved)'
+                    : st === 'Rejected'
+                    ? 'अस्वीकृत (Rejected)'
+                    : 'सभी (All)';
+                return (
+                  <button
+                    key={st}
+                    type="button"
+                    onClick={() => setUpiStatusFilter(st)}
+                    className={`px-3 py-1.5 rounded-lg cursor-pointer transition-all ${
+                      upiStatusFilter === st
+                        ? 'bg-[#0c2340] text-amber-300 shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {label} ({count})
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="relative w-full sm:w-64">
+              <i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+              <input
+                type="text"
+                value={upiSearchTerm}
+                onChange={(e) => setUpiSearchTerm(e.target.value)}
+                placeholder="UTR नंबर या छात्र खोजें..."
+                className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-300 text-xs outline-none focus:border-blue-900"
+              />
+            </div>
+          </div>
+
+          {/* Queue Cards */}
+          {filteredUpiPayments.length === 0 ? (
+            <div className="p-12 text-center bg-slate-50 rounded-3xl border border-dashed border-slate-300 text-slate-500">
+              <i className="fa-solid fa-circle-check text-4xl text-emerald-500 mb-2"></i>
+              <div className="font-bold text-slate-800 text-sm">
+                इस श्रेणी में कोई ऑनलाइन UPI भुगतान अनुरोध नहीं है
+              </div>
+              <p className="text-xs text-slate-400 mt-1">
+                जब अभिभावक Parent Portal से फीस जमा करके UTR दर्ज करेंगे, तो यहाँ तुरंत दिखाई देगा।
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {filteredUpiPayments.map((pay) => {
+                const matchedStudent = students.find(
+                  (s) => String(s.Student_ID || '').toLowerCase() === String(pay.studentId || '').toLowerCase()
+                );
+                const isProcessing = verifyingUpiId === pay.id;
+
+                return (
+                  <div
+                    key={pay.id}
+                    className={`p-4 rounded-2xl border transition-all space-y-3 ${
+                      pay.status === 'Pending'
+                        ? 'bg-amber-50/40 border-amber-300'
+                        : pay.status === 'Approved'
+                        ? 'bg-emerald-50/30 border-emerald-200'
+                        : 'bg-rose-50/30 border-rose-200'
+                    }`}
+                  >
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                      {/* Left Info */}
+                      <div className="space-y-1.5 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h4 className="font-black text-slate-900 text-sm sm:text-base">
+                            {pay.studentName}
+                          </h4>
+                          <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-900 font-bold text-[11px]">
+                            Class {pay.className || (matchedStudent ? getClassName(matchedStudent.Class) : 'N/A')}
+                          </span>
+                          <span className="font-mono text-[11px] bg-white px-2 py-0.5 rounded border border-slate-200 text-slate-600">
+                            ID: {pay.studentId}
+                          </span>
+                          {pay.status === 'Pending' && (
+                            <span className="px-2.5 py-0.5 rounded-full bg-amber-200 text-amber-950 font-black text-[10px]">
+                              ⏳ सत्यापन लंबित
+                            </span>
+                          )}
+                          {pay.status === 'Approved' && (
+                            <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-900 font-black text-[10px]">
+                              ✅ स्वीकृत · #{pay.receiptNumber}
+                            </span>
+                          )}
+                          {pay.status === 'Rejected' && (
+                            <span className="px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-900 font-black text-[10px]">
+                              ❌ अस्वीकृत
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600 tabular-nums">
+                          <span className="font-black text-emerald-800 text-base">
+                            ₹{Number(pay.amount || 0).toLocaleString('en-IN')}
+                          </span>
+                          <span className="text-slate-300">·</span>
+                          <span>
+                            {pay.feeType} ({pay.month})
+                          </span>
+                          <span className="text-slate-300">·</span>
+                          <span className="font-mono font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">
+                            UTR: {pay.utrNumber}
+                          </span>
+                          <span className="text-slate-300">·</span>
+                          <span>{pay.paymentApp || 'UPI'}</span>
+                          <span className="text-slate-300">·</span>
+                          <span>{pay.paymentDate}</span>
+                        </div>
+
+                        <div className="text-[11px] text-slate-500 flex flex-wrap gap-3">
+                          {pay.payerName && <span>भेजने वाला: <b>{pay.payerName}</b></span>}
+                          {pay.parentMobile && <span>फ़ोन: <b>{pay.parentMobile}</b></span>}
+                          {pay.notes && <span>नोट: "{pay.notes}"</span>}
+                          {pay.managerNote && (
+                            <span className="text-rose-700 font-bold">कार्यालय टिप्पणी: {pay.managerNote}</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Right Actions */}
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        {pay.screenshotData && (
+                          <button
+                            type="button"
+                            onClick={() => setUpiScreenshotPreview(pay.screenshotData || null)}
+                            className="px-3 py-2 rounded-xl bg-white hover:bg-slate-100 border border-slate-300 text-slate-800 font-bold text-xs flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <i className="fa-regular fa-image text-indigo-600"></i>
+                            <span>स्क्रीनशॉट देखें</span>
+                          </button>
+                        )}
+
+                        {pay.status === 'Pending' && (
+                          <>
+                            <button
+                              type="button"
+                              disabled={isProcessing}
+                              onClick={() => handleApproveUpiSubmission(pay, false)}
+                              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+                            >
+                              <i className={`fa-solid ${isProcessing ? 'fa-spinner fa-spin' : 'fa-check-double'}`}></i>
+                              <span>अप्रूव व रसीद जारी करें</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={isProcessing}
+                              onClick={() => handleApproveUpiSubmission(pay, true)}
+                              className="px-3 py-2 rounded-xl bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+                              title="अप्रूव करके WhatsApp रसीद भी भेजें"
+                            >
+                              <i className="fa-brands fa-whatsapp text-emerald-400"></i>
+                              <span>अप्रूव + WhatsApp</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={isProcessing}
+                              onClick={() => {
+                                setRejectingUpiId(rejectingUpiId === pay.id ? null : pay.id);
+                                setRejectReason('');
+                              }}
+                              className="px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white border border-rose-300 font-bold text-xs cursor-pointer transition-colors"
+                            >
+                              ✕ अस्वीकार
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Inline Reject Confirmation */}
+                    {rejectingUpiId === pay.id && (
+                      <div className="p-3 bg-white rounded-xl border border-rose-200 flex flex-col sm:flex-row items-stretch sm:items-center gap-2 text-xs">
+                        <input
+                          type="text"
+                          value={rejectReason}
+                          onChange={(e) => setRejectReason(e.target.value)}
+                          placeholder="अस्वीकार करने का कारण लिखें (उदा. बैंक में यह UTR प्राप्त नहीं हुआ)..."
+                          className="flex-1 px-3 py-1.5 rounded-lg border border-slate-300 outline-none focus:border-rose-600"
+                        />
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleRejectUpiSubmission(pay)}
+                            disabled={isProcessing}
+                            className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold cursor-pointer"
+                          >
+                            पुष्टि करें (Reject)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRejectingUpiId(null)}
+                            className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold cursor-pointer"
+                          >
+                            रद्द
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Edit Fee Record Modal for Manager */}
       {editingFee && (
         <div className="fixed inset-0 z-50 bg-black/70 flex items-start justify-center p-3 sm:p-4 backdrop-blur-xs animate-fadeIn overflow-y-auto">
@@ -3089,6 +3560,186 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
           if (onRefreshFees) onRefreshFees();
         }}
       />
+
+      {/* FEATURE 6: SCHOOL UPI SETTINGS MODAL */}
+      {showUpiSettingsModal && (
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/75 backdrop-blur-xs flex items-start justify-center p-3 sm:p-5 animate-fadeIn"
+          onClick={() => setShowUpiSettingsModal(false)}
+        >
+          <div
+            className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden my-auto max-h-[92vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-gradient-to-r from-[#0c2340] to-[#10316b] px-5 py-4 text-white flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center font-black">
+                  <i className="fa-solid fa-qrcode"></i>
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-white">
+                    स्कूल UPI QR पेमेंट सेटिंग्स
+                  </h3>
+                  <p className="text-[11px] text-amber-200">
+                    Parent Portal में लाइव शुल्क भुगतान QR कोड सक्रिय करें
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowUpiSettingsModal(false)}
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-sm cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setSavingUpiSettings(true);
+                try {
+                  const saved = await saveUpiSettingsToServer(upiSettingsForm);
+                  setUpiSettings(saved);
+                  setShowUpiSettingsModal(false);
+                } finally {
+                  setSavingUpiSettings(false);
+                }
+              }}
+              className="p-5 overflow-y-auto flex-1 space-y-4 text-xs text-slate-800"
+            >
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  स्कूल UPI ID (VPA) <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={upiSettingsForm.upiId}
+                  onChange={(e) => setUpiSettingsForm({ ...upiSettingsForm, upiId: e.target.value })}
+                  placeholder="उदा. evspublicschool@sbi या 9876543210@ybl"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono font-bold text-sm outline-none focus:border-blue-900"
+                />
+                <span className="text-[11px] text-slate-500 block mt-0.5">
+                  इसे भरते ही अभिभावकों को उनकी बकाया राशि के साथ डायनामिक QR कोड व UPI Pay बटन दिखने लगेगा।
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">खाता / स्कूल नाम (Payee Name)</label>
+                  <input
+                    type="text"
+                    value={upiSettingsForm.payeeName}
+                    onChange={(e) => setUpiSettingsForm({ ...upiSettingsForm, payeeName: e.target.value })}
+                    placeholder="E.V.S. Public School"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 font-semibold outline-none focus:border-blue-900"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">बैंक का नाम (Optional)</label>
+                  <input
+                    type="text"
+                    value={upiSettingsForm.bankName || ''}
+                    onChange={(e) => setUpiSettingsForm({ ...upiSettingsForm, bankName: e.target.value })}
+                    placeholder="उदा. State Bank of India"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 outline-none focus:border-blue-900"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">अभिभावकों के लिए निर्देश (Instructions)</label>
+                <textarea
+                  rows={2}
+                  value={upiSettingsForm.instructions || ''}
+                  onChange={(e) => setUpiSettingsForm({ ...upiSettingsForm, instructions: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 outline-none focus:border-blue-900"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  वैकल्पिक बैंक QR फोटो अपलोड करें (Optional Static QR)
+                </label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    try {
+                      const compressed = await compressReceiptImageFile(file);
+                      setUpiSettingsForm({ ...upiSettingsForm, staticQrImage: compressed });
+                    } catch {}
+                  }}
+                  className="w-full text-[11px] file:mr-2.5 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-blue-50 file:text-blue-900 cursor-pointer"
+                />
+                {upiSettingsForm.staticQrImage && (
+                  <div className="mt-2 flex items-center gap-3">
+                    <img
+                      src={upiSettingsForm.staticQrImage}
+                      alt="Static QR"
+                      className="w-16 h-16 rounded-xl border border-slate-200 object-contain"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setUpiSettingsForm({ ...upiSettingsForm, staticQrImage: '' })}
+                      className="text-rose-600 font-bold text-xs hover:underline cursor-pointer"
+                    >
+                      फोटो हटाएं
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setShowUpiSettingsModal(false)}
+                  className="px-4 py-2 rounded-xl border border-slate-300 hover:bg-slate-100 text-slate-700 font-bold cursor-pointer"
+                >
+                  रद्द करें
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingUpiSettings}
+                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black cursor-pointer disabled:opacity-50"
+                >
+                  {savingUpiSettings ? 'सेव हो रहा है...' : '✓ UPI सेटिंग्स सेव करें'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* SCREENSHOT LIGHTBOX FOR VERIFICATION QUEUE */}
+      {upiScreenshotPreview && (
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/80 flex items-start justify-center p-4"
+          onClick={() => setUpiScreenshotPreview(null)}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-lg w-full my-auto max-h-[92vh] flex flex-col overflow-hidden shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 bg-[#0c2340] text-white flex items-center justify-between shrink-0">
+              <span className="font-bold text-xs">भुगतान स्क्रीनशॉट (Parent Payment Proof)</span>
+              <button
+                type="button"
+                onClick={() => setUpiScreenshotPreview(null)}
+                className="w-7 h-7 rounded-full bg-white/15 hover:bg-white/25 text-white text-xs cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-4 overflow-y-auto flex-1 flex items-center justify-center bg-slate-50">
+              <img src={upiScreenshotPreview} alt="Parent UPI proof" className="max-h-[72vh] rounded-xl object-contain" />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

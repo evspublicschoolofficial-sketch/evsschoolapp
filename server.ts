@@ -218,6 +218,78 @@ function saveSchoolHolidaysCache() {
   }
 }
 
+// =========================================================================
+// STAFF SALARY CONFIGURATION PERSISTENCE (/api/staff-salary-config)
+// =========================================================================
+const STAFF_SALARY_CONFIG_FILE = '/tmp/evs_staff_salary_config.json';
+let staffSalaryConfigStore: Record<string, any> = {};
+try {
+  if (fs.existsSync(STAFF_SALARY_CONFIG_FILE)) {
+    const rawSalary = fs.readFileSync(STAFF_SALARY_CONFIG_FILE, 'utf-8');
+    staffSalaryConfigStore = JSON.parse(rawSalary) || {};
+  }
+} catch {
+  staffSalaryConfigStore = {};
+}
+
+function saveStaffSalaryConfigCache() {
+  try {
+    fs.writeFileSync(STAFF_SALARY_CONFIG_FILE, JSON.stringify(staffSalaryConfigStore, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Could not write staff salary config cache file:', e);
+  }
+}
+
+// =========================================================================
+// SCHOOL UPI SETTINGS & ONLINE FEE PAYMENTS QUEUE (/api/upi-settings, /api/upi-payments)
+// =========================================================================
+const UPI_SETTINGS_FILE = '/tmp/evs_upi_settings.json';
+const DEFAULT_UPI_SETTINGS_STORE = {
+  upiId: '',
+  payeeName: 'E.V.S. Public School',
+  bankName: '',
+  instructions: 'QR स्कैन या UPI ऐप से भुगतान करने के बाद 12 अंकों का UTR / Reference No नीचे दर्ज करें।',
+  staticQrImage: '',
+  updatedAt: '',
+};
+let upiSettingsStore: any = { ...DEFAULT_UPI_SETTINGS_STORE };
+try {
+  if (fs.existsSync(UPI_SETTINGS_FILE)) {
+    const rawUpi = fs.readFileSync(UPI_SETTINGS_FILE, 'utf-8');
+    upiSettingsStore = { ...DEFAULT_UPI_SETTINGS_STORE, ...(JSON.parse(rawUpi) || {}) };
+  }
+} catch {
+  upiSettingsStore = { ...DEFAULT_UPI_SETTINGS_STORE };
+}
+
+function saveUpiSettingsCache() {
+  try {
+    fs.writeFileSync(UPI_SETTINGS_FILE, JSON.stringify(upiSettingsStore, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Could not write UPI settings cache file:', e);
+  }
+}
+
+const UPI_PAYMENTS_FILE = '/tmp/evs_upi_payments.json';
+let upiPaymentsStore: any[] = [];
+try {
+  if (fs.existsSync(UPI_PAYMENTS_FILE)) {
+    const rawPay = fs.readFileSync(UPI_PAYMENTS_FILE, 'utf-8');
+    const parsed = JSON.parse(rawPay);
+    upiPaymentsStore = Array.isArray(parsed) ? parsed : [];
+  }
+} catch {
+  upiPaymentsStore = [];
+}
+
+function saveUpiPaymentsCache() {
+  try {
+    fs.writeFileSync(UPI_PAYMENTS_FILE, JSON.stringify(upiPaymentsStore, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Could not write UPI payments cache file:', e);
+  }
+}
+
 function parseAppsScriptResponse(text: string): { ok: boolean; error?: string } {
   const trimmed = String(text || '').trim();
   if (!trimmed) return { ok: false, error: 'Google Apps Script से खाली जवाब मिला' };
@@ -3163,6 +3235,233 @@ async function startServer() {
         greeting: 'अस्सलाम वालेकुम! छात्र की आज की स्कूल गतिविधियां व विवरण नीचे काम की चीजों में प्रस्तुत हैं। अल्लाह आपके बच्चे को इल्म व तरक्की से नवाज़े।',
         fallback: true,
       });
+    }
+  });
+
+  // =========================================================================
+  // FEATURE 5: STAFF SALARY & LATE/OVERTIME CONFIG ROUTES
+  // =========================================================================
+  app.get('/api/staff-salary-config', (_req, res) => {
+    res.json({ success: true, configs: staffSalaryConfigStore });
+  });
+
+  app.post('/api/staff-salary-config', (req, res) => {
+    try {
+      const cfg = req.body?.config || req.body;
+      const userId = String(cfg?.userId || '').trim();
+      if (!userId) {
+        return res.status(400).json({ success: false, error: 'userId is required' });
+      }
+      staffSalaryConfigStore[userId] = {
+        ...cfg,
+        userId,
+        updatedAt: new Date().toISOString(),
+      };
+      saveStaffSalaryConfigCache();
+
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'staff_salary_config',
+        action: 'save',
+        details: { userId },
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(broadcastMsg);
+        }
+      }
+
+      return res.json({ success: true, configs: staffSalaryConfigStore });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Error saving salary config' });
+    }
+  });
+
+  // =========================================================================
+  // FEATURE 6: SCHOOL UPI SETTINGS & ONLINE PAYMENT SUBMISSION / VERIFICATION
+  // =========================================================================
+  app.get('/api/upi-settings', (_req, res) => {
+    res.json({ success: true, settings: upiSettingsStore });
+  });
+
+  app.post('/api/upi-settings', (req, res) => {
+    try {
+      const incoming = req.body?.settings || req.body || {};
+      upiSettingsStore = {
+        ...DEFAULT_UPI_SETTINGS_STORE,
+        ...upiSettingsStore,
+        upiId: String(incoming.upiId ?? upiSettingsStore.upiId ?? '').trim(),
+        payeeName: String(incoming.payeeName || upiSettingsStore.payeeName || 'E.V.S. Public School').trim(),
+        bankName: String(incoming.bankName ?? upiSettingsStore.bankName ?? '').trim(),
+        instructions: String(incoming.instructions || upiSettingsStore.instructions || DEFAULT_UPI_SETTINGS_STORE.instructions).trim(),
+        staticQrImage: incoming.staticQrImage !== undefined ? String(incoming.staticQrImage || '') : (upiSettingsStore.staticQrImage || ''),
+        updatedAt: new Date().toISOString(),
+      };
+      saveUpiSettingsCache();
+
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'upi_settings',
+        action: 'update',
+        details: { upiId: upiSettingsStore.upiId },
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(broadcastMsg);
+        }
+      }
+
+      return res.json({ success: true, settings: upiSettingsStore });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Could not save UPI settings' });
+    }
+  });
+
+  app.get('/api/upi-payments', (req, res) => {
+    try {
+      const studentId = String(req.query.studentId || '').trim().toLowerCase();
+      const statusFilter = String(req.query.status || '').trim().toLowerCase();
+
+      let list = [...upiPaymentsStore];
+      if (studentId) {
+        list = list.filter((p) => String(p.studentId || '').trim().toLowerCase() === studentId);
+      }
+      if (statusFilter && statusFilter !== 'all') {
+        list = list.filter((p) => String(p.status || '').trim().toLowerCase() === statusFilter);
+      }
+      return res.json({ success: true, payments: list });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Error fetching UPI payments' });
+    }
+  });
+
+  app.post('/api/upi-payments', (req, res) => {
+    try {
+      const body = req.body || {};
+      const studentId = String(body.studentId || '').trim();
+      const amount = Number(body.amount || 0);
+      const utrNumber = String(body.utrNumber || '').trim();
+
+      if (!studentId || !amount || amount <= 0 || !utrNumber) {
+        return res.status(400).json({
+          success: false,
+          error: 'छात्र आईडी, जमा राशि और UTR / Transaction ID अनिवार्य हैं।',
+        });
+      }
+
+      // Guard against duplicate UTR submission
+      const dup = upiPaymentsStore.find(
+        (p) =>
+          String(p.utrNumber || '').trim().toLowerCase() === utrNumber.toLowerCase() &&
+          p.status !== 'Rejected'
+      );
+      if (dup) {
+        return res.status(409).json({
+          success: false,
+          error: `यह UTR नंबर (${utrNumber}) पहले से दर्ज है (Status: ${dup.status})।`,
+        });
+      }
+
+      const record = {
+        id: String(body.id || `upi_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`),
+        studentId,
+        studentName: String(body.studentName || studentId).trim(),
+        className: String(body.className || '').trim(),
+        parentMobile: String(body.parentMobile || '').trim(),
+        payerName: String(body.payerName || '').trim(),
+        amount,
+        feeType: String(body.feeType || 'Monthly Tuition Fee').trim(),
+        month: String(body.month || 'Current').trim(),
+        utrNumber,
+        paymentApp: String(body.paymentApp || 'UPI').trim(),
+        paymentDate: String(body.paymentDate || new Date().toISOString().split('T')[0]).trim(),
+        screenshotData: body.screenshotData ? String(body.screenshotData) : '',
+        notes: String(body.notes || '').trim(),
+        status: 'Pending',
+        createdAt: String(body.createdAt || new Date().toISOString()),
+      };
+
+      upiPaymentsStore = [record, ...upiPaymentsStore];
+      saveUpiPaymentsCache();
+
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'upi_payments',
+        action: 'create',
+        details: { id: record.id, studentId: record.studentId, amount: record.amount },
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(broadcastMsg);
+        }
+      }
+
+      return res.json({ success: true, payment: record, payments: upiPaymentsStore });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Error submitting payment' });
+    }
+  });
+
+  app.post('/api/upi-payments/:id/verify', (req, res) => {
+    try {
+      const targetId = String(req.params.id || '').trim();
+      const { status, receiptNumber, managerNote, verifiedBy } = req.body || {};
+
+      if (status !== 'Approved' && status !== 'Rejected') {
+        return res.status(400).json({ success: false, error: 'Status must be Approved or Rejected' });
+      }
+
+      const idx = upiPaymentsStore.findIndex((p) => p.id === targetId);
+      if (idx === -1) {
+        return res.status(404).json({ success: false, error: 'UPI payment request not found' });
+      }
+
+      const updated = {
+        ...upiPaymentsStore[idx],
+        status,
+        receiptNumber: receiptNumber || upiPaymentsStore[idx].receiptNumber || '',
+        managerNote: managerNote !== undefined ? String(managerNote).trim() : (upiPaymentsStore[idx].managerNote || ''),
+        verifiedBy: String(verifiedBy || 'School Manager').trim(),
+        verifiedAt: new Date().toISOString(),
+      };
+
+      upiPaymentsStore[idx] = updated;
+      saveUpiPaymentsCache();
+
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'upi_payments',
+        action: status.toLowerCase(),
+        details: { id: updated.id, studentId: updated.studentId, status: updated.status },
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(broadcastMsg);
+        }
+      }
+
+      return res.json({ success: true, payment: updated, payments: upiPaymentsStore });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Error verifying payment' });
+    }
+  });
+
+  app.delete('/api/upi-payments/:id', (req, res) => {
+    try {
+      const targetId = String(req.params.id || '').trim();
+      const before = upiPaymentsStore.length;
+      upiPaymentsStore = upiPaymentsStore.filter((p) => p.id !== targetId);
+      if (upiPaymentsStore.length === before) {
+        return res.status(404).json({ success: false, error: 'UPI payment not found' });
+      }
+      saveUpiPaymentsCache();
+      return res.json({ success: true, payments: upiPaymentsStore });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Delete failed' });
     }
   });
 

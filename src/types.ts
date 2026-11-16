@@ -175,3 +175,52 @@ export interface WeeklyTestRecord {
   timestamp?: string;
 }
 
+export interface StaffSalaryConfig {
+  userId: string;
+  name?: string;
+  baseSalary: number;
+  paidLeaveDays: number;
+  lateThresholdDays: number;
+  latePenaltyPerDay: number;
+  lateDeductionPerMinute: number;
+  halfDayFactor: number;
+  overtimeHourlyRate: number;
+  extraDutyDayBonus: number;
+  allowances: number;
+  manualDeduction: number;
+  updatedAt?: string;
+}
+
+export interface UpiSettings {
+  upiId: string;
+  payeeName: string;
+  bankName?: string;
+  instructions?: string;
+  staticQrImage?: string;
+  updatedAt?: string;
+}
+
+export interface UpiPaymentRequest {
+  id: string;
+  studentId: string;
+  studentName: string;
+  className?: string;
+  parentMobile?: string;
+  payerName?: string;
+  amount: number;
+  feeType: string;
+  month: string;
+  utrNumber: string;
+  paymentApp?: string;
+  paymentDate: string;
+  screenshotData?: string;
+  notes?: string;
+  status: 'Pending' | 'Approved' | 'Rejected';
+  receiptNumber?: string;
+  managerNote?: string;
+  verifiedBy?: string;
+  verifiedAt?: string;
+  createdAt: string;
+}
+
+

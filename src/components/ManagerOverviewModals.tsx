@@ -2,6 +2,11 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { Student, FeeCollectionRecord, StudentBehaviorRecord } from '../types';
 import { StudentAvatar } from './StudentAvatar';
 import { computeStudentFeeMetrics, computeSchoolFeeTotals } from '../utils/feeCalculation';
+import {
+  openWhatsappAlert,
+  buildAbsentAlertMessage,
+  buildFeeDueReminderMessage,
+} from '../utils/whatsappReminders';
 
 interface ManagerOverviewModalsProps {
   students: Student[];
@@ -71,6 +76,7 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
   const [syncingStudentId, setSyncingStudentId] = useState<string | null>(null);
   const [syncingAll, setSyncingAll] = useState<boolean>(false);
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
+  const [sentAlertIds, setSentAlertIds] = useState<Record<string, boolean>>({});
 
   // Reset search and filters whenever modal opens/changes
   useEffect(() => {
@@ -1252,9 +1258,9 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                     </div>
                   ) : (
                     <div>
-                      <div className="mb-3 px-3 py-2 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-center justify-between">
+                      <div className="mb-3 px-3 py-2 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex flex-wrap items-center justify-between gap-2">
                         <span>
-                          <strong>बकाया शुल्क सूची (Pending Dues List):</strong> कुल बकाया ₹{formatIndianCurrency(totalPendingAmount)}
+                          <strong>बकाया शुल्क सूची (Pending Dues List):</strong> कुल बकाया ₹{formatIndianCurrency(totalPendingAmount)} · 1-क्लिक में अभिभावक को WhatsApp रिमाइंडर भेजें
                         </span>
                         <span className="text-[11px] font-bold">
                           {filteredPendingFees.length} छात्र (Students with Dues)
@@ -1271,6 +1277,8 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                         <div className="space-y-2.5">
                           {filteredPendingFees.map(({ student, pendingAmount }) => {
                             const phone = getStudentPhone(student);
+                            const alertKey = `fee_${student.Student_ID}`;
+                            const isSent = Boolean(sentAlertIds[alertKey]);
 
                             return (
                               <div
@@ -1303,8 +1311,8 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                                   </div>
                                 </div>
 
-                                <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100">
-                                  <div className="text-right">
+                                <div className="flex items-center justify-between sm:justify-end gap-2 sm:gap-2.5 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 flex-wrap">
+                                  <div className="text-right mr-1 tabular-nums">
                                     <div className="text-base font-black text-rose-600">
                                       ₹{formatIndianCurrency(pendingAmount)}
                                     </div>
@@ -1313,6 +1321,30 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                                     </div>
                                   </div>
 
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const msg = buildFeeDueReminderMessage({
+                                        studentName: student.Student_Name || student.Student_ID,
+                                        className: getClassName(student.Class),
+                                        studentId: student.Student_ID,
+                                        fatherName: student.Father_Name,
+                                        pendingAmount,
+                                      });
+                                      openWhatsappAlert(phone, msg);
+                                      setSentAlertIds((prev) => ({ ...prev, [alertKey]: true }));
+                                    }}
+                                    className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer ${
+                                      isSent
+                                        ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                                        : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                    }`}
+                                    title={phone ? `WhatsApp बकाया रिमाइंडर भेजें: ${phone}` : 'WhatsApp रिमाइंडर खोलें'}
+                                  >
+                                    <i className="fa-brands fa-whatsapp text-sm"></i>
+                                    <span>{isSent ? 'भेजा गया ✓' : 'WhatsApp'}</span>
+                                  </button>
+
                                   {phone ? (
                                     <a
                                       href={`tel:${phone}`}
@@ -1320,7 +1352,7 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                                       title={`फीस याद दिलाने हेतु कॉल करें: ${phone}`}
                                     >
                                       <i className="fa-solid fa-phone text-[10px]"></i>
-                                      <span>Call Parent</span>
+                                      <span>Call</span>
                                     </a>
                                   ) : (
                                     <span className="text-[10px] text-slate-400 bg-slate-100 px-2 py-1 rounded-lg">
@@ -1562,6 +1594,8 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                       {filteredAbsentees.map((rec, idx) => {
                         const st = findStudent(rec.Student_ID);
                         const phone = getStudentPhone(st);
+                        const absentKey = `absent_${rec.Student_ID}_${rec.Date || todayDmy}`;
+                        const isSent = Boolean(sentAlertIds[absentKey]);
 
                         return (
                           <div
@@ -1601,7 +1635,7 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                               </div>
                             </div>
 
-                            <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100">
+                            <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 flex-wrap">
                               {onOpenAttendanceCalendar && (
                                 <button
                                   type="button"
@@ -1613,21 +1647,46 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                                   title="इस छात्र का मासिक हाजिरी कैलेंडर खोलें"
                                 >
                                   <i className="fa-solid fa-calendar-days text-[10px]"></i>
-                                  <span>कैलेंडर (Calendar)</span>
+                                  <span>कैलेंडर</span>
                                 </button>
                               )}
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const msg = buildAbsentAlertMessage({
+                                    studentName: st?.Student_Name || `Student ${rec.Student_ID}`,
+                                    className: getClassName(rec.Class || st?.Class || ''),
+                                    rollNumber: st?.Roll_Number,
+                                    dateStr: rec.Date || todayDmy,
+                                    remark: rec.Remark,
+                                  });
+                                  openWhatsappAlert(phone, msg);
+                                  setSentAlertIds((prev) => ({ ...prev, [absentKey]: true }));
+                                }}
+                                className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer ${
+                                  isSent
+                                    ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                                    : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                }`}
+                                title={phone ? `अभिभावक को WhatsApp सूचना भेजें: ${phone}` : 'WhatsApp अनुपस्थिति अलर्ट खोलें'}
+                              >
+                                <i className="fa-brands fa-whatsapp text-sm"></i>
+                                <span>{isSent ? 'भेजा गया ✓' : 'WhatsApp सूचना'}</span>
+                              </button>
+
                               {phone ? (
                                 <a
                                   href={`tel:${phone}`}
-                                  className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors"
+                                  className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors"
                                   title={`अनुपस्थिति के कारण जानने हेतु कॉल करें: ${phone}`}
                                 >
                                   <i className="fa-solid fa-phone text-[10px]"></i>
-                                  <span>Call Parent</span>
+                                  <span>Call</span>
                                 </a>
                               ) : (
                                 <span className="text-[10px] text-slate-400 bg-slate-100 px-2.5 py-1 rounded-lg">
-                                  फ़ोन उपलब्ध नहीं
+                                  No Phone
                                 </span>
                               )}
                             </div>

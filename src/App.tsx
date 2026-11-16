@@ -39,6 +39,7 @@ const ManagerOverviewModals = React.lazy(() => import('./components/ManagerOverv
 const TeacherPerformanceDashboard = React.lazy(() => import('./components/TeacherPerformanceDashboard').then((m) => ({ default: m.TeacherPerformanceDashboard })));
 const TeacherSyllabusPlanner = React.lazy(() => import('./components/TeacherSyllabusPlanner').then((m) => ({ default: m.TeacherSyllabusPlanner })));
 const WeeklySubjectTestManager = React.lazy(() => import('./components/WeeklySubjectTestManager').then((m) => ({ default: m.WeeklySubjectTestManager })));
+const ParentUpiFeeSection = React.lazy(() => import('./components/ParentUpiFeeSection').then((m) => ({ default: m.ParentUpiFeeSection })));
 
 // Non-inlined static asset paths (prevents 1.4 MB image bloat inside main JS bundle)
 const studentFarahPhoto = '/assets/student_farah_1789483069291.jpg';
@@ -9271,6 +9272,24 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       </div>
                     </div>
 
+                    {/* Feature 6: Online UPI QR Fee Payment & Proof Submission */}
+                    <Suspense
+                      fallback={
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-500 flex items-center gap-2">
+                          <i className="fa-solid fa-spinner fa-spin text-blue-900"></i>
+                          <span>ऑनलाइन UPI फीस भुगतान सेक्शन लोड हो रहा है...</span>
+                        </div>
+                      }
+                    >
+                      <ParentUpiFeeSection
+                        student={selectedStudent}
+                        pendingDue={studentFeeSummary.hasDues ? studentFeeSummary.balance : 0}
+                        monthlyTuition={studentFeeSummary.monthlyTuition || 450}
+                        getClassName={getClassName}
+                        onFeeSynced={() => fetchFeeCollection()}
+                      />
+                    </Suspense>
+
                     {/* Receipts List Table */}
                     <div>
                       <div className="flex items-center justify-between mb-3">
@@ -12833,6 +12852,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 }}
                 onEditFee={handleEditFee}
                 onDeleteFee={handleDeleteFee}
+                onApproveUpiPayment={handleFeeAdded}
               />
             )}
 

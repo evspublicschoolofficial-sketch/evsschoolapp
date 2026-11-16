@@ -13,6 +13,17 @@ import {
   fetchSchoolHolidaysFromApiOrSheet,
   subscribeSchoolHolidaysUpdates,
 } from '../utils/schoolHolidaysHelper';
+import { StaffSalaryConfig } from '../types';
+import {
+  loadLocalSalaryConfigs,
+  fetchSalaryConfigsFromServer,
+  saveStaffSalaryConfigToServer,
+  subscribeSalaryConfigUpdates,
+  getDefaultStaffSalaryConfig,
+  calculateStaffMonthlySalary,
+  StaffSalaryCalculation,
+} from '../utils/staffSalaryHelper';
+import { openWhatsappAlert } from '../utils/whatsappReminders';
 
 interface StaffMonthlyReportViewProps {
   currentUser: SchoolUser;
@@ -46,10 +57,17 @@ export const StaffMonthlyReportView: React.FC<StaffMonthlyReportViewProps> = ({
   const [standardStartTime, setStandardStartTime] = useState<string>(() => getSchoolShiftSettings().schoolOpeningTime || '08:30 AM');
   const [standardEndTime, setStandardEndTime] = useState<string>(() => getSchoolShiftSettings().schoolClosingTime || '02:00 PM');
 
-  // View Mode: 'master_register' (all staff list) vs 'individual_report' (single person card)
-  const [viewMode, setViewMode] = useState<'master_register' | 'individual_report'>(
+  // View Mode: 'master_register' | 'individual_report' | 'salary_payroll'
+  const [viewMode, setViewMode] = useState<'master_register' | 'individual_report' | 'salary_payroll'>(
     isManager ? 'master_register' : 'individual_report'
   );
+
+  // Feature 5: Staff Salary Configs & Pay-Slip Modals
+  const [salaryConfigs, setSalaryConfigs] = useState<Record<string, StaffSalaryConfig>>(() => loadLocalSalaryConfigs());
+  const [editingSalaryStaff, setEditingSalaryStaff] = useState<StaffMonthlyReport | null>(null);
+  const [salaryForm, setSalaryForm] = useState<StaffSalaryConfig | null>(null);
+  const [savingSalaryConfig, setSavingSalaryConfig] = useState<boolean>(false);
+  const [paySlipStaff, setPaySlipStaff] = useState<StaffMonthlyReport | null>(null);
 
   // Selected staff user for individual report (Staff only sees themselves, Manager sees all staff)
   const staffList = useMemo(() => {
@@ -96,6 +114,14 @@ export const StaffMonthlyReportView: React.FC<StaffMonthlyReportViewProps> = ({
     fetchSchoolHolidaysFromApiOrSheet(true).then(setSchoolHolidays).catch(() => {});
     const unsubscribe = subscribeSchoolHolidaysUpdates((latest) => {
       setSchoolHolidays(latest);
+    });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    fetchSalaryConfigsFromServer().then(setSalaryConfigs).catch(() => {});
+    const unsubscribe = subscribeSalaryConfigUpdates((latest) => {
+      setSalaryConfigs(latest);
     });
     return unsubscribe;
   }, []);
@@ -408,7 +434,20 @@ export const StaffMonthlyReportView: React.FC<StaffMonthlyReportViewProps> = ({
             }`}
           >
             <i className="fa-solid fa-id-card text-emerald-400"></i>
-            <span>व्यक्तिगत स्टाफ रिपोर्ट पर्ची (Single Staff Slip)</span>
+            <span>व्यक्तिगत स्टाफ रिपोर्ट पर्ची</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setViewMode('salary_payroll')}
+            className={`px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
+              viewMode === 'salary_payroll'
+                ? 'bg-[#0c2340] text-amber-300 shadow-sm'
+                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            <i className="fa-solid fa-money-check-dollar text-amber-400"></i>
+            <span>{isManager ? '💰 वेतन व पे-स्लिप (Payroll)' : '💰 मेरी वेतन पर्ची (Pay-Slip)'}</span>
           </button>
         </div>
 
@@ -721,18 +760,29 @@ export const StaffMonthlyReportView: React.FC<StaffMonthlyReportViewProps> = ({
                     </td>
 
                     {/* Action */}
-                    <td className="px-4 py-3.5 text-right">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedStaffUserId(rep.userId);
-                          setViewMode('individual_report');
-                        }}
-                        className="px-3 py-1.5 rounded-xl bg-[#0c2340] hover:bg-slate-800 text-amber-300 font-bold text-xs transition-colors cursor-pointer inline-flex items-center gap-1 shadow-2xs"
-                      >
-                        <i className="fa-solid fa-eye text-[11px]"></i>
-                        <span>पूरी पर्ची</span>
-                      </button>
+                    <td className="px-4 py-3.5 text-right whitespace-nowrap">
+                      <div className="inline-flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setPaySlipStaff(rep)}
+                          className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-colors cursor-pointer inline-flex items-center gap-1 shadow-2xs"
+                          title="मासिक वेतन पे-स्लिप देखें"
+                        >
+                          <i className="fa-solid fa-file-invoice-dollar text-[11px]"></i>
+                          <span>पे-स्लिप</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedStaffUserId(rep.userId);
+                            setViewMode('individual_report');
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-[#0c2340] hover:bg-slate-800 text-amber-300 font-bold text-xs transition-colors cursor-pointer inline-flex items-center gap-1 shadow-2xs"
+                        >
+                          <i className="fa-solid fa-eye text-[11px]"></i>
+                          <span>पूरी पर्ची</span>
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1172,6 +1222,662 @@ export const StaffMonthlyReportView: React.FC<StaffMonthlyReportViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* ============================================================== */}
+      {/* MODE 3: FEATURE 5 — STAFF SALARY & LATE/OVERTIME PAY-SLIP HUB */}
+      {/* ============================================================== */}
+      {viewMode === 'salary_payroll' && (
+        <div className="space-y-5 animate-fadeIn">
+          {(() => {
+            const targetReports = isManager ? filteredReports : currentSelectedReport ? [currentSelectedReport] : [];
+            const rows = targetReports.map((rep) => {
+              const cfg =
+                salaryConfigs[rep.userId] ||
+                salaryConfigs[String(rep.mobile || '').trim()] ||
+                getDefaultStaffSalaryConfig(rep.userId, rep.name);
+              const calc: StaffSalaryCalculation = calculateStaffMonthlySalary(rep, cfg);
+              return { rep, cfg, calc };
+            });
+
+            const totalBase = rows.reduce((acc, r) => acc + r.calc.baseSalary, 0);
+            const totalAdditions = rows.reduce((acc, r) => acc + r.calc.totalAdditions, 0);
+            const totalDeductions = rows.reduce((acc, r) => acc + r.calc.totalDeductions, 0);
+            const totalNet = rows.reduce((acc, r) => acc + r.calc.netPayable, 0);
+
+            const openEditSalary = (rep: StaffMonthlyReport, cfg: StaffSalaryConfig) => {
+              setEditingSalaryStaff(rep);
+              setSalaryForm({
+                ...getDefaultStaffSalaryConfig(rep.userId, rep.name),
+                ...cfg,
+                userId: rep.userId,
+                name: rep.name,
+              });
+            };
+
+            return (
+              <>
+                {/* Summary KPIs */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 tabular-nums">
+                  <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs">
+                    <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+                      कुल मूल वेतन (Base Salary)
+                    </span>
+                    <div className="text-2xl font-black text-slate-900 mt-1">
+                      ₹{totalBase.toLocaleString('en-IN')}
+                    </div>
+                    <span className="text-[11px] text-slate-500 mt-0.5 block">
+                      {rows.length} स्टाफ · {allStaffReports[0]?.monthName}
+                    </span>
+                  </div>
+
+                  <div className="bg-emerald-50/70 p-4 rounded-2xl border border-emerald-200 shadow-2xs">
+                    <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider block">
+                      ओवर-टाइम व बोनस (+)
+                    </span>
+                    <div className="text-2xl font-black text-emerald-800 mt-1">
+                      +₹{totalAdditions.toLocaleString('en-IN')}
+                    </div>
+                    <span className="text-[11px] text-emerald-700 mt-0.5 block">
+                      Add Extra घंटे + अवकाश ड्यूटी + भत्ता
+                    </span>
+                  </div>
+
+                  <div className="bg-rose-50/70 p-4 rounded-2xl border border-rose-200 shadow-2xs">
+                    <span className="text-[11px] font-bold text-rose-700 uppercase tracking-wider block">
+                      अनुपस्थिति / लेट कटौती (-)
+                    </span>
+                    <div className="text-2xl font-black text-rose-800 mt-1">
+                      -₹{totalDeductions.toLocaleString('en-IN')}
+                    </div>
+                    <span className="text-[11px] text-rose-700 mt-0.5 block">
+                      सवैतनिक अवकाश व लेट छूट घटाकर
+                    </span>
+                  </div>
+
+                  <div className="bg-[#0c2340] text-white p-4 rounded-2xl border border-amber-400/40 shadow-sm">
+                    <span className="text-[11px] font-bold text-amber-300 uppercase tracking-wider block">
+                      शुद्ध देय वेतन (Net Payable)
+                    </span>
+                    <div className="text-2xl font-black text-white mt-1">
+                      ₹{totalNet.toLocaleString('en-IN')}
+                    </div>
+                    <span className="text-[11px] text-amber-200/80 mt-0.5 block">
+                      ऑटो हाजिरी आधारित गणना
+                    </span>
+                  </div>
+                </div>
+
+                {/* Payroll Table */}
+                <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                  <div className="p-4 sm:p-5 border-b border-slate-200 bg-slate-50/60 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                    <div>
+                      <h3 className="font-black text-slate-900 text-sm sm:text-base flex items-center gap-2">
+                        <i className="fa-solid fa-money-check-dollar text-emerald-600"></i>
+                        <span>मासिक स्टाफ वेतन व लेट/ओवर-टाइम पे-रोल रजिस्टर</span>
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        उपस्थिति, लेट मिनट, और Add Extra घंटों के आधार पर स्वतः वेतन गणना · {allStaffReports[0]?.monthName}
+                      </p>
+                    </div>
+
+                    {isManager && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="relative">
+                          <i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                          <input
+                            type="text"
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            placeholder="स्टाफ खोजें..."
+                            className="pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 w-44"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs sm:text-sm tabular-nums">
+                      <thead className="bg-[#0c2340] text-amber-300 text-[11px] uppercase tracking-wider">
+                        <tr>
+                          <th className="px-4 py-3.5">स्टाफ व पद</th>
+                          <th className="px-3.5 py-3.5 text-right">मूल वेतन</th>
+                          <th className="px-3.5 py-3.5 text-center">हाजिरी / अनुपस्थित</th>
+                          <th className="px-3.5 py-3.5 text-center">लेट / एक्स्ट्रा</th>
+                          <th className="px-3.5 py-3.5 text-right">कटौती (-)</th>
+                          <th className="px-3.5 py-3.5 text-right">अतिरिक्त (+)</th>
+                          <th className="px-4 py-3.5 text-right">शुद्ध देय (Net ₹)</th>
+                          <th className="px-4 py-3.5 text-right">पे-स्लिप व नियम</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {rows.map(({ rep, cfg, calc }) => (
+                          <tr key={rep.userId} className="hover:bg-amber-50/30 transition-colors">
+                            <td className="px-4 py-3.5">
+                              <div className="font-extrabold text-slate-900">{rep.name}</div>
+                              <div className="text-[11px] text-slate-500">
+                                {rep.designation} · ₹{calc.perDaySalary.toLocaleString('en-IN')}/दिन
+                              </div>
+                            </td>
+                            <td className="px-3.5 py-3.5 text-right font-bold text-slate-800 whitespace-nowrap">
+                              ₹{calc.baseSalary.toLocaleString('en-IN')}
+                            </td>
+                            <td className="px-3.5 py-3.5 text-center whitespace-nowrap">
+                              <div className="font-bold text-emerald-700">
+                                {rep.presentDays}/{rep.workingDays} दिन
+                              </div>
+                              <div className="text-[11px] text-rose-600">
+                                {rep.absentDays} Absent ({calc.paidLeaveApplied} Free)
+                              </div>
+                            </td>
+                            <td className="px-3.5 py-3.5 text-center whitespace-nowrap">
+                              <div className="text-amber-800 font-semibold">
+                                {rep.lateDays} लेट ({rep.totalLateMinutes}m)
+                              </div>
+                              <div className="text-purple-700 font-semibold text-[11px]">
+                                +{rep.extraOvertimeHours}h Extra
+                              </div>
+                            </td>
+                            <td className="px-3.5 py-3.5 text-right font-bold text-rose-700 whitespace-nowrap">
+                              {calc.totalDeductions > 0 ? `-₹${calc.totalDeductions.toLocaleString('en-IN')}` : '₹0'}
+                            </td>
+                            <td className="px-3.5 py-3.5 text-right font-bold text-emerald-700 whitespace-nowrap">
+                              {calc.totalAdditions > 0 ? `+₹${calc.totalAdditions.toLocaleString('en-IN')}` : '₹0'}
+                            </td>
+                            <td className="px-4 py-3.5 text-right whitespace-nowrap">
+                              <span className="px-2.5 py-1 rounded-xl bg-emerald-100 text-emerald-950 font-black text-sm border border-emerald-200">
+                                ₹{calc.netPayable.toLocaleString('en-IN')}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5 text-right whitespace-nowrap">
+                              <div className="inline-flex items-center gap-1.5">
+                                {isManager && (
+                                  <button
+                                    type="button"
+                                    onClick={() => openEditSalary(rep, cfg)}
+                                    className="px-2.5 py-1.5 rounded-xl bg-amber-100 hover:bg-amber-200 text-amber-950 font-bold text-xs transition-colors cursor-pointer inline-flex items-center gap-1 border border-amber-300"
+                                    title="वेतन और कटौती/ओवर-टाइम नियम सेट करें"
+                                  >
+                                    <i className="fa-solid fa-sliders text-[10px]"></i>
+                                    <span>नियम सेट</span>
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => setPaySlipStaff(rep)}
+                                  className="px-3 py-1.5 rounded-xl bg-[#0c2340] hover:bg-slate-800 text-amber-300 font-bold text-xs transition-colors cursor-pointer inline-flex items-center gap-1 shadow-2xs"
+                                >
+                                  <i className="fa-solid fa-receipt text-[10px]"></i>
+                                  <span>Pay-Slip</span>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* MODAL A: STAFF SALARY & RULE CONFIGURATION (MANAGER ONLY)       */}
+      {/* ============================================================== */}
+      {isManager && editingSalaryStaff && salaryForm && (
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/70 backdrop-blur-xs flex items-start justify-center p-3 sm:p-5 animate-fadeIn"
+          onClick={() => setEditingSalaryStaff(null)}
+        >
+          <div
+            className="bg-white rounded-3xl max-w-xl w-full shadow-2xl border border-slate-200 overflow-hidden my-auto max-h-[92vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-gradient-to-r from-[#0c2340] to-[#16365c] px-5 py-4 text-white flex items-center justify-between shrink-0">
+              <div>
+                <h3 className="text-base font-extrabold text-amber-300">
+                  वेतन व लेट/ओवर-टाइम नियम — {editingSalaryStaff.name}
+                </h3>
+                <p className="text-[11px] text-slate-300">
+                  {editingSalaryStaff.designation} · ID: {editingSalaryStaff.userId}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingSalaryStaff(null)}
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-sm cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setSavingSalaryConfig(true);
+                try {
+                  const updatedAll = await saveStaffSalaryConfigToServer(salaryForm);
+                  setSalaryConfigs(updatedAll);
+                  setEditingSalaryStaff(null);
+                } finally {
+                  setSavingSalaryConfig(false);
+                }
+              }}
+              className="p-5 overflow-y-auto flex-1 space-y-4 text-xs"
+            >
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    मासिक मूल वेतन (Base Salary ₹)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="100"
+                    required
+                    value={salaryForm.baseSalary}
+                    onChange={(e) => setSalaryForm({ ...salaryForm, baseSalary: Number(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 font-bold text-sm outline-none focus:border-blue-900"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    मासिक मुफ्त छुट्टी (Paid Leave Days)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="10"
+                    step="1"
+                    value={salaryForm.paidLeaveDays}
+                    onChange={(e) => setSalaryForm({ ...salaryForm, paidLeaveDays: Number(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 font-bold text-sm outline-none focus:border-blue-900"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    लेट छूट सीमा (Free Late Days/माह)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="15"
+                    value={salaryForm.lateThresholdDays}
+                    onChange={(e) => setSalaryForm({ ...salaryForm, lateThresholdDays: Number(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 font-bold outline-none focus:border-blue-900"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    अतिरिक्त लेट दिन कटौती (₹ / Late Day)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="10"
+                    value={salaryForm.latePenaltyPerDay}
+                    onChange={(e) => setSalaryForm({ ...salaryForm, latePenaltyPerDay: Number(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 font-bold outline-none focus:border-blue-900"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-purple-800 mb-1">
+                    ओवर-टाइम दर (Overtime ₹ / घंटा)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="10"
+                    value={salaryForm.overtimeHourlyRate}
+                    onChange={(e) => setSalaryForm({ ...salaryForm, overtimeHourlyRate: Number(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 rounded-xl border border-purple-300 font-bold outline-none focus:border-purple-700"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-purple-800 mb-1">
+                    अवकाश ड्यूटी बोनस (₹ / Extra Day)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="50"
+                    value={salaryForm.extraDutyDayBonus}
+                    onChange={(e) => setSalaryForm({ ...salaryForm, extraDutyDayBonus: Number(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 rounded-xl border border-purple-300 font-bold outline-none focus:border-purple-700"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-emerald-800 mb-1">
+                    अन्य भत्ता / बोनस (Allowances ₹ +)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="50"
+                    value={salaryForm.allowances}
+                    onChange={(e) => setSalaryForm({ ...salaryForm, allowances: Number(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 rounded-xl border border-emerald-300 font-bold outline-none focus:border-emerald-700"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-rose-800 mb-1">
+                    अग्रिम / अन्य कटौती (Advance Cut ₹ -)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="50"
+                    value={salaryForm.manualDeduction}
+                    onChange={(e) => setSalaryForm({ ...salaryForm, manualDeduction: Number(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 rounded-xl border border-rose-300 font-bold outline-none focus:border-rose-700"
+                  />
+                </div>
+              </div>
+
+              {(() => {
+                const preview = calculateStaffMonthlySalary(editingSalaryStaff, salaryForm);
+                return (
+                  <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between tabular-nums">
+                    <div>
+                      <div className="font-bold text-slate-700">अनुमानित शुद्ध वेतन (Live Preview)</div>
+                      <div className="text-[11px] text-slate-500">
+                        मूल ₹{preview.baseSalary.toLocaleString('en-IN')} + अतिरिक्त ₹{preview.totalAdditions.toLocaleString('en-IN')} − कटौती ₹{preview.totalDeductions.toLocaleString('en-IN')}
+                      </div>
+                    </div>
+                    <div className="text-xl font-black text-emerald-700">
+                      ₹{preview.netPayable.toLocaleString('en-IN')}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setEditingSalaryStaff(null)}
+                  className="px-4 py-2 rounded-xl border border-slate-300 hover:bg-slate-100 text-slate-700 font-bold cursor-pointer"
+                >
+                  रद्द करें
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingSalaryConfig}
+                  className="px-5 py-2 rounded-xl bg-[#0c2340] hover:bg-slate-800 text-amber-300 font-extrabold cursor-pointer disabled:opacity-50"
+                >
+                  {savingSalaryConfig ? 'सेव हो रहा है...' : '✓ नियम सेव करें'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* MODAL B: OFFICIAL PRINTABLE MONTHLY SALARY PAY-SLIP (वेतन पर्ची) */}
+      {/* ============================================================== */}
+      {paySlipStaff && (() => {
+        const cfg =
+          salaryConfigs[paySlipStaff.userId] ||
+          salaryConfigs[String(paySlipStaff.mobile || '').trim()] ||
+          getDefaultStaffSalaryConfig(paySlipStaff.userId, paySlipStaff.name);
+        const calc = calculateStaffMonthlySalary(paySlipStaff, cfg);
+
+        const handleShareSalaryWhatsapp = () => {
+          const msg =
+            `*E.V.S. PUBLIC SCHOOL — मासिक वेतन पर्ची (Salary Pay-Slip)*\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━\n` +
+            `🗓️ *माह:* ${paySlipStaff.monthName}\n` +
+            `👤 *नाम:* ${paySlipStaff.name} (${paySlipStaff.designation})\n` +
+            `📊 *हाजिरी:* ${paySlipStaff.presentDays}/${paySlipStaff.workingDays} दिन · अनुपस्थित: ${paySlipStaff.absentDays} दिन\n` +
+            `⏰ *लेट:* ${paySlipStaff.lateDays} दिन (${paySlipStaff.totalLateMinutes} मिनट) · *ओवर-टाइम:* +${paySlipStaff.extraOvertimeHours} घंटे\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━\n` +
+            `💵 *मूल वेतन (Base):* ₹${calc.baseSalary.toLocaleString('en-IN')}\n` +
+            `➕ *ओवर-टाइम / बोनस:* +₹${calc.totalAdditions.toLocaleString('en-IN')}\n` +
+            `➖ *अनुपस्थिति / लेट कटौती:* -₹${calc.totalDeductions.toLocaleString('en-IN')}\n` +
+            `✅ *शुद्ध देय वेतन (Net Payable):* *₹${calc.netPayable.toLocaleString('en-IN')}*\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━\n` +
+            `_सादर, लेखा व प्रबंधन कार्यालय — ई.वी.एस. पब्लिक स्कूल_`;
+          openWhatsappAlert(paySlipStaff.mobile, msg);
+        };
+
+        return (
+          <div
+            className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/75 backdrop-blur-xs flex items-start justify-center p-3 sm:p-5 animate-fadeIn"
+            onClick={() => setPaySlipStaff(null)}
+          >
+            <div
+              className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border border-slate-200 overflow-hidden my-auto max-h-[92vh] flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Modal Top Toolbar (Hidden on print inside slip) */}
+              <div className="bg-gradient-to-r from-[#0c2340] to-[#16365c] px-5 py-3.5 text-white flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <i className="fa-solid fa-file-invoice-dollar text-amber-400 text-lg"></i>
+                  <div>
+                    <h3 className="text-sm sm:text-base font-extrabold text-white">
+                      आधिकारिक मासिक वेतन पर्ची (Salary Pay-Slip)
+                    </h3>
+                    <p className="text-[11px] text-amber-200">
+                      {paySlipStaff.name} · {paySlipStaff.monthName}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPaySlipStaff(null)}
+                  className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-sm cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Pay-Slip Printable Body */}
+              <div className="p-5 sm:p-6 overflow-y-auto flex-1 space-y-5 text-xs text-slate-800 tabular-nums">
+                {/* School Letterhead Banner */}
+                <div className="border-b-2 border-[#0c2340] pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <div className="text-lg font-black text-[#0c2340] uppercase tracking-tight">
+                      {schoolName || 'E.V.S. PUBLIC SCHOOL'}
+                    </div>
+                    <div className="text-[11px] text-slate-500 font-medium">
+                      आधिकारिक मासिक वेतन विवरण पत्र (Official Monthly Salary Statement)
+                    </div>
+                  </div>
+                  <div className="text-left sm:text-right">
+                    <span className="inline-block px-3 py-1 rounded-lg bg-amber-100 text-amber-950 font-black border border-amber-300">
+                      वेतन माह: {paySlipStaff.monthName}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Employee Metadata */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
+                  <div>
+                    <span className="text-[10px] text-slate-500 block">स्टाफ का नाम</span>
+                    <span className="font-extrabold text-slate-900 text-sm">{paySlipStaff.name}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 block">पद (Designation)</span>
+                    <span className="font-bold text-slate-800">{paySlipStaff.designation}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 block">स्टाफ आईडी</span>
+                    <span className="font-mono font-bold text-blue-900">{paySlipStaff.userId}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 block">मोबाइल नंबर</span>
+                    <span className="font-mono font-bold text-slate-800">{paySlipStaff.mobile || '—'}</span>
+                  </div>
+                </div>
+
+                {/* Attendance Breakdown Strip */}
+                <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-center">
+                  <div className="p-2 rounded-xl bg-blue-50 border border-blue-200">
+                    <div className="text-[10px] text-blue-700 font-semibold">स्कूल खुला</div>
+                    <div className="font-black text-sm text-blue-950">{paySlipStaff.workingDays} दिन</div>
+                  </div>
+                  <div className="p-2 rounded-xl bg-emerald-50 border border-emerald-200">
+                    <div className="text-[10px] text-emerald-700 font-semibold">उपस्थित</div>
+                    <div className="font-black text-sm text-emerald-900">{paySlipStaff.presentDays} दिन</div>
+                  </div>
+                  <div className="p-2 rounded-xl bg-rose-50 border border-rose-200">
+                    <div className="text-[10px] text-rose-700 font-semibold">अनुपस्थित</div>
+                    <div className="font-black text-sm text-rose-900">{paySlipStaff.absentDays} दिन</div>
+                  </div>
+                  <div className="p-2 rounded-xl bg-amber-50 border border-amber-200">
+                    <div className="text-[10px] text-amber-800 font-semibold">स्कूल अवकाश</div>
+                    <div className="font-black text-sm text-amber-950">{paySlipStaff.totalHolidays} दिन</div>
+                  </div>
+                  <div className="p-2 rounded-xl bg-orange-50 border border-orange-200">
+                    <div className="text-[10px] text-orange-800 font-semibold">लेट दिन</div>
+                    <div className="font-black text-sm text-orange-950">{paySlipStaff.lateDays} ({paySlipStaff.totalLateMinutes}m)</div>
+                  </div>
+                  <div className="p-2 rounded-xl bg-purple-50 border border-purple-200">
+                    <div className="text-[10px] text-purple-800 font-semibold">ऐड एक्स्ट्रा</div>
+                    <div className="font-black text-sm text-purple-950">+{paySlipStaff.extraOvertimeHours}h</div>
+                  </div>
+                </div>
+
+                {/* Earnings vs Deductions Two-Column Table */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* Earnings */}
+                  <div className="border border-emerald-200 rounded-2xl overflow-hidden">
+                    <div className="bg-emerald-700 text-white px-3.5 py-2 font-bold text-xs flex items-center justify-between">
+                      <span>आय व भत्ते (Earnings)</span>
+                      <span>राशि (₹)</span>
+                    </div>
+                    <div className="p-3.5 space-y-2 bg-emerald-50/20">
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">मासिक मूल वेतन (Base Salary)</span>
+                        <span className="font-bold text-slate-900">₹{calc.baseSalary.toLocaleString('en-IN')}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">
+                          ओवर-टाइम ({paySlipStaff.extraOvertimeHours}h × ₹{calc.config.overtimeHourlyRate})
+                        </span>
+                        <span className="font-bold text-emerald-700">+₹{calc.overtimePay.toLocaleString('en-IN')}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">
+                          अतिरिक्त ड्यूटी ({paySlipStaff.extraDutyDays} दिन × ₹{calc.config.extraDutyDayBonus})
+                        </span>
+                        <span className="font-bold text-emerald-700">+₹{calc.extraDutyBonusPay.toLocaleString('en-IN')}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">अन्य भत्ता / बोनस</span>
+                        <span className="font-bold text-emerald-700">+₹{calc.allowances.toLocaleString('en-IN')}</span>
+                      </div>
+                      <div className="pt-2 border-t border-emerald-200 flex justify-between font-black text-emerald-900">
+                        <span>कुल सकल वेतन (Gross)</span>
+                        <span>₹{calc.grossEarnings.toLocaleString('en-IN')}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Deductions */}
+                  <div className="border border-rose-200 rounded-2xl overflow-hidden">
+                    <div className="bg-rose-700 text-white px-3.5 py-2 font-bold text-xs flex items-center justify-between">
+                      <span>कटौतियाँ (Deductions)</span>
+                      <span>राशि (₹)</span>
+                    </div>
+                    <div className="p-3.5 space-y-2 bg-rose-50/20">
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">
+                          अनुपस्थिति ({calc.chargeableAbsentDays} दिन × ₹{calc.perDaySalary})
+                        </span>
+                        <span className="font-bold text-rose-700">-₹{calc.absentDeduction.toLocaleString('en-IN')}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">हाफ-डे कटौती ({paySlipStaff.halfDays} दिन)</span>
+                        <span className="font-bold text-rose-700">-₹{calc.halfDayDeduction.toLocaleString('en-IN')}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">
+                          लेट आगमन दंड ({calc.chargeableLateDays} अतिरिक्त दिन)
+                        </span>
+                        <span className="font-bold text-rose-700">-₹{calc.lateDeduction.toLocaleString('en-IN')}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">अग्रिम वेतन / अन्य कटौती</span>
+                        <span className="font-bold text-rose-700">-₹{calc.manualDeduction.toLocaleString('en-IN')}</span>
+                      </div>
+                      <div className="pt-2 border-t border-rose-200 flex justify-between font-black text-rose-900">
+                        <span>कुल कटौती (Total Cuts)</span>
+                        <span>-₹{calc.totalDeductions.toLocaleString('en-IN')}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Net Payable Hero Strip */}
+                <div className="bg-[#0c2340] text-white p-4 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-2 border-amber-400/60">
+                  <div>
+                    <div className="text-[11px] text-amber-300 font-bold uppercase tracking-wider">
+                      शुद्ध देय मासिक वेतन (Net Payable Salary)
+                    </div>
+                    <div className="text-[11px] text-slate-300 mt-0.5">
+                      सवैतनिक अवकाश छूट: {calc.paidLeaveApplied} दिन · लेट छूट सीमा: {calc.config.lateThresholdDays} दिन
+                    </div>
+                  </div>
+                  <div className="text-2xl sm:text-3xl font-black text-amber-300">
+                    ₹{calc.netPayable.toLocaleString('en-IN')}
+                  </div>
+                </div>
+
+                {/* Signature Bar */}
+                <div className="grid grid-cols-2 gap-6 pt-6 text-[11px] text-slate-500">
+                  <div className="border-t border-slate-300 pt-1.5 text-center">
+                    कर्मचारी हस्ताक्षर ({paySlipStaff.name})
+                  </div>
+                  <div className="border-t border-slate-300 pt-1.5 text-center">
+                    प्रबंधक / प्रधानाचार्य हस्ताक्षर ({schoolName || 'E.V.S. Public School'})
+                  </div>
+                </div>
+              </div>
+
+              {/* Footer Actions */}
+              <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleShareSalaryWhatsapp}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
+                >
+                  <i className="fa-brands fa-whatsapp text-sm"></i>
+                  <span>WhatsApp पर स्लिप भेजें</span>
+                </button>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    className="px-4 py-2 rounded-xl bg-blue-900 hover:bg-blue-950 text-amber-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  >
+                    <i className="fa-solid fa-print"></i>
+                    <span>प्रिंट / PDF</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaySlipStaff(null)}
+                    className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold text-xs cursor-pointer"
+                  >
+                    बंद करें
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };
