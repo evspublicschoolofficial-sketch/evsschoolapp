@@ -10,6 +10,7 @@ import { FloatingSocialBar } from './components/FloatingSocialBar';
 import { fetchFeeMasterDirectGViz } from './utils/feeMaster';
 import { initGeolocationPrewarmer, syncSchoolLocationFromServer } from './utils/schoolLocationService';
 import { computeStudentFeeMetrics, computeSchoolFeeTotals, normalizeStudentId, reconcileFeeRecords, calculateStudentSummary } from './utils/feeCalculation';
+import { computeFamilyFeeSummary, FamilyFeeSummary } from './utils/familyFeeHelper';
 import { realtimeSync } from './utils/realtimeSync';
 import { AppLanguage, getStoredLanguage, setStoredLanguage, TRANSLATIONS } from './utils/translations';
 import { NotificationPermissionBanner } from './components/NotificationPermissionBanner';
@@ -1782,6 +1783,7 @@ export default function App() {
   // Add Fee Modal State (Manager & Principal fee collection)
   const [addFeeModalOpen, setAddFeeModalOpen] = useState<boolean>(false);
   const [addFeeInitialStudentId, setAddFeeInitialStudentId] = useState<string | undefined>(undefined);
+  const [managerFamilyFeeTarget, setManagerFamilyFeeTarget] = useState<FamilyFeeSummary | null>(null);
   const [feeNotificationSuccess, setFeeNotificationSuccess] = useState<string | null>(null);
 
   // Add Student Modal State (Manager Portal: नया छात्र जोड़ें / संपादित करें)
@@ -4345,6 +4347,12 @@ export default function App() {
       receiptsCount: summary.recordsCount,
     };
   }, [selectedStudent, feeRecords]);
+
+  // Combined Family Fee Summary when Parent has 2+ linked children on same mobile
+  const parentFamilyFeeSummary = useMemo(() => {
+    if (!parentChildren || parentChildren.length <= 1) return null;
+    return computeFamilyFeeSummary(parentChildren, feeRecords);
+  }, [parentChildren, feeRecords]);
 
   // Attendance Trend Data (Last 30 Days) for Recharts Line Chart
   const attendanceChartData = useMemo(() => {
@@ -7790,7 +7798,11 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             <i className="fa-solid fa-chevron-right text-xs text-slate-300 group-hover:text-slate-500"></i>
                           </div>
                           <div className="text-[11px] mt-0.5 text-slate-500">
-                            {studentFeeSummary.hasDues
+                            {parentFamilyFeeSummary
+                              ? currentLang === 'en'
+                                ? `Family (${parentFamilyFeeSummary.members.length} kids): Due ₹${parentFamilyFeeSummary.totalDue.toLocaleString('en-IN')}`
+                                : `परिवार कुल (${parentFamilyFeeSummary.members.length} बच्चे): ₹${parentFamilyFeeSummary.totalDue.toLocaleString('en-IN')} बकाया`
+                              : studentFeeSummary.hasDues
                               ? (currentLang === 'en' ? 'View fee breakdown' : 'जमा विवरण देखें')
                               : studentFeeSummary.isAdvance
                               ? (currentLang === 'en' ? 'View advance receipts' : 'अग्रिम जमा रसीदें देखें')
@@ -9350,6 +9362,106 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       </div>
                     </div>
 
+                    {/* Multi-Child Combined Family Fee Dashboard (shown automatically when 2+ children share same mobile) */}
+                    {parentFamilyFeeSummary && parentFamilyFeeSummary.members.length > 1 && (
+                      <div className="rounded-2xl border-2 border-[#0c2340]/20 bg-gradient-to-br from-[#0c2340] via-[#122e54] to-[#173968] text-white p-4 sm:p-5 space-y-4 shadow-sm">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/15 pb-3">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-xl bg-amber-400 text-[#0c2340] flex items-center justify-center text-lg shrink-0 font-black">
+                              <i className="fa-solid fa-children"></i>
+                            </div>
+                            <div>
+                              <div className="text-sm sm:text-base font-black text-amber-300 flex items-center gap-2 flex-wrap">
+                                <span>पूरे परिवार की कुल फीस सारांश ({parentFamilyFeeSummary.members.length} बच्चे)</span>
+                              </div>
+                              <div className="text-[11px] text-slate-200 flex items-center gap-2 flex-wrap">
+                                <span>अभिभावक: {parentFamilyFeeSummary.fatherName}</span>
+                                <span>·</span>
+                                <span className="font-mono">📱 {parentFamilyFeeSummary.displayMobile}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-3 gap-2 sm:gap-3 text-right tabular-nums">
+                            <div className="bg-white/10 rounded-xl px-2.5 py-1.5">
+                              <div className="text-[10px] text-slate-300">कुल सत्र फीस</div>
+                              <div className="text-xs sm:text-sm font-black text-white">
+                                ₹{parentFamilyFeeSummary.totalBilled.toLocaleString('en-IN')}
+                              </div>
+                            </div>
+                            <div className="bg-emerald-500/20 border border-emerald-400/30 rounded-xl px-2.5 py-1.5">
+                              <div className="text-[10px] text-emerald-200">कुल जमा</div>
+                              <div className="text-xs sm:text-sm font-black text-emerald-300">
+                                ₹{parentFamilyFeeSummary.totalPaid.toLocaleString('en-IN')}
+                              </div>
+                            </div>
+                            <div className="bg-amber-400/20 border border-amber-300/40 rounded-xl px-2.5 py-1.5">
+                              <div className="text-[10px] text-amber-200">कुल शेष बकाया</div>
+                              <div className="text-xs sm:text-sm font-black text-amber-300">
+                                ₹{parentFamilyFeeSummary.totalDue.toLocaleString('en-IN')}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                          {parentFamilyFeeSummary.members.map((member) => {
+                            const isCurrent = member.student.Student_ID === selectedStudent.Student_ID;
+                            return (
+                              <button
+                                key={member.student.Student_ID}
+                                type="button"
+                                onClick={() => setSelectedStudent(member.student)}
+                                className={`text-left p-3 rounded-xl border transition-all cursor-pointer tabular-nums ${
+                                  isCurrent
+                                    ? 'bg-white text-slate-900 border-amber-400 ring-2 ring-amber-300 shadow-md'
+                                    : 'bg-white/10 hover:bg-white/15 text-white border-white/15'
+                                }`}
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="min-w-0">
+                                    <div className="font-extrabold text-xs sm:text-sm truncate">
+                                      {member.student.Student_Name}
+                                    </div>
+                                    <div className={`text-[11px] ${isCurrent ? 'text-slate-500' : 'text-slate-300'}`}>
+                                      {getClassName(member.student.Class)} · {member.student.Student_ID}
+                                    </div>
+                                  </div>
+                                  <span
+                                    className={`text-[10px] px-2 py-0.5 rounded-full font-extrabold shrink-0 ${
+                                      member.dueAmount > 0
+                                        ? isCurrent
+                                          ? 'bg-rose-100 text-rose-800'
+                                          : 'bg-rose-500/25 text-rose-200'
+                                        : isCurrent
+                                        ? 'bg-emerald-100 text-emerald-800'
+                                        : 'bg-emerald-500/25 text-emerald-200'
+                                    }`}
+                                  >
+                                    {member.dueAmount > 0
+                                      ? `बकाया ₹${member.dueAmount.toLocaleString('en-IN')}`
+                                      : member.advanceAmount > 0
+                                      ? `अग्रिम -₹${member.advanceAmount.toLocaleString('en-IN')}`
+                                      : 'जमा ✓'}
+                                  </span>
+                                </div>
+                                <div
+                                  className={`mt-2 pt-1.5 border-t flex items-center justify-between text-[11px] ${
+                                    isCurrent ? 'border-slate-100 text-slate-600' : 'border-white/10 text-slate-300'
+                                  }`}
+                                >
+                                  <span>जमा: ₹{member.metrics.totalPaid.toLocaleString('en-IN')}</span>
+                                  <span className={`font-bold ${isCurrent ? 'text-[#0c2340]' : 'text-amber-300'}`}>
+                                    {isCurrent ? 'चयनित ✓' : 'देखें / रसीदें →'}
+                                  </span>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
                     {/* Fee Summary Cards */}
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                       {/* Total Fee */}
@@ -9456,6 +9568,17 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         monthlyTuition={studentFeeSummary.monthlyTuition || 450}
                         getClassName={getClassName}
                         onFeeSynced={() => fetchFeeCollection()}
+                        siblings={
+                          parentFamilyFeeSummary
+                            ? parentFamilyFeeSummary.members.map((m) => ({
+                                student: m.student,
+                                pendingDue: m.dueAmount,
+                                monthlyTuition: m.metrics.monthlyTuition || 450,
+                              }))
+                            : undefined
+                        }
+                        familyTotalDue={parentFamilyFeeSummary?.totalDue}
+                        onSelectChild={(st) => setSelectedStudent(st)}
                       />
                     </Suspense>
 
@@ -13140,6 +13263,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 onEditFee={handleEditFee}
                 onDeleteFee={handleDeleteFee}
                 onApproveUpiPayment={handleFeeAdded}
+                externalFamilyTarget={managerFamilyFeeTarget}
+                onClearExternalFamilyTarget={() => setManagerFamilyFeeTarget(null)}
               />
             )}
 
@@ -14088,6 +14213,13 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
           setQrScannerTarget('managerStudents');
           setQrScannerSubtitle('फ़ीस जमा करने हेतु छात्र का QR कोड स्कैन करें');
           setQrScannerOpen(true);
+        }}
+        onOpenFamilyFeeModal={(fam) => {
+          setAddFeeModalOpen(false);
+          setAddFeeInitialStudentId(undefined);
+          setManagerFamilyFeeTarget(fam);
+          setActiveTab('manager');
+          setManagerTab('fees');
         }}
       />
 

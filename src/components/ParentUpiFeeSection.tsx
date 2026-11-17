@@ -12,12 +12,21 @@ import {
   compressReceiptImageFile,
 } from '../utils/upiFeeHelper';
 
+export interface FamilySiblingOption {
+  student: Student;
+  pendingDue: number;
+  monthlyTuition: number;
+}
+
 interface ParentUpiFeeSectionProps {
   student: Student;
   pendingDue: number;
   monthlyTuition: number;
   getClassName: (c?: string | null) => string;
   onFeeSynced?: () => void;
+  siblings?: FamilySiblingOption[];
+  familyTotalDue?: number;
+  onSelectChild?: (student: Student) => void;
 }
 
 const FEE_HEAD_OPTIONS = [
@@ -43,7 +52,24 @@ export const ParentUpiFeeSection: React.FC<ParentUpiFeeSectionProps> = ({
   monthlyTuition,
   getClassName,
   onFeeSynced,
+  siblings = [],
+  familyTotalDue,
+  onSelectChild,
 }) => {
+  const hasMultipleChildren = siblings.length > 1;
+  const effectiveFamilyDue = useMemo(
+    () =>
+      familyTotalDue !== undefined
+        ? familyTotalDue
+        : siblings.reduce((sum, s) => sum + Math.max(0, s.pendingDue || 0), 0),
+    [familyTotalDue, siblings]
+  );
+  const totalFamilyMonthly = useMemo(
+    () => siblings.reduce((sum, s) => sum + Math.max(0, s.monthlyTuition || 0), 0),
+    [siblings]
+  );
+
+  const [payScope, setPayScope] = useState<'single' | 'all_family'>('single');
   const [upiSettings, setUpiSettings] = useState<UpiSettings>(() => loadLocalUpiSettings());
   const [payments, setPayments] = useState<UpiPaymentRequest[]>([]);
   const [loadingPayments, setLoadingPayments] = useState<boolean>(false);
@@ -68,12 +94,20 @@ export const ParentUpiFeeSection: React.FC<ParentUpiFeeSectionProps> = ({
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Sync suggested amount when switching student or balance changes
+  // Sync suggested amount when switching student, balance, or scope
   useEffect(() => {
-    const nextAmt = pendingDue > 0 ? pendingDue : monthlyTuition > 0 ? monthlyTuition : 500;
-    setAmount(String(nextAmt));
+    if (!hasMultipleChildren && payScope === 'all_family') {
+      setPayScope('single');
+    }
+    if (payScope === 'all_family' && hasMultipleChildren) {
+      const famAmt = effectiveFamilyDue > 0 ? effectiveFamilyDue : totalFamilyMonthly > 0 ? totalFamilyMonthly : 500;
+      setAmount(String(famAmt));
+    } else {
+      const nextAmt = pendingDue > 0 ? pendingDue : monthlyTuition > 0 ? monthlyTuition : 500;
+      setAmount(String(nextAmt));
+    }
     setPayerName(student.Father_Name || '');
-  }, [student.Student_ID, pendingDue, monthlyTuition, student.Father_Name]);
+  }, [student.Student_ID, pendingDue, monthlyTuition, student.Father_Name, payScope, hasMultipleChildren, effectiveFamilyDue, totalFamilyMonthly]);
 
   const loadAll = async () => {
     setLoadingPayments(true);
@@ -113,13 +147,17 @@ export const ParentUpiFeeSection: React.FC<ParentUpiFeeSectionProps> = ({
   const hasConfiguredUpi = Boolean(upiSettings.upiId?.trim());
   const upiIntentUri = useMemo(() => {
     if (!hasConfiguredUpi) return '';
+    const noteText =
+      payScope === 'all_family' && hasMultipleChildren
+        ? `Family Fee ${siblings.length} Children (${student.Father_Name || student.Student_Name})`
+        : `${student.Student_Name} Fee ${student.Student_ID}`;
     return buildUpiIntentUri({
       upiId: upiSettings.upiId,
       payeeName: upiSettings.payeeName || 'E.V.S. Public School',
       amount: numericAmount,
-      note: `${student.Student_Name} Fee ${student.Student_ID}`,
+      note: noteText,
     });
-  }, [upiSettings, numericAmount, student.Student_Name, student.Student_ID, hasConfiguredUpi]);
+  }, [upiSettings, numericAmount, student.Student_Name, student.Student_ID, student.Father_Name, hasConfiguredUpi, payScope, hasMultipleChildren, siblings.length]);
 
   // Generate dynamic QR Code image using qrcode package
   useEffect(() => {
@@ -184,9 +222,24 @@ export const ParentUpiFeeSection: React.FC<ParentUpiFeeSectionProps> = ({
 
     setSubmitting(true);
     try {
+      const familyTag =
+        payScope === 'all_family' && hasMultipleChildren
+          ? `[संयुक्त परिवार फीस (${siblings.length} बच्चे): ${siblings
+              .map((s) => `${s.student.Student_Name} (${getClassName(s.student.Class)}) बकाया ₹${s.pendingDue}`)
+              .join(' | ')}]`
+          : '';
+      const combinedNotes = familyTag
+        ? notes.trim() && !notes.includes('[संयुक्त परिवार')
+          ? `${familyTag} ${notes.trim()}`
+          : notes.trim() || familyTag
+        : notes.trim();
+
       const res = await submitUpiPaymentToServer({
         studentId: student.Student_ID,
-        studentName: student.Student_Name,
+        studentName:
+          payScope === 'all_family' && hasMultipleChildren
+            ? `${student.Student_Name} + परिवार (${siblings.length} बच्चे)`
+            : student.Student_Name,
         className: getClassName(student.Class),
         parentMobile: String(student.Parent_Mobile || ''),
         payerName: payerName.trim() || student.Father_Name || 'Parent',
@@ -197,7 +250,7 @@ export const ParentUpiFeeSection: React.FC<ParentUpiFeeSectionProps> = ({
         paymentApp,
         paymentDate,
         screenshotData,
-        notes: notes.trim(),
+        notes: combinedNotes,
       });
 
       if (!res.success) {
@@ -253,6 +306,80 @@ export const ParentUpiFeeSection: React.FC<ParentUpiFeeSectionProps> = ({
         </button>
       </div>
 
+      {/* Multi-Child Family Scope Switcher */}
+      {hasMultipleChildren && (
+        <div className="bg-white rounded-xl border border-indigo-200 p-3 space-y-2 shadow-2xs">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <span className="text-xs font-extrabold text-[#0c2340] flex items-center gap-1.5">
+              <i className="fa-solid fa-children text-indigo-600"></i>
+              <span>आप एक बच्चे या सभी {siblings.length} बच्चों की 1 साथ फीस भर सकते हैं:</span>
+            </span>
+            <span className="text-[11px] font-bold text-slate-500 tabular-nums">
+              {payScope === 'all_family' ? 'मोड: पूरा परिवार एक साथ' : `मोड: ${student.Student_Name}`}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setPayScope('all_family');
+                const famAmt = effectiveFamilyDue > 0 ? effectiveFamilyDue : totalFamilyMonthly > 0 ? totalFamilyMonthly : 500;
+                setAmount(String(famAmt));
+                setNotes(
+                  `परिवार के ${siblings.length} बच्चों की संयुक्त फीस: ${siblings
+                    .map((s) => `${s.student.Student_Name} (₹${s.pendingDue})`)
+                    .join(', ')}`
+                );
+              }}
+              className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border transition-colors cursor-pointer flex items-center gap-1.5 tabular-nums ${
+                payScope === 'all_family'
+                  ? 'bg-[#0c2340] text-amber-300 border-[#0c2340] shadow-xs'
+                  : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border-indigo-200'
+              }`}
+            >
+              <i className="fa-solid fa-users"></i>
+              <span>
+                सभी {siblings.length} बच्चे एक साथ (कुल बकाया: ₹{effectiveFamilyDue.toLocaleString('en-IN')})
+              </span>
+            </button>
+
+            {siblings.map((sib) => {
+              const isActiveSingle = payScope === 'single' && sib.student.Student_ID === student.Student_ID;
+              return (
+                <button
+                  key={sib.student.Student_ID}
+                  type="button"
+                  onClick={() => {
+                    setPayScope('single');
+                    if (notes.startsWith('परिवार के ')) setNotes('');
+                    onSelectChild?.(sib.student);
+                  }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer flex items-center gap-1.5 tabular-nums ${
+                    isActiveSingle
+                      ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
+                      : 'bg-slate-50 hover:bg-slate-100 text-slate-800 border-slate-200'
+                  }`}
+                >
+                  <span>{sib.student.Student_Name}</span>
+                  <span className="opacity-75 text-[10px]">({getClassName(sib.student.Class)})</span>
+                  <span
+                    className={`text-[10px] px-1.5 py-0.2 rounded font-extrabold ${
+                      isActiveSingle
+                        ? 'bg-white/20 text-white'
+                        : sib.pendingDue > 0
+                        ? 'bg-rose-100 text-rose-800'
+                        : 'bg-emerald-100 text-emerald-800'
+                    }`}
+                  >
+                    {sib.pendingDue > 0 ? `₹${sib.pendingDue.toLocaleString('en-IN')}` : 'जमा ✓'}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Main 2-Column Grid: QR Scan + Payment Proof Submission */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
         {/* LEFT: QR CODE & DIRECT UPI INTENT */}
@@ -291,31 +418,64 @@ export const ParentUpiFeeSection: React.FC<ParentUpiFeeSectionProps> = ({
               <div className="w-full space-y-1.5">
                 <div className="text-[11px] font-bold text-slate-500">त्वरित राशि चुनें (Select Pay Amount):</div>
                 <div className="flex flex-wrap justify-center gap-1.5 tabular-nums">
-                  {pendingDue > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setAmount(String(pendingDue))}
-                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
-                        Number(amount) === pendingDue
-                          ? 'bg-[#0c2340] text-amber-300 border-[#0c2340]'
-                          : 'bg-rose-50 text-rose-800 border-rose-200 hover:bg-rose-100'
-                      }`}
-                    >
-                      पूरा बकाया: ₹{pendingDue.toLocaleString('en-IN')}
-                    </button>
-                  )}
-                  {monthlyTuition > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setAmount(String(monthlyTuition))}
-                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
-                        Number(amount) === monthlyTuition
-                          ? 'bg-[#0c2340] text-amber-300 border-[#0c2340]'
-                          : 'bg-blue-50 text-blue-900 border-blue-200 hover:bg-blue-100'
-                      }`}
-                    >
-                      1 माह: ₹{monthlyTuition.toLocaleString('en-IN')}
-                    </button>
+                  {payScope === 'all_family' && hasMultipleChildren ? (
+                    <>
+                      {effectiveFamilyDue > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setAmount(String(effectiveFamilyDue))}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
+                            Number(amount) === effectiveFamilyDue
+                              ? 'bg-[#0c2340] text-amber-300 border-[#0c2340]'
+                              : 'bg-rose-50 text-rose-800 border-rose-200 hover:bg-rose-100'
+                          }`}
+                        >
+                          पूरा परिवार बकाया: ₹{effectiveFamilyDue.toLocaleString('en-IN')}
+                        </button>
+                      )}
+                      {totalFamilyMonthly > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setAmount(String(totalFamilyMonthly))}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
+                            Number(amount) === totalFamilyMonthly
+                              ? 'bg-[#0c2340] text-amber-300 border-[#0c2340]'
+                              : 'bg-blue-50 text-blue-900 border-blue-200 hover:bg-blue-100'
+                          }`}
+                        >
+                          1 माह (सभी बच्चे): ₹{totalFamilyMonthly.toLocaleString('en-IN')}
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      {pendingDue > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setAmount(String(pendingDue))}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
+                            Number(amount) === pendingDue
+                              ? 'bg-[#0c2340] text-amber-300 border-[#0c2340]'
+                              : 'bg-rose-50 text-rose-800 border-rose-200 hover:bg-rose-100'
+                          }`}
+                        >
+                          पूरा बकाया: ₹{pendingDue.toLocaleString('en-IN')}
+                        </button>
+                      )}
+                      {monthlyTuition > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setAmount(String(monthlyTuition))}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
+                            Number(amount) === monthlyTuition
+                              ? 'bg-[#0c2340] text-amber-300 border-[#0c2340]'
+                              : 'bg-blue-50 text-blue-900 border-blue-200 hover:bg-blue-100'
+                          }`}
+                        >
+                          1 माह: ₹{monthlyTuition.toLocaleString('en-IN')}
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
               </div>

@@ -3,6 +3,11 @@ import { getLocalDateYMD } from '../utils/localTime';
 import { StudentRecordForScan } from './StudentQRScannerModal';
 import { computeStudentFeeMetrics, isTuitionFeeRecord } from '../utils/feeCalculation';
 import {
+  computeFamilyFeeSummary,
+  FamilyFeeSummary,
+  findSiblingsForStudent,
+} from '../utils/familyFeeHelper';
+import {
   getStandardFeeAmount,
   isFreeStudent,
   tagStudentWaiver,
@@ -24,6 +29,7 @@ interface AddFeeModalProps {
   feeBalances?: Record<string, number>;
   onTriggerQRScan?: () => void;
   initialSelectedStudentId?: string;
+  onOpenFamilyFeeModal?: (family: FamilyFeeSummary) => void;
 }
 
 export const MONTHS_LIST = [
@@ -140,6 +146,7 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
   feeBalances = {},
   onTriggerQRScan,
   initialSelectedStudentId,
+  onOpenFamilyFeeModal,
 }) => {
   // Form State
   const [studentSearch, setStudentSearch] = useState<string>('');
@@ -178,6 +185,14 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
     if (!selectedStudent) return null;
     return computeStudentFeeMetrics(selectedStudent as any, feeRecords);
   }, [selectedStudent, feeRecords]);
+
+  // Siblings & Family Total Due (same Parent_Mobile)
+  const selectedFamilySummary = useMemo(() => {
+    if (!selectedStudent) return null;
+    const sibs = findSiblingsForStudent(students as any, selectedStudent as any);
+    if (sibs.length <= 1) return null;
+    return computeFamilyFeeSummary(sibs, feeRecords);
+  }, [selectedStudent, students, feeRecords]);
 
   // Current balance of selected student from computed metrics, feeBalances, or student record
   const currentPendingBalance = useMemo(() => {
@@ -701,6 +716,67 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
                       ? `-₹${Math.abs(currentPendingBalance).toLocaleString('en-IN')}`
                       : `₹${currentPendingBalance.toLocaleString('en-IN')}`}
                   </span>
+                </div>
+              </div>
+            )}
+
+            {/* Family / Siblings Quick-Switcher Bar inside AddFeeModal */}
+            {selectedStudent && selectedFamilySummary && (
+              <div className="mt-2.5 p-3 rounded-xl bg-indigo-50/80 border border-indigo-200 space-y-2 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-bold text-indigo-950 flex items-center gap-1.5">
+                    <i className="fa-solid fa-people-roof text-indigo-600"></i>
+                    <span>
+                      एक परिवार ({selectedFamilySummary.members.length} बच्चे) • कुल बकाया:{' '}
+                      <strong className="text-rose-700">₹{selectedFamilySummary.totalDue.toLocaleString('en-IN')}</strong>
+                    </span>
+                  </div>
+                  {onOpenFamilyFeeModal && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClose();
+                        onOpenFamilyFeeModal(selectedFamilySummary);
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-bold text-[10px] cursor-pointer flex items-center gap-1"
+                    >
+                      <i className="fa-solid fa-layer-group"></i>
+                      <span>सभी बच्चों की 1 साथ जमा करें →</span>
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {selectedFamilySummary.members.map((m) => {
+                    const isActive = m.student.Student_ID === selectedStudent.Student_ID;
+                    return (
+                      <button
+                        key={m.student.Student_ID}
+                        type="button"
+                        onClick={() => {
+                          setSelectedStudent(m.student as any);
+                          setStudentSearch(`${m.student.Student_Name} (${m.student.Student_ID})`);
+                          setUserManuallyEditedPaid(false);
+                        }}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer flex items-center gap-1.5 ${
+                          isActive
+                            ? 'bg-[#0c2340] text-amber-300 border-[#0c2340]'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-indigo-100/60'
+                        }`}
+                      >
+                        <span>{m.student.Student_Name}</span>
+                        <span className="opacity-75 text-[10px]">({getClassName(m.student.Class)})</span>
+                        {m.dueAmount > 0 && (
+                          <span
+                            className={`px-1 rounded text-[10px] ${
+                              isActive ? 'bg-rose-500/30 text-rose-200' : 'bg-rose-50 text-rose-700'
+                            }`}
+                          >
+                            ₹{m.dueAmount}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             )}

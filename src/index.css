@@ -130,7 +130,8 @@
     visibility: visible !important;
   }
 
-  body.printing-report-card #printable-report-card-sheet {
+  body.printing-report-card #printable-report-card-sheet,
+  body.printing-family-receipt #printable-family-receipt-sheet {
     position: absolute;
     left: 0;
     top: 0;
@@ -143,6 +144,15 @@
     background: #ffffff !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
+  }
+
+  body.printing-family-receipt * {
+    visibility: hidden !important;
+  }
+
+  body.printing-family-receipt #printable-family-receipt-sheet,
+  body.printing-family-receipt #printable-family-receipt-sheet * {
+    visibility: visible !important;
   }
 }
 

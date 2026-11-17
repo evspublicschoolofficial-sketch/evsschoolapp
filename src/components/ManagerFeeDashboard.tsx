@@ -15,6 +15,7 @@ import { StudentRecordForScan } from './StudentQRScannerModal';
 import { FeeCollectionRecord } from './AddFeeModal';
 import { OfficialFeeReceiptModal } from './OfficialFeeReceiptModal';
 import { FeeMasterModal } from './FeeMasterModal';
+import { FamilyFeeCollectionModal } from './FamilyFeeCollectionModal';
 import { Student, UpiPaymentRequest, UpiSettings } from '../types';
 import {
   computeStudentFeeMetrics,
@@ -22,6 +23,11 @@ import {
   computeReceiptBalance,
   calculateStudentSummary,
 } from '../utils/feeCalculation';
+import {
+  buildFamilyGroups,
+  buildFamilyWhatsappDueReminder,
+  FamilyFeeSummary,
+} from '../utils/familyFeeHelper';
 import { APPS_SCRIPT_FEE_CODE } from '../utils/feeMaster';
 import {
   DEFAULT_UPI_SETTINGS,
@@ -278,6 +284,8 @@ interface ManagerFeeDashboardProps {
   onEditFee?: (updatedRecord: FeeCollectionRecord, originalReceiptNo: string) => Promise<void> | void;
   onDeleteFee?: (receiptNo: string, studentId: string) => Promise<boolean | void> | void;
   onApproveUpiPayment?: (newRec: FeeCollectionRecord, sendWhatsApp: boolean) => Promise<void> | void;
+  externalFamilyTarget?: FamilyFeeSummary | null;
+  onClearExternalFamilyTarget?: () => void;
 }
 
 export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
@@ -296,11 +304,18 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
   onEditFee,
   onDeleteFee,
   onApproveUpiPayment,
+  externalFamilyTarget = null,
+  onClearExternalFamilyTarget,
 }) => {
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [classFilter, setClassFilter] = useState<string>('all');
   const [selectedStudent, setSelectedStudent] = useState<StudentRecordForScan | null>(initialSelectedStudent);
-  const [activeViewMode, setActiveViewMode] = useState<'trends' | 'student' | 'allLedger' | 'upiQueue'>('trends');
+  const [activeViewMode, setActiveViewMode] = useState<'trends' | 'student' | 'family' | 'allLedger' | 'upiQueue'>('trends');
+  const [familySearchQuery, setFamilySearchQuery] = useState<string>('');
+  const [familyFilterMode, setFamilyFilterMode] = useState<'all' | 'multi' | 'dues'>('multi');
+  const [selectedFamilyKey, setSelectedFamilyKey] = useState<string>('');
+  const [familyModalOpen, setFamilyModalOpen] = useState<boolean>(false);
+  const [familyModalTarget, setFamilyModalTarget] = useState<FamilyFeeSummary | null>(null);
   const [ledgerSearch, setLedgerSearch] = useState<string>('');
   const [ledgerClassFilter, setLedgerClassFilter] = useState<string>('all');
   const [copiedReceipt, setCopiedReceipt] = useState<string | null>(null);
@@ -689,6 +704,56 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
       return matchSearch && matchClass;
     });
   }, [students, searchTerm, classFilter, getClassName]);
+
+  // All families grouped by normalized 10-digit Parent Mobile
+  const allFamilyGroups = useMemo(() => {
+    return buildFamilyGroups(students as Student[], feeRecords);
+  }, [students, feeRecords]);
+
+  // Filtered family groups for Family Fee tab
+  const filteredFamilies = useMemo(() => {
+    const q = familySearchQuery.trim().toLowerCase();
+    const qDigits = q.replace(/\D/g, '');
+    return allFamilyGroups.filter((fam) => {
+      if (familyFilterMode === 'multi' && fam.members.length < 2) return false;
+      if (familyFilterMode === 'dues' && fam.totalDue <= 0) return false;
+      if (!q) return true;
+      if (qDigits.length >= 3 && fam.mobileKey.includes(qDigits)) return true;
+      if (fam.fatherName.toLowerCase().includes(q) || fam.displayMobile.toLowerCase().includes(q)) return true;
+      return fam.members.some(
+        (m) =>
+          String(m.student.Student_Name || '').toLowerCase().includes(q) ||
+          String(m.student.Student_ID || '').toLowerCase().includes(q) ||
+          String(m.student.Roll_Number || '').toLowerCase().includes(q)
+      );
+    });
+  }, [allFamilyGroups, familySearchQuery, familyFilterMode]);
+
+  // Quick family matches detected from main searchTerm bar (e.g., when typing a phone number)
+  const searchBarMatchedFamilies = useMemo(() => {
+    if (!searchTerm.trim()) return [];
+    return buildFamilyGroups(students as Student[], feeRecords, searchTerm).filter(
+      (f) => f.members.length > 1 || /^\d{4,}$/.test(searchTerm.trim().replace(/\D/g, ''))
+    );
+  }, [students, feeRecords, searchTerm]);
+
+  const activeSelectedFamily = useMemo(() => {
+    if (selectedFamilyKey) {
+      const exact = allFamilyGroups.find((f) => f.mobileKey === selectedFamilyKey);
+      if (exact) return exact;
+    }
+    return filteredFamilies[0] || allFamilyGroups[0] || null;
+  }, [allFamilyGroups, filteredFamilies, selectedFamilyKey]);
+
+  React.useEffect(() => {
+    if (externalFamilyTarget) {
+      setFamilyModalTarget(externalFamilyTarget);
+      setFamilyModalOpen(true);
+      setSelectedFamilyKey(externalFamilyTarget.mobileKey);
+      setActiveViewMode('family');
+      onClearExternalFamilyTarget?.();
+    }
+  }, [externalFamilyTarget, onClearExternalFamilyTarget]);
 
   // Fee records strictly for the active selected student (Sorted descending: newest first)
   const studentFeeRecords = useMemo(() => {
@@ -1132,6 +1197,19 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
 
             <button
               type="button"
+              onClick={() => {
+                setFamilyModalTarget(activeSelectedFamily);
+                setFamilyModalOpen(true);
+              }}
+              className="px-3.5 py-2.5 bg-indigo-500/80 hover:bg-indigo-500 text-white font-black rounded-xl text-xs flex items-center gap-1.5 cursor-pointer transition-all active:scale-95 border border-indigo-300/40 shadow-sm"
+              title="मोबाइल नंबर से एक परिवार के सभी बच्चों की कुल फीस देखें व 1 जगह से जमा करें"
+            >
+              <i className="fa-solid fa-people-roof text-amber-300"></i>
+              <span>परिवार / मोबाइल फीस</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setActiveViewMode('trends')}
               className={`px-3.5 py-2.5 font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer transition-all active:scale-95 ${
                 activeViewMode === 'trends'
@@ -1324,6 +1402,18 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
             </button>
             <button
               type="button"
+              onClick={() => setActiveViewMode('family')}
+              className={`px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                activeViewMode === 'family'
+                  ? 'bg-[#0c2340] text-amber-300 shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+              }`}
+            >
+              <i className="fa-solid fa-people-roof text-xs"></i>
+              <span>👨‍👧‍👦 परिवार / मोबाइल फीस</span>
+            </button>
+            <button
+              type="button"
               onClick={() => setActiveViewMode('allLedger')}
               className={`px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
                 activeViewMode === 'allLedger'
@@ -1356,7 +1446,44 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
 
         {/* Search Results Dropdown when user types */}
         {searchTerm.trim().length > 0 && (
-          <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl space-y-2 animate-fadeIn max-h-60 overflow-y-auto">
+          <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl space-y-2 animate-fadeIn max-h-72 overflow-y-auto">
+            {searchBarMatchedFamilies.length > 0 && (
+              <div className="p-2.5 bg-indigo-50 border border-indigo-200 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="font-bold text-indigo-950 flex items-center gap-2">
+                  <i className="fa-solid fa-people-roof text-indigo-600"></i>
+                  <span>
+                    परिवार मिलान ({searchBarMatchedFamilies[0].fatherName} • 📱 {searchBarMatchedFamilies[0].displayMobile} •{' '}
+                    {searchBarMatchedFamilies[0].members.length} बच्चे): कुल बकाया{' '}
+                    <strong className="text-rose-700">₹{searchBarMatchedFamilies[0].totalDue.toLocaleString('en-IN')}</strong>
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedFamilyKey(searchBarMatchedFamilies[0].mobileKey);
+                      setFamilySearchQuery(searchBarMatchedFamilies[0].displayMobile);
+                      setActiveViewMode('family');
+                      setSearchTerm('');
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-white hover:bg-indigo-100 text-indigo-900 border border-indigo-300 font-bold text-[11px] cursor-pointer"
+                  >
+                    सभी बच्चे देखें
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFamilyModalTarget(searchBarMatchedFamilies[0]);
+                      setFamilyModalOpen(true);
+                      setSearchTerm('');
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-black text-[11px] cursor-pointer"
+                  >
+                    1 जगह से फीस जमा करें →
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="text-[11px] font-bold text-slate-500 flex items-center justify-between px-1">
               <span>खोज परिणाम ({filteredStudents.length} छात्र मिले)</span>
               <span>छात्र पर क्लिक करके उसका पूरा फीस इतिहास देखें</span>
@@ -3129,6 +3256,357 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
         </div>
       )}
 
+      {/* 3.5 VIEW MODE: FAMILY / MULTI-CHILD FEE BY MOBILE NUMBER */}
+      {activeViewMode === 'family' && (
+        <div className="px-6 pb-6 space-y-5 animate-fadeIn">
+          {/* Header & Mobile Search Toolbar */}
+          <div className="rounded-3xl bg-gradient-to-br from-indigo-950 via-[#0c2340] to-slate-900 text-white p-5 sm:p-6 space-y-4 shadow-md">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30 text-[10px] font-black uppercase">
+                    Family Fee Counter
+                  </span>
+                  <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold">
+                    {allFamilyGroups.filter((f) => f.members.length > 1).length} मल्टी-चाइल्ड परिवार
+                  </span>
+                </div>
+                <h3 className="text-lg sm:text-xl font-black mt-1">
+                  मोबाइल नंबर से सभी बच्चों की कुल फीस देखें व एक जगह से जमा करें
+                </h3>
+                <p className="text-xs text-slate-300 mt-0.5">
+                  अभिभावक का 10 अंकों का मोबाइल नंबर, पिता का नाम या किसी बच्चे का नाम लिखें — एक साथ सभी बच्चों की फीस व संयुक्त रसीद पाएं।
+                </p>
+              </div>
+              {activeSelectedFamily && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFamilyModalTarget(activeSelectedFamily);
+                    setFamilyModalOpen(true);
+                  }}
+                  className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs flex items-center gap-2 shadow-md cursor-pointer shrink-0"
+                >
+                  <i className="fa-solid fa-layer-group text-amber-300"></i>
+                  <span>एक जगह से फीस जमा करें</span>
+                </button>
+              )}
+            </div>
+
+            {/* Search & Filters */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+              <div className="relative flex-1">
+                <i className="fa-solid fa-mobile-screen-button absolute left-3.5 top-1/2 -translate-y-1/2 text-amber-300 text-sm"></i>
+                <input
+                  type="text"
+                  value={familySearchQuery}
+                  onChange={(e) => {
+                    setFamilySearchQuery(e.target.value);
+                    setSelectedFamilyKey('');
+                  }}
+                  placeholder="मोबाइल नंबर (उदा. 9876543210), पिता का नाम या बच्चे का नाम डालें..."
+                  className="w-full pl-10 pr-8 py-2.5 rounded-xl bg-white text-slate-900 placeholder-slate-400 text-xs sm:text-sm font-bold outline-none focus:ring-2 focus:ring-amber-400"
+                />
+                {familySearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setFamilySearchQuery('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 text-xs cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center gap-1 bg-white/10 p-1 rounded-xl text-xs font-bold shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setFamilyFilterMode('multi')}
+                  className={`px-3 py-1.5 rounded-lg cursor-pointer transition-colors ${
+                    familyFilterMode === 'multi'
+                      ? 'bg-amber-400 text-slate-950 font-black'
+                      : 'text-slate-200 hover:bg-white/10'
+                  }`}
+                >
+                  2+ बच्चे वाले ({allFamilyGroups.filter((f) => f.members.length > 1).length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFamilyFilterMode('dues')}
+                  className={`px-3 py-1.5 rounded-lg cursor-pointer transition-colors ${
+                    familyFilterMode === 'dues'
+                      ? 'bg-amber-400 text-slate-950 font-black'
+                      : 'text-slate-200 hover:bg-white/10'
+                  }`}
+                >
+                  बकाया वाले ({allFamilyGroups.filter((f) => f.totalDue > 0).length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFamilyFilterMode('all')}
+                  className={`px-3 py-1.5 rounded-lg cursor-pointer transition-colors ${
+                    familyFilterMode === 'all'
+                      ? 'bg-amber-400 text-slate-950 font-black'
+                      : 'text-slate-200 hover:bg-white/10'
+                  }`}
+                >
+                  सभी ({allFamilyGroups.length})
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            {/* LEFT: Matching Families Directory */}
+            <div className="lg:col-span-5 space-y-2.5 max-h-[600px] overflow-y-auto pr-1">
+              {filteredFamilies.length === 0 ? (
+                <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-300 text-xs text-slate-500">
+                  इस फ़िल्टर/खोज से कोई परिवार नहीं मिला। ऊपर 'सभी' बटन दबाकर या सही मोबाइल नंबर डालकर देखें।
+                </div>
+              ) : (
+                filteredFamilies.slice(0, 60).map((fam) => {
+                  const isActive = activeSelectedFamily?.mobileKey === fam.mobileKey;
+                  return (
+                    <button
+                      key={fam.mobileKey}
+                      type="button"
+                      onClick={() => setSelectedFamilyKey(fam.mobileKey)}
+                      className={`w-full text-left p-3.5 rounded-2xl border transition-all cursor-pointer space-y-2 ${
+                        isActive
+                          ? 'bg-blue-50/90 border-[#0c2340] ring-2 ring-[#0c2340]/20 shadow-sm'
+                          : 'bg-white border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-mono font-black text-xs text-indigo-900">
+                              📱 {fam.displayMobile}
+                            </span>
+                            <span className="px-2 py-0.2 rounded-full bg-indigo-100 text-indigo-900 text-[10px] font-black">
+                              {fam.members.length} बच्चे
+                            </span>
+                          </div>
+                          <div className="font-black text-slate-900 text-sm truncate mt-0.5">
+                            {fam.fatherName}
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <span className="text-[10px] text-slate-500 block">कुल बकाया</span>
+                          <span
+                            className={`font-black text-sm tabular-nums ${
+                              fam.totalDue > 0 ? 'text-rose-700' : 'text-emerald-700'
+                            }`}
+                          >
+                            ₹{fam.totalDue.toLocaleString('en-IN')}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {fam.members.map((m) => (
+                          <span
+                            key={m.student.Student_ID}
+                            className="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-[10px] font-bold text-slate-700"
+                          >
+                            {m.student.Student_Name} ({getClassName(m.student.Class)})
+                            {m.dueAmount > 0 ? ` · ₹${m.dueAmount}` : ' · ✓'}
+                          </span>
+                        ))}
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+
+            {/* RIGHT: Active Family Detail & Combined Action Panel */}
+            <div className="lg:col-span-7">
+              {activeSelectedFamily ? (
+                <div className="bg-white rounded-3xl border border-slate-200 p-5 space-y-5 shadow-xs">
+                  {/* Family Master Header */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="px-2.5 py-0.5 rounded-full bg-[#0c2340] text-amber-300 text-[11px] font-black">
+                          {activeSelectedFamily.members.length} बच्चे जुड़े हैं
+                        </span>
+                        <span className="font-mono text-xs font-bold text-slate-700">
+                          📱 {activeSelectedFamily.displayMobile}
+                        </span>
+                      </div>
+                      <h4 className="text-lg font-black text-slate-900 mt-1">
+                        अभिभावक: {activeSelectedFamily.fatherName}
+                      </h4>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFamilyModalTarget(activeSelectedFamily);
+                          setFamilyModalOpen(true);
+                        }}
+                        className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs flex items-center gap-1.5 shadow-sm cursor-pointer"
+                      >
+                        <i className="fa-solid fa-indian-rupee-sign"></i>
+                        <span>एक जगह से फीस जमा करें</span>
+                      </button>
+
+                      {activeSelectedFamily.displayMobile !== 'N/A' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const msg = buildFamilyWhatsappDueReminder(activeSelectedFamily, getClassName);
+                            openWhatsappAlert(activeSelectedFamily.displayMobile, msg, {
+                              alertType: 'Fee Due Reminder',
+                              recipientType: 'Parent',
+                              recipientId: activeSelectedFamily.mobileKey,
+                              recipientName: activeSelectedFamily.fatherName,
+                              classOrRole: `${activeSelectedFamily.members.length} Children`,
+                              amount: activeSelectedFamily.totalDue,
+                              sentBy: managerName,
+                            });
+                          }}
+                          className="px-3.5 py-2.5 rounded-xl bg-[#25D366] hover:bg-[#1ebe5d] text-white font-black text-xs flex items-center gap-1.5 shadow-sm cursor-pointer"
+                        >
+                          <i className="fa-brands fa-whatsapp text-sm"></i>
+                          <span>परिवार रिमाइंडर</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 4 Family Totals */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                    <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
+                      <span className="text-[10px] text-slate-500 font-bold block">कुल पारिवारिक देय</span>
+                      <strong className="text-base font-black text-slate-900 tabular-nums">
+                        ₹{activeSelectedFamily.totalBilled.toLocaleString('en-IN')}
+                      </strong>
+                    </div>
+                    <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200">
+                      <span className="text-[10px] text-emerald-700 font-bold block">कुल जमा राशि</span>
+                      <strong className="text-base font-black text-emerald-900 tabular-nums">
+                        ₹{activeSelectedFamily.totalPaid.toLocaleString('en-IN')}
+                      </strong>
+                    </div>
+                    <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200">
+                      <span className="text-[10px] text-amber-800 font-bold block">कुल छूट</span>
+                      <strong className="text-base font-black text-amber-900 tabular-nums">
+                        ₹{activeSelectedFamily.totalDiscount.toLocaleString('en-IN')}
+                      </strong>
+                    </div>
+                    <div className="p-3 rounded-2xl bg-rose-50 border border-rose-300">
+                      <span className="text-[10px] text-rose-800 font-bold block">सभी बच्चों का बकाया</span>
+                      <strong className="text-lg font-black text-rose-900 tabular-nums">
+                        ₹{activeSelectedFamily.totalDue.toLocaleString('en-IN')}
+                      </strong>
+                    </div>
+                  </div>
+
+                  {/* All Children List for This Family */}
+                  <div className="space-y-3">
+                    <div className="text-xs font-black text-slate-800 flex items-center justify-between">
+                      <span>इस मोबाइल नंबर से जुड़े सभी बच्चे ({activeSelectedFamily.members.length})</span>
+                      <span className="text-[11px] font-medium text-slate-500">
+                        किसी भी बच्चे की अलग या एक साथ फीस जोड़ें
+                      </span>
+                    </div>
+
+                    {activeSelectedFamily.members.map((m, idx) => {
+                      const st = m.student;
+                      return (
+                        <div
+                          key={st.Student_ID}
+                          className="p-4 rounded-2xl border border-slate-200 bg-slate-50/70 hover:bg-white transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                        >
+                          <div className="space-y-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="w-6 h-6 rounded-lg bg-[#0c2340] text-amber-300 text-[11px] font-black flex items-center justify-center shrink-0">
+                                {idx + 1}
+                              </span>
+                              <span className="font-black text-slate-900 text-sm">{st.Student_Name}</span>
+                              <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-900 text-[10px] font-bold">
+                                {getClassName(st.Class)}
+                              </span>
+                              <span className="font-mono text-[10px] text-slate-500">
+                                ID: {st.Student_ID} {st.Roll_Number ? `• रोल: ${st.Roll_Number}` : ''}
+                              </span>
+                            </div>
+
+                            <div className="text-[11px] text-slate-600 flex flex-wrap items-center gap-2 pl-8">
+                              <span>सत्र फीस: ₹{m.metrics.totalSessionFee.toLocaleString('en-IN')}</span>
+                              <span>·</span>
+                              <span className="text-emerald-700 font-bold">
+                                जमा: ₹{m.metrics.totalPaid.toLocaleString('en-IN')}
+                              </span>
+                              {(m.metrics.admissionDue || 0) > 0 && (
+                                <span className="px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 text-[10px] font-bold">
+                                  प्रवेश बकाया: ₹{m.metrics.admissionDue}
+                                </span>
+                              )}
+                              {(m.metrics.tuitionDue || 0) > 0 && (
+                                <span className="px-1.5 py-0.2 rounded bg-indigo-100 text-indigo-900 text-[10px] font-bold">
+                                  ट्यूशन बकाया: ₹{m.metrics.tuitionDue}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between sm:justify-end gap-2.5 shrink-0 pl-8 sm:pl-0">
+                            <div className="text-right">
+                              <span className="text-[10px] text-slate-500 block">
+                                {m.advanceAmount > 0 ? 'अग्रिम जमा' : 'शेष बकाया'}
+                              </span>
+                              <strong
+                                className={`text-sm font-black tabular-nums ${
+                                  m.dueAmount > 0
+                                    ? 'text-rose-700'
+                                    : m.advanceAmount > 0
+                                    ? 'text-purple-700'
+                                    : 'text-emerald-700'
+                                }`}
+                              >
+                                {m.advanceAmount > 0
+                                  ? `-₹${m.advanceAmount.toLocaleString('en-IN')}`
+                                  : `₹${m.dueAmount.toLocaleString('en-IN')}`}
+                              </strong>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => onOpenAddFeeModal(st.Student_ID)}
+                              className="px-3 py-1.5 rounded-xl bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-black text-[11px] cursor-pointer whitespace-nowrap"
+                            >
+                              + फीस जमा करें
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedStudent(st as any);
+                                setActiveViewMode('student');
+                              }}
+                              className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-bold text-[11px] cursor-pointer whitespace-nowrap"
+                            >
+                              इतिहास
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <div className="p-12 text-center bg-slate-50 rounded-3xl border border-dashed border-slate-300 text-slate-500 text-xs">
+                  बाईं ओर सूची से किसी परिवार को चुनें या ऊपर मोबाइल नंबर लिखें।
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Edit Fee Record Modal for Manager */}
       {editingFee && (
         <div className="fixed inset-0 z-50 bg-black/70 flex items-start justify-center p-3 sm:p-4 backdrop-blur-xs animate-fadeIn overflow-y-auto">
@@ -3817,6 +4295,25 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
           </div>
         </div>
       )}
+
+      {/* COMBINED MULTI-CHILD FAMILY FEE COLLECTION & PRINTABLE RECEIPT MODAL */}
+      <FamilyFeeCollectionModal
+        isOpen={familyModalOpen}
+        onClose={() => {
+          setFamilyModalOpen(false);
+          setFamilyModalTarget(null);
+        }}
+        students={students as Student[]}
+        feeRecords={feeRecords}
+        initialFamily={familyModalTarget}
+        managerName={managerName}
+        getClassName={getClassName}
+        onAddFeeRecord={async (rec, sendWa) => {
+          if (onApproveUpiPayment) {
+            await onApproveUpiPayment(rec, sendWa);
+          }
+        }}
+      />
     </div>
   );
 };
