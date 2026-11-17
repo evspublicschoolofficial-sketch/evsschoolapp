@@ -341,6 +341,7 @@ function onOpen(e) {
     var ui = SpreadsheetApp.getUi();
     ui.createMenu("🏫 EVS स्कूल ऑटोमेशन")
       .addItem("⚡ सभी आवश्यक टैब स्वतः बनाएं (Auto-Create All Tabs)", "setupAllRequiredSheets")
+      .addItem("💾 फीचर 2, 5, 6 बैकअप टैब बनाएं (WhatsApp/Salary/UPI)", "menuCreateFeatureBackupTabs")
       .addItem("📋 फीस मास्टर टैब बनाएं (Create Fee_Master)", "menuCreateFeeMaster")
       .addItem("📢 स्कूल नोटिस टैब बनाएं (Create School_Notices)", "menuCreateNotices")
       .addSeparator()
@@ -350,10 +351,18 @@ function onOpen(e) {
       .addToUi();
   } catch(uiErr) {}
 
-  // Automatically check and create Fee_Master and School_Notices tabs on opening the sheet
+  // Automatically check and create Fee_Master, School_Notices & backup tabs on opening the sheet
   try {
     setupAllRequiredSheetsSilently();
   } catch(silentErr) {}
+}
+
+function menuCreateFeatureBackupTabs() {
+  var ss = getSpreadsheet();
+  ensureFeatureBackupTabs(ss);
+  try {
+    SpreadsheetApp.getUi().alert("✅ 'WhatsApp_Alert_Logs', 'Staff_Salary_Config', 'Staff_Salary_Payroll', 'UPI_Settings', 'UPI_Payments', 'Exam_Marks', 'Report_Cards_Backup', 'Weekly_Tests', 'Teacher_Performance', 'Syllabus_Tracker', 'School_Holidays' सभी बैकअप टैब Google Sheet में तैयार हैं!");
+  } catch(e) {}
 }
 
 function menuCreateFeeMaster() {
@@ -372,23 +381,82 @@ function menuCreateNotices() {
   } catch(e) {}
 }
 
+function normalizeSheetKey_(name) {
+  return String(name || "").toLowerCase().replace(/[\\s_\\-]+/g, "");
+}
+
+function findExistingSheet_(ss, namesList) {
+  if (!ss) return null;
+  for (var i = 0; i < namesList.length; i++) {
+    var exact = ss.getSheetByName(namesList[i]);
+    if (exact) return exact;
+  }
+  var wanted = {};
+  for (var j = 0; j < namesList.length; j++) {
+    wanted[normalizeSheetKey_(namesList[j])] = true;
+  }
+  var allSheets = ss.getSheets();
+  for (var k = 0; k < allSheets.length; k++) {
+    if (wanted[normalizeSheetKey_(allSheets[k].getName())]) {
+      return allSheets[k];
+    }
+  }
+  return null;
+}
+
+function ensureTabSafe_(ss, primaryName, altNames, headers, createdList) {
+  var names = [primaryName].concat(altNames || []);
+  var sheet = findExistingSheet_(ss, names);
+  if (!sheet) {
+    sheet = ss.insertSheet(primaryName);
+    if (headers && headers.length > 0) sheet.appendRow(headers);
+    if (createdList) createdList.push(primaryName);
+    return sheet;
+  }
+  // If user already created this tab manually and left it completely blank, add Row-1 headers only.
+  // If it already has rows/data, DO NOT modify existing headers or rows!
+  if (sheet.getLastRow() === 0 && headers && headers.length > 0) {
+    sheet.appendRow(headers);
+  }
+  return sheet;
+}
+
+function ensureFeatureBackupTabs(ss) {
+  if (!ss) return [];
+  var added = [];
+  ensureTabSafe_(ss, "WhatsApp_Alert_Logs", ["WhatsApp Alert Logs", "Whatsapp_Logs"], ["Log_ID", "Date", "Time", "Alert_Type", "Recipient_Type", "Student_or_Staff_ID", "Recipient_Name", "Class_or_Role", "Mobile_Number", "Amount", "Message_Summary", "Sent_By"], added);
+  ensureTabSafe_(ss, "Staff_Salary_Config", ["Staff Salary Config", "Salary_Config"], ["User_ID", "Staff_Name", "Base_Salary", "Paid_Leave_Days", "Late_Threshold_Days", "Late_Penalty_Per_Day", "Late_Deduction_Per_Min", "Half_Day_Factor", "Overtime_Hourly_Rate", "Extra_Duty_Bonus", "Allowances", "Manual_Deduction", "Notes", "Updated_At"], added);
+  ensureTabSafe_(ss, "Staff_Salary_Payroll", ["Staff Salary Payroll", "Salary_Payroll"], ["Payroll_Key", "Month_Key", "Month_Label", "User_ID", "Staff_Name", "Role", "Mobile", "Working_Days", "Present_Days", "Absent_Days", "Half_Days", "Late_Days", "Late_Minutes", "Extra_Hours", "Extra_Duty_Days", "Base_Salary", "Additions", "Deductions", "Net_Payable", "Saved_At"], added);
+  ensureTabSafe_(ss, "UPI_Settings", ["UPI Settings"], ["Setting_Key", "UPI_ID", "Payee_Name", "Bank_Name", "Instructions", "Has_Static_QR", "Updated_At"], added);
+  ensureTabSafe_(ss, "UPI_Payments", ["UPI Payments", "UPI_Payment_Logs"], ["Payment_ID", "Created_At", "Student_ID", "Student_Name", "Class", "Parent_Mobile", "Payer_Name", "Amount", "Fee_Type", "Month", "UTR_Number", "Payment_App", "Payment_Date", "Notes", "Status", "Receipt_Number", "Manager_Note", "Verified_By", "Verified_At", "Has_Screenshot"], added);
+  ensureTabSafe_(ss, "Exam_Marks", ["Exam Marks", "ExamMarks"], ["Mark_ID", "Session", "Exam_Type", "Student_ID", "Student_Name", "Class", "Subject", "Max_Marks", "Marks_Obtained", "Attendance_Status", "Teacher_ID", "Teacher_Name", "Remarks", "Updated_At"], added);
+  ensureTabSafe_(ss, "Report_Cards_Backup", ["Report Cards Backup", "Report_Cards", "ReportCardsBackup"], ["Report_Key", "Session", "Student_ID", "Student_Name", "Class", "Roll_Number", "Weekly_Pct", "Quarterly_Pct", "HalfYearly_Pct", "Annual_Pct", "Overall_Pct", "Grade", "Attendance_Pct", "Present_Days", "Total_Days", "Teacher_Remark", "Principal_Remark", "Result_Status", "Published_For_Parent", "Updated_By", "Updated_At"], added);
+  ensureTabSafe_(ss, "Weekly_Tests", ["Weekly Tests", "Weekly_Subject_Tests"], ["ID", "Session_ID", "Teacher_ID", "Teacher_Name", "Class", "Month", "Week_Number", "Test_Date", "Subject", "Topic", "Student_ID", "Student_Name", "Max_Marks", "Marks_Obtained", "Status", "Remarks", "Timestamp"], added);
+  ensureTabSafe_(ss, "Teacher_Performance", ["Teacher Performance"], ["Record_ID", "Teacher_ID", "Teacher_Name", "Assigned_Class", "Month", "Academic_Year", "Syllabus_Score_30", "Test_Score_25", "Attendance_Score_15", "Homework_Score_15", "Punctuality_Score_15", "Total_Score_100", "Grade", "Evaluated_By", "Remarks", "Timestamp"], added);
+  ensureTabSafe_(ss, "Syllabus_Tracker", ["Syllabus Tracker"], ["ID", "Teacher_ID", "Teacher_Name", "Class", "Subject", "Month", "Week_Number", "Week_Label", "Chapter_Title", "Topic_Description", "Planned_Date", "Target_Completion_Date", "Completed_Date", "Status", "Timestamp"], added);
+  ensureTabSafe_(ss, "School_Holidays", ["School Holidays", "Holidays"], ["ID", "Date", "End_Date", "Title", "Category", "Description", "Timestamp"], added);
+  return added;
+}
+
 function setupAllRequiredSheetsSilently() {
   var ss = getSpreadsheet();
   if (!ss) return;
-  var feeSheet = ss.getSheetByName("Fee_Master") || ss.getSheetByName("FeeMaster") || ss.getSheetByName("Fee Master");
+  var feeSheet = findExistingSheet_(ss, ["Fee_Master", "FeeMaster", "Fee Master"]);
   if (!feeSheet) handleGetFeeMaster(ss);
-  var notSheet = ss.getSheetByName("School_Notices") || ss.getSheetByName("Notices") || ss.getSheetByName("Notice");
+  var notSheet = findExistingSheet_(ss, ["School_Notices", "Notices", "Notice"]);
   if (!notSheet) handleGetNotices(ss);
-  var busSheet = ss.getSheetByName("Bus_Tracking");
+  var busSheet = findExistingSheet_(ss, ["Bus_Tracking", "Bus Tracking"]);
   if (!busSheet) {
     busSheet = ss.insertSheet("Bus_Tracking");
     busSheet.appendRow(["Bus_ID", "Driver_Name", "Current_Location", "Last_Updated"]);
     busSheet.appendRow(["ecad7ddc", "Amjad", "30.056038, 77.419096", Utilities.formatDate(new Date(), "Asia/Kolkata", "dd/MM/yyyy HH:mm:ss")]);
   }
+  ensureFeatureBackupTabs(ss);
 }
 
 /**
  * Standalone runner: Run directly from Apps Script editor by selecting "setupAllRequiredSheets" and clicking Run!
+ * Safe for sheets with existing tabs — skips existing tabs and never deletes or overwrites existing data.
  */
 function setupAllRequiredSheets() {
   var ss = getSpreadsheet();
@@ -399,78 +467,70 @@ function setupAllRequiredSheets() {
   var created = [];
 
   // 1. Fee_Master
-  var feeMasterSheet = ss.getSheetByName("Fee_Master") || ss.getSheetByName("FeeMaster") || ss.getSheetByName("Fee Master");
-  if (!feeMasterSheet) {
+  if (!findExistingSheet_(ss, ["Fee_Master", "FeeMaster", "Fee Master"])) {
     handleGetFeeMaster(ss);
     created.push("Fee_Master");
   }
 
   // 2. School_Notices
-  var noticesSheet = ss.getSheetByName("School_Notices") || ss.getSheetByName("Notices") || ss.getSheetByName("Notice");
-  if (!noticesSheet) {
+  if (!findExistingSheet_(ss, ["School_Notices", "Notices", "Notice"])) {
     handleGetNotices(ss);
     created.push("School_Notices");
   }
 
   // 3. Bus_Tracking
-  var busSheet = ss.getSheetByName("Bus_Tracking");
-  if (!busSheet) {
-    busSheet = ss.insertSheet("Bus_Tracking");
+  if (!findExistingSheet_(ss, ["Bus_Tracking", "Bus Tracking"])) {
+    var busSheet = ss.insertSheet("Bus_Tracking");
     busSheet.appendRow(["Bus_ID", "Driver_Name", "Current_Location", "Last_Updated"]);
     busSheet.appendRow(["ecad7ddc", "Amjad", "30.056038, 77.419096", Utilities.formatDate(new Date(), "Asia/Kolkata", "dd/MM/yyyy HH:mm:ss")]);
     created.push("Bus_Tracking");
   }
 
   // 4. Students
-  var studentsSheet = ss.getSheetByName("Students");
-  if (!studentsSheet) {
-    studentsSheet = ss.insertSheet("Students");
-    studentsSheet.appendRow([
-      "Student_ID", "Student_Name", "Father_Name", "Mother_Name", "Mobile_Number", "Parent_Mobile",
-      "Class", "Section", "Roll_Number", "Date_Of_Birth", "Address", "Transport_Required",
-      "Bus_Stop", "Route", "Fee_Category", "Monthly_Fee", "Admission_Date", "Session_Start_Month", "Status"
-    ]);
-    created.push("Students");
-  }
+  ensureTabSafe_(ss, "Students", ["Student"], [
+    "Student_ID", "Admission_Number", "Roll_Number", "Student_Name", "Class",
+    "Father_Name", "Mother_Name", "Parent_Mobile", "Student_Photo", "Village/rRoute",
+    "Adhar_Card", "Adhar_Photo", "Balance_Amount", "Session_Start_Month", "QR code"
+  ], created);
 
-  // 5. Fees
-  var feesSheet = ss.getSheetByName("Fees") || ss.getSheetByName("Fee_Collection");
-  if (!feesSheet) {
-    feesSheet = ss.insertSheet("Fees");
-    feesSheet.appendRow([
-      "Receipt_No", "Date", "Student_ID", "Student_Name", "Class", "Month",
-      "Total_Amount", "Amount_Paid", "Balance_Amount", "Payment_Mode", "Collected_By", "Remarks"
-    ]);
-    created.push("Fees");
-  }
+  // 5. Fee_Collection
+  ensureTabSafe_(ss, "Fee_Collection", ["Fees", "Fee Collection"], [
+    "Receipt_Number", "Student_ID", "Date", "Fee_Type", "Month",
+    "Total_Amount", "Discount_Amount", "Net_Payable", "Amount_Paid",
+    "Balance_Amount", "Payment_Mode", "Received_By", "Allocations_Summary"
+  ], created);
 
   // 6. Homework
-  var hwSheet = ss.getSheetByName("Homework");
-  if (!hwSheet) {
-    hwSheet = ss.insertSheet("Homework");
-    hwSheet.appendRow(["Date", "Class", "Subject", "Title", "Description", "Assigned_By", "Status"]);
-    created.push("Homework");
-  }
+  ensureTabSafe_(ss, "Homework", ["HomeWork"], ["Homework_ID", "Date", "Class", "Subject", "Homework_Detail", "Target_Type", "", "", "", "", "Teacher"], created);
 
-  // 7. Behavior
-  var behSheet = ss.getSheetByName("Behavior") || ss.getSheetByName("Attendance");
-  if (!behSheet) {
-    behSheet = ss.insertSheet("Behavior");
-    behSheet.appendRow(["Date", "Student_ID", "Student_Name", "Class", "Roll_Number", "Is_Present", "Remark", "Teacher_Name"]);
-    created.push("Behavior");
-  }
+  // 7. Homework_Tracker
+  ensureTabSafe_(ss, "Homework_Tracker", ["Homework Tracker"], ["ID", "Date", "Class", "Student_ID", "Subject", "Last_homework_Status"], created);
 
-  // 8. Route_Stops (User Custom Pinned Stoppages)
-  var stopsSheet = ss.getSheetByName("Route_Stops") || ss.getSheetByName("Route_Stop") || ss.getSheetByName("Stoppages") || ss.getSheetByName("Stops");
-  if (!stopsSheet) {
-    stopsSheet = ss.insertSheet("Route_Stops");
-    stopsSheet.appendRow(["Stop_ID", "Route_ID", "Stop_Name", "Sequence_Order", "Latitude", "Longitude", "Morning_Time", "Evening_Time", "Village_Name", "Student_Count", "Notes"]);
-    created.push("Route_Stops");
+  // 8. Student_Behavior
+  ensureTabSafe_(ss, "Student_Behavior", ["Behavior", "Attendance", "Student Behavior"], [
+    "Behavior_ID", "Student_ID", "Date", "Class",
+    "Is_Bathed", "Nails_Clean", "Uniform_clean",
+    "Good_Manners", "Discipline", "Is_Present", "Remark", "AI_Feedback"
+  ], created);
+
+  // 9. Staff_Attendance
+  ensureTabSafe_(ss, "Staff_Attendance ", ["Staff_Attendance", "Staff Attendance"], [
+    "ID", "Name", "User_ID", "Designation", "Date", "Check_In_Time", "Check_Out_Time",
+    "Status", "Late_Minutes", "Extra_Hours", "Method", "Location", "Remark", "Timestamp", "Check_Out_Timestamp"
+  ], created);
+
+  // 10. Route_Stops
+  ensureTabSafe_(ss, "Route_Stops", ["Route_Stop", "Stoppages", "Stops"], ["Stop_ID", "Route_ID", "Stop_Name", "Sequence_Order", "Latitude", "Longitude", "Morning_Time", "Evening_Time", "Village_Name", "Student_Count", "Notes"], created);
+
+  // 11-21. All Feature Backup & Module Tabs
+  var featureCreated = ensureFeatureBackupTabs(ss);
+  for (var fi = 0; fi < featureCreated.length; fi++) {
+    created.push(featureCreated[fi]);
   }
 
   var msg = created.length > 0
-    ? "✅ सफलतापूर्वक " + created.length + " नए टैब बनाए गए: " + created.join(", ")
-    : "✅ सभी आवश्यक टैब (Route_Stops, Fee_Master, School_Notices, Students आदि) मौजूद हैं!";
+    ? "✅ पहले से मौजूद टैब सुरक्षित रखते हुए " + created.length + " नए टैब बनाए गए: " + created.join(", ")
+    : "✅ सभी 21 आवश्यक टैब पहले से मौजूद हैं (कोई पुराना डेटा या टैब बदला नहीं गया)!";
 
   try {
     SpreadsheetApp.getUi().alert("🏫 EVS स्कूल ऑटोमेशन", msg, SpreadsheetApp.getUi().ButtonSet.OK);
@@ -480,7 +540,7 @@ function setupAllRequiredSheets() {
     status: "success",
     message: msg,
     created: created,
-    totalRequiredChecked: 8
+    totalRequiredChecked: 21
   };
 }
 
@@ -611,8 +671,43 @@ function doGet(e) {
       .setMimeType(ContentService.MimeType.JSON);
   }
 
+  // 9B. FEATURE 2, 5, 6 GET BACKUP READS
+  if (action === "getWhatsappLogs") {
+    return handleGetWhatsappLogs(ss);
+  }
+  if (action === "getStaffSalaryConfig") {
+    return handleGetStaffSalaryConfig(ss);
+  }
+  if (action === "getStaffSalaryPayroll") {
+    return handleGetStaffSalaryPayroll(ss);
+  }
+  if (action === "getUpiSettings") {
+    return handleGetUpiSettings(ss);
+  }
+  if (action === "getUpiPayments") {
+    return handleGetUpiPayments(ss);
+  }
+  if (action === "getExamMarks") {
+    return handleGetExamMarks(ss);
+  }
+  if (action === "getReportCardMeta") {
+    return handleGetReportCardMeta(ss);
+  }
+  if (action === "getWeeklyTests") {
+    return handleGetWeeklyTests(ss);
+  }
+  if (action === "getTeacherPerformance") {
+    return handleGetTeacherPerformance(ss);
+  }
+  if (action === "getSyllabusTracker") {
+    return handleGetSyllabusTracker(ss);
+  }
+  if (action === "getSchoolHolidays") {
+    return handleGetSchoolHolidays(ss);
+  }
+
   // 10. GET FALLBACK: Delegate write actions when called via GET query parameters
-  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass") {
+  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday") {
     return doPost(e);
   }
 
@@ -1228,6 +1323,77 @@ function doPost(e) {
     // 8. RECORD / UPDATE STAFF ATTENDANCE (School QR Check-In & Check-Out)
     if (action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "staffAttendance") {
       return handleRecordStaffAttendance(ss, data);
+    }
+
+    // 9. FEATURE 2 BACKUP: LOG WHATSAPP ALERT
+    if (action === "logWhatsappAlert") {
+      return handleLogWhatsappAlert(ss, data);
+    }
+
+    // 10. FEATURE 5 BACKUP: SAVE STAFF SALARY CONFIG & MONTHLY PAYROLL
+    if (action === "saveStaffSalaryConfig") {
+      return handleSaveStaffSalaryConfig(ss, data);
+    }
+    if (action === "saveStaffSalaryPayroll") {
+      return handleSaveStaffSalaryPayroll(ss, data);
+    }
+
+    // 11. FEATURE 6 BACKUP: SAVE UPI SETTINGS, PAYMENT PROOF, VERIFICATION & BATCH SYNC
+    if (action === "saveUpiSettings") {
+      return handleSaveUpiSettings(ss, data);
+    }
+    if (action === "saveUpiPayment") {
+      return handleSaveUpiPayment(ss, data);
+    }
+    if (action === "verifyUpiPayment") {
+      return handleVerifyUpiPayment(ss, data);
+    }
+    if (action === "syncAllUpiPayments") {
+      return handleSyncAllUpiPayments(ss, data);
+    }
+
+    // 12. REPORT CARD & EXAM MARKS BACKUP (Quarterly, Half-Yearly, Annual & Report Card Remarks)
+    if (action === "saveExamMarksBatch") {
+      return handleSaveExamMarksBatch(ss, data);
+    }
+    if (action === "deleteExamMark") {
+      return handleDeleteExamMark(ss, data);
+    }
+    if (action === "saveReportCardMeta") {
+      return handleSaveReportCardMeta(ss, data);
+    }
+    if (action === "syncReportCardsBatch") {
+      return handleSyncReportCardsBatch(ss, data);
+    }
+
+    // 13. DELETE HOMEWORK
+    if (action === "deleteHomework") {
+      return handleDeleteHomework(ss, data);
+    }
+
+    // 14. WEEKLY SUBJECT TESTS (Weekly_Tests - 2-Way Sync)
+    if (action === "saveWeeklyTestsBatch" || action === "saveWeeklyTest") {
+      return handleSaveWeeklyTestsBatch(ss, data);
+    }
+    if (action === "deleteWeeklyTest") {
+      return handleDeleteRowById_(ss, "Weekly_Tests", data.id || data.test_id);
+    }
+
+    // 15. TEACHER PERFORMANCE, SYLLABUS TRACKER & SCHOOL HOLIDAYS (2-Way Sync)
+    if (action === "saveTeacherPerformance") {
+      return handleSaveTeacherPerformance(ss, data);
+    }
+    if (action === "saveSyllabusTopic") {
+      return handleSaveSyllabusTopic(ss, data);
+    }
+    if (action === "deleteSyllabusTopic") {
+      return handleDeleteRowById_(ss, "Syllabus_Tracker", data.id);
+    }
+    if (action === "saveSchoolHoliday") {
+      return handleSaveSchoolHoliday(ss, data);
+    }
+    if (action === "deleteSchoolHoliday") {
+      return handleDeleteRowById_(ss, "School_Holidays", data.id);
     }
 
     return ContentService.createTextOutput(JSON.stringify({
@@ -2353,6 +2519,1068 @@ function handleSyncNotices(ss, data) {
     message: "Single notice appended to School_Notices sheet!",
     notice_id: singleRow[0]
   })).setMimeType(ContentService.MimeType.JSON);
+}
+
+// =========================================================================
+// FEATURE 2 BACKUP: WhatsApp_Alert_Logs HANDLERS
+// =========================================================================
+function handleGetWhatsappLogs(ss) {
+  var sheet = findExistingSheet_(ss, ["WhatsApp_Alert_Logs", "WhatsApp Alert Logs", "Whatsapp_Logs"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", logs: [] })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var logs = [];
+  for (var r = 1; r < rows.length; r++) {
+    var row = rows[r];
+    if (!row[0]) continue;
+    logs.push({
+      id: String(row[0] || ""),
+      date: String(row[1] || ""),
+      time: String(row[2] || ""),
+      alertType: String(row[3] || ""),
+      recipientType: String(row[4] || ""),
+      recipientId: String(row[5] || ""),
+      recipientName: String(row[6] || ""),
+      classOrRole: String(row[7] || ""),
+      mobile: String(row[8] || ""),
+      amount: Number(row[9] || 0),
+      summary: String(row[10] || ""),
+      sentBy: String(row[11] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", logs: logs.reverse() })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleLogWhatsappAlert(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["WhatsApp_Alert_Logs", "WhatsApp Alert Logs", "Whatsapp_Logs"]);
+  var item = data.log || data;
+  if (typeof item === "string") {
+    try { item = JSON.parse(item); } catch(e) { item = data; }
+  }
+  var now = new Date();
+  var dateStr = String(item.date || Utilities.formatDate(now, "Asia/Kolkata", "yyyy-MM-dd"));
+  var timeStr = String(item.time || Utilities.formatDate(now, "Asia/Kolkata", "hh:mm a"));
+  var logId = String(item.id || ("WA-" + Date.now()));
+
+  var rows = sheet.getDataRange().getValues();
+  for (var r = 1; r < rows.length; r++) {
+    if (String(rows[r][0] || "") === logId) {
+      return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "Log already backed up", id: logId })).setMimeType(ContentService.MimeType.JSON);
+    }
+  }
+
+  sheet.appendRow([
+    logId,
+    dateStr,
+    timeStr,
+    String(item.alertType || "WhatsApp Alert"),
+    String(item.recipientType || "Parent"),
+    String(item.recipientId || ""),
+    String(item.recipientName || ""),
+    String(item.classOrRole || ""),
+    String(item.mobile || ""),
+    Number(item.amount || 0),
+    String(item.summary || "").slice(0, 350),
+    String(item.sentBy || "Manager")
+  ]);
+
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "WhatsApp alert logged to Google Sheet!", id: logId })).setMimeType(ContentService.MimeType.JSON);
+}
+
+// =========================================================================
+// FEATURE 5 BACKUP: Staff_Salary_Config & Staff_Salary_Payroll HANDLERS
+// =========================================================================
+function handleGetStaffSalaryConfig(ss) {
+  var sheet = findExistingSheet_(ss, ["Staff_Salary_Config", "Staff Salary Config", "Salary_Config"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", configs: {} })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var configs = {};
+  for (var r = 1; r < rows.length; r++) {
+    var row = rows[r];
+    var uid = String(row[0] || "").trim();
+    if (!uid) continue;
+    configs[uid] = {
+      userId: uid,
+      name: String(row[1] || ""),
+      baseSalary: Number(row[2] || 8000),
+      paidLeaveDays: Number(row[3] || 1),
+      lateThresholdDays: Number(row[4] || 2),
+      latePenaltyPerDay: Number(row[5] || 100),
+      lateDeductionPerMinute: Number(row[6] || 0),
+      halfDayFactor: Number(row[7] !== "" ? row[7] : 0.5),
+      overtimeHourlyRate: Number(row[8] || 80),
+      extraDutyDayBonus: Number(row[9] || 350),
+      allowances: Number(row[10] || 0),
+      manualDeduction: Number(row[11] || 0),
+      notes: String(row[12] || ""),
+      updatedAt: String(row[13] || "")
+    };
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", configs: configs })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveStaffSalaryConfig(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Staff_Salary_Config", "Staff Salary Config", "Salary_Config"]);
+  var list = [];
+  if (data.configs && typeof data.configs === "object" && !Array.isArray(data.configs)) {
+    for (var k in data.configs) {
+      if (data.configs[k]) list.push(data.configs[k]);
+    }
+  } else {
+    var single = data.config || data;
+    if (typeof single === "string") {
+      try { single = JSON.parse(single); } catch(e) { single = data; }
+    }
+    if (single && single.userId) list.push(single);
+  }
+
+  var rows = sheet.getDataRange().getValues();
+  var rowMap = {};
+  for (var r = 1; r < rows.length; r++) {
+    var uid = String(rows[r][0] || "").trim();
+    if (uid) rowMap[uid.toLowerCase()] = r + 1;
+  }
+
+  var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var saved = 0;
+  for (var i = 0; i < list.length; i++) {
+    var cfg = list[i];
+    var uidVal = String(cfg.userId || "").trim();
+    if (!uidVal) continue;
+    var rowArr = [
+      uidVal,
+      String(cfg.name || ""),
+      Number(cfg.baseSalary || 0),
+      Number(cfg.paidLeaveDays || 0),
+      Number(cfg.lateThresholdDays || 0),
+      Number(cfg.latePenaltyPerDay || 0),
+      Number(cfg.lateDeductionPerMinute || 0),
+      Number(cfg.halfDayFactor !== undefined ? cfg.halfDayFactor : 0.5),
+      Number(cfg.overtimeHourlyRate || 0),
+      Number(cfg.extraDutyDayBonus || 0),
+      Number(cfg.allowances || 0),
+      Number(cfg.manualDeduction || 0),
+      String(cfg.notes || ""),
+      String(cfg.updatedAt || nowStr)
+    ];
+    var targetRow = rowMap[uidVal.toLowerCase()];
+    if (targetRow) {
+      sheet.getRange(targetRow, 1, 1, 14).setValues([rowArr]);
+    } else {
+      sheet.appendRow(rowArr);
+      rowMap[uidVal.toLowerCase()] = sheet.getLastRow();
+    }
+    saved++;
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Staff_Salary_Config sheet backed up (" + saved + " saved)!",
+    count: saved
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetStaffSalaryPayroll(ss) {
+  var sheet = findExistingSheet_(ss, ["Staff_Salary_Payroll", "Staff Salary Payroll", "Salary_Payroll"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", payroll: [] })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var list = [];
+  for (var r = 1; r < rows.length; r++) {
+    var row = rows[r];
+    if (!row[0]) continue;
+    list.push({
+      payrollKey: String(row[0] || ""),
+      monthKey: String(row[1] || ""),
+      monthName: String(row[2] || ""),
+      userId: String(row[3] || ""),
+      name: String(row[4] || ""),
+      role: String(row[5] || ""),
+      mobile: String(row[6] || ""),
+      workingDays: Number(row[7] || 0),
+      presentDays: Number(row[8] || 0),
+      absentDays: Number(row[9] || 0),
+      halfDays: Number(row[10] || 0),
+      lateDays: Number(row[11] || 0),
+      totalLateMinutes: Number(row[12] || 0),
+      extraOvertimeHours: Number(row[13] || 0),
+      extraDutyDays: Number(row[14] || 0),
+      baseSalary: Number(row[15] || 0),
+      totalAdditions: Number(row[16] || 0),
+      totalDeductions: Number(row[17] || 0),
+      netPayable: Number(row[18] || 0),
+      savedAt: String(row[19] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", payroll: list })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveStaffSalaryPayroll(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Staff_Salary_Payroll", "Staff Salary Payroll", "Salary_Payroll"]);
+  var records = data.records;
+  if (typeof records === "string") {
+    try { records = JSON.parse(records); } catch(e) { records = []; }
+  }
+  if (!Array.isArray(records)) {
+    records = data.record ? [data.record] : [];
+  }
+
+  var existing = sheet.getDataRange().getValues();
+  var keyMap = {};
+  for (var r = 1; r < existing.length; r++) {
+    var k = String(existing[r][0] || "").trim().toLowerCase();
+    if (k) keyMap[k] = r + 1;
+  }
+
+  var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var saved = 0;
+  for (var i = 0; i < records.length; i++) {
+    var rec = records[i];
+    if (!rec || !rec.userId) continue;
+    var pKey = String(rec.payrollKey || (String(rec.monthKey || "cur") + "::" + String(rec.userId))).trim();
+    var rowArr = [
+      pKey,
+      String(rec.monthKey || ""),
+      String(rec.monthName || ""),
+      String(rec.userId || ""),
+      String(rec.name || ""),
+      String(rec.role || ""),
+      String(rec.mobile || ""),
+      Number(rec.workingDays || 0),
+      Number(rec.presentDays || 0),
+      Number(rec.absentDays || 0),
+      Number(rec.halfDays || 0),
+      Number(rec.lateDays || 0),
+      Number(rec.totalLateMinutes || 0),
+      Number(rec.extraOvertimeHours || 0),
+      Number(rec.extraDutyDays || 0),
+      Number(rec.baseSalary || 0),
+      Number(rec.totalAdditions || 0),
+      Number(rec.totalDeductions || 0),
+      Number(rec.netPayable || 0),
+      String(rec.savedAt || nowStr)
+    ];
+    var tRow = keyMap[pKey.toLowerCase()];
+    if (tRow) {
+      sheet.getRange(tRow, 1, 1, 20).setValues([rowArr]);
+    } else {
+      sheet.appendRow(rowArr);
+      keyMap[pKey.toLowerCase()] = sheet.getLastRow();
+    }
+    saved++;
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Staff_Salary_Payroll backed up (" + saved + " payslips)!",
+    count: saved
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+// =========================================================================
+// FEATURE 6 BACKUP: UPI_Settings & UPI_Payments HANDLERS
+// =========================================================================
+function handleGetUpiSettings(ss) {
+  var sheet = findExistingSheet_(ss, ["UPI_Settings", "UPI Settings"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", settings: null })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  if (rows.length < 2) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", settings: null })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var r = rows[1];
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    settings: {
+      upiId: String(r[1] || ""),
+      payeeName: String(r[2] || "E.V.S. Public School"),
+      bankName: String(r[3] || ""),
+      instructions: String(r[4] || ""),
+      updatedAt: String(r[6] || "")
+    }
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveUpiSettings(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["UPI_Settings", "UPI Settings"]);
+  var s = data.settings || data;
+  if (typeof s === "string") {
+    try { s = JSON.parse(s); } catch(e) { s = data; }
+  }
+  var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var rowArr = [
+    "SCHOOL_UPI",
+    String(s.upiId || ""),
+    String(s.payeeName || "E.V.S. Public School"),
+    String(s.bankName || ""),
+    String(s.instructions || ""),
+    (s.hasStaticQr || (s.staticQrImage && String(s.staticQrImage).length > 10)) ? "YES" : "NO",
+    String(s.updatedAt || nowStr)
+  ];
+  if (sheet.getLastRow() >= 2) {
+    sheet.getRange(2, 1, 1, 7).setValues([rowArr]);
+  } else {
+    sheet.appendRow(rowArr);
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "UPI_Settings backed up to Google Sheet!"
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetUpiPayments(ss) {
+  var sheet = findExistingSheet_(ss, ["UPI_Payments", "UPI Payments", "UPI_Payment_Logs"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", payments: [] })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var list = [];
+  for (var r = 1; r < rows.length; r++) {
+    var row = rows[r];
+    if (!row[0]) continue;
+    list.push({
+      id: String(row[0] || ""),
+      createdAt: String(row[1] || ""),
+      studentId: String(row[2] || ""),
+      studentName: String(row[3] || ""),
+      className: String(row[4] || ""),
+      parentMobile: String(row[5] || ""),
+      payerName: String(row[6] || ""),
+      amount: Number(row[7] || 0),
+      feeType: String(row[8] || "Monthly Tuition Fee"),
+      month: String(row[9] || ""),
+      utrNumber: String(row[10] || ""),
+      paymentApp: String(row[11] || "UPI"),
+      paymentDate: String(row[12] || ""),
+      notes: String(row[13] || ""),
+      status: String(row[14] || "Pending"),
+      receiptNumber: String(row[15] || ""),
+      managerNote: String(row[16] || ""),
+      verifiedBy: String(row[17] || ""),
+      verifiedAt: String(row[18] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", payments: list })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function upsertUpiPaymentRow(sheet, p) {
+  var pid = String(p.id || "").trim();
+  if (!pid) return;
+  var rows = sheet.getDataRange().getValues();
+  var tRow = -1;
+  for (var r = 1; r < rows.length; r++) {
+    if (String(rows[r][0] || "").trim() === pid) {
+      tRow = r + 1;
+      break;
+    }
+  }
+  var rowArr = [
+    pid,
+    String(p.createdAt || ""),
+    String(p.studentId || ""),
+    String(p.studentName || ""),
+    String(p.className || ""),
+    String(p.parentMobile || ""),
+    String(p.payerName || ""),
+    Number(p.amount || 0),
+    String(p.feeType || "Monthly Tuition Fee"),
+    String(p.month || ""),
+    String(p.utrNumber || ""),
+    String(p.paymentApp || "UPI"),
+    String(p.paymentDate || ""),
+    String(p.notes || ""),
+    String(p.status || "Pending"),
+    String(p.receiptNumber || ""),
+    String(p.managerNote || ""),
+    String(p.verifiedBy || ""),
+    String(p.verifiedAt || ""),
+    (p.hasScreenshot || (p.screenshotData && String(p.screenshotData).length > 10)) ? "YES" : "NO"
+  ];
+  if (tRow > 0) {
+    sheet.getRange(tRow, 1, 1, 20).setValues([rowArr]);
+  } else {
+    sheet.appendRow(rowArr);
+  }
+}
+
+function handleSaveUpiPayment(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["UPI_Payments", "UPI Payments", "UPI_Payment_Logs"]);
+  var p = data.payment || data;
+  if (typeof p === "string") {
+    try { p = JSON.parse(p); } catch(e) { p = data; }
+  }
+  upsertUpiPaymentRow(sheet, p);
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "UPI payment backed up to UPI_Payments sheet!",
+    id: p.id
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleVerifyUpiPayment(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["UPI_Payments", "UPI Payments", "UPI_Payment_Logs"]);
+  var p = data.payment || data;
+  if (typeof p === "string") {
+    try { p = JSON.parse(p); } catch(e) { p = data; }
+  }
+  if (p && p.studentId) {
+    upsertUpiPaymentRow(sheet, p);
+  } else if (p && p.id) {
+    var rows = sheet.getDataRange().getValues();
+    for (var r = 1; r < rows.length; r++) {
+      if (String(rows[r][0] || "").trim() === String(p.id).trim()) {
+        sheet.getRange(r + 1, 15, 1, 5).setValues([[
+          String(p.status || "Approved"),
+          String(p.receiptNumber || ""),
+          String(p.managerNote || ""),
+          String(p.verifiedBy || "School Manager"),
+          String(p.verifiedAt || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss"))
+        ]]);
+        break;
+      }
+    }
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "UPI verification status updated in UPI_Payments sheet!"
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSyncAllUpiPayments(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["UPI_Payments", "UPI Payments", "UPI_Payment_Logs"]);
+  if (data.settings) {
+    handleSaveUpiSettings(ss, { settings: data.settings });
+  }
+  var payments = data.payments;
+  if (typeof payments === "string") {
+    try { payments = JSON.parse(payments); } catch(e) { payments = []; }
+  }
+  if (!Array.isArray(payments)) payments = [];
+  for (var i = 0; i < payments.length; i++) {
+    upsertUpiPaymentRow(sheet, payments[i]);
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "UPI_Payments & UPI_Settings synced (" + payments.length + " records)!",
+    count: payments.length
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+// =========================================================================
+// REPORT CARD BACKUP: Exam_Marks & Report_Cards_Backup HANDLERS
+// =========================================================================
+function handleGetExamMarks(ss) {
+  var sheet = findExistingSheet_(ss, ["Exam_Marks", "Exam Marks", "ExamMarks"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", marks: [] })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var list = [];
+  for (var r = 1; r < rows.length; r++) {
+    var row = rows[r];
+    if (!row[0] && !row[3]) continue;
+    list.push({
+      id: String(row[0] || ""),
+      session: String(row[1] || "2026-27"),
+      exam_type: String(row[2] || "Quarterly"),
+      student_id: String(row[3] || ""),
+      student_name: String(row[4] || ""),
+      class_name: String(row[5] || ""),
+      subject: String(row[6] || ""),
+      max_marks: Number(row[7] || 50),
+      marks_obtained: Number(row[8] || 0),
+      attendance_status: String(row[9] || "Present") === "Absent" ? "Absent" : "Present",
+      teacher_id: String(row[10] || ""),
+      teacher_name: String(row[11] || ""),
+      remarks: String(row[12] || ""),
+      updated_at: String(row[13] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", marks: list })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function upsertExamMarksArray(sheet, records) {
+  if (!Array.isArray(records) || records.length === 0) return 0;
+  var rows = sheet.getDataRange().getValues();
+  var idMap = {};
+  var compositeMap = {};
+  for (var r = 1; r < rows.length; r++) {
+    var rId = String(rows[r][0] || "").trim().toLowerCase();
+    var compKey = [
+      String(rows[r][1] || "2026-27").trim().toLowerCase(),
+      String(rows[r][2] || "").trim().toLowerCase(),
+      String(rows[r][3] || "").trim().toLowerCase(),
+      String(rows[r][6] || "").trim().toLowerCase()
+    ].join("::");
+    if (rId) idMap[rId] = r + 1;
+    if (rows[r][3] && rows[r][6]) compositeMap[compKey] = r + 1;
+  }
+
+  var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var count = 0;
+  for (var i = 0; i < records.length; i++) {
+    var rec = records[i];
+    if (!rec || !rec.student_id || !rec.subject) continue;
+    var markId = String(rec.id || ("EM-" + Date.now() + "-" + i)).trim();
+    var sess = String(rec.session || "2026-27").trim();
+    var exType = String(rec.exam_type || "Quarterly").trim();
+    var sId = String(rec.student_id || "").trim();
+    var subj = String(rec.subject || "").trim();
+    var comp = [sess.toLowerCase(), exType.toLowerCase(), sId.toLowerCase(), subj.toLowerCase()].join("::");
+    var rowArr = [
+      markId,
+      sess,
+      exType,
+      sId,
+      String(rec.student_name || ""),
+      String(rec.class_name || ""),
+      subj,
+      Number(rec.max_marks || 50),
+      Number(rec.marks_obtained || 0),
+      String(rec.attendance_status || "Present") === "Absent" ? "Absent" : "Present",
+      String(rec.teacher_id || ""),
+      String(rec.teacher_name || ""),
+      String(rec.remarks || ""),
+      String(rec.updated_at || nowStr)
+    ];
+    var targetRow = idMap[markId.toLowerCase()] || compositeMap[comp];
+    if (targetRow) {
+      sheet.getRange(targetRow, 1, 1, 14).setValues([rowArr]);
+    } else {
+      sheet.appendRow(rowArr);
+      var lastR = sheet.getLastRow();
+      idMap[markId.toLowerCase()] = lastR;
+      compositeMap[comp] = lastR;
+    }
+    count++;
+  }
+  return count;
+}
+
+function handleSaveExamMarksBatch(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Exam_Marks", "Exam Marks", "ExamMarks"]);
+  var records = data.records;
+  if (typeof records === "string") {
+    try { records = JSON.parse(records); } catch(e) { records = []; }
+  }
+  if (!Array.isArray(records)) records = data.record ? [data.record] : [];
+  var count = upsertExamMarksArray(sheet, records);
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Exam_Marks backed up (" + count + " records)!",
+    count: count
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleDeleteExamMark(ss, data) {
+  var sheet = findExistingSheet_(ss, ["Exam_Marks", "Exam Marks", "ExamMarks"]);
+  if (!sheet) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", deleted: false })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var targetId = String(data.id || data.mark_id || "").trim().toLowerCase();
+  var rows = sheet.getDataRange().getValues();
+  var deleted = false;
+  for (var r = rows.length - 1; r >= 1; r--) {
+    if (String(rows[r][0] || "").trim().toLowerCase() === targetId) {
+      sheet.deleteRow(r + 1);
+      deleted = true;
+      break;
+    }
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", deleted: deleted })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetReportCardMeta(ss) {
+  var sheet = findExistingSheet_(ss, ["Report_Cards_Backup", "Report Cards Backup", "Report_Cards", "ReportCardsBackup"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", meta: {} })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var meta = {};
+  for (var r = 1; r < rows.length; r++) {
+    var row = rows[r];
+    var rKey = String(row[0] || "").trim();
+    if (!rKey) continue;
+    var pubRaw = String(row[18] || "YES").trim().toUpperCase();
+    meta[rKey] = {
+      reportKey: rKey,
+      session: String(row[1] || "2026-27"),
+      studentId: String(row[2] || ""),
+      teacherRemark: String(row[15] || ""),
+      principalRemark: String(row[16] || ""),
+      resultStatus: String(row[17] || "PROMOTED"),
+      publishedToParent: pubRaw !== "FALSE" && pubRaw !== "NO" && pubRaw !== "HIDDEN",
+      updatedBy: String(row[19] || ""),
+      updatedAt: String(row[20] || "")
+    };
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", meta: meta })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveReportCardMeta(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Report_Cards_Backup", "Report Cards Backup", "Report_Cards", "ReportCardsBackup"]);
+  var m = data.meta || data;
+  if (typeof m === "string") {
+    try { m = JSON.parse(m); } catch(e) { m = data; }
+  }
+  var rKey = String(m.reportKey || ((m.session || "2026-27") + "::" + (m.studentId || ""))).trim();
+  if (!rKey || rKey.endsWith("::")) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "reportKey required" })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var tRow = -1;
+  for (var r = 1; r < rows.length; r++) {
+    if (String(rows[r][0] || "").trim().toLowerCase() === rKey.toLowerCase()) {
+      tRow = r + 1;
+      break;
+    }
+  }
+  var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var pubStr = (m.publishedToParent === false) ? "NO" : "YES";
+  if (tRow > 0) {
+    sheet.getRange(tRow, 16, 1, 6).setValues([[
+      String(m.teacherRemark || ""),
+      String(m.principalRemark || ""),
+      String(m.resultStatus || "PROMOTED"),
+      pubStr,
+      String(m.updatedBy || "Staff"),
+      String(m.updatedAt || nowStr)
+    ]]);
+  } else {
+    sheet.appendRow([
+      rKey,
+      String(m.session || "2026-27"),
+      String(m.studentId || ""),
+      String(m.studentName || ""),
+      String(m.className || ""),
+      String(m.rollNumber || ""),
+      "", "", "", "", "", "", "", "", "",
+      String(m.teacherRemark || ""),
+      String(m.principalRemark || ""),
+      String(m.resultStatus || "PROMOTED"),
+      pubStr,
+      String(m.updatedBy || "Staff"),
+      String(m.updatedAt || nowStr)
+    ]);
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Report card remarks backed up in Report_Cards_Backup!",
+    reportKey: rKey
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSyncReportCardsBatch(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var emSheet = findExistingSheet_(ss, ["Exam_Marks", "Exam Marks", "ExamMarks"]);
+  var rcSheet = findExistingSheet_(ss, ["Report_Cards_Backup", "Report Cards Backup", "Report_Cards", "ReportCardsBackup"]);
+
+  var examMarks = data.examMarks;
+  if (typeof examMarks === "string") {
+    try { examMarks = JSON.parse(examMarks); } catch(e) { examMarks = []; }
+  }
+  var emCount = upsertExamMarksArray(emSheet, examMarks || []);
+
+  var backups = data.backups;
+  if (typeof backups === "string") {
+    try { backups = JSON.parse(backups); } catch(e) { backups = []; }
+  }
+  if (!Array.isArray(backups)) backups = [];
+
+  var existing = rcSheet.getDataRange().getValues();
+  var keyMap = {};
+  for (var r = 1; r < existing.length; r++) {
+    var k = String(existing[r][0] || "").trim().toLowerCase();
+    if (k) keyMap[k] = r + 1;
+  }
+
+  var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var rcCount = 0;
+  for (var i = 0; i < backups.length; i++) {
+    var b = backups[i];
+    if (!b || !b.reportKey) continue;
+    var rKey = String(b.reportKey).trim();
+    var rowArr = [
+      rKey,
+      String(b.session || "2026-27"),
+      String(b.studentId || ""),
+      String(b.studentName || ""),
+      String(b.className || ""),
+      String(b.rollNumber || ""),
+      Number(b.weeklyPct || 0),
+      Number(b.quarterlyPct || 0),
+      Number(b.halfYearlyPct || 0),
+      Number(b.annualPct || 0),
+      Number(b.overallPct || 0),
+      String(b.grade || "-"),
+      Number(b.attendancePct || 0),
+      Number(b.presentDays || 0),
+      Number(b.totalDays || 0),
+      String(b.teacherRemark || ""),
+      String(b.principalRemark || ""),
+      String(b.resultStatus || "PROMOTED"),
+      (b.publishedToParent === false) ? "NO" : "YES",
+      String(b.updatedBy || "Manager"),
+      String(b.updatedAt || nowStr)
+    ];
+    var tRow = keyMap[rKey.toLowerCase()];
+    if (tRow) {
+      rcSheet.getRange(tRow, 1, 1, 21).setValues([rowArr]);
+    } else {
+      rcSheet.appendRow(rowArr);
+      keyMap[rKey.toLowerCase()] = rcSheet.getLastRow();
+    }
+    rcCount++;
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Exam_Marks (" + emCount + ") और Report_Cards_Backup (" + rcCount + ") सफलतापूर्वक बैकअप हुए!",
+    examMarksCount: emCount,
+    reportCardsCount: rcCount
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+// =========================================================================
+// WEEKLY TESTS, TEACHER PERFORMANCE, SYLLABUS & HOLIDAYS (2-WAY SYNC)
+// =========================================================================
+function formatCellMonth_(val) {
+  if (!val) return "";
+  if (Object.prototype.toString.call(val) === "[object Date]") {
+    return Utilities.formatDate(val, Session.getScriptTimeZone() || "Asia/Kolkata", "yyyy-MM");
+  }
+  var s = String(val).trim();
+  return s.length >= 7 ? s.slice(0, 7) : s;
+}
+
+function formatCellDate_(val) {
+  if (!val) return "";
+  if (Object.prototype.toString.call(val) === "[object Date]") {
+    return Utilities.formatDate(val, Session.getScriptTimeZone() || "Asia/Kolkata", "yyyy-MM-dd");
+  }
+  var s = String(val).trim();
+  if (/^[0-9]{4}-[0-9]{2}-[0-9]{2}/.test(s)) return s.slice(0, 10);
+  return s;
+}
+
+function isHolidayDateFirst_(sheet) {
+  var lastCol = sheet.getLastColumn();
+  if (sheet.getLastRow() < 1 || lastCol < 4) return false;
+  var hdr = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  var colB = String(hdr[1] || "").toLowerCase();
+  return colB.indexOf("date") !== -1;
+}
+
+function handleDeleteRowById_(ss, sheetName, id) {
+  var sheet = ss.getSheetByName(sheetName);
+  if (!sheet || !id) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", deleted: false })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var targetId = String(id).trim().toLowerCase();
+  var rows = sheet.getDataRange().getValues();
+  var deleted = false;
+  for (var i = rows.length - 1; i >= 1; i--) {
+    if (String(rows[i][0] || "").trim().toLowerCase() === targetId) {
+      sheet.deleteRow(i + 1);
+      deleted = true;
+      break;
+    }
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", deleted: deleted, id: id })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleDeleteHomework(ss, data) {
+  var sheet = ss.getSheetByName("Homework");
+  if (!sheet) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", deleted: false })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var targetId = String(data.homework_id || data.id || "").trim().toLowerCase();
+  var targetDate = String(data.date || "").trim();
+  var targetClass = String(data.class_name || data.class || "").trim().toLowerCase();
+  var targetSubj = String(data.subject || "").trim().toLowerCase();
+  var rows = sheet.getDataRange().getValues();
+  var deleted = false;
+  for (var i = rows.length - 1; i >= 1; i--) {
+    var rId = String(rows[i][0] || "").trim().toLowerCase();
+    var rDate = formatCellDate_(rows[i][1]);
+    var rClass = String(rows[i][2] || "").trim().toLowerCase();
+    var rSubj = String(rows[i][3] || "").trim().toLowerCase();
+    if ((targetId && rId === targetId) ||
+        (targetDate && rDate === targetDate && targetClass && rClass === targetClass && targetSubj && rSubj === targetSubj)) {
+      sheet.deleteRow(i + 1);
+      deleted = true;
+    }
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", deleted: deleted })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetWeeklyTests(ss) {
+  var sheet = findExistingSheet_(ss, ["Weekly_Tests", "Weekly Tests", "Weekly_Subject_Tests"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", tests: [] })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var tests = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r[0] && !r[10] && !r[11]) continue;
+    tests.push({
+      id: String(r[0] || ("wt_" + i)),
+      test_session_id: String(r[1] || ""),
+      teacher_id: String(r[2] || ""),
+      teacher_name: String(r[3] || ""),
+      class_name: String(r[4] || ""),
+      month: formatCellMonth_(r[5]),
+      week_number: Number(r[6] || 1),
+      test_date: formatCellDate_(r[7]),
+      subject: String(r[8] || ""),
+      topic_name: String(r[9] || ""),
+      student_id: String(r[10] || ""),
+      student_name: String(r[11] || ""),
+      max_marks: Number(r[12] || 20),
+      marks_obtained: Number(r[13] || 0),
+      attendance_status: String(r[14] || "Present") === "Absent" ? "Absent" : "Present",
+      remarks: String(r[15] || ""),
+      timestamp: String(r[16] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", tests: tests })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveWeeklyTestsBatch(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Weekly_Tests", "Weekly Tests", "Weekly_Subject_Tests"]);
+  var records = data.records;
+  if (typeof records === "string") {
+    try { records = JSON.parse(records); } catch(e) { records = []; }
+  }
+  if (!Array.isArray(records)) {
+    var single = data.record ? (typeof data.record === "string" ? JSON.parse(data.record) : data.record) : data;
+    records = (single && (single.student_id || single.student_name)) ? [single] : [];
+  }
+  var rows = sheet.getDataRange().getValues();
+  var idMap = {};
+  for (var r = 1; r < rows.length; r++) {
+    var rId = String(rows[r][0] || "").trim().toLowerCase();
+    if (rId) idMap[rId] = r + 1;
+  }
+  var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var saved = 0;
+  for (var i = 0; i < records.length; i++) {
+    var rec = records[i];
+    if (!rec || (!rec.student_id && !rec.student_name)) continue;
+    var recId = String(rec.id || ("wt_" + Date.now() + "_" + i)).trim();
+    var rowArr = [
+      recId,
+      String(rec.test_session_id || ""),
+      String(rec.teacher_id || ""),
+      String(rec.teacher_name || ""),
+      String(rec.class_name || ""),
+      "'" + String(rec.month || ""),
+      Number(rec.week_number || 1),
+      "'" + String(rec.test_date || ""),
+      String(rec.subject || ""),
+      String(rec.topic_name || ""),
+      String(rec.student_id || ""),
+      String(rec.student_name || ""),
+      Number(rec.max_marks || 20),
+      Number(rec.marks_obtained || 0),
+      String(rec.attendance_status || "Present") === "Absent" ? "Absent" : "Present",
+      String(rec.remarks || ""),
+      String(rec.timestamp || nowStr)
+    ];
+    var tRow = idMap[recId.toLowerCase()];
+    if (tRow) {
+      sheet.getRange(tRow, 1, 1, 17).setValues([rowArr]);
+    } else {
+      sheet.appendRow(rowArr);
+      idMap[recId.toLowerCase()] = sheet.getLastRow();
+    }
+    saved++;
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Weekly_Tests backed up (" + saved + " entries)!",
+    count: saved
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetTeacherPerformance(ss) {
+  var sheet = findExistingSheet_(ss, ["Teacher_Performance", "Teacher Performance"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", records: [] })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var records = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r[0] && !r[1]) continue;
+    records.push({
+      id: String(r[0] || ("tp_" + i)),
+      teacher_id: String(r[1] || ""),
+      teacher_name: String(r[2] || ""),
+      assigned_class: String(r[3] || ""),
+      month: formatCellMonth_(r[4]),
+      academic_year: String(r[5] || "2026-2027"),
+      syllabus_progress_score: Number(r[6] || 0),
+      student_test_score: Number(r[7] || 0),
+      attendance_logging_score: Number(r[8] || 0),
+      homework_evaluation_score: Number(r[9] || 0),
+      punctuality_discipline_score: Number(r[10] || 0),
+      monthly_total_score: Number(r[11] || 0),
+      grade: String(r[12] || "B"),
+      evaluated_by: String(r[13] || "Principal / Manager"),
+      remarks: String(r[14] || ""),
+      timestamp: String(r[15] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", records: records })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveTeacherPerformance(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Teacher_Performance", "Teacher Performance"]);
+  var rec = data.record ? (typeof data.record === "string" ? JSON.parse(data.record) : data.record) : data;
+  var recordId = String(rec.id || ("tp_" + rec.month + "_" + rec.teacher_id));
+  var rows = sheet.getDataRange().getValues();
+  var rowIndex = -1;
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]) === recordId || (String(rows[i][1]) === String(rec.teacher_id) && formatCellMonth_(rows[i][4]) === String(rec.month))) {
+      rowIndex = i + 1;
+      break;
+    }
+  }
+  var rowData = [
+    recordId, rec.teacher_id || "", rec.teacher_name || "", rec.assigned_class || "",
+    "'" + String(rec.month || ""), rec.academic_year || "2026-2027",
+    Number(rec.syllabus_progress_score || 0), Number(rec.student_test_score || 0),
+    Number(rec.attendance_logging_score || 0), Number(rec.homework_evaluation_score || 0),
+    Number(rec.punctuality_discipline_score || 0), Number(rec.monthly_total_score || 0),
+    rec.grade || "B", rec.evaluated_by || "Principal / Manager", rec.remarks || "", new Date()
+  ];
+  if (rowIndex > 0) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
+  else sheet.appendRow(rowData);
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "Teacher performance saved!" })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetSyllabusTracker(ss) {
+  var sheet = findExistingSheet_(ss, ["Syllabus_Tracker", "Syllabus Tracker"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", topics: [] })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var topics = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r[0] && !r[8] && !r[9]) continue;
+    topics.push({
+      id: String(r[0] || ("syl_" + i)),
+      teacher_id: String(r[1] || ""),
+      teacher_name: String(r[2] || ""),
+      class_name: String(r[3] || ""),
+      subject: String(r[4] || ""),
+      month: formatCellMonth_(r[5]),
+      week_number: Number(r[6] || 1),
+      week_label: String(r[7] || ""),
+      chapter_title: String(r[8] || ""),
+      topic_description: String(r[9] || ""),
+      planned_date: formatCellDate_(r[10]),
+      target_completion_date: formatCellDate_(r[11]),
+      completed_date: formatCellDate_(r[12]),
+      status: String(r[13] || "Pending"),
+      timestamp: String(r[14] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", topics: topics })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveSyllabusTopic(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Syllabus_Tracker", "Syllabus Tracker"]);
+  var t = data.topic ? (typeof data.topic === "string" ? JSON.parse(data.topic) : data.topic) : data;
+  var topicId = String(t.id || ("syl_" + Date.now()));
+  var rows = sheet.getDataRange().getValues();
+  var rowIndex = -1;
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]) === topicId) { rowIndex = i + 1; break; }
+  }
+  var rowData = [
+    topicId, t.teacher_id || "", t.teacher_name || "", t.class_name || "", t.subject || "",
+    "'" + String(t.month || ""), Number(t.week_number || 1), t.week_label || "",
+    t.chapter_title || "", t.topic_description || "", t.planned_date || "",
+    t.target_completion_date || "", t.completed_date || "", t.status || "Pending", new Date()
+  ];
+  if (rowIndex > 0) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
+  else sheet.appendRow(rowData);
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "Syllabus topic saved!" })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetSchoolHolidays(ss) {
+  var sheet = findExistingSheet_(ss, ["School_Holidays", "School Holidays", "Holidays"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", holidays: [] })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var dateFirst = isHolidayDateFirst_(sheet);
+  var holidays = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r[1] && !r[2]) continue;
+    holidays.push({
+      id: String(r[0] || ("hol_" + i)),
+      title: String((dateFirst ? r[3] : r[1]) || ""),
+      date: formatCellDate_(dateFirst ? r[1] : r[2]),
+      end_date: formatCellDate_(dateFirst ? r[2] : r[3]),
+      category: String(r[4] || "festival"),
+      description: String(r[5] || ""),
+      timestamp: String(r[6] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", holidays: holidays })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveSchoolHoliday(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["School_Holidays", "School Holidays", "Holidays"]);
+  var h = data.holiday ? (typeof data.holiday === "string" ? JSON.parse(data.holiday) : data.holiday) : data;
+  var holId = String(h.id || ("hol_" + Date.now()));
+  var dateFirst = isHolidayDateFirst_(sheet);
+  var rows = sheet.getDataRange().getValues();
+  var rowIndex = -1;
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]) === holId) { rowIndex = i + 1; break; }
+  }
+  var rowData = dateFirst
+    ? [holId, "'" + String(h.date || ""), h.end_date ? ("'" + String(h.end_date)) : "", h.title || "", h.category || "festival", h.description || "", new Date()]
+    : [holId, h.title || "", "'" + String(h.date || ""), h.end_date ? ("'" + String(h.end_date)) : "", h.category || "festival", h.description || "", new Date()];
+  if (rowIndex > 0) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
+  else sheet.appendRow(rowData);
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "Holiday saved!" })).setMimeType(ContentService.MimeType.JSON);
 }
 `;
 

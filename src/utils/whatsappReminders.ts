@@ -1,4 +1,91 @@
-// Clean 1-Click WhatsApp Reminder Helpers for E.V.S. Public School
+// Clean 1-Click WhatsApp Reminder Helpers + Automatic Google Sheet Backup Logger
+import { getAppsScriptUrl } from './busTrackingService';
+import { dualSyncWriteToSheet } from './sheetDirectSync';
+
+export interface WhatsappAlertLog {
+  id: string;
+  date: string;
+  time: string;
+  alertType: 'Absent Alert' | 'Fee Due Reminder' | 'Staff Salary Slip' | 'WhatsApp Alert';
+  recipientType: 'Parent' | 'Staff';
+  recipientId: string;
+  recipientName: string;
+  classOrRole: string;
+  mobile: string;
+  amount: number;
+  summary: string;
+  sentBy: string;
+}
+
+const WA_LOG_STORAGE_KEY = 'evs_whatsapp_alert_logs_v1';
+
+export const loadLocalWhatsappLogs = (): WhatsappAlertLog[] => {
+  try {
+    const raw = localStorage.getItem(WA_LOG_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return [];
+};
+
+export const saveLocalWhatsappLogs = (list: WhatsappAlertLog[]) => {
+  try {
+    localStorage.setItem(WA_LOG_STORAGE_KEY, JSON.stringify(list.slice(0, 300)));
+  } catch {}
+};
+
+export const fetchWhatsappLogsFromServer = async (forceRefresh = false): Promise<WhatsappAlertLog[]> => {
+  try {
+    const res = await fetch(`/api/whatsapp-logs${forceRefresh ? '?refresh=1' : ''}`, {
+      headers: { 'x-apps-script-url': getAppsScriptUrl() },
+      cache: 'no-store',
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data?.logs)) {
+        saveLocalWhatsappLogs(data.logs);
+        return data.logs;
+      }
+    }
+  } catch {}
+  return loadLocalWhatsappLogs();
+};
+
+export const logWhatsappAlertBackup = async (
+  meta: Partial<WhatsappAlertLog> & { mobile?: string; summary?: string }
+): Promise<{ sheetSynced: boolean; sheetError?: string }> => {
+  const now = new Date();
+  const entry: WhatsappAlertLog = {
+    id: `WA-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    date: now.toISOString().split('T')[0],
+    time: now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+    alertType: meta.alertType || 'WhatsApp Alert',
+    recipientType: meta.recipientType || 'Parent',
+    recipientId: String(meta.recipientId || '').trim(),
+    recipientName: String(meta.recipientName || '').trim(),
+    classOrRole: String(meta.classOrRole || '').trim(),
+    mobile: normalizeWhatsappDigits(meta.mobile || '') || String(meta.mobile || '').trim(),
+    amount: Number(meta.amount || 0),
+    summary: String(meta.summary || '').trim().slice(0, 280),
+    sentBy: String(meta.sentBy || 'Manager').trim(),
+  };
+
+  const prev = loadLocalWhatsappLogs();
+  saveLocalWhatsappLogs([entry, ...prev]);
+
+  const syncRes = await dualSyncWriteToSheet({
+    apiPath: '/api/whatsapp-logs',
+    apiBody: { log: entry },
+    directPayload: {
+      action: 'logWhatsappAlert',
+      log: entry,
+    },
+  });
+
+  return { sheetSynced: syncRes.sheetSynced, sheetError: syncRes.sheetError };
+};
 
 export const normalizeWhatsappDigits = (rawPhone?: string | number | null): string => {
   const digits = String(rawPhone || '').replace(/\D/g, '');
@@ -17,9 +104,21 @@ export const buildWhatsappUrl = (rawPhone: string | number | undefined | null, m
     : `https://wa.me/?text=${encoded}`;
 };
 
-export const openWhatsappAlert = (rawPhone: string | number | undefined | null, message: string) => {
+export const openWhatsappAlert = (
+  rawPhone: string | number | undefined | null,
+  message: string,
+  backupMeta?: Partial<WhatsappAlertLog>
+) => {
   const url = buildWhatsappUrl(rawPhone, message);
   window.open(url, '_blank', 'noopener,noreferrer');
+
+  if (backupMeta) {
+    logWhatsappAlertBackup({
+      ...backupMeta,
+      mobile: String(rawPhone || backupMeta.mobile || ''),
+      summary: backupMeta.summary || message.replace(/\*/g, '').slice(0, 200),
+    }).catch(() => {});
+  }
 };
 
 export const buildAbsentAlertMessage = (params: {

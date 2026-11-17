@@ -22,6 +22,8 @@ import {
   getDefaultStaffSalaryConfig,
   calculateStaffMonthlySalary,
   StaffSalaryCalculation,
+  syncAllPayrollBackupToSheet,
+  StaffPayrollBackupRecord,
 } from '../utils/staffSalaryHelper';
 import { openWhatsappAlert } from '../utils/whatsappReminders';
 
@@ -68,6 +70,8 @@ export const StaffMonthlyReportView: React.FC<StaffMonthlyReportViewProps> = ({
   const [salaryForm, setSalaryForm] = useState<StaffSalaryConfig | null>(null);
   const [savingSalaryConfig, setSavingSalaryConfig] = useState<boolean>(false);
   const [paySlipStaff, setPaySlipStaff] = useState<StaffMonthlyReport | null>(null);
+  const [syncingPayrollBackup, setSyncingPayrollBackup] = useState<boolean>(false);
+  const [payrollSyncBanner, setPayrollSyncBanner] = useState<{ ok: boolean; msg: string } | null>(null);
 
   // Selected staff user for individual report (Staff only sees themselves, Manager sees all staff)
   const staffList = useMemo(() => {
@@ -1322,6 +1326,99 @@ export const StaffMonthlyReportView: React.FC<StaffMonthlyReportViewProps> = ({
 
                     {isManager && (
                       <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={syncingPayrollBackup || rows.length === 0}
+                          onClick={async () => {
+                            setSyncingPayrollBackup(true);
+                            setPayrollSyncBanner(null);
+                            try {
+                              const payloadRecords: StaffPayrollBackupRecord[] = rows.map(({ rep, calc }) => ({
+                                payrollKey: `${rep.monthKey}::${rep.userId}`,
+                                monthKey: rep.monthKey,
+                                monthName: rep.monthName,
+                                userId: rep.userId,
+                                name: rep.name,
+                                role: rep.designation,
+                                mobile: String(rep.mobile || ''),
+                                workingDays: rep.workingDays,
+                                presentDays: rep.presentDays,
+                                absentDays: rep.absentDays,
+                                halfDays: rep.halfDays,
+                                lateDays: rep.lateDays,
+                                totalLateMinutes: rep.totalLateMinutes,
+                                extraOvertimeHours: rep.extraOvertimeHours,
+                                extraDutyDays: rep.extraDutyDays,
+                                baseSalary: calc.baseSalary,
+                                totalAdditions: calc.totalAdditions,
+                                totalDeductions: calc.totalDeductions,
+                                netPayable: calc.netPayable,
+                                savedAt: new Date().toISOString(),
+                              }));
+                              const res = await syncAllPayrollBackupToSheet({
+                                records: payloadRecords,
+                                configs: salaryConfigs,
+                              });
+                              if (res.sheetSynced) {
+                                setPayrollSyncBanner({
+                                  ok: true,
+                                  msg: `✅ ${payloadRecords.length} स्टाफ का वेतन डेटा 'Staff_Salary_Payroll' व 'Staff_Salary_Config' Google Sheet टैब में बैकअप हो गया!`,
+                                });
+                              } else {
+                                setPayrollSyncBanner({
+                                  ok: false,
+                                  msg: `⚠️ सर्वर पर सेव हो गया, पर Google Sheet में नहीं गया (${res.sheetError || 'कृपया नया Apps Script कोड Deploy करें'})`,
+                                });
+                              }
+                            } finally {
+                              setSyncingPayrollBackup(false);
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs cursor-pointer"
+                          title="इस माह का पूरा वेतन रजिस्टर Google Sheet (Staff_Salary_Payroll) में बैकअप करें"
+                        >
+                          <i className={`fa-solid ${syncingPayrollBackup ? 'fa-spinner fa-spin' : 'fa-cloud-arrow-up'}`}></i>
+                          <span>{syncingPayrollBackup ? 'सिंक हो रहा है...' : 'Sheet में बैकअप'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const headers = ['Staff_Name', 'Role', 'Month', 'Working_Days', 'Present', 'Absent', 'Half_Days', 'Late_Days', 'Late_Min', 'Overtime_Hrs', 'Base_Salary', 'Additions', 'Deductions', 'Net_Payable'];
+                            const csvLines = [headers.join(',')];
+                            rows.forEach(({ rep, calc }) => {
+                              csvLines.push(
+                                [
+                                  `"${String(rep.name || '').replace(/"/g, '""')}"`,
+                                  `"${String(rep.designation || '').replace(/"/g, '""')}"`,
+                                  `"${String(rep.monthName || '')}"`,
+                                  rep.workingDays,
+                                  rep.presentDays,
+                                  rep.absentDays,
+                                  rep.halfDays,
+                                  rep.lateDays,
+                                  rep.totalLateMinutes,
+                                  rep.extraOvertimeHours,
+                                  calc.baseSalary,
+                                  calc.totalAdditions,
+                                  calc.totalDeductions,
+                                  calc.netPayable,
+                                ].join(',')
+                              );
+                            });
+                            const blob = new Blob([csvLines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+                            const link = document.createElement('a');
+                            link.href = URL.createObjectURL(blob);
+                            link.download = `EVS_Staff_Payroll_${selectedMonth}.csv`;
+                            link.click();
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                          title="Excel/CSV बैकअप डाउनलोड करें"
+                        >
+                          <i className="fa-solid fa-file-csv text-emerald-700"></i>
+                          <span>CSV बैकअप</span>
+                        </button>
+
                         <div className="relative">
                           <i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
                           <input
@@ -1329,12 +1426,31 @@ export const StaffMonthlyReportView: React.FC<StaffMonthlyReportViewProps> = ({
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
                             placeholder="स्टाफ खोजें..."
-                            className="pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 w-44"
+                            className="pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 w-40"
                           />
                         </div>
                       </div>
                     )}
                   </div>
+
+                  {payrollSyncBanner && (
+                    <div
+                      className={`mx-4 mt-3 p-3 rounded-xl text-xs font-bold flex items-center justify-between gap-2 ${
+                        payrollSyncBanner.ok
+                          ? 'bg-emerald-50 border border-emerald-300 text-emerald-900'
+                          : 'bg-amber-50 border border-amber-300 text-amber-900'
+                      }`}
+                    >
+                      <span>{payrollSyncBanner.msg}</span>
+                      <button
+                        type="button"
+                        onClick={() => setPayrollSyncBanner(null)}
+                        className="text-xs opacity-70 hover:opacity-100 cursor-pointer"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  )}
 
                   <div className="overflow-x-auto">
                     <table className="w-full text-left text-xs sm:text-sm tabular-nums">
@@ -1459,9 +1575,20 @@ export const StaffMonthlyReportView: React.FC<StaffMonthlyReportViewProps> = ({
                 e.preventDefault();
                 setSavingSalaryConfig(true);
                 try {
-                  const updatedAll = await saveStaffSalaryConfigToServer(salaryForm);
-                  setSalaryConfigs(updatedAll);
+                  const res = await saveStaffSalaryConfigToServer(salaryForm);
+                  setSalaryConfigs(res.configs);
                   setEditingSalaryStaff(null);
+                  setPayrollSyncBanner(
+                    res.sheetSynced
+                      ? {
+                          ok: true,
+                          msg: `✅ ${salaryForm.name || salaryForm.userId} का वेतन नियम सर्वर व Google Sheet ('Staff_Salary_Config') में सेव हो गया!`,
+                        }
+                      : {
+                          ok: false,
+                          msg: `⚠️ नियम ऐप सर्वर पर सेव हुआ (${res.sheetError || 'Google Sheet सिंक के लिए नया Apps Script Deploy करें'})`,
+                        }
+                  );
                 } finally {
                   setSavingSalaryConfig(false);
                 }
@@ -1647,7 +1774,15 @@ export const StaffMonthlyReportView: React.FC<StaffMonthlyReportViewProps> = ({
             `✅ *शुद्ध देय वेतन (Net Payable):* *₹${calc.netPayable.toLocaleString('en-IN')}*\n` +
             `━━━━━━━━━━━━━━━━━━━━━━\n` +
             `_सादर, लेखा व प्रबंधन कार्यालय — ई.वी.एस. पब्लिक स्कूल_`;
-          openWhatsappAlert(paySlipStaff.mobile, msg);
+          openWhatsappAlert(paySlipStaff.mobile, msg, {
+            alertType: 'Staff Salary Slip',
+            recipientType: 'Staff',
+            recipientId: paySlipStaff.userId,
+            recipientName: paySlipStaff.name,
+            classOrRole: paySlipStaff.designation,
+            amount: calc.netPayable,
+            sentBy: 'Manager',
+          });
         };
 
         return (

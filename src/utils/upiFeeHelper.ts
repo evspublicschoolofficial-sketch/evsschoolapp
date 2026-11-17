@@ -1,4 +1,6 @@
 import { UpiSettings, UpiPaymentRequest } from '../types';
+import { getAppsScriptUrl } from './busTrackingService';
+import { dualSyncWriteToSheet } from './sheetDirectSync';
 
 const UPI_SETTINGS_KEY = 'evs_upi_settings_v1';
 const UPI_PAYMENTS_KEY = 'evs_upi_payments_v1';
@@ -46,10 +48,13 @@ export const saveLocalUpiPayments = (payments: UpiPaymentRequest[]) => {
   } catch {}
 };
 
-export const fetchUpiSettingsFromServer = async (): Promise<UpiSettings> => {
+export const fetchUpiSettingsFromServer = async (forceRefresh = false): Promise<UpiSettings> => {
   const local = loadLocalUpiSettings();
   try {
-    const res = await fetch(`/api/upi-settings?_t=${Date.now()}`, { cache: 'no-store' });
+    const res = await fetch(`/api/upi-settings${forceRefresh ? '?refresh=1&' : '?'}_t=${Date.now()}`, {
+      headers: { 'x-apps-script-url': getAppsScriptUrl() },
+      cache: 'no-store',
+    });
     if (res.ok) {
       const data = await res.json();
       if (data?.settings) {
@@ -62,7 +67,9 @@ export const fetchUpiSettingsFromServer = async (): Promise<UpiSettings> => {
   return local;
 };
 
-export const saveUpiSettingsToServer = async (settings: UpiSettings): Promise<UpiSettings> => {
+export const saveUpiSettingsToServer = async (
+  settings: UpiSettings
+): Promise<{ settings: UpiSettings; sheetSynced: boolean; sheetError?: string }> => {
   const payload: UpiSettings = {
     ...DEFAULT_UPI_SETTINGS,
     ...settings,
@@ -74,24 +81,43 @@ export const saveUpiSettingsToServer = async (settings: UpiSettings): Promise<Up
   };
   saveLocalUpiSettings(payload);
 
-  try {
-    const res = await fetch('/api/upi-settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ settings: payload }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data?.settings) {
-        saveLocalUpiSettings(data.settings);
-        return data.settings;
-      }
-    }
-  } catch {}
-  return payload;
+  const sheetSafeSettings = {
+    upiId: payload.upiId,
+    payeeName: payload.payeeName,
+    bankName: payload.bankName,
+    instructions: payload.instructions,
+    hasStaticQr: Boolean(payload.staticQrImage),
+    updatedAt: payload.updatedAt,
+  };
+
+  const syncRes = await dualSyncWriteToSheet({
+    apiPath: '/api/upi-settings',
+    apiBody: { settings: payload },
+    directPayload: {
+      action: 'saveUpiSettings',
+      settings: sheetSafeSettings,
+    },
+  });
+
+  if (syncRes.data?.settings) {
+    saveLocalUpiSettings(syncRes.data.settings);
+    return {
+      settings: syncRes.data.settings,
+      sheetSynced: syncRes.sheetSynced,
+      sheetError: syncRes.sheetError,
+    };
+  }
+  return {
+    settings: payload,
+    sheetSynced: syncRes.sheetSynced,
+    sheetError: syncRes.sheetError,
+  };
 };
 
-export const fetchUpiPaymentsFromServer = async (studentId?: string): Promise<UpiPaymentRequest[]> => {
+export const fetchUpiPaymentsFromServer = async (
+  studentId?: string,
+  forceRefresh = false
+): Promise<UpiPaymentRequest[]> => {
   const filterByStudent = (list: UpiPaymentRequest[]) => {
     if (!studentId) return list;
     const clean = studentId.trim().toLowerCase();
@@ -99,10 +125,18 @@ export const fetchUpiPaymentsFromServer = async (studentId?: string): Promise<Up
   };
 
   try {
-    const url = studentId
-      ? `/api/upi-payments?studentId=${encodeURIComponent(studentId)}&_t=${Date.now()}`
-      : `/api/upi-payments?_t=${Date.now()}`;
-    const res = await fetch(url, { cache: 'no-store' });
+    const qs = [
+      studentId ? `studentId=${encodeURIComponent(studentId)}` : '',
+      forceRefresh ? 'refresh=1' : '',
+      `_t=${Date.now()}`,
+    ]
+      .filter(Boolean)
+      .join('&');
+    const url = `/api/upi-payments?${qs}`;
+    const res = await fetch(url, {
+      headers: { 'x-apps-script-url': getAppsScriptUrl() },
+      cache: 'no-store',
+    });
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data?.payments)) {
@@ -118,7 +152,13 @@ export const fetchUpiPaymentsFromServer = async (studentId?: string): Promise<Up
 
 export const submitUpiPaymentToServer = async (
   payload: Omit<UpiPaymentRequest, 'id' | 'status' | 'createdAt'>
-): Promise<{ success: boolean; payment?: UpiPaymentRequest; error?: string }> => {
+): Promise<{
+  success: boolean;
+  payment?: UpiPaymentRequest;
+  error?: string;
+  sheetSynced?: boolean;
+  sheetError?: string;
+}> => {
   const optimistic: UpiPaymentRequest = {
     ...payload,
     id: `upi_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -126,11 +166,15 @@ export const submitUpiPaymentToServer = async (
     createdAt: new Date().toISOString(),
   };
 
+  const activeUrl = getAppsScriptUrl();
   try {
     const res = await fetch('/api/upi-payments', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(optimistic),
+      headers: {
+        'Content-Type': 'application/json',
+        'x-apps-script-url': activeUrl,
+      },
+      body: JSON.stringify({ ...optimistic, appsScriptUrl: activeUrl }),
     });
     const data = await res.json();
     if (!res.ok || !data?.success) {
@@ -139,7 +183,23 @@ export const submitUpiPaymentToServer = async (
     const saved: UpiPaymentRequest = data.payment || optimistic;
     const prev = loadLocalUpiPayments().filter((p) => p.id !== saved.id);
     saveLocalUpiPayments([saved, ...prev]);
-    return { success: true, payment: saved };
+
+    let sheetSynced = Boolean(data.sheetSynced);
+    let sheetError = data.sheetError;
+    if (!sheetSynced) {
+      const directRes = await dualSyncWriteToSheet({
+        apiPath: '/api/upi-payments/sync-all',
+        apiBody: {},
+        directPayload: {
+          action: 'saveUpiPayment',
+          payment: { ...saved, screenshotData: '', hasScreenshot: Boolean(saved.screenshotData) },
+        },
+      }).catch(() => ({ sheetSynced: false, sheetError: undefined }));
+      sheetSynced = directRes.sheetSynced;
+      sheetError = directRes.sheetError || sheetError;
+    }
+
+    return { success: true, payment: saved, sheetSynced, sheetError };
   } catch (err: any) {
     return { success: false, error: err?.message || 'सर्वर से संपर्क नहीं हो सका।' };
   }
@@ -151,12 +211,22 @@ export const verifyUpiPaymentOnServer = async (params: {
   receiptNumber?: string;
   managerNote?: string;
   verifiedBy?: string;
-}): Promise<{ success: boolean; payment?: UpiPaymentRequest; error?: string }> => {
+}): Promise<{
+  success: boolean;
+  payment?: UpiPaymentRequest;
+  error?: string;
+  sheetSynced?: boolean;
+  sheetError?: string;
+}> => {
+  const activeUrl = getAppsScriptUrl();
   try {
     const res = await fetch(`/api/upi-payments/${encodeURIComponent(params.id)}/verify`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
+      headers: {
+        'Content-Type': 'application/json',
+        'x-apps-script-url': activeUrl,
+      },
+      body: JSON.stringify({ ...params, appsScriptUrl: activeUrl }),
     });
     const data = await res.json();
     if (!res.ok || !data?.success) {
@@ -165,10 +235,50 @@ export const verifyUpiPaymentOnServer = async (params: {
     if (Array.isArray(data.payments)) {
       saveLocalUpiPayments(data.payments);
     }
-    return { success: true, payment: data.payment };
+    return {
+      success: true,
+      payment: data.payment,
+      sheetSynced: Boolean(data.sheetSynced),
+      sheetError: data.sheetError,
+    };
   } catch (err: any) {
     return { success: false, error: err?.message || 'Network error' };
   }
+};
+
+export const syncAllUpiBackupToSheet = async (
+  settings: UpiSettings,
+  payments: UpiPaymentRequest[]
+): Promise<{ serverOk: boolean; sheetSynced: boolean; sheetError?: string }> => {
+  const sheetSafeSettings = {
+    upiId: settings.upiId,
+    payeeName: settings.payeeName,
+    bankName: settings.bankName,
+    instructions: settings.instructions,
+    hasStaticQr: Boolean(settings.staticQrImage),
+    updatedAt: settings.updatedAt || new Date().toISOString(),
+  };
+  const sheetSafePayments = payments.map((p) => ({
+    ...p,
+    screenshotData: '',
+    hasScreenshot: Boolean(p.screenshotData),
+  }));
+
+  const res = await dualSyncWriteToSheet({
+    apiPath: '/api/upi-payments/sync-all',
+    apiBody: {},
+    directPayload: {
+      action: 'syncAllUpiPayments',
+      settings: sheetSafeSettings,
+      payments: sheetSafePayments,
+    },
+  });
+
+  return {
+    serverOk: res.serverOk,
+    sheetSynced: res.sheetSynced,
+    sheetError: res.sheetError,
+  };
 };
 
 export const subscribeUpiUpdates = (onUpdate: (kind: 'settings' | 'payments' | 'all') => void): (() => void) => {

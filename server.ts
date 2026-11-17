@@ -290,6 +290,94 @@ function saveUpiPaymentsCache() {
   }
 }
 
+// =========================================================================
+// WHATSAPP ALERT LOGS & STAFF MONTHLY PAYROLL SNAPSHOTS
+// =========================================================================
+const WHATSAPP_LOGS_FILE = '/tmp/evs_whatsapp_logs.json';
+let whatsappLogsStore: any[] = [];
+try {
+  if (fs.existsSync(WHATSAPP_LOGS_FILE)) {
+    const rawWa = fs.readFileSync(WHATSAPP_LOGS_FILE, 'utf-8');
+    const parsed = JSON.parse(rawWa);
+    whatsappLogsStore = Array.isArray(parsed) ? parsed : [];
+  }
+} catch {
+  whatsappLogsStore = [];
+}
+
+function saveWhatsappLogsCache() {
+  try {
+    fs.writeFileSync(WHATSAPP_LOGS_FILE, JSON.stringify(whatsappLogsStore.slice(0, 500), null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Could not write whatsapp logs cache file:', e);
+  }
+}
+
+const STAFF_PAYROLL_FILE = '/tmp/evs_staff_salary_payroll.json';
+let staffPayrollStore: any[] = [];
+try {
+  if (fs.existsSync(STAFF_PAYROLL_FILE)) {
+    const rawPay = fs.readFileSync(STAFF_PAYROLL_FILE, 'utf-8');
+    const parsed = JSON.parse(rawPay);
+    staffPayrollStore = Array.isArray(parsed) ? parsed : [];
+  }
+} catch {
+  staffPayrollStore = [];
+}
+
+function saveStaffPayrollCache() {
+  try {
+    fs.writeFileSync(STAFF_PAYROLL_FILE, JSON.stringify(staffPayrollStore, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Could not write staff payroll cache file:', e);
+  }
+}
+
+// =========================================================================
+// EXAM MARKS (QUARTERLY/HALF-YEARLY/ANNUAL) & REPORT CARD META PERSISTENCE
+// =========================================================================
+const EXAM_MARKS_FILE = '/tmp/evs_exam_marks.json';
+let examMarksStore: any[] = [];
+try {
+  if (fs.existsSync(EXAM_MARKS_FILE)) {
+    const rawEm = fs.readFileSync(EXAM_MARKS_FILE, 'utf-8');
+    const parsed = JSON.parse(rawEm);
+    examMarksStore = Array.isArray(parsed) ? parsed : [];
+  }
+} catch {
+  examMarksStore = [];
+}
+
+function saveExamMarksCache() {
+  try {
+    fs.writeFileSync(EXAM_MARKS_FILE, JSON.stringify(examMarksStore, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Could not write exam marks cache file:', e);
+  }
+}
+
+const REPORT_CARD_META_FILE = '/tmp/evs_report_card_meta.json';
+let reportCardMetaStore: Record<string, any> = {};
+try {
+  if (fs.existsSync(REPORT_CARD_META_FILE)) {
+    const rawRc = fs.readFileSync(REPORT_CARD_META_FILE, 'utf-8');
+    const parsed = JSON.parse(rawRc);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      reportCardMetaStore = parsed;
+    }
+  }
+} catch {
+  reportCardMetaStore = {};
+}
+
+function saveReportCardMetaCache() {
+  try {
+    fs.writeFileSync(REPORT_CARD_META_FILE, JSON.stringify(reportCardMetaStore, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Could not write report card meta cache file:', e);
+  }
+}
+
 function parseAppsScriptResponse(text: string): { ok: boolean; error?: string } {
   const trimmed = String(text || '').trim();
   if (!trimmed) return { ok: false, error: 'Google Apps Script से खाली जवाब मिला' };
@@ -3239,25 +3327,126 @@ async function startServer() {
   });
 
   // =========================================================================
-  // FEATURE 5: STAFF SALARY & LATE/OVERTIME CONFIG ROUTES
+  // FEATURE 2 BACKUP: WHATSAPP ALERT LOGS (/api/whatsapp-logs)
   // =========================================================================
-  app.get('/api/staff-salary-config', (_req, res) => {
+  app.get('/api/whatsapp-logs', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      if (whatsappLogsStore.length === 0 || req.query.refresh === '1') {
+        try {
+          const sRes = await fetch(`${targetUrl}?action=getWhatsappLogs&_t=${Date.now()}`, {
+            redirect: 'follow',
+            signal: AbortSignal.timeout(7000),
+          });
+          const txt = await sRes.text();
+          if (sRes.ok && !txt.trim().startsWith('<')) {
+            const parsed = JSON.parse(txt);
+            if (Array.isArray(parsed?.logs)) {
+              const seen = new Set(whatsappLogsStore.map((l) => l.id));
+              for (const row of parsed.logs) {
+                if (row?.id && !seen.has(row.id)) {
+                  whatsappLogsStore.push(row);
+                  seen.add(row.id);
+                }
+              }
+              saveWhatsappLogsCache();
+            }
+          }
+        } catch {}
+      }
+      return res.json({ success: true, logs: whatsappLogsStore });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Error fetching WhatsApp logs' });
+    }
+  });
+
+  app.post('/api/whatsapp-logs', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const raw = req.body?.log || req.body || {};
+      const now = new Date();
+      const entry = {
+        id: String(raw.id || `WA-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`),
+        date: String(raw.date || now.toISOString().split('T')[0]),
+        time: String(raw.time || now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })),
+        alertType: String(raw.alertType || 'WhatsApp Alert').trim(),
+        recipientType: String(raw.recipientType || 'Parent').trim(),
+        recipientId: String(raw.recipientId || '').trim(),
+        recipientName: String(raw.recipientName || '').trim(),
+        classOrRole: String(raw.classOrRole || '').trim(),
+        mobile: String(raw.mobile || '').trim(),
+        amount: Number(raw.amount || 0),
+        summary: String(raw.summary || '').trim().slice(0, 350),
+        sentBy: String(raw.sentBy || 'Manager').trim(),
+      };
+      whatsappLogsStore = [entry, ...whatsappLogsStore.filter((l) => l.id !== entry.id)].slice(0, 500);
+      saveWhatsappLogsCache();
+
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'logWhatsappAlert',
+        log: entry,
+        appsScriptUrl: targetUrl,
+      });
+
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : gasResult.error,
+        log: entry,
+        logs: whatsappLogsStore,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Error logging WhatsApp alert' });
+    }
+  });
+
+  // =========================================================================
+  // FEATURE 5: STAFF SALARY & LATE/OVERTIME CONFIG & PAYROLL BACKUP ROUTES
+  // =========================================================================
+  app.get('/api/staff-salary-config', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      if (Object.keys(staffSalaryConfigStore).length === 0 || req.query.refresh === '1') {
+        try {
+          const sRes = await fetch(`${targetUrl}?action=getStaffSalaryConfig&_t=${Date.now()}`, {
+            redirect: 'follow',
+            signal: AbortSignal.timeout(7000),
+          });
+          const txt = await sRes.text();
+          if (sRes.ok && !txt.trim().startsWith('<')) {
+            const parsed = JSON.parse(txt);
+            if (parsed?.configs && typeof parsed.configs === 'object') {
+              staffSalaryConfigStore = { ...parsed.configs, ...staffSalaryConfigStore };
+              saveStaffSalaryConfigCache();
+            }
+          }
+        } catch {}
+      }
+    } catch {}
     res.json({ success: true, configs: staffSalaryConfigStore });
   });
 
-  app.post('/api/staff-salary-config', (req, res) => {
+  app.post('/api/staff-salary-config', async (req, res) => {
     try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
       const cfg = req.body?.config || req.body;
       const userId = String(cfg?.userId || '').trim();
       if (!userId) {
         return res.status(400).json({ success: false, error: 'userId is required' });
       }
-      staffSalaryConfigStore[userId] = {
+      const savedEntry = {
         ...cfg,
         userId,
         updatedAt: new Date().toISOString(),
       };
+      staffSalaryConfigStore[userId] = savedEntry;
       saveStaffSalaryConfigCache();
+
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'saveStaffSalaryConfig',
+        config: savedEntry,
+        appsScriptUrl: targetUrl,
+      });
 
       const broadcastMsg = JSON.stringify({
         type: 'APP_DATA_UPDATED',
@@ -3272,21 +3461,142 @@ async function startServer() {
         }
       }
 
-      return res.json({ success: true, configs: staffSalaryConfigStore });
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : gasResult.error,
+        configs: staffSalaryConfigStore,
+      });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err?.message || 'Error saving salary config' });
+    }
+  });
+
+  app.get('/api/staff-salary-payroll', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      if (staffPayrollStore.length === 0 || req.query.refresh === '1') {
+        try {
+          const sRes = await fetch(`${targetUrl}?action=getStaffSalaryPayroll&_t=${Date.now()}`, {
+            redirect: 'follow',
+            signal: AbortSignal.timeout(7000),
+          });
+          const txt = await sRes.text();
+          if (sRes.ok && !txt.trim().startsWith('<')) {
+            const parsed = JSON.parse(txt);
+            if (Array.isArray(parsed?.payroll)) {
+              const map = new Map<string, any>();
+              for (const row of parsed.payroll) {
+                if (row?.payrollKey) map.set(row.payrollKey, row);
+              }
+              for (const cur of staffPayrollStore) {
+                if (cur?.payrollKey) map.set(cur.payrollKey, cur);
+              }
+              staffPayrollStore = Array.from(map.values());
+              saveStaffPayrollCache();
+            }
+          }
+        } catch {}
+      }
+      return res.json({ success: true, payroll: staffPayrollStore });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Error reading payroll backup' });
+    }
+  });
+
+  app.post('/api/staff-salary-payroll', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const records: any[] = Array.isArray(req.body?.records)
+        ? req.body.records
+        : req.body?.record
+        ? [req.body.record]
+        : [];
+      const configsPayload = req.body?.configs && typeof req.body.configs === 'object' ? req.body.configs : null;
+
+      if (configsPayload) {
+        for (const k of Object.keys(configsPayload)) {
+          if (configsPayload[k]?.userId) {
+            staffSalaryConfigStore[configsPayload[k].userId] = configsPayload[k];
+          }
+        }
+        saveStaffSalaryConfigCache();
+      }
+
+      const map = new Map<string, any>();
+      for (const cur of staffPayrollStore) {
+        if (cur?.payrollKey) map.set(cur.payrollKey, cur);
+      }
+      const nowIso = new Date().toISOString();
+      for (const r of records) {
+        if (!r?.userId) continue;
+        const pKey = String(r.payrollKey || `${r.monthKey || 'cur'}::${r.userId}`).trim();
+        map.set(pKey, { ...r, payrollKey: pKey, savedAt: r.savedAt || nowIso });
+      }
+      staffPayrollStore = Array.from(map.values());
+      saveStaffPayrollCache();
+
+      let cfgSynced = true;
+      if (configsPayload && Object.keys(configsPayload).length > 0) {
+        const cfgRes = await forwardToGoogleAppsScript({
+          action: 'saveStaffSalaryConfig',
+          configs: configsPayload,
+          appsScriptUrl: targetUrl,
+        });
+        cfgSynced = cfgRes.ok;
+      }
+
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'saveStaffSalaryPayroll',
+        records: records.map((r) => ({ ...r, payrollKey: String(r.payrollKey || `${r.monthKey || 'cur'}::${r.userId}`), savedAt: r.savedAt || nowIso })),
+        appsScriptUrl: targetUrl,
+      });
+
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok && cfgSynced,
+        sheetError: gasResult.ok ? undefined : gasResult.error,
+        count: records.length,
+        payroll: staffPayrollStore,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Error backing up salary payroll' });
     }
   });
 
   // =========================================================================
   // FEATURE 6: SCHOOL UPI SETTINGS & ONLINE PAYMENT SUBMISSION / VERIFICATION
   // =========================================================================
-  app.get('/api/upi-settings', (_req, res) => {
+  app.get('/api/upi-settings', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      if (!upiSettingsStore.upiId || req.query.refresh === '1') {
+        try {
+          const sRes = await fetch(`${targetUrl}?action=getUpiSettings&_t=${Date.now()}`, {
+            redirect: 'follow',
+            signal: AbortSignal.timeout(7000),
+          });
+          const txt = await sRes.text();
+          if (sRes.ok && !txt.trim().startsWith('<')) {
+            const parsed = JSON.parse(txt);
+            if (parsed?.settings && parsed.settings.upiId && !upiSettingsStore.upiId) {
+              upiSettingsStore = {
+                ...DEFAULT_UPI_SETTINGS_STORE,
+                ...parsed.settings,
+                staticQrImage: upiSettingsStore.staticQrImage || '',
+              };
+              saveUpiSettingsCache();
+            }
+          }
+        } catch {}
+      }
+    } catch {}
     res.json({ success: true, settings: upiSettingsStore });
   });
 
-  app.post('/api/upi-settings', (req, res) => {
+  app.post('/api/upi-settings', async (req, res) => {
     try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
       const incoming = req.body?.settings || req.body || {};
       upiSettingsStore = {
         ...DEFAULT_UPI_SETTINGS_STORE,
@@ -3299,6 +3609,20 @@ async function startServer() {
         updatedAt: new Date().toISOString(),
       };
       saveUpiSettingsCache();
+
+      const sheetSafeSettings = {
+        upiId: upiSettingsStore.upiId,
+        payeeName: upiSettingsStore.payeeName,
+        bankName: upiSettingsStore.bankName,
+        instructions: upiSettingsStore.instructions,
+        hasStaticQr: Boolean(upiSettingsStore.staticQrImage),
+        updatedAt: upiSettingsStore.updatedAt,
+      };
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'saveUpiSettings',
+        settings: sheetSafeSettings,
+        appsScriptUrl: targetUrl,
+      });
 
       const broadcastMsg = JSON.stringify({
         type: 'APP_DATA_UPDATED',
@@ -3313,14 +3637,50 @@ async function startServer() {
         }
       }
 
-      return res.json({ success: true, settings: upiSettingsStore });
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : gasResult.error,
+        settings: upiSettingsStore,
+      });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err?.message || 'Could not save UPI settings' });
     }
   });
 
-  app.get('/api/upi-payments', (req, res) => {
+  app.get('/api/upi-payments', async (req, res) => {
     try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      if (upiPaymentsStore.length === 0 || req.query.refresh === '1') {
+        try {
+          const sRes = await fetch(`${targetUrl}?action=getUpiPayments&_t=${Date.now()}`, {
+            redirect: 'follow',
+            signal: AbortSignal.timeout(7000),
+          });
+          const txt = await sRes.text();
+          if (sRes.ok && !txt.trim().startsWith('<')) {
+            const parsed = JSON.parse(txt);
+            if (Array.isArray(parsed?.payments) && parsed.payments.length > 0) {
+              const existingMap = new Map(upiPaymentsStore.map((p) => [p.id, p]));
+              for (const sp of parsed.payments) {
+                if (!sp?.id) continue;
+                const local = existingMap.get(sp.id);
+                if (!local) {
+                  existingMap.set(sp.id, sp);
+                } else {
+                  // Preserve local screenshotData if present
+                  existingMap.set(sp.id, { ...sp, screenshotData: local.screenshotData || sp.screenshotData || '' });
+                }
+              }
+              upiPaymentsStore = Array.from(existingMap.values()).sort(
+                (a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))
+              );
+              saveUpiPaymentsCache();
+            }
+          }
+        } catch {}
+      }
+
       const studentId = String(req.query.studentId || '').trim().toLowerCase();
       const statusFilter = String(req.query.status || '').trim().toLowerCase();
 
@@ -3337,8 +3697,9 @@ async function startServer() {
     }
   });
 
-  app.post('/api/upi-payments', (req, res) => {
+  app.post('/api/upi-payments', async (req, res) => {
     try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
       const body = req.body || {};
       const studentId = String(body.studentId || '').trim();
       const amount = Number(body.amount || 0);
@@ -3386,6 +3747,17 @@ async function startServer() {
       upiPaymentsStore = [record, ...upiPaymentsStore];
       saveUpiPaymentsCache();
 
+      const sheetSafePayment = {
+        ...record,
+        screenshotData: '',
+        hasScreenshot: Boolean(record.screenshotData),
+      };
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'saveUpiPayment',
+        payment: sheetSafePayment,
+        appsScriptUrl: targetUrl,
+      });
+
       const broadcastMsg = JSON.stringify({
         type: 'APP_DATA_UPDATED',
         entity: 'upi_payments',
@@ -3399,14 +3771,56 @@ async function startServer() {
         }
       }
 
-      return res.json({ success: true, payment: record, payments: upiPaymentsStore });
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : gasResult.error,
+        payment: record,
+        payments: upiPaymentsStore,
+      });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err?.message || 'Error submitting payment' });
     }
   });
 
-  app.post('/api/upi-payments/:id/verify', (req, res) => {
+  app.post('/api/upi-payments/sync-all', async (req, res) => {
     try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const sheetSafeSettings = {
+        upiId: upiSettingsStore.upiId,
+        payeeName: upiSettingsStore.payeeName,
+        bankName: upiSettingsStore.bankName,
+        instructions: upiSettingsStore.instructions,
+        hasStaticQr: Boolean(upiSettingsStore.staticQrImage),
+        updatedAt: upiSettingsStore.updatedAt || new Date().toISOString(),
+      };
+      const sheetSafePayments = upiPaymentsStore.map((p) => ({
+        ...p,
+        screenshotData: '',
+        hasScreenshot: Boolean(p.screenshotData),
+      }));
+
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'syncAllUpiPayments',
+        settings: sheetSafeSettings,
+        payments: sheetSafePayments,
+        appsScriptUrl: targetUrl,
+      });
+
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : gasResult.error,
+        count: sheetSafePayments.length,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Batch UPI sync failed' });
+    }
+  });
+
+  app.post('/api/upi-payments/:id/verify', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
       const targetId = String(req.params.id || '').trim();
       const { status, receiptNumber, managerNote, verifiedBy } = req.body || {};
 
@@ -3431,6 +3845,17 @@ async function startServer() {
       upiPaymentsStore[idx] = updated;
       saveUpiPaymentsCache();
 
+      const sheetSafePayment = {
+        ...updated,
+        screenshotData: '',
+        hasScreenshot: Boolean(updated.screenshotData),
+      };
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'verifyUpiPayment',
+        payment: sheetSafePayment,
+        appsScriptUrl: targetUrl,
+      });
+
       const broadcastMsg = JSON.stringify({
         type: 'APP_DATA_UPDATED',
         entity: 'upi_payments',
@@ -3444,7 +3869,13 @@ async function startServer() {
         }
       }
 
-      return res.json({ success: true, payment: updated, payments: upiPaymentsStore });
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : gasResult.error,
+        payment: updated,
+        payments: upiPaymentsStore,
+      });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err?.message || 'Error verifying payment' });
     }
@@ -3462,6 +3893,287 @@ async function startServer() {
       return res.json({ success: true, payments: upiPaymentsStore });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err?.message || 'Delete failed' });
+    }
+  });
+
+  // =========================================================================
+  // REPORT CARD & EXAM MARKS API (Exam_Marks & Report_Cards_Backup)
+  // =========================================================================
+  app.get('/api/exam-marks', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      if (examMarksStore.length === 0 || req.query.refresh === '1') {
+        try {
+          const sRes = await fetch(`${targetUrl}?action=getExamMarks&_t=${Date.now()}`, {
+            redirect: 'follow',
+            signal: AbortSignal.timeout(7000),
+          });
+          const txt = await sRes.text();
+          if (sRes.ok && !txt.trim().startsWith('<')) {
+            const parsed = JSON.parse(txt);
+            if (Array.isArray(parsed?.marks) && parsed.marks.length > 0) {
+              const map = new Map<string, any>();
+              const getCompKey = (m: any) =>
+                `${String(m.session || '2026-27').toLowerCase()}::${String(m.exam_type || '').toLowerCase()}::${String(m.student_id || '').toLowerCase()}::${String(m.subject || '').toLowerCase()}`;
+              for (const m of parsed.marks) {
+                if (m?.student_id && m?.subject) map.set(getCompKey(m), m);
+              }
+              for (const cur of examMarksStore) {
+                if (cur?.student_id && cur?.subject) map.set(getCompKey(cur), cur);
+              }
+              examMarksStore = Array.from(map.values());
+              saveExamMarksCache();
+            }
+          }
+        } catch {}
+      }
+
+      let list = [...examMarksStore];
+      if (req.query.studentId) {
+        const sid = String(req.query.studentId).trim().toLowerCase();
+        list = list.filter((m) => String(m.student_id || '').trim().toLowerCase() === sid);
+      }
+      if (req.query.class_name) {
+        const cls = String(req.query.class_name).trim().toLowerCase();
+        list = list.filter((m) => String(m.class_name || '').trim().toLowerCase() === cls);
+      }
+      if (req.query.exam_type) {
+        const et = String(req.query.exam_type).trim().toLowerCase();
+        list = list.filter((m) => String(m.exam_type || '').trim().toLowerCase() === et);
+      }
+      return res.json({ success: true, marks: list });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Error reading exam marks' });
+    }
+  });
+
+  app.post('/api/exam-marks', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const batchInput: any[] = Array.isArray(req.body?.records)
+        ? req.body.records
+        : req.body?.record
+        ? [req.body.record]
+        : req.body && req.body.student_id
+        ? [req.body]
+        : [];
+      const valid = batchInput.filter((r) => r && r.student_id && r.subject);
+      if (valid.length === 0) {
+        return res.status(400).json({ success: false, error: 'Valid exam mark record(s) required' });
+      }
+
+      const nowIso = new Date().toISOString();
+      const getCompKey = (m: any) =>
+        `${String(m.session || '2026-27').toLowerCase()}::${String(m.exam_type || 'Quarterly').toLowerCase()}::${String(m.student_id || '').toLowerCase()}::${String(m.subject || '').toLowerCase()}`;
+
+      const map = new Map<string, any>();
+      for (const cur of examMarksStore) {
+        if (cur?.student_id && cur?.subject) map.set(getCompKey(cur), cur);
+      }
+
+      const savedRecords: any[] = [];
+      for (const rec of valid) {
+        const normalized = {
+          ...rec,
+          id: String(
+            rec.id ||
+              `em_${String(rec.session || '2026-27').replace(/[^a-z0-9]/gi, '')}_${String(rec.exam_type || 'Q')}_${String(rec.student_id)}_${String(rec.subject).replace(/\s+/g, '_')}`
+          ).trim(),
+          session: String(rec.session || '2026-27').trim(),
+          exam_type: rec.exam_type || 'Quarterly',
+          max_marks: Number(rec.max_marks || 50),
+          marks_obtained: Number(rec.marks_obtained || 0),
+          attendance_status: rec.attendance_status === 'Absent' ? 'Absent' : 'Present',
+          updated_at: nowIso,
+        };
+        map.set(getCompKey(normalized), normalized);
+        savedRecords.push(normalized);
+      }
+      examMarksStore = Array.from(map.values());
+      saveExamMarksCache();
+
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'saveExamMarksBatch',
+        records: JSON.stringify(savedRecords),
+        appsScriptUrl: targetUrl,
+      });
+
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'exam_marks',
+        action: 'update',
+        details: { count: savedRecords.length },
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) client.send(broadcastMsg);
+      }
+
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : gasResult.error,
+        records: savedRecords,
+        allMarks: examMarksStore,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Error saving exam marks' });
+    }
+  });
+
+  app.delete('/api/exam-marks/:id', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const id = String(req.params.id || '').trim();
+      examMarksStore = examMarksStore.filter((m) => m.id !== id);
+      saveExamMarksCache();
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'deleteExamMark',
+        id,
+        appsScriptUrl: targetUrl,
+      });
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'exam_marks',
+        action: 'delete',
+        details: { id },
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) client.send(broadcastMsg);
+      }
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : gasResult.error,
+        allMarks: examMarksStore,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Error deleting exam mark' });
+    }
+  });
+
+  app.get('/api/report-cards-meta', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      if (Object.keys(reportCardMetaStore).length === 0 || req.query.refresh === '1') {
+        try {
+          const sRes = await fetch(`${targetUrl}?action=getReportCardMeta&_t=${Date.now()}`, {
+            redirect: 'follow',
+            signal: AbortSignal.timeout(7000),
+          });
+          const txt = await sRes.text();
+          if (sRes.ok && !txt.trim().startsWith('<')) {
+            const parsed = JSON.parse(txt);
+            if (parsed?.meta && typeof parsed.meta === 'object') {
+              reportCardMetaStore = { ...parsed.meta, ...reportCardMetaStore };
+              saveReportCardMetaCache();
+            }
+          }
+        } catch {}
+      }
+      return res.json({ success: true, meta: reportCardMetaStore });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Error fetching report card meta' });
+    }
+  });
+
+  app.post('/api/report-cards-meta', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const m = req.body?.meta || req.body || {};
+      const reportKey = String(m.reportKey || `${m.session || '2026-27'}::${m.studentId || ''}`).trim();
+      if (!reportKey || reportKey.endsWith('::')) {
+        return res.status(400).json({ success: false, error: 'reportKey & studentId are required' });
+      }
+      const savedMeta = {
+        ...m,
+        reportKey,
+        updatedAt: new Date().toISOString(),
+      };
+      reportCardMetaStore[reportKey] = savedMeta;
+      saveReportCardMetaCache();
+
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'saveReportCardMeta',
+        meta: savedMeta,
+        appsScriptUrl: targetUrl,
+      });
+
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'report_card_meta',
+        action: 'update',
+        details: { reportKey },
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) client.send(broadcastMsg);
+      }
+
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : gasResult.error,
+        meta: reportCardMetaStore,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Error saving report card remark' });
+    }
+  });
+
+  app.post('/api/report-cards-backup/sync-all', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const backups: any[] = Array.isArray(req.body?.backups) ? req.body.backups : [];
+      const examMarks: any[] = Array.isArray(req.body?.examMarks) ? req.body.examMarks : examMarksStore;
+
+      if (backups.length > 0) {
+        const nowIso = new Date().toISOString();
+        for (const b of backups) {
+          if (b?.reportKey && !reportCardMetaStore[b.reportKey]) {
+            reportCardMetaStore[b.reportKey] = {
+              reportKey: b.reportKey,
+              session: b.session || '2026-27',
+              studentId: b.studentId,
+              teacherRemark: b.teacherRemark || '',
+              principalRemark: b.principalRemark || '',
+              resultStatus: b.resultStatus || 'PROMOTED',
+              publishedToParent: b.publishedToParent !== false,
+              updatedBy: b.updatedBy || 'Manager',
+              updatedAt: b.updatedAt || nowIso,
+            };
+          }
+        }
+        saveReportCardMetaCache();
+      }
+
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'syncReportCardsBatch',
+        backups: JSON.stringify(backups),
+        examMarks: JSON.stringify(examMarks),
+        appsScriptUrl: targetUrl,
+      });
+
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'report_card_meta',
+        action: 'sync',
+        details: { count: backups.length },
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) client.send(broadcastMsg);
+      }
+
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : gasResult.error,
+        count: backups.length,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Batch report card backup failed' });
     }
   });
 

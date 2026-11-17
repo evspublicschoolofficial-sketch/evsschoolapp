@@ -5,7 +5,7 @@ import { SchoolNoticeBoard, DEFAULT_SEED_NOTICES } from './components/SchoolNoti
 import { EmergencyAlertBanner } from './components/EmergencyAlertBanner';
 import { playSirenPreview, playAnnouncementPreview, speakAnnouncement, unlockAudioContext } from './utils/sirenAudio';
 import { InstallAppModal } from './components/InstallAppModal';
-import { SchoolNotice, StaffAttendanceRecord } from './types';
+import { ExamMarkRecord, ReportCardRemarkRecord, SchoolNotice, StaffAttendanceRecord, WeeklyTestRecord } from './types';
 import { FloatingSocialBar } from './components/FloatingSocialBar';
 import { fetchFeeMasterDirectGViz } from './utils/feeMaster';
 import { initGeolocationPrewarmer, syncSchoolLocationFromServer } from './utils/schoolLocationService';
@@ -15,6 +15,15 @@ import { AppLanguage, getStoredLanguage, setStoredLanguage, TRANSLATIONS } from 
 import { NotificationPermissionBanner } from './components/NotificationPermissionBanner';
 import { PWAHeaderUpdateButton, PWAUpdateBanner } from './components/PWAUpdateBanner';
 import { checkAndNotifyNewNotices } from './utils/notificationService';
+import {
+  CURRENT_ACADEMIC_SESSION,
+  computeStudentReportCardData,
+  fetchExamMarksFromServer,
+  fetchReportCardMetaFromServer,
+  loadLocalExamMarks,
+  loadLocalReportCardMeta,
+  subscribeReportCardUpdates,
+} from './utils/reportCardHelper';
 
 // High-speed on-demand code splitting (React.lazy): Drops initial bundle size by ~85% for Parents on mobile!
 const StudentAttendanceChart = React.lazy(() => import('./components/StudentAttendanceChart'));
@@ -40,6 +49,8 @@ const TeacherPerformanceDashboard = React.lazy(() => import('./components/Teache
 const TeacherSyllabusPlanner = React.lazy(() => import('./components/TeacherSyllabusPlanner').then((m) => ({ default: m.TeacherSyllabusPlanner })));
 const WeeklySubjectTestManager = React.lazy(() => import('./components/WeeklySubjectTestManager').then((m) => ({ default: m.WeeklySubjectTestManager })));
 const ParentUpiFeeSection = React.lazy(() => import('./components/ParentUpiFeeSection').then((m) => ({ default: m.ParentUpiFeeSection })));
+const ReportCardManagerView = React.lazy(() => import('./components/ReportCardManagerView').then((m) => ({ default: m.ReportCardManagerView })));
+const PrintableReportCard = React.lazy(() => import('./components/PrintableReportCard').then((m) => ({ default: m.PrintableReportCard })));
 
 // Non-inlined static asset paths (prevents 1.4 MB image bloat inside main JS bundle)
 const studentFarahPhoto = '/assets/student_farah_1789483069291.jpg';
@@ -1366,7 +1377,7 @@ export default function App() {
   const [manualLinkSuccess, setManualLinkSuccess] = useState<string | null>(null);
   const [hwFilterType, setHwFilterType] = useState<'all' | 'class' | 'student'>('all');
   const [hwDaysFilter, setHwDaysFilter] = useState<'latest' | 'all'>('latest');
-  const [parentActiveSection, setParentActiveSection] = useState<'overview' | 'homework' | 'tracker' | 'behavior' | 'fees' | 'calendar' | 'notices' | 'profile'>('overview');
+  const [parentActiveSection, setParentActiveSection] = useState<'overview' | 'homework' | 'tracker' | 'behavior' | 'fees' | 'calendar' | 'notices' | 'profile' | 'reportCard'>('overview');
   const [trackerStatusFilter, setTrackerStatusFilter] = useState<'all' | 'completed' | 'incompleted'>('all');
 
   // AI Daily Greeting & Activity Summary for Parent Portal
@@ -1468,6 +1479,64 @@ export default function App() {
   const [copiedBehaviorReport, setCopiedBehaviorReport] = useState<string | null>(null);
   const [behaviorViewMode, setBehaviorViewMode] = useState<'cards' | 'table'>('cards');
   const [showAttendanceChart, setShowAttendanceChart] = useState<boolean>(false);
+
+  // Digital Report Card State (Weekly Subject Tests + Quarterly/Half-Yearly/Annual Exam Marks + Remarks)
+  const [weeklyTestsList, setWeeklyTestsList] = useState<WeeklyTestRecord[]>(() => {
+    try {
+      const raw = localStorage.getItem('evs_weekly_subject_tests_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+    return [];
+  });
+  const [examMarksList, setExamMarksList] = useState<ExamMarkRecord[]>(() => loadLocalExamMarks());
+  const [reportCardMetaMap, setReportCardMetaMap] = useState<Record<string, ReportCardRemarkRecord>>(() => loadLocalReportCardMeta());
+
+  const fetchReportCardAllData = async (forceRefresh = false) => {
+    try {
+      const activeUrl = getEffectiveApiUrl();
+      const [wtRes, emRes, rcRes] = await Promise.allSettled([
+        fetch(`/api/weekly-tests${forceRefresh ? '?refresh=1' : ''}`, {
+          headers: { 'x-apps-script-url': activeUrl },
+          cache: 'no-store',
+        }).then((r) => (r.ok ? r.json() : null)),
+        fetchExamMarksFromServer(forceRefresh),
+        fetchReportCardMetaFromServer(forceRefresh),
+      ]);
+
+      if (wtRes.status === 'fulfilled' && Array.isArray(wtRes.value)) {
+        setWeeklyTestsList(wtRes.value);
+        try {
+          localStorage.setItem('evs_weekly_subject_tests_v1', JSON.stringify(wtRes.value));
+        } catch {}
+      }
+      if (emRes.status === 'fulfilled' && Array.isArray(emRes.value)) {
+        setExamMarksList(emRes.value);
+      }
+      if (rcRes.status === 'fulfilled' && rcRes.value && typeof rcRes.value === 'object') {
+        setReportCardMetaMap(rcRes.value);
+      }
+    } catch {}
+  };
+
+  useEffect(() => {
+    fetchReportCardAllData(false);
+    const unsub = subscribeReportCardUpdates(() => {
+      try {
+        const rawWt = localStorage.getItem('evs_weekly_subject_tests_v1');
+        if (rawWt) {
+          const parsedWt = JSON.parse(rawWt);
+          if (Array.isArray(parsedWt)) setWeeklyTestsList(parsedWt);
+        }
+      } catch {}
+      setExamMarksList(loadLocalExamMarks());
+      setReportCardMetaMap(loadLocalReportCardMeta());
+      fetchReportCardAllData(false);
+    });
+    return unsub;
+  }, []);
 
   // Teacher Dashboard State
   const [hwDate, setHwDate] = useState<string>(new Date().toISOString().split('T')[0]);
@@ -1647,10 +1716,10 @@ export default function App() {
   const [teacherLoginError, setTeacherLoginError] = useState<string | null>(null);
   const [teacherLoginSubmitting, setTeacherLoginSubmitting] = useState<boolean>(false);
   const [showTeacherPassword, setShowTeacherPassword] = useState<boolean>(false);
-  const [teacherPortalTab, setTeacherPortalTab] = useState<'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior' | 'staff_attendance' | 'performance' | 'syllabus' | 'weekly_tests'>(() => {
+  const [teacherPortalTab, setTeacherPortalTab] = useState<'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior' | 'staff_attendance' | 'performance' | 'syllabus' | 'weekly_tests' | 'report_card'>(() => {
     try {
       const saved = localStorage.getItem('evs_teacher_portal_tab');
-      if (saved && ['upload', 'tracker', 'submissions', 'notices', 'behavior', 'staff_attendance', 'performance', 'syllabus', 'weekly_tests'].includes(saved)) {
+      if (saved && ['upload', 'tracker', 'submissions', 'notices', 'behavior', 'staff_attendance', 'performance', 'syllabus', 'weekly_tests', 'report_card'].includes(saved)) {
         return saved as any;
       }
     } catch {}
@@ -1754,10 +1823,10 @@ export default function App() {
   const [managerSelectedFeeStudent, setManagerSelectedFeeStudent] = useState<Student | null>(null);
 
   // Manager Dashboard State
-  const [managerTab, setManagerTab] = useState<'students' | 'homework' | 'behavior' | 'fees' | 'users' | 'vanTracking' | 'attendance' | 'notices' | 'autoTransport' | 'staffAttendance' | 'teacherPerformance'>(() => {
+  const [managerTab, setManagerTab] = useState<'students' | 'homework' | 'behavior' | 'fees' | 'users' | 'vanTracking' | 'attendance' | 'notices' | 'autoTransport' | 'staffAttendance' | 'teacherPerformance' | 'reportCards'>(() => {
     try {
       const saved = localStorage.getItem('evs_manager_tab');
-      if (saved && ['students', 'homework', 'behavior', 'fees', 'users', 'vanTracking', 'attendance', 'notices', 'autoTransport', 'staffAttendance', 'teacherPerformance'].includes(saved)) {
+      if (saved && ['students', 'homework', 'behavior', 'fees', 'users', 'vanTracking', 'attendance', 'notices', 'autoTransport', 'staffAttendance', 'teacherPerformance', 'reportCards'].includes(saved)) {
         return saved as any;
       }
     } catch {}
@@ -3134,7 +3203,7 @@ export default function App() {
   }, [staffAttendanceList, teacherUser, managerUser]);
 
   // Switch tabs in Teacher Portal with automatic tab-specific data refresh
-  const handleSelectTeacherTab = (tab: 'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior' | 'staff_attendance' | 'performance' | 'syllabus' | 'weekly_tests') => {
+  const handleSelectTeacherTab = (tab: 'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior' | 'staff_attendance' | 'performance' | 'syllabus' | 'weekly_tests' | 'report_card') => {
     setTeacherPortalTab(tab);
     if (tab === 'tracker') {
       fetchHomeworkTracker(false, true);
@@ -3144,6 +3213,8 @@ export default function App() {
       fetchStudentBehavior(false, true);
     } else if (tab === 'staff_attendance') {
       fetchStaffAttendance(true);
+    } else if (tab === 'weekly_tests' || tab === 'report_card') {
+      fetchReportCardAllData(true);
     }
   };
 
@@ -7788,6 +7859,60 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       </button>
                     </div>
 
+                    {/* Highlight Banner Card: Protected View-Only Digital Report Card */}
+                    {selectedStudent && (() => {
+                      const rcPreview = computeStudentReportCardData({
+                        student: selectedStudent,
+                        weeklyTests: weeklyTestsList,
+                        examMarks: examMarksList,
+                        behaviorList,
+                        metaMap: reportCardMetaMap,
+                        session: CURRENT_ACADEMIC_SESSION,
+                      });
+                      return (
+                        <button
+                          id="parent-tab-report-card"
+                          type="button"
+                          onClick={() => {
+                            fetchReportCardAllData(true);
+                            setParentActiveSection('reportCard');
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }}
+                          className="w-full p-4 rounded-2xl border-2 border-indigo-900/20 bg-gradient-to-r from-[#0c2340] via-[#10316b] to-indigo-950 text-white text-left transition-all cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md hover:shadow-lg active:scale-[0.99]"
+                        >
+                          <div className="flex items-center gap-3">
+                            <span className="w-11 h-11 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center text-xl shrink-0 shadow">
+                              <i className="fa-solid fa-graduation-cap"></i>
+                            </span>
+                            <div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-black text-sm sm:text-base text-amber-300">
+                                  🎓 डिजिटल रिपोर्ट कार्ड व मार्कशीट ({CURRENT_ACADEMIC_SESSION})
+                                </span>
+                                <span className="px-2 py-0.5 rounded-full bg-rose-500/25 border border-rose-400/40 text-[10px] font-black text-rose-200">
+                                  🔒 केवल देखने योग्य (View-Only)
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-blue-100 mt-0.5">
+                                साप्ताहिक टेस्ट + तिमाही + छमाही + सालाना परीक्षा अंक, हाजिरी ({rcPreview.attendance.attendancePct}%) व टीचर रिमार्क
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2.5 self-end sm:self-center">
+                            {rcPreview.overall.hasAnyScore && (
+                              <span className="px-3 py-1.5 rounded-xl bg-white/15 border border-white/20 text-xs font-black text-amber-300">
+                                {rcPreview.overall.pct}% ({rcPreview.overall.grade})
+                              </span>
+                            )}
+                            <span className="px-3.5 py-2 rounded-xl bg-amber-400 text-slate-950 text-xs font-black flex items-center gap-1.5">
+                              <span>रिपोर्ट देखें</span>
+                              <i className="fa-solid fa-chevron-right text-[10px]"></i>
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })()}
+
                     {/* Quick Profile Row */}
                     <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex flex-wrap items-center justify-between gap-2">
                       <div className="flex items-center gap-2 text-xs text-slate-700">
@@ -7880,12 +8005,24 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         🪪 7. प्रोफ़ाइल
                       </button>
                       <button
+                        onClick={() => {
+                          fetchReportCardAllData(true);
+                          setParentActiveSection('reportCard');
+                        }}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                          parentActiveSection === 'reportCard' ? 'bg-amber-400 text-slate-950 shadow-xs' : 'bg-white/15 hover:bg-white/25 text-white'
+                        }`}
+                      >
+                        🎓 8. रिपोर्ट कार्ड
+                      </button>
+                      <button
                         type="button"
                         onClick={() => {
                           fetchHomework();
                           fetchHomeworkTracker();
                           fetchStudentBehavior();
                           fetchFeeCollection();
+                          fetchReportCardAllData(true);
                         }}
                         disabled={loadingHomework || loadingHwTracker || loadingBehavior || loadingFees}
                         className="px-2.5 py-1.5 bg-white/15 hover:bg-white/25 text-white rounded-xl text-xs font-semibold flex items-center gap-1 cursor-pointer"
@@ -9592,6 +9729,46 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     </div>
                   </div>
                 )}
+
+                {/* VIEW 6: STRICT VIEW-ONLY PROTECTED DIGITAL REPORT CARD */}
+                {parentActiveSection === 'reportCard' && selectedStudent && (
+                  <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-6 space-y-4 animate-fadeIn">
+                    <Suspense
+                      fallback={
+                        <div className="p-10 text-center text-slate-500 font-bold">
+                          <i className="fa-solid fa-circle-notch fa-spin text-blue-900 mr-2"></i>
+                          डिजिटल रिपोर्ट कार्ड लोड हो रहा है...
+                        </div>
+                      }
+                    >
+                      <PrintableReportCard
+                        mode="parent_view_only"
+                        data={computeStudentReportCardData({
+                          student: selectedStudent,
+                          weeklyTests: weeklyTestsList,
+                          examMarks: examMarksList,
+                          behaviorList,
+                          metaMap: reportCardMetaMap,
+                          session: CURRENT_ACADEMIC_SESSION,
+                        })}
+                      />
+                    </Suspense>
+
+                    <div className="pt-4 border-t border-slate-200 flex justify-center">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setParentActiveSection('overview');
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        className="px-5 py-2.5 bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-bold rounded-xl text-xs sm:text-sm flex items-center gap-2 shadow-sm cursor-pointer transition-all active:scale-95"
+                      >
+                        <i className="fa-solid fa-arrow-left"></i>
+                        <span>← वापस मुख्य कार्ड्स पर जाएं (Back to Cards)</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -9958,6 +10135,19 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 <i className="fa-solid fa-file-pen text-emerald-400"></i>
                 <span>{currentLang === 'en' ? 'Weekly Subject Test' : 'वीकली विषय टेस्ट'}</span>
                 <span className="px-1.5 py-0.5 text-[10px] bg-emerald-400/20 text-emerald-300 font-black rounded-md">25 Pts</span>
+              </button>
+
+              <button
+                onClick={() => handleSelectTeacherTab('report_card')}
+                className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                  teacherPortalTab === 'report_card'
+                    ? 'bg-[#0c2340] text-amber-300 shadow-sm ring-2 ring-amber-400/50'
+                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                }`}
+              >
+                <i className="fa-solid fa-graduation-cap text-amber-400"></i>
+                <span>{currentLang === 'en' ? 'Report Cards (PDF)' : 'मार्कशीट व रिपोर्ट कार्ड'}</span>
+                <span className="px-1.5 py-0.5 text-[10px] bg-amber-400/20 text-amber-300 font-black rounded-md">PDF</span>
               </button>
 
               {/* Universal Student Finder & QR Scanner button */}
@@ -11294,6 +11484,36 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   students={students}
                   classMap={classMap}
                   isManager={false}
+                  onTestsUpdated={(tests) => setWeeklyTestsList(tests)}
+                />
+              </Suspense>
+            )}
+
+            {/* TAB 10: DIGITAL REPORT CARD & EXAM MARKS (WEEKLY + QUARTERLY + HALF-YEARLY + ANNUAL) */}
+            {teacherPortalTab === 'report_card' && (
+              <Suspense
+                fallback={
+                  <div className="bg-white rounded-3xl p-12 text-center text-slate-500 font-bold border border-slate-200">
+                    <i className="fa-solid fa-circle-notch fa-spin text-amber-500 mr-2 text-2xl"></i>
+                    <span>डिजिटल मार्कशीट व रिपोर्ट कार्ड लोड हो रहा है...</span>
+                  </div>
+                }
+              >
+                <ReportCardManagerView
+                  students={students}
+                  behaviorList={behaviorList}
+                  weeklyTests={weeklyTestsList}
+                  examMarks={examMarksList}
+                  reportCardMeta={reportCardMetaMap}
+                  onExamMarksUpdated={(marks) => setExamMarksList(marks)}
+                  onReportCardMetaUpdated={(meta) => setReportCardMetaMap(meta)}
+                  currentUser={{
+                    id: teacherUser.User_ID,
+                    name: teacherUser.Name,
+                    role: teacherUser.Designation || 'Teacher',
+                    assignedClass: activeTeacherAssignedClass || teacherUser.Assigned_Class || '',
+                  }}
+                  isManager={false}
                 />
               </Suspense>
             )}
@@ -11458,10 +11678,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   type="button"
                   onClick={() => setIsManagerMenuOpen(true)}
                   className="px-3.5 py-2 bg-gradient-to-r from-[#0c2340] via-[#10316b] to-[#0c2340] hover:from-[#10316b] hover:to-[#0c2340] text-amber-300 font-black text-xs sm:text-sm rounded-xl flex items-center gap-2 shadow-md cursor-pointer transition-all active:scale-95 border border-amber-400/40 shrink-0"
-                  title="सभी 11 प्रबंधन सुविधाएं खोलें (3-Line Menu)"
+                  title="सभी 12 प्रबंधन सुविधाएं खोलें (3-Line Menu)"
                 >
                   <i className="fa-solid fa-bars text-sm"></i>
-                  <span>मेन्यू (11 सुविधाएं)</span>
+                  <span>मेन्यू (12 सुविधाएं)</span>
                   <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
                 </button>
 
@@ -11480,6 +11700,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       {managerTab === 'notices' && <><i className="fa-solid fa-bullhorn text-amber-600"></i> सूचना पट्ट व अवकाश</>}
                       {managerTab === 'autoTransport' && <><i className="fa-solid fa-route text-amber-700"></i> ऑटो व रूट फीस</>}
                       {managerTab === 'teacherPerformance' && <><i className="fa-solid fa-trophy text-amber-600"></i> 🏆 शिक्षक लीडरबोर्ड (100 Pts)</>}
+                      {managerTab === 'reportCards' && <><i className="fa-solid fa-graduation-cap text-indigo-800"></i> 🎓 मार्कशीट व रिपोर्ट कार्ड (PDF)</>}
                     </span>
                     <span className="px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-900 text-[10px] font-black shrink-0 border border-blue-200">
                       {managerTab === 'students' && `${filteredStudents.length}`}
@@ -11493,6 +11714,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       {managerTab === 'notices' && `${schoolNotices.length}`}
                       {managerTab === 'autoTransport' && 'रूट्स'}
                       {managerTab === 'teacherPerformance' && '100 Pts'}
+                      {managerTab === 'reportCards' && 'PDF'}
                     </span>
                   </div>
                 </div>
@@ -11688,6 +11910,39 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           </div>
                           <span className="px-2 py-0.5 rounded-lg text-xs font-black bg-amber-400 text-slate-950 shrink-0">
                             100 Pts
+                          </span>
+                        </button>
+
+                        {/* Digital Report Cards & Exam Marks */}
+                        <button
+                          type="button"
+                          id="manager-tab-report-cards"
+                          onClick={() => {
+                            fetchReportCardAllData(true);
+                            setManagerTab('reportCards');
+                            setIsManagerMenuOpen(false);
+                          }}
+                          className={`p-3 rounded-2xl border text-left transition-all flex items-center justify-between gap-3 cursor-pointer sm:col-span-2 ${
+                            managerTab === 'reportCards'
+                              ? 'bg-indigo-50 border-indigo-900 ring-2 ring-indigo-900/20 shadow-sm'
+                              : 'bg-white hover:bg-slate-50 border-slate-200'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <span className="w-10 h-10 rounded-xl bg-indigo-100 text-indigo-900 flex items-center justify-center text-lg shrink-0">
+                              <i className="fa-solid fa-graduation-cap"></i>
+                            </span>
+                            <div className="min-w-0">
+                              <h4 className="font-black text-xs sm:text-sm text-slate-900 truncate">
+                                🎓 मार्कशीट व रिपोर्ट कार्ड (Report Card PDF)
+                              </h4>
+                              <p className="text-[11px] text-slate-500 truncate">
+                                साप्ताहिक + तिमाही + छमाही + सालाना अंक, हाजिरी व Sheet बैकअप
+                              </p>
+                            </div>
+                          </div>
+                          <span className="px-2 py-0.5 rounded-lg text-xs font-black bg-indigo-900 text-amber-300 shrink-0">
+                            PDF
                           </span>
                         </button>
                       </div>
@@ -13328,6 +13583,34 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   behaviorList={behaviorList}
                   students={students}
                   classMap={classMap}
+                />
+              </Suspense>
+            )}
+
+            {/* VIEW 11: DIGITAL REPORT CARDS & EXAM MARKS (WEEKLY + QUARTERLY + HALF-YEARLY + ANNUAL) */}
+            {managerTab === 'reportCards' && (
+              <Suspense
+                fallback={
+                  <div className="bg-white rounded-3xl p-12 text-center text-slate-500 font-bold border border-slate-200">
+                    <i className="fa-solid fa-circle-notch fa-spin text-amber-500 mr-2 text-2xl"></i>
+                    <span>डिजिटल मार्कशीट व रिपोर्ट कार्ड सिस्टम लोड हो रहा है...</span>
+                  </div>
+                }
+              >
+                <ReportCardManagerView
+                  students={students}
+                  behaviorList={behaviorList}
+                  weeklyTests={weeklyTestsList}
+                  examMarks={examMarksList}
+                  reportCardMeta={reportCardMetaMap}
+                  onExamMarksUpdated={(marks) => setExamMarksList(marks)}
+                  onReportCardMetaUpdated={(meta) => setReportCardMetaMap(meta)}
+                  currentUser={{
+                    id: managerUser?.User_ID || 'MANAGER',
+                    name: managerUser?.Name || 'प्रबंधक / प्रधानाचार्य',
+                    role: 'Manager',
+                  }}
+                  isManager={true}
                 />
               </Suspense>
             )}

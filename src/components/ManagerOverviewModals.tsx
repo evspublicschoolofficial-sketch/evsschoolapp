@@ -1331,7 +1331,15 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                                         fatherName: student.Father_Name,
                                         pendingAmount,
                                       });
-                                      openWhatsappAlert(phone, msg);
+                                      openWhatsappAlert(phone, msg, {
+                                        alertType: 'Fee Due Reminder',
+                                        recipientType: 'Parent',
+                                        recipientId: student.Student_ID,
+                                        recipientName: student.Student_Name || student.Student_ID,
+                                        classOrRole: getClassName(student.Class),
+                                        amount: pendingAmount,
+                                        sentBy: 'Manager',
+                                      });
                                       setSentAlertIds((prev) => ({ ...prev, [alertKey]: true }));
                                     }}
                                     className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer ${
@@ -1661,7 +1669,15 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                                     dateStr: rec.Date || todayDmy,
                                     remark: rec.Remark,
                                   });
-                                  openWhatsappAlert(phone, msg);
+                                  openWhatsappAlert(phone, msg, {
+                                    alertType: 'Absent Alert',
+                                    recipientType: 'Parent',
+                                    recipientId: rec.Student_ID,
+                                    recipientName: st?.Student_Name || `Student ${rec.Student_ID}`,
+                                    classOrRole: getClassName(rec.Class || st?.Class || ''),
+                                    amount: 0,
+                                    sentBy: 'Manager',
+                                  });
                                   setSentAlertIds((prev) => ({ ...prev, [absentKey]: true }));
                                 }}
                                 className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer ${

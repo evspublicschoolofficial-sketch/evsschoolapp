@@ -76,3 +76,73 @@
 .animate-pulse-ring {
   animation: pulse-ring 2.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
+
+.no-capture-surface {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-user-drag: none;
+}
+
+.parent-print-block-notice {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 10mm;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .parent-protected-marksheet,
+  .parent-protected-marksheet * {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+  }
+
+  .parent-print-block-notice {
+    display: flex !important;
+    visibility: visible !important;
+    align-items: center;
+    justify-content: center;
+    min-height: 70vh;
+    padding: 2rem;
+    text-align: center;
+    font-weight: 900;
+    font-size: 18px;
+    color: #991b1b;
+    border: 2px dashed #dc2626;
+    border-radius: 16px;
+  }
+
+  body.printing-report-card * {
+    visibility: hidden !important;
+  }
+
+  body.printing-report-card #printable-report-card-sheet,
+  body.printing-report-card #printable-report-card-sheet * {
+    visibility: visible !important;
+  }
+
+  body.printing-report-card #printable-report-card-sheet {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    background: #ffffff !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
+

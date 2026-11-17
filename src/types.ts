@@ -223,4 +223,33 @@ export interface UpiPaymentRequest {
   createdAt: string;
 }
 
+export type ExamTermType = 'Quarterly' | 'Half-Yearly' | 'Annual';
 
+export interface ExamMarkRecord {
+  id: string;
+  session: string;
+  exam_type: ExamTermType;
+  student_id: string;
+  student_name: string;
+  class_name: string;
+  subject: string;
+  max_marks: number;
+  marks_obtained: number;
+  attendance_status?: 'Present' | 'Absent';
+  teacher_id?: string;
+  teacher_name?: string;
+  remarks?: string;
+  updated_at?: string;
+}
+
+export interface ReportCardRemarkRecord {
+  reportKey: string; // e.g. "2026-27::EVS001"
+  session: string;
+  studentId: string;
+  teacherRemark: string;
+  principalRemark: string;
+  resultStatus?: 'PROMOTED' | 'PASSED' | 'NEEDS IMPROVEMENT' | 'DETAINED';
+  publishedToParent?: boolean;
+  updatedBy?: string;
+  updatedAt?: string;
+}

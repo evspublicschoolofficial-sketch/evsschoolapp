@@ -1,5 +1,7 @@
 import { StaffSalaryConfig } from '../types';
 import { StaffMonthlyReport } from './staffAttendanceMetrics';
+import { getAppsScriptUrl } from './busTrackingService';
+import { dualSyncWriteToSheet } from './sheetDirectSync';
 
 const SALARY_STORAGE_KEY = 'evs_staff_salary_config_v1';
 const SALARY_EVENT = 'evs-staff-salary-updated';
@@ -41,10 +43,11 @@ export const saveLocalSalaryConfigs = (configs: Record<string, StaffSalaryConfig
   } catch {}
 };
 
-export const fetchSalaryConfigsFromServer = async (): Promise<Record<string, StaffSalaryConfig>> => {
+export const fetchSalaryConfigsFromServer = async (forceRefresh = false): Promise<Record<string, StaffSalaryConfig>> => {
   const local = loadLocalSalaryConfigs();
   try {
-    const res = await fetch(`/api/staff-salary-config?_t=${Date.now()}`, {
+    const res = await fetch(`/api/staff-salary-config${forceRefresh ? '?refresh=1&' : '?'}_t=${Date.now()}`, {
+      headers: { 'x-apps-script-url': getAppsScriptUrl() },
       cache: 'no-store',
     });
     if (res.ok) {
@@ -61,7 +64,7 @@ export const fetchSalaryConfigsFromServer = async (): Promise<Record<string, Sta
 
 export const saveStaffSalaryConfigToServer = async (
   config: StaffSalaryConfig
-): Promise<Record<string, StaffSalaryConfig>> => {
+): Promise<{ configs: Record<string, StaffSalaryConfig>; sheetSynced: boolean; sheetError?: string }> => {
   const key = String(config.userId || '').trim();
   const payload: StaffSalaryConfig = {
     ...config,
@@ -73,21 +76,86 @@ export const saveStaffSalaryConfigToServer = async (
   const nextLocal = { ...current, [key]: payload };
   saveLocalSalaryConfigs(nextLocal);
 
-  try {
-    const res = await fetch('/api/staff-salary-config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config: payload }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data?.configs && typeof data.configs === 'object') {
-        saveLocalSalaryConfigs(data.configs);
-        return data.configs;
-      }
-    }
-  } catch {}
-  return nextLocal;
+  const syncRes = await dualSyncWriteToSheet({
+    apiPath: '/api/staff-salary-config',
+    apiBody: { config: payload },
+    directPayload: {
+      action: 'saveStaffSalaryConfig',
+      config: payload,
+    },
+  });
+
+  if (syncRes.data?.configs && typeof syncRes.data.configs === 'object') {
+    saveLocalSalaryConfigs(syncRes.data.configs);
+    return {
+      configs: syncRes.data.configs,
+      sheetSynced: syncRes.sheetSynced,
+      sheetError: syncRes.sheetError,
+    };
+  }
+  return {
+    configs: nextLocal,
+    sheetSynced: syncRes.sheetSynced,
+    sheetError: syncRes.sheetError,
+  };
+};
+
+export interface StaffPayrollBackupRecord {
+  payrollKey: string;
+  monthKey: string;
+  monthName: string;
+  userId: string;
+  name: string;
+  role: string;
+  mobile: string;
+  workingDays: number;
+  presentDays: number;
+  absentDays: number;
+  halfDays: number;
+  lateDays: number;
+  totalLateMinutes: number;
+  extraOvertimeHours: number;
+  extraDutyDays: number;
+  baseSalary: number;
+  totalAdditions: number;
+  totalDeductions: number;
+  netPayable: number;
+  savedAt: string;
+}
+
+export const syncAllPayrollBackupToSheet = async (params: {
+  records: StaffPayrollBackupRecord[];
+  configs: Record<string, StaffSalaryConfig>;
+}): Promise<{ serverOk: boolean; sheetSynced: boolean; sheetError?: string }> => {
+  const res = await dualSyncWriteToSheet({
+    apiPath: '/api/staff-salary-payroll',
+    apiBody: {
+      records: params.records,
+      configs: params.configs,
+    },
+    directPayload: {
+      action: 'saveStaffSalaryPayroll',
+      records: params.records,
+    },
+  });
+
+  if (params.configs && Object.keys(params.configs).length > 0 && !res.sheetSynced) {
+    // Also try pushing configs directly if payroll needed fallback
+    await dualSyncWriteToSheet({
+      apiPath: '/api/staff-salary-config',
+      apiBody: { config: Object.values(params.configs)[0] },
+      directPayload: {
+        action: 'saveStaffSalaryConfig',
+        configs: params.configs,
+      },
+    }).catch(() => {});
+  }
+
+  return {
+    serverOk: res.serverOk,
+    sheetSynced: res.sheetSynced,
+    sheetError: res.sheetError,
+  };
 };
 
 export const subscribeSalaryConfigUpdates = (

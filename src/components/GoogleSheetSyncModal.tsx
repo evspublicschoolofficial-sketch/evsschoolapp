@@ -492,14 +492,14 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
         </div>
 
         {/* Modal Footer */}
-        <div className="p-3.5 sm:p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+        <div className="p-3.5 sm:p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-2">
           <span className="text-[11px] text-slate-500">
-            टैब: Bus_Tracking, Route_Stops • स्प्रेडशीट ID: 1AHQowKTK_...
+            सभी 21 टैब (2-Way सिंक): Exam_Marks, Report_Cards_Backup, Weekly_Tests, Teacher_Performance, Syllabus_Tracker, School_Holidays, WhatsApp_Alert_Logs, Staff_Salary_Config, Staff_Salary_Payroll, UPI_Settings, UPI_Payments, Bus_Tracking, Route_Stops
           </span>
           <button
             type="button"
             onClick={onClose}
-            className="px-5 py-2 rounded-xl bg-blue-900 hover:bg-blue-800 text-white text-xs font-bold transition-colors cursor-pointer"
+            className="px-5 py-2 rounded-xl bg-blue-900 hover:bg-blue-800 text-white text-xs font-bold transition-colors cursor-pointer shrink-0"
           >
             समझ गया (बंद करें)
           </button>

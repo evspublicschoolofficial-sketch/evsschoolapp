@@ -31,6 +31,7 @@ import {
   verifyUpiPaymentOnServer,
   subscribeUpiUpdates,
   compressReceiptImageFile,
+  syncAllUpiBackupToSheet,
 } from '../utils/upiFeeHelper';
 import { openWhatsappAlert, buildFeeDueReminderMessage } from '../utils/whatsappReminders';
 
@@ -320,6 +321,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
   const [rejectReason, setRejectReason] = useState<string>('');
   const [upiScreenshotPreview, setUpiScreenshotPreview] = useState<string | null>(null);
   const [upiActionBanner, setUpiActionBanner] = useState<string | null>(null);
+  const [syncingUpiBackup, setSyncingUpiBackup] = useState<boolean>(false);
 
   // Edit Fee Modal State for Manager
   const [editingFee, setEditingFee] = useState<FeeCollectionRecord | null>(null);
@@ -448,7 +450,9 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
       const latest = await fetchUpiPaymentsFromServer();
       setUpiPayments(latest);
       setUpiActionBanner(
-        `✅ ${pay.studentName} के ₹${Number(pay.amount).toLocaleString('en-IN')} सत्यापित होकर पक्की रसीद #${receiptNo} जारी हो गई!`
+        verifyRes.sheetSynced
+          ? `✅ ${pay.studentName} के ₹${Number(pay.amount).toLocaleString('en-IN')} सत्यापित होकर पक्की रसीद #${receiptNo} व Google Sheet ('UPI_Payments' + 'Fee_Collection') में सेव हो गई!`
+          : `✅ ${pay.studentName} के ₹${Number(pay.amount).toLocaleString('en-IN')} की रसीद #${receiptNo} जारी हो गई! (UPI_Payments Sheet बैकअप: ${verifyRes.sheetError || 'नया Apps Script Deploy करें'})`
       );
       setTimeout(() => setUpiActionBanner(null), 6000);
     } finally {
@@ -2090,7 +2094,15 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                           fatherName: selectedStudent.Father_Name,
                           pendingAmount: studentFeeSummary.balance,
                         });
-                        openWhatsappAlert(selectedStudent.Parent_Mobile, msg);
+                        openWhatsappAlert(selectedStudent.Parent_Mobile, msg, {
+                          alertType: 'Fee Due Reminder',
+                          recipientType: 'Parent',
+                          recipientId: selectedStudent.Student_ID,
+                          recipientName: selectedStudent.Student_Name || selectedStudent.Student_ID,
+                          classOrRole: getClassName(selectedStudent.Class),
+                          amount: studentFeeSummary.balance,
+                          sentBy: managerName,
+                        });
                       }}
                       className="px-3.5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs"
                       title="बकाया फीस जमा करने हेतु अभिभावक को 1-क्लिक रिमाइंडर भेजें"
@@ -2810,6 +2822,65 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
               </div>
               <button
                 type="button"
+                disabled={syncingUpiBackup}
+                onClick={async () => {
+                  setSyncingUpiBackup(true);
+                  setUpiActionBanner(null);
+                  try {
+                    const syncRes = await syncAllUpiBackupToSheet(upiSettings, upiPayments);
+                    setUpiActionBanner(
+                      syncRes.sheetSynced
+                        ? `✅ सभी ${upiPayments.length} UPI रिकॉर्ड व सेटिंग्स Google Sheet ('UPI_Payments' व 'UPI_Settings') में बैकअप हो गए!`
+                        : `⚠️ बैकअप Google Sheet में नहीं जा सका: ${syncRes.sheetError || 'कृपया नया Apps Script कोड Deploy करें'}`
+                    );
+                  } finally {
+                    setSyncingUpiBackup(false);
+                  }
+                }}
+                className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
+                title="सभी UPI पेमेंट्स और सेटिंग्स को Google Sheet में बैकअप करें"
+              >
+                <i className={`fa-solid ${syncingUpiBackup ? 'fa-spinner fa-spin' : 'fa-cloud-arrow-up'}`}></i>
+                <span>{syncingUpiBackup ? 'सिंक...' : 'Sheet बैकअप'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const headers = ['Payment_ID', 'Date', 'Student_ID', 'Student_Name', 'Class', 'Amount', 'UTR_Number', 'App', 'Fee_Type', 'Month', 'Status', 'Receipt_No', 'Verified_By'];
+                  const lines = [headers.join(',')];
+                  upiPayments.forEach((p) => {
+                    lines.push(
+                      [
+                        `"${p.id}"`,
+                        `"${p.paymentDate}"`,
+                        `"${p.studentId}"`,
+                        `"${String(p.studentName || '').replace(/"/g, '""')}"`,
+                        `"${String(p.className || '')}"`,
+                        p.amount,
+                        `"${p.utrNumber}"`,
+                        `"${p.paymentApp}"`,
+                        `"${p.feeType}"`,
+                        `"${p.month}"`,
+                        `"${p.status}"`,
+                        `"${p.receiptNumber || ''}"`,
+                        `"${p.verifiedBy || ''}"`,
+                      ].join(',')
+                    );
+                  });
+                  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+                  const link = document.createElement('a');
+                  link.href = URL.createObjectURL(blob);
+                  link.download = `EVS_UPI_Payments_Backup_${new Date().toISOString().split('T')[0]}.csv`;
+                  link.click();
+                }}
+                className="px-3 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer"
+                title="CSV फाइल डाउनलोड करें"
+              >
+                <i className="fa-solid fa-file-csv text-emerald-700"></i>
+                <span>CSV</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => {
                   setUpiSettingsForm(upiSettings);
                   setShowUpiSettingsModal(true);
@@ -2817,7 +2888,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                 className="px-3.5 py-2 rounded-xl bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
               >
                 <i className="fa-solid fa-gear"></i>
-                <span>UPI QR बदलें / सेट करें</span>
+                <span>UPI QR सेटिंग्स</span>
               </button>
             </div>
           </div>
@@ -3599,9 +3670,14 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                 e.preventDefault();
                 setSavingUpiSettings(true);
                 try {
-                  const saved = await saveUpiSettingsToServer(upiSettingsForm);
-                  setUpiSettings(saved);
+                  const res = await saveUpiSettingsToServer(upiSettingsForm);
+                  setUpiSettings(res.settings);
                   setShowUpiSettingsModal(false);
+                  setUpiActionBanner(
+                    res.sheetSynced
+                      ? `✅ स्कूल UPI सेटिंग्स (${res.settings.upiId}) सर्वर व Google Sheet ('UPI_Settings') में सेव हो गईं!`
+                      : `✅ UPI सेटिंग्स ऐप सर्वर पर सेव हो गईं। (Sheet बैकअप: ${res.sheetError || 'नया Apps Script Deploy करें'})`
+                  );
                 } finally {
                   setSavingUpiSettings(false);
                 }
