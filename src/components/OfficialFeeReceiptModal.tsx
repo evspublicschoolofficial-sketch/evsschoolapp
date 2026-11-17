@@ -1,4 +1,5 @@
 import React from 'react';
+import { getLocalDateYMD } from '../utils/localTime';
 import { Student, FeeCollectionRecord } from '../types';
 
 interface OfficialFeeReceiptModalProps {
@@ -78,7 +79,7 @@ export const OfficialFeeReceiptModal: React.FC<OfficialFeeReceiptModalProps> = (
     ? calculatedBal
     : rawBalance;
 
-  const receiptDate = feeRecord.Date || new Date().toISOString().slice(0, 10);
+  const receiptDate = feeRecord.Date || getLocalDateYMD();
   const paymentMode = feeRecord.Payment_Mode || 'Cash';
   const feeHead = feeRecord.Fee_Type || feeRecord.Month || 'शैक्षणिक शुल्क (School Tuition Fee)';
   const receiver = feeRecord.Received_By || managerName;

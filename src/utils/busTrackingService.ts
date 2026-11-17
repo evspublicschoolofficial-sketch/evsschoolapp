@@ -1,6 +1,7 @@
 // Bus Tracking Service & Telemetry Synchronizer
 // Synchronizes with Google Sheets ("Bus_Tracking" & "Users") and real-time backend API
 import { RouteStoppage } from '../types/routeTracking';
+import { getLocalTimestamp } from './localTime';
 
 export const SPREADSHEET_ID = '1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU';
 export const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbwVy51K14qu6IXipAZXP4NspFcAUHpLcYv8-zjhkYnBlUI17TzGi_KaJU9TRmNT8D5vvQ/exec';
@@ -381,6 +382,23 @@ function menuCreateNotices() {
   } catch(e) {}
 }
 
+function formatToLocalIST_(val, fallbackNowStr) {
+  var fallback = fallbackNowStr || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  if (!val) return fallback;
+  if (Object.prototype.toString.call(val) === "[object Date]") {
+    return Utilities.formatDate(val, "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  }
+  var s = String(val).trim();
+  if (!s) return fallback;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s) && (s.endsWith("Z") || /[+-]\d{2}:?\d{2}$/.test(s))) {
+    var dt = new Date(s);
+    if (!isNaN(dt.getTime())) {
+      return Utilities.formatDate(dt, "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+    }
+  }
+  return s;
+}
+
 function normalizeSheetKey_(name) {
   return String(name || "").toLowerCase().replace(/[\\s_\\-]+/g, "");
 }
@@ -748,7 +766,7 @@ function doPost(e) {
         sheet.appendRow(["Homework_ID", "Date", "Class", "Subject", "Homework_Detail", "Target_Type", "", "", "", "", "Teacher"]);
       }
       var hwId = String(data.homework_id || data.id || "HW-" + Date.now()).trim();
-      var hwDate = String(data.date || new Date().toISOString().split("T")[0]).trim();
+      var hwDate = String(data.date || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd")).trim();
       var hwClass = String(data.class_name || data.class || "").trim();
       var hwSubj = String(data.subject || "").trim();
       var hwDetail = String(data.detail || data.Homework_Detail || "").trim();
@@ -826,7 +844,7 @@ function doPost(e) {
       sheet.appendRow([
         data.receipt_no || "REC-" + Date.now(),
         data.student_id || "",
-        data.date || new Date().toISOString().split("T")[0],
+        data.date || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd"),
         data.fee_type || "Monthly",
         data.month || "",
         data.total_amount !== undefined ? Number(data.total_amount) : 0,
@@ -1006,7 +1024,7 @@ function doPost(e) {
         if (!it) continue;
         var sId = String(it.student_id || it.Student_ID || "").trim();
         if (!sId) continue;
-        var dt = String(it.date || it.Date || new Date().toISOString().split("T")[0]).trim();
+        var dt = String(it.date || it.Date || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd")).trim();
         var bId = String(it.behavior_id || it.Behavior_ID || ("BEH-" + sId + "-" + dt)).trim();
         var cls = String(it.class || it.Class || "").trim();
 
@@ -1072,7 +1090,7 @@ function doPost(e) {
 
       var recId = String(data.record_id || data.id || "TRK-" + Date.now()).trim();
       var sId = String(data.student_id || "").trim();
-      var curDate = String(data.date || new Date().toISOString().split("T")[0]).trim();
+      var curDate = String(data.date || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd")).trim();
       var compDate = cleanDateForCompare(curDate);
       var curRawStatus = String(data.status || "Completed").trim();
       var curStatus = /incom|pend|adhura|not/i.test(curRawStatus) ? "Incompleted" : "Completed";
@@ -1139,7 +1157,7 @@ function doPost(e) {
       }
 
       var sIds = data.student_ids || [];
-      var curDate = String(data.date || new Date().toISOString().split("T")[0]).trim();
+      var curDate = String(data.date || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd")).trim();
       var compDate = cleanDateForCompare(curDate);
       var curRawStatus = String(data.status || "Completed").trim();
       var curStatus = /incom|pend|adhura|not/i.test(curRawStatus) ? "Incompleted" : "Completed";
@@ -2668,7 +2686,7 @@ function handleSaveStaffSalaryConfig(ss, data) {
       Number(cfg.allowances || 0),
       Number(cfg.manualDeduction || 0),
       String(cfg.notes || ""),
-      String(cfg.updatedAt || nowStr)
+      formatToLocalIST_(cfg.updatedAt, nowStr)
     ];
     var targetRow = rowMap[uidVal.toLowerCase()];
     if (targetRow) {
@@ -2768,7 +2786,7 @@ function handleSaveStaffSalaryPayroll(ss, data) {
       Number(rec.totalAdditions || 0),
       Number(rec.totalDeductions || 0),
       Number(rec.netPayable || 0),
-      String(rec.savedAt || nowStr)
+      formatToLocalIST_(rec.savedAt, nowStr)
     ];
     var tRow = keyMap[pKey.toLowerCase()];
     if (tRow) {
@@ -2828,7 +2846,7 @@ function handleSaveUpiSettings(ss, data) {
     String(s.bankName || ""),
     String(s.instructions || ""),
     (s.hasStaticQr || (s.staticQrImage && String(s.staticQrImage).length > 10)) ? "YES" : "NO",
-    String(s.updatedAt || nowStr)
+    formatToLocalIST_(s.updatedAt, nowStr)
   ];
   if (sheet.getLastRow() >= 2) {
     sheet.getRange(2, 1, 1, 7).setValues([rowArr]);
@@ -2888,9 +2906,10 @@ function upsertUpiPaymentRow(sheet, p) {
       break;
     }
   }
+  var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
   var rowArr = [
     pid,
-    String(p.createdAt || ""),
+    formatToLocalIST_(p.createdAt, nowStr),
     String(p.studentId || ""),
     String(p.studentName || ""),
     String(p.className || ""),
@@ -2907,7 +2926,7 @@ function upsertUpiPaymentRow(sheet, p) {
     String(p.receiptNumber || ""),
     String(p.managerNote || ""),
     String(p.verifiedBy || ""),
-    String(p.verifiedAt || ""),
+    p.verifiedAt ? formatToLocalIST_(p.verifiedAt, nowStr) : "",
     (p.hasScreenshot || (p.screenshotData && String(p.screenshotData).length > 10)) ? "YES" : "NO"
   ];
   if (tRow > 0) {
@@ -2950,7 +2969,7 @@ function handleVerifyUpiPayment(ss, data) {
           String(p.receiptNumber || ""),
           String(p.managerNote || ""),
           String(p.verifiedBy || "School Manager"),
-          String(p.verifiedAt || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss"))
+          formatToLocalIST_(p.verifiedAt, Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss"))
         ]]);
         break;
       }
@@ -3060,7 +3079,7 @@ function upsertExamMarksArray(sheet, records) {
       String(rec.teacher_id || ""),
       String(rec.teacher_name || ""),
       String(rec.remarks || ""),
-      String(rec.updated_at || nowStr)
+      formatToLocalIST_(rec.updated_at, nowStr)
     ];
     var targetRow = idMap[markId.toLowerCase()] || compositeMap[comp];
     if (targetRow) {
@@ -3168,7 +3187,7 @@ function handleSaveReportCardMeta(ss, data) {
       String(m.resultStatus || "PROMOTED"),
       pubStr,
       String(m.updatedBy || "Staff"),
-      String(m.updatedAt || nowStr)
+      formatToLocalIST_(m.updatedAt, nowStr)
     ]]);
   } else {
     sheet.appendRow([
@@ -3184,7 +3203,7 @@ function handleSaveReportCardMeta(ss, data) {
       String(m.resultStatus || "PROMOTED"),
       pubStr,
       String(m.updatedBy || "Staff"),
-      String(m.updatedAt || nowStr)
+      formatToLocalIST_(m.updatedAt, nowStr)
     ]);
   }
   return ContentService.createTextOutput(JSON.stringify({
@@ -3245,7 +3264,7 @@ function handleSyncReportCardsBatch(ss, data) {
       String(b.resultStatus || "PROMOTED"),
       (b.publishedToParent === false) ? "NO" : "YES",
       String(b.updatedBy || "Manager"),
-      String(b.updatedAt || nowStr)
+      formatToLocalIST_(b.updatedAt, nowStr)
     ];
     var tRow = keyMap[rKey.toLowerCase()];
     if (tRow) {
@@ -3415,7 +3434,7 @@ function handleSaveWeeklyTestsBatch(ss, data) {
       Number(rec.marks_obtained || 0),
       String(rec.attendance_status || "Present") === "Absent" ? "Absent" : "Present",
       String(rec.remarks || ""),
-      String(rec.timestamp || nowStr)
+      formatToLocalIST_(rec.timestamp, nowStr)
     ];
     var tRow = idMap[recId.toLowerCase()];
     if (tRow) {
@@ -3485,7 +3504,7 @@ function handleSaveTeacherPerformance(ss, data) {
     Number(rec.syllabus_progress_score || 0), Number(rec.student_test_score || 0),
     Number(rec.attendance_logging_score || 0), Number(rec.homework_evaluation_score || 0),
     Number(rec.punctuality_discipline_score || 0), Number(rec.monthly_total_score || 0),
-    rec.grade || "B", rec.evaluated_by || "Principal / Manager", rec.remarks || "", new Date()
+    rec.grade || "B", rec.evaluated_by || "Principal / Manager", rec.remarks || "", formatToLocalIST_(rec.timestamp)
   ];
   if (rowIndex > 0) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
   else sheet.appendRow(rowData);
@@ -3538,7 +3557,7 @@ function handleSaveSyllabusTopic(ss, data) {
     topicId, t.teacher_id || "", t.teacher_name || "", t.class_name || "", t.subject || "",
     "'" + String(t.month || ""), Number(t.week_number || 1), t.week_label || "",
     t.chapter_title || "", t.topic_description || "", t.planned_date || "",
-    t.target_completion_date || "", t.completed_date || "", t.status || "Pending", new Date()
+    t.target_completion_date || "", t.completed_date || "", t.status || "Pending", formatToLocalIST_(t.timestamp)
   ];
   if (rowIndex > 0) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
   else sheet.appendRow(rowData);
@@ -3581,9 +3600,10 @@ function handleSaveSchoolHoliday(ss, data) {
   for (var i = 1; i < rows.length; i++) {
     if (String(rows[i][0]) === holId) { rowIndex = i + 1; break; }
   }
+  var nowIst = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
   var rowData = dateFirst
-    ? [holId, "'" + String(h.date || ""), h.end_date ? ("'" + String(h.end_date)) : "", h.title || "", h.category || "festival", h.description || "", new Date()]
-    : [holId, h.title || "", "'" + String(h.date || ""), h.end_date ? ("'" + String(h.end_date)) : "", h.category || "festival", h.description || "", new Date()];
+    ? [holId, "'" + String(h.date || ""), h.end_date ? ("'" + String(h.end_date)) : "", h.title || "", h.category || "festival", h.description || "", formatToLocalIST_(h.timestamp, nowIst)]
+    : [holId, h.title || "", "'" + String(h.date || ""), h.end_date ? ("'" + String(h.end_date)) : "", h.category || "festival", h.description || "", formatToLocalIST_(h.timestamp, nowIst)];
   if (rowIndex > 0) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
   else sheet.appendRow(rowData);
   return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "Holiday saved!" })).setMimeType(ContentService.MimeType.JSON);
@@ -3717,7 +3737,7 @@ export const syncLocationToSheetBackend = async (data: {
   status?: string;
 }): Promise<{ success: boolean; message?: string }> => {
   const locStr = `${data.latitude.toFixed(6)}, ${data.longitude.toFixed(6)}`;
-  const now = new Date().toISOString();
+  const now = getLocalTimestamp();
   const activeUrl = getAppsScriptUrl();
 
   // 1. First, always sync immediately to shared local server API (/api/bus-tracking)

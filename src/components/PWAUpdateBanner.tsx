@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
   applyPWAUpdate,
-  checkForAppUpdate,
   getPWAUpdateState,
   PWAUpdateState,
   subscribePWAUpdate,
@@ -32,8 +31,8 @@ export const PWAHeaderUpdateButton: React.FC<PWAUpdateProps> = ({ lang = 'hi' })
         className="relative px-2.5 sm:px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-400 via-emerald-300 to-amber-300 hover:from-emerald-300 hover:to-amber-200 text-slate-950 font-black text-xs shadow-lg shadow-emerald-500/30 border border-emerald-200 flex items-center gap-1.5 cursor-pointer transition-all active:scale-95 shrink-0"
         title={
           lang === 'en'
-            ? 'New App Update Available! Tap to load latest version.'
-            : 'नया ऐप अपडेट उपलब्ध है! नया वर्ज़न लोड करने के लिए क्लिक करें।'
+            ? 'New GitHub/App update available! Tap Update Now to load the latest version.'
+            : 'GitHub पर नया ऐप अपडेट उपलब्ध है! अभी अपडेट करने के लिए क्लिक करें।'
         }
       >
         <span className="w-2 h-2 rounded-full bg-rose-600 animate-ping shrink-0" />
@@ -44,8 +43,8 @@ export const PWAHeaderUpdateButton: React.FC<PWAUpdateProps> = ({ lang = 'hi' })
               ? 'Updating...'
               : 'अपडेट हो रहा...'
             : lang === 'en'
-            ? 'Update App'
-            : 'अपडेट करें'}
+            ? 'Update Now'
+            : 'अभी अपडेट करें'}
         </span>
       </button>
     );
@@ -54,26 +53,18 @@ export const PWAHeaderUpdateButton: React.FC<PWAUpdateProps> = ({ lang = 'hi' })
   return (
     <button
       type="button"
-      onClick={() => checkForAppUpdate(true)}
-      disabled={pwaState.isChecking}
-      className="px-2.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-amber-200 hover:text-white border border-white/20 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all active:scale-95 disabled:opacity-60 shrink-0"
+      disabled
+      aria-disabled="true"
+      className="px-2.5 py-1.5 rounded-xl bg-white/5 text-slate-300/60 border border-white/10 text-xs font-bold flex items-center gap-1.5 cursor-not-allowed opacity-60 shrink-0 select-none"
       title={
         lang === 'en'
-          ? 'Check for new app updates'
-          : 'नया ऐप अपडेट जांचें (Check for Updates)'
+          ? 'Up to date — Update Now becomes active only when a new update is pushed to GitHub'
+          : 'ऐप नवीनतम वर्ज़न पर है — GitHub पर नया अपडेट आने पर ही यह बटन सक्रिय होगा'
       }
     >
-      <i className={`fa-solid fa-arrows-rotate text-[11px] ${pwaState.isChecking ? 'fa-spin text-amber-300' : ''}`} />
-      <span className="hidden sm:inline">
-        {pwaState.isChecking
-          ? lang === 'en'
-            ? 'Checking...'
-            : 'जांच रहा...'
-          : lang === 'en'
-          ? 'Check Update'
-          : 'अपडेट जांचें'}
-      </span>
-      <span className="sm:hidden">{lang === 'en' ? 'Update' : 'अपडेट'}</span>
+      <i className="fa-solid fa-circle-check text-[11px] text-emerald-400/75" />
+      <span className="hidden sm:inline">{lang === 'en' ? 'Update Now' : 'अभी अपडेट करें'}</span>
+      <span className="sm:hidden">{lang === 'en' ? 'Update Now' : 'अपडेट'}</span>
     </button>
   );
 };

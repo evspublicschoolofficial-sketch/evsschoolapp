@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { getLocalDateYMD, getLocalTimestamp } from '../utils/localTime';
 import { SchoolUser, SyllabusTopicRecord } from '../types';
 import { ACADEMIC_MONTHS, getDefaultAcademicMonth } from '../utils/teacherPerformanceEngine';
 import { getAppsScriptUrl } from '../utils/busTrackingService';
@@ -126,8 +127,8 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
   const [formClass, setFormClass] = useState<string>(currentUser?.Assigned_Class || 'Class 5');
   const [formSubject, setFormSubject] = useState<string>('गणित (Mathematics)');
   const [formWeekNumber, setFormWeekNumber] = useState<number>(1);
-  const [formPlannedDate, setFormPlannedDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [formTargetDate, setFormTargetDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [formPlannedDate, setFormPlannedDate] = useState<string>(getLocalDateYMD());
+  const [formTargetDate, setFormTargetDate] = useState<string>(getLocalDateYMD());
   const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
 
   const [isRefreshingSheet, setIsRefreshingSheet] = useState<boolean>(false);
@@ -409,8 +410,8 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
         return {
           ...t,
           status: nextStatus,
-          completed_date: nextStatus === 'Completed' ? new Date().toISOString().split('T')[0] : undefined,
-          timestamp: new Date().toISOString(),
+          completed_date: nextStatus === 'Completed' ? getLocalDateYMD() : undefined,
+          timestamp: getLocalTimestamp(),
         };
       }
       return t;
@@ -471,8 +472,8 @@ export const TeacherSyllabusPlanner: React.FC<TeacherSyllabusPlannerProps> = ({
       target_completion_date: formTargetDate,
       status: existingItem?.status || 'Pending',
       completed_date: existingItem?.completed_date,
-      created_at: existingItem?.created_at || new Date().toISOString().split('T')[0],
-      timestamp: new Date().toISOString(),
+      created_at: existingItem?.created_at || getLocalDateYMD(),
+      timestamp: getLocalTimestamp(),
     };
 
     let updatedList: SyllabusTopicRecord[];

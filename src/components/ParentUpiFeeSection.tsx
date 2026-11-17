@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
+import { getLocalDateYMD } from '../utils/localTime';
 import { Student, UpiPaymentRequest, UpiSettings } from '../types';
 import {
   DEFAULT_UPI_SETTINGS,
@@ -60,7 +61,7 @@ export const ParentUpiFeeSection: React.FC<ParentUpiFeeSectionProps> = ({
   });
   const [utrNumber, setUtrNumber] = useState<string>('');
   const [paymentApp, setPaymentApp] = useState<string>('PhonePe');
-  const [paymentDate, setPaymentDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [paymentDate, setPaymentDate] = useState<string>(() => getLocalDateYMD());
   const [payerName, setPayerName] = useState<string>(student.Father_Name || '');
   const [notes, setNotes] = useState<string>('');
   const [screenshotData, setScreenshotData] = useState<string>('');

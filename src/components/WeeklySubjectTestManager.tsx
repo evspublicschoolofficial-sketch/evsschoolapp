@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { getLocalDateYMD, getLocalTimestamp } from '../utils/localTime';
 import { SchoolUser, Student, WeeklyTestRecord } from '../types';
 import { ACADEMIC_MONTHS, getDefaultAcademicMonth } from '../utils/teacherPerformanceEngine';
 import { getAppsScriptUrl } from '../utils/busTrackingService';
@@ -102,7 +103,7 @@ export const WeeklySubjectTestManager: React.FC<WeeklySubjectTestManagerProps> =
   );
   const [formMonth, setFormMonth] = useState<string>(() => getDefaultAcademicMonth());
   const [formWeek, setFormWeek] = useState<number>(1);
-  const [formTestDate, setFormTestDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [formTestDate, setFormTestDate] = useState<string>(() => getLocalDateYMD());
   const [formClass, setFormClass] = useState<string>('');
   const [formSubject, setFormSubject] = useState<string>(COMMON_SUBJECTS[0]);
   const [formCustomSubject, setFormCustomSubject] = useState<string>('');
@@ -239,7 +240,7 @@ export const WeeklySubjectTestManager: React.FC<WeeklySubjectTestManagerProps> =
     setFormTeacherId(defaultTid);
     setFormMonth(selectedMonth);
     setFormWeek(selectedWeek > 0 ? selectedWeek : 1);
-    setFormTestDate(new Date().toISOString().slice(0, 10));
+    setFormTestDate(getLocalDateYMD());
     setFormClass(assignedFirst || availableClasses[0] || '');
     setFormSubject(COMMON_SUBJECTS[0]);
     setFormCustomSubject('');
@@ -441,7 +442,7 @@ export const WeeklySubjectTestManager: React.FC<WeeklySubjectTestManagerProps> =
           marks_obtained: 0,
           attendance_status: 'Absent',
           remarks: inp.remarks || 'अनुपस्थित',
-          timestamp: new Date().toISOString(),
+          timestamp: getLocalTimestamp(),
         });
       } else if (inp.marks !== '' && !isNaN(Number(inp.marks))) {
         const clamped = Math.max(0, Math.min(maxM, Number(inp.marks)));
@@ -462,7 +463,7 @@ export const WeeklySubjectTestManager: React.FC<WeeklySubjectTestManagerProps> =
           marks_obtained: clamped,
           attendance_status: 'Present',
           remarks: inp.remarks || '',
-          timestamp: new Date().toISOString(),
+          timestamp: getLocalTimestamp(),
         });
       }
     }

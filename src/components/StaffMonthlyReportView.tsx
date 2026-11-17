@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { getLocalTimestamp } from '../utils/localTime';
 import { SchoolUser, StaffAttendanceRecord, SchoolHolidayRecord } from '../types';
 import {
   calculateStaffMonthlyStats,
@@ -1353,7 +1354,7 @@ export const StaffMonthlyReportView: React.FC<StaffMonthlyReportViewProps> = ({
                                 totalAdditions: calc.totalAdditions,
                                 totalDeductions: calc.totalDeductions,
                                 netPayable: calc.netPayable,
-                                savedAt: new Date().toISOString(),
+                                savedAt: getLocalTimestamp(),
                               }));
                               const res = await syncAllPayrollBackupToSheet({
                                 records: payloadRecords,

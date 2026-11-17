@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { getLocalDateYMD } from '../utils/localTime';
 import { StudentRecordForScan } from './StudentQRScannerModal';
 
 export interface StudentBehaviorInput {
@@ -54,7 +55,7 @@ export const StudentBehaviorModal: React.FC<StudentBehaviorModalProps> = ({
   getClassName = (c) => c || 'N/A',
   getStudentPhoto = (_s?: any) => '',
 }) => {
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getLocalDateYMD();
 
   const [date, setDate] = useState<string>(todayStr);
   const [isPresent, setIsPresent] = useState<boolean>(true);
@@ -231,9 +232,9 @@ export const StudentBehaviorModal: React.FC<StudentBehaviorModalProps> = ({
                 <div className="flex items-center gap-1">
                   <button
                     type="button"
-                    onClick={() => setDate(new Date().toISOString().split('T')[0])}
+                    onClick={() => setDate(getLocalDateYMD())}
                     className={`text-[10px] px-1.5 py-0.5 rounded font-bold transition-colors cursor-pointer ${
-                      date === new Date().toISOString().split('T')[0]
+                      date === getLocalDateYMD()
                         ? 'bg-blue-900 text-amber-300'
                         : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                     }`}
@@ -245,7 +246,7 @@ export const StudentBehaviorModal: React.FC<StudentBehaviorModalProps> = ({
                     onClick={() => {
                       const d = new Date();
                       d.setDate(d.getDate() - 1);
-                      setDate(d.toISOString().split('T')[0]);
+                      setDate(getLocalDateYMD(d));
                     }}
                     className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 hover:bg-slate-200 font-bold transition-colors cursor-pointer"
                   >

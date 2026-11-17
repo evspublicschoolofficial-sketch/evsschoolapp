@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { getLocalDateYMD, getLocalTimestamp } from '../utils/localTime';
 import { Student, StudentBehaviorRecord, SchoolHolidayRecord } from '../types';
 import { getAppsScriptUrl } from '../utils/busTrackingService';
 import { directGetFromSheet, dualSyncWriteToSheet } from '../utils/sheetDirectSync';
@@ -275,7 +276,7 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
       end_date: holidayEndDate ? holidayEndDate : undefined,
       category: holidayCategory,
       description: holidayDescription.trim() || undefined,
-      created_at: new Date().toISOString(),
+      created_at: getLocalTimestamp(),
     };
 
     const updated = [...holidays, newHoliday].sort((a, b) => a.date.localeCompare(b.date));
@@ -342,7 +343,7 @@ export const AttendanceCalendarModal: React.FC<AttendanceCalendarModalProps> = (
   // Filter for Absent List tab
   const [absentDateStr, setAbsentDateStr] = useState<string>(() => {
     const today = new Date();
-    return today.toISOString().slice(0, 10);
+    return getLocalDateYMD(today);
   });
   const [absentClassFilter, setAbsentClassFilter] = useState<string>('All');
   const [activeStudentId, setActiveStudentId] = useState<string>(() => selectedStudent?.Student_ID || '');

@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { getLocalDateYMD } from '../utils/localTime';
 import { SchoolUser, StaffAttendanceRecord, SchoolHolidayRecord } from '../types';
 import { StaffMonthlyReportView } from './StaffMonthlyReportView';
 import { SchoolLocationModal } from './SchoolLocationModal';
@@ -66,7 +67,7 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
   }, []);
 
   const [selectedDate, setSelectedDate] = useState<string>(() => {
-    return new Date().toISOString().split('T')[0];
+    return getLocalDateYMD();
   });
   const [searchStaff, setSearchStaff] = useState<string>('');
   const [filterDesignation, setFilterDesignation] = useState<string>('all');
@@ -86,7 +87,7 @@ export const StaffAttendanceView: React.FC<StaffAttendanceViewProps> = ({
     return subscribeSchoolHolidaysUpdates(setSchoolHolidays);
   }, []);
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getLocalDateYMD();
   const todayHoliday = useMemo(() => findHolidayForDate(todayStr, schoolHolidays), [todayStr, schoolHolidays]);
   const selectedDateHoliday = useMemo(() => findHolidayForDate(selectedDate, schoolHolidays), [selectedDate, schoolHolidays]);
 

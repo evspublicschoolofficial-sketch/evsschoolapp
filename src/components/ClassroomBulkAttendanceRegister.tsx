@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { getLocalDateYMD } from '../utils/localTime';
 import { Student, StudentBehaviorRecord, SchoolHolidayRecord } from '../types';
 import { StudentAvatar } from './StudentAvatar';
 import {
@@ -243,7 +244,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
   lang = 'en',
 }) => {
   const isEn = lang === 'en';
-  const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
+  const todayStr = useMemo(() => getLocalDateYMD(), []);
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
   const [schoolHolidays, setSchoolHolidays] = useState<SchoolHolidayRecord[]>(() => loadLocalSchoolHolidays());
 

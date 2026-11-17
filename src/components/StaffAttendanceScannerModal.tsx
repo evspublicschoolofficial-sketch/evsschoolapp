@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
+import { getLocalDateYMD } from '../utils/localTime';
 import jsQR from 'jsqr';
 import { SchoolUser, StaffAttendanceRecord } from '../types';
 import { SCHOOL_CHECKIN_CODE } from './SchoolQRCodeModal';
@@ -405,7 +406,7 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
 
   // Robust lookup of today's attendance record for currentUser
   const effectiveTodayRecord = useMemo(() => {
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = getLocalDateYMD();
     const targetUserId = String(currentUser.User_ID || currentUser.Mobile_number || '').trim().toLowerCase();
     const targetName = String(currentUser.Name || '').trim().toLowerCase();
     const targetUsername = String(currentUser.Username || '').trim().toLowerCase();
@@ -481,7 +482,7 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
       minute: '2-digit',
       hour12: true,
     });
-    const dateStr = now.toISOString().split('T')[0];
+    const dateStr = getLocalDateYMD(now);
 
     const attendancePayload: Partial<StaffAttendanceRecord> = {
       user_id: currentUser.User_ID || String(currentUser.Mobile_number),

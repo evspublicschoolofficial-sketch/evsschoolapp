@@ -14,9 +14,35 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('[Process] Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
+const pad2 = (n: number) => String(n).padStart(2, '0');
+
+function getLocalTimestampIST(d: Date = new Date()): string {
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).formatToParts(d);
+    const get = (t: string) => parts.find((p) => p.type === t)?.value || '00';
+    const hr = get('hour') === '24' ? '00' : get('hour');
+    return `${get('year')}-${get('month')}-${get('day')} ${hr}:${get('minute')}:${get('second')}`;
+  } catch {
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+  }
+}
+
+function getLocalDateIST(d: Date = new Date()): string {
+  return getLocalTimestampIST(d).slice(0, 10);
+}
+
 const PORT = 3000;
-const SERVER_BOOT_AT = new Date().toISOString();
-const SERVER_BOOT_VERSION = `srv-${SERVER_BOOT_AT.replace(/[-:.TZ]/g, '').slice(0, 14)}`;
+const SERVER_BOOT_AT = getLocalTimestampIST();
+const SERVER_BOOT_VERSION = `srv-${SERVER_BOOT_AT.replace(/[-: ]/g, '').slice(0, 14)}`;
 const TELEMETRY_CACHE_FILE = '/tmp/evs_bus_telemetry.json';
 const URL_CONFIG_FILE = '/tmp/evs_apps_script_url.txt';
 const DEFAULT_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwVy51K14qu6IXipAZXP4NspFcAUHpLcYv8-zjhkYnBlUI17TzGi_KaJU9TRmNT8D5vvQ/exec';
@@ -56,7 +82,7 @@ if (!liveTelemetryStore['121212'] || liveTelemetryStore['121212'].currentLocatio
     accuracy: 8,
     speed: 0,
     heading: 0,
-    lastUpdated: new Date().toISOString(),
+    lastUpdated: getLocalTimestampIST(),
     status: 'running',
     isLiveFromSheet: true,
   };
@@ -421,7 +447,7 @@ async function forwardToGoogleAppsScript(payload: any) {
       bus_id: payload.busId || payload.bus_id || '121212',
       driver_name: payload.driverName || payload.driver_name || 'Amjad',
       current_location: payload.currentLocationStr || `${payload.latitude}, ${payload.longitude}`,
-      last_updated: payload.lastUpdated || new Date().toISOString(),
+      last_updated: payload.lastUpdated || getLocalTimestampIST(),
       speed: payload.speed || 0,
       status: payload.status || 'running',
     };
@@ -657,8 +683,8 @@ async function syncTeacherPerformanceFromSheet(force = false, overrideUrl?: stri
           grade: String(r[12] || (totalScore >= 90 ? 'A+' : totalScore >= 80 ? 'A' : totalScore >= 70 ? 'B' : totalScore >= 60 ? 'C' : 'D')).trim(),
           evaluated_by: String(r[13] || 'Principal / Manager').trim(),
           remarks: String(r[14] || '').trim(),
-          evaluation_date: normalizeSheetDate(r[15]) || new Date().toISOString().slice(0, 10),
-          timestamp: r[15] ? String(r[15]) : new Date().toISOString(),
+          evaluation_date: normalizeSheetDate(r[15]) || getLocalDateIST(),
+          timestamp: r[15] ? String(r[15]) : getLocalTimestampIST(),
           _sheetSynced: true,
         });
       }
@@ -690,8 +716,8 @@ async function syncTeacherPerformanceFromSheet(force = false, overrideUrl?: stri
           grade: String(obj.grade ?? obj.Grade ?? (totalScore >= 90 ? 'A+' : totalScore >= 80 ? 'A' : totalScore >= 70 ? 'B' : totalScore >= 60 ? 'C' : 'D')).trim(),
           evaluated_by: String(obj.evaluated_by ?? obj.Evaluated_By ?? 'Principal / Manager').trim(),
           remarks: String(obj.remarks ?? obj.Remarks ?? '').trim(),
-          evaluation_date: normalizeSheetDate(obj.evaluation_date ?? obj.Timestamp) || new Date().toISOString().slice(0, 10),
-          timestamp: String(obj.timestamp ?? obj.Timestamp ?? new Date().toISOString()),
+          evaluation_date: normalizeSheetDate(obj.evaluation_date ?? obj.Timestamp) || getLocalDateIST(),
+          timestamp: String(obj.timestamp ?? obj.Timestamp ?? getLocalTimestampIST()),
           _sheetSynced: true,
         });
       }
@@ -755,11 +781,11 @@ async function syncSyllabusTrackerFromSheet(force = false, overrideUrl?: string)
           week_label: String(r[7] || `सप्ताह ${weekNum}`).trim(),
           chapter_title: String(r[8] || '').trim(),
           topic_description: String(r[9] || '').trim(),
-          planned_date: normalizeSheetDate(r[10]) || new Date().toISOString().slice(0, 10),
-          target_completion_date: normalizeSheetDate(r[11]) || new Date().toISOString().slice(0, 10),
+          planned_date: normalizeSheetDate(r[10]) || getLocalDateIST(),
+          target_completion_date: normalizeSheetDate(r[11]) || getLocalDateIST(),
           completed_date: normalizeSheetDate(r[12]) || undefined,
           status,
-          timestamp: r[14] ? String(r[14]) : new Date().toISOString(),
+          timestamp: r[14] ? String(r[14]) : getLocalTimestampIST(),
           _sheetSynced: true,
         });
       }
@@ -781,11 +807,11 @@ async function syncSyllabusTrackerFromSheet(force = false, overrideUrl?: string)
           week_label: String(obj.week_label ?? obj.Week_Label ?? `सप्ताह ${weekNum}`).trim(),
           chapter_title: String(obj.chapter_title ?? obj.Chapter_Title ?? '').trim(),
           topic_description: String(obj.topic_description ?? obj.Topic_Description ?? '').trim(),
-          planned_date: normalizeSheetDate(obj.planned_date ?? obj.Planned_Date) || new Date().toISOString().slice(0, 10),
-          target_completion_date: normalizeSheetDate(obj.target_completion_date ?? obj.Target_Completion_Date) || new Date().toISOString().slice(0, 10),
+          planned_date: normalizeSheetDate(obj.planned_date ?? obj.Planned_Date) || getLocalDateIST(),
+          target_completion_date: normalizeSheetDate(obj.target_completion_date ?? obj.Target_Completion_Date) || getLocalDateIST(),
           completed_date: normalizeSheetDate(obj.completed_date ?? obj.Completed_Date) || undefined,
           status,
-          timestamp: String(obj.timestamp ?? obj.Timestamp ?? new Date().toISOString()),
+          timestamp: String(obj.timestamp ?? obj.Timestamp ?? getLocalTimestampIST()),
           _sheetSynced: true,
         });
       }
@@ -832,7 +858,7 @@ async function syncWeeklyTestsFromSheet(force = false, overrideUrl?: string): Pr
       for (let i = 1; i < rawRows.length; i++) {
         const r = rawRows[i];
         if (!r || (!r[0] && !r[9] && !r[10])) continue;
-        const testDate = normalizeSheetDate(r[7]) || new Date().toISOString().slice(0, 10);
+        const testDate = normalizeSheetDate(r[7]) || getLocalDateIST();
         const monthStr = normalizeSheetMonth(r[5]) || testDate.slice(0, 7);
         parsed.push({
           id: String(r[0] || `wt_${i}`).trim(),
@@ -851,14 +877,14 @@ async function syncWeeklyTestsFromSheet(force = false, overrideUrl?: string): Pr
           marks_obtained: Number(r[13] || 0),
           attendance_status: String(r[14] || 'Present').trim() === 'Absent' ? 'Absent' : 'Present',
           remarks: String(r[15] || '').trim(),
-          timestamp: r[16] ? String(r[16]) : new Date().toISOString(),
+          timestamp: r[16] ? String(r[16]) : getLocalTimestampIST(),
           _sheetSynced: true,
         });
       }
     } else {
       for (const obj of rawRows) {
         if (!obj || (!obj.student_id && !obj.student_name && !obj.Student_ID && !obj.Student_Name)) continue;
-        const testDate = normalizeSheetDate(obj.test_date ?? obj.Test_Date) || new Date().toISOString().slice(0, 10);
+        const testDate = normalizeSheetDate(obj.test_date ?? obj.Test_Date) || getLocalDateIST();
         const monthStr = normalizeSheetMonth(obj.month ?? obj.Month) || testDate.slice(0, 7);
         parsed.push({
           id: String(obj.id ?? obj.ID ?? `wt_${testDate}_${obj.student_id || 's'}`).trim(),
@@ -878,7 +904,7 @@ async function syncWeeklyTestsFromSheet(force = false, overrideUrl?: string): Pr
           attendance_status:
             String(obj.attendance_status ?? obj.Status ?? 'Present').trim() === 'Absent' ? 'Absent' : 'Present',
           remarks: String(obj.remarks ?? obj.Remarks ?? '').trim(),
-          timestamp: String(obj.timestamp ?? obj.Timestamp ?? new Date().toISOString()),
+          timestamp: String(obj.timestamp ?? obj.Timestamp ?? getLocalTimestampIST()),
           _sheetSynced: true,
         });
       }
@@ -952,7 +978,7 @@ async function syncSchoolHolidaysFromSheet(force = false, overrideUrl?: string):
           end_date: endStr && /^\d{4}-\d{2}-\d{2}$/.test(endStr) && endStr !== dateStr ? endStr : undefined,
           category: String(r[4] || 'festival').trim(),
           description: String(r[5] || '').trim() || undefined,
-          timestamp: r[6] ? String(r[6]) : new Date().toISOString(),
+          timestamp: r[6] ? String(r[6]) : getLocalTimestampIST(),
         });
       }
     } else {
@@ -973,7 +999,7 @@ async function syncSchoolHolidaysFromSheet(force = false, overrideUrl?: string):
           end_date: endStr && /^\d{4}-\d{2}-\d{2}$/.test(endStr) && endStr !== dateStr ? endStr : undefined,
           category: String(obj.category ?? obj.Category ?? 'festival').trim(),
           description: String(obj.description ?? obj.Description ?? '').trim() || undefined,
-          timestamp: String(obj.timestamp ?? obj.Timestamp ?? new Date().toISOString()),
+          timestamp: String(obj.timestamp ?? obj.Timestamp ?? getLocalTimestampIST()),
           _sheetSynced: true,
         });
       }
@@ -1022,7 +1048,7 @@ function processTelemetryPayload(data: any) {
   }
 
   const locStr = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
-  const now = new Date().toISOString();
+  const now = getLocalTimestampIST();
   const existing = liveTelemetryStore[busId];
 
   // Derive instantaneous speed if device GPS speed is 0 or null
@@ -1197,35 +1223,90 @@ async function startServer() {
   app.get('/api/health', (_req, res) => {
     res.json({
       status: 'ok',
-      timestamp: new Date().toISOString(),
+      timestamp: getLocalTimestampIST(),
       buses: Object.keys(liveTelemetryStore),
       appsScriptUrl: currentAppsScriptUrl,
       wsClients: clients.size,
     });
   });
 
-  // Live App Version endpoint for installed PWA update detection
-  app.get('/api/app-version', (_req, res) => {
+  // Live App Version endpoint for installed PWA + GitHub update detection
+  let githubCheckCache: { checkedAt: number; latestSha: string | null; repo: string | null } = {
+    checkedAt: 0,
+    latestSha: null,
+    repo: null,
+  };
+
+  function resolveGitHubRepo(): string | null {
+    const envRepo = String(process.env.GITHUB_REPO || process.env.VITE_GITHUB_REPO || '').trim();
+    if (envRepo && envRepo.includes('/')) return envRepo.replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '');
+    try {
+      const pkgPath = path.join(process.cwd(), 'package.json');
+      if (fs.existsSync(pkgPath)) {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+        const rawRepo = typeof pkg?.repository === 'string' ? pkg.repository : pkg?.repository?.url;
+        if (rawRepo) {
+          const m = String(rawRepo).match(/github\.com[:/]([^/]+\/[^/.]+)(?:\.git)?/i);
+          if (m?.[1]) return m[1];
+        }
+      }
+    } catch {}
+    return null;
+  }
+
+  app.get('/api/app-version', async (_req, res) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
+
+    let version = SERVER_BOOT_VERSION;
+    let builtAt = SERVER_BOOT_AT;
+    let mode = process.env.NODE_ENV === 'production' ? 'production' : 'dev';
+    let builtSha = String(process.env.GITHUB_SHA || process.env.COMMIT_SHA || '').trim();
 
     try {
       const distVersionFile = path.join(process.cwd(), 'dist', 'version.json');
       if (process.env.NODE_ENV === 'production' && fs.existsSync(distVersionFile)) {
         const parsed = JSON.parse(fs.readFileSync(distVersionFile, 'utf-8'));
-        return res.json({
-          version: parsed?.version || SERVER_BOOT_VERSION,
-          builtAt: parsed?.builtAt || SERVER_BOOT_AT,
-          mode: 'production',
-        });
+        version = parsed?.version || SERVER_BOOT_VERSION;
+        builtAt = parsed?.builtAt || SERVER_BOOT_AT;
+        if (parsed?.githubSha) builtSha = String(parsed.githubSha).trim();
+        mode = 'production';
       }
     } catch {}
 
+    let githubLatestSha: string | null = null;
+    let hasGitHubUpdate = false;
+    const repo = resolveGitHubRepo();
+    if (repo) {
+      const nowMs = Date.now();
+      if (nowMs - githubCheckCache.checkedAt > 60_000 || githubCheckCache.repo !== repo) {
+        githubCheckCache.checkedAt = nowMs;
+        githubCheckCache.repo = repo;
+        try {
+          const branch = String(process.env.GITHUB_BRANCH || 'main').trim();
+          const ghRes = await fetch(`https://api.github.com/repos/${repo}/commits/${branch}`, {
+            headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'evs-school-portal' },
+            signal: AbortSignal.timeout(3500),
+          });
+          if (ghRes.ok) {
+            const ghData: any = await ghRes.json();
+            if (ghData?.sha) githubCheckCache.latestSha = String(ghData.sha).trim();
+          }
+        } catch {}
+      }
+      githubLatestSha = githubCheckCache.latestSha;
+      if (githubLatestSha && builtSha && !githubLatestSha.toLowerCase().startsWith(builtSha.toLowerCase())) {
+        hasGitHubUpdate = true;
+      }
+    }
+
     res.json({
-      version: SERVER_BOOT_VERSION,
-      builtAt: SERVER_BOOT_AT,
-      mode: process.env.NODE_ENV === 'production' ? 'production' : 'dev',
+      version,
+      builtAt,
+      mode,
+      hasGitHubUpdate,
+      githubLatestSha,
     });
   });
 
@@ -1349,7 +1430,7 @@ async function startServer() {
     address: 'Saharanpur road, Chilkana Sultanpur, Chilkana, Uttar Pradesh 247231',
     mapsUrl: 'https://maps.app.goo.gl/TCqvnXrQN2326Lpp6',
     geofenceEnabled: true,
-    updated_at: new Date().toISOString(),
+    updated_at: getLocalTimestampIST(),
     updated_by: 'School Location Registered',
   };
 
@@ -1360,7 +1441,7 @@ async function startServer() {
     overtimeThresholdMinutes: 15,
     fullDayMinHours: 5.5,
     halfDayMinHours: 3.0,
-    updated_at: new Date().toISOString(),
+    updated_at: getLocalTimestampIST(),
     updated_by: 'Default Schedule',
   };
 
@@ -1385,7 +1466,7 @@ async function startServer() {
       overtimeThresholdMinutes: typeof body.overtimeThresholdMinutes === 'number' ? body.overtimeThresholdMinutes : current.overtimeThresholdMinutes,
       fullDayMinHours: typeof body.fullDayMinHours === 'number' ? body.fullDayMinHours : current.fullDayMinHours,
       halfDayMinHours: typeof body.halfDayMinHours === 'number' ? body.halfDayMinHours : current.halfDayMinHours,
-      updated_at: new Date().toISOString(),
+      updated_at: getLocalTimestampIST(),
       updated_by: body.updated_by || 'Manager',
     };
     try {
@@ -1417,7 +1498,7 @@ async function startServer() {
       address: body.address || current.address || 'Saharanpur road, Chilkana Sultanpur, Chilkana, Uttar Pradesh 247231',
       mapsUrl: body.mapsUrl || current.mapsUrl || 'https://maps.app.goo.gl/TCqvnXrQN2326Lpp6',
       geofenceEnabled: body.geofenceEnabled !== undefined ? Boolean(body.geofenceEnabled) : current.geofenceEnabled,
-      updated_at: new Date().toISOString(),
+      updated_at: getLocalTimestampIST(),
       updated_by: body.updated_by || 'Manager',
     };
     try {
@@ -1571,7 +1652,7 @@ async function startServer() {
     const hwId = String(item.homework_id || item.Homework_ID || `HW-${Date.now()}`);
     const normalized = {
       Homework_ID: hwId,
-      Date: item.date || item.Date || new Date().toISOString().split('T')[0],
+      Date: item.date || item.Date || getLocalDateIST(),
       Class: item.class_name || item.class || item.Class || '',
       Subject: item.subject || item.Subject || 'General',
       Homework_Detail: item.detail || item.detail_text || item.Homework_Detail || '',
@@ -1651,7 +1732,7 @@ async function startServer() {
     for (const it of items) {
       if (!it) continue;
       const sId = String(it.student_id || it.Student_ID || '').trim();
-      const dt = it.date || it.Date || new Date().toISOString().split('T')[0];
+      const dt = it.date || it.Date || getLocalDateIST();
       const bId = String(it.behavior_id || it.Behavior_ID || (sId ? `BEH-${sId}-${dt}` : `BEH-${Date.now()}`));
       const normalized = {
         Behavior_ID: bId,
@@ -1701,7 +1782,7 @@ async function startServer() {
     let list = getHwTrackerList();
     const tId = String(item.record_id || item.ID || `TRK-${Date.now()}`);
     const sId = String(item.student_id || item.Student_ID || '').trim();
-    const dateStr = item.date || item.Date || new Date().toISOString().split('T')[0];
+    const dateStr = item.date || item.Date || getLocalDateIST();
     const targetDate = normalizeDateKey(dateStr);
     const targetSubject = String(item.subject || item.Subject || 'General').toLowerCase().trim();
 
@@ -1761,7 +1842,7 @@ async function startServer() {
   const saveStaffAttendanceRecord = (item: any): any[] => {
     const list = getStaffAttendanceList();
     const userId = String(item.user_id || item.User_ID || '').trim();
-    const date = item.date || item.Date || new Date().toISOString().split('T')[0];
+    const date = item.date || item.Date || getLocalDateIST();
     const recId = String(item.id || item.ID || `STAFF-ATT-${userId}-${date}`);
     
     const nowTimeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
@@ -1781,7 +1862,7 @@ async function startServer() {
       location: item.location || 'School Campus Gate',
       remark: item.remark || item.Note || '',
       timestamp: item.timestamp || Date.now(),
-      created_at: item.created_at || new Date().toISOString(),
+      created_at: item.created_at || getLocalTimestampIST(),
     };
 
     const idx = list.findIndex(
@@ -1818,7 +1899,7 @@ async function startServer() {
       check_out_time: normalized.check_out_time || '',
       status: normalized.status,
       method: normalized.method,
-      last_updated: new Date().toISOString(),
+      last_updated: getLocalTimestampIST(),
     }).catch(() => {});
 
     return list;
@@ -1923,7 +2004,7 @@ async function startServer() {
   app.post('/api/homework-tracker', (req, res) => {
     const item = req.body;
     if (item.action === 'bulkUpdateHomeworkTracker' && Array.isArray(item.student_ids)) {
-      const cleanDate = item.date || new Date().toISOString().split('T')[0];
+      const cleanDate = item.date || getLocalDateIST();
       const hwClass = item.class || '';
       const hwSubject = item.subject || 'General';
       const targetStatus = item.status || 'Completed';
@@ -2077,9 +2158,9 @@ async function startServer() {
         (r) => r.id === record.id || (r.teacher_id === record.teacher_id && r.month === record.month)
       );
       if (idx >= 0) {
-        teacherPerformanceStore[idx] = { ...teacherPerformanceStore[idx], ...record, timestamp: new Date().toISOString() };
+        teacherPerformanceStore[idx] = { ...teacherPerformanceStore[idx], ...record, timestamp: getLocalTimestampIST() };
       } else {
-        teacherPerformanceStore.unshift({ ...record, timestamp: new Date().toISOString() });
+        teacherPerformanceStore.unshift({ ...record, timestamp: getLocalTimestampIST() });
       }
       saveTeacherPerformanceCache();
 
@@ -2277,9 +2358,9 @@ async function startServer() {
 
       const idx = syllabusTrackerStore.findIndex((s) => s.id === topic.id);
       if (idx >= 0) {
-        syllabusTrackerStore[idx] = { ...syllabusTrackerStore[idx], ...topic, timestamp: new Date().toISOString() };
+        syllabusTrackerStore[idx] = { ...syllabusTrackerStore[idx], ...topic, timestamp: getLocalTimestampIST() };
       } else {
-        syllabusTrackerStore.unshift({ ...topic, timestamp: new Date().toISOString() });
+        syllabusTrackerStore.unshift({ ...topic, timestamp: getLocalTimestampIST() });
       }
       saveSyllabusTrackerCache();
 
@@ -2494,7 +2575,7 @@ async function startServer() {
         return res.status(400).json({ error: 'Valid weekly test record(s) required' });
       }
 
-      const nowIso = new Date().toISOString();
+      const nowIso = getLocalTimestampIST();
       const savedRecords: any[] = [];
       for (const rec of validRecords) {
         const rid = String(
@@ -2637,9 +2718,9 @@ async function startServer() {
 
       const idx = schoolHolidaysStore.findIndex((h) => h.id === holiday.id || (h.date === holiday.date && h.title === holiday.title));
       if (idx >= 0) {
-        schoolHolidaysStore[idx] = { ...schoolHolidaysStore[idx], ...holiday, timestamp: new Date().toISOString() };
+        schoolHolidaysStore[idx] = { ...schoolHolidaysStore[idx], ...holiday, timestamp: getLocalTimestampIST() };
       } else {
-        schoolHolidaysStore.push({ ...holiday, timestamp: new Date().toISOString() });
+        schoolHolidaysStore.push({ ...holiday, timestamp: getLocalTimestampIST() });
       }
       // Sort chronologically by date
       schoolHolidaysStore.sort((a, b) => a.date.localeCompare(b.date));
@@ -2938,7 +3019,7 @@ async function startServer() {
       } else if (payload?.action === 'updateHomeworkTracker') {
         saveHwTrackerItem(payload);
       } else if (payload?.action === 'bulkUpdateHomeworkTracker' && Array.isArray(payload?.student_ids)) {
-        const cleanDate = payload.date || new Date().toISOString().split('T')[0];
+        const cleanDate = payload.date || getLocalDateIST();
         const hwClass = payload.class || '';
         const hwSubject = payload.subject || 'General';
         const targetStatus = payload.status || 'Completed';
@@ -2983,7 +3064,7 @@ async function startServer() {
 
       // If bulk update, also send individual items to Apps Script targetUrl
       if (payload?.action === 'bulkUpdateHomeworkTracker' && Array.isArray(payload?.student_ids)) {
-        const cleanDate = payload.date || new Date().toISOString().split('T')[0];
+        const cleanDate = payload.date || getLocalDateIST();
         const hwClass = payload.class || '';
         const hwSubject = payload.subject || 'General';
         const targetStatus = payload.status || 'Completed';
@@ -3390,7 +3471,7 @@ async function startServer() {
       const now = new Date();
       const entry = {
         id: String(raw.id || `WA-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`),
-        date: String(raw.date || now.toISOString().split('T')[0]),
+        date: String(raw.date || getLocalDateIST(now)),
         time: String(raw.time || now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })),
         alertType: String(raw.alertType || 'WhatsApp Alert').trim(),
         recipientType: String(raw.recipientType || 'Parent').trim(),
@@ -3460,7 +3541,7 @@ async function startServer() {
       const savedEntry = {
         ...cfg,
         userId,
-        updatedAt: new Date().toISOString(),
+        updatedAt: getLocalTimestampIST(),
       };
       staffSalaryConfigStore[userId] = savedEntry;
       saveStaffSalaryConfigCache();
@@ -3550,7 +3631,7 @@ async function startServer() {
       for (const cur of staffPayrollStore) {
         if (cur?.payrollKey) map.set(cur.payrollKey, cur);
       }
-      const nowIso = new Date().toISOString();
+      const nowIso = getLocalTimestampIST();
       for (const r of records) {
         if (!r?.userId) continue;
         const pKey = String(r.payrollKey || `${r.monthKey || 'cur'}::${r.userId}`).trim();
@@ -3629,7 +3710,7 @@ async function startServer() {
         bankName: String(incoming.bankName ?? upiSettingsStore.bankName ?? '').trim(),
         instructions: String(incoming.instructions || upiSettingsStore.instructions || DEFAULT_UPI_SETTINGS_STORE.instructions).trim(),
         staticQrImage: incoming.staticQrImage !== undefined ? String(incoming.staticQrImage || '') : (upiSettingsStore.staticQrImage || ''),
-        updatedAt: new Date().toISOString(),
+        updatedAt: getLocalTimestampIST(),
       };
       saveUpiSettingsCache();
 
@@ -3760,11 +3841,11 @@ async function startServer() {
         month: String(body.month || 'Current').trim(),
         utrNumber,
         paymentApp: String(body.paymentApp || 'UPI').trim(),
-        paymentDate: String(body.paymentDate || new Date().toISOString().split('T')[0]).trim(),
+        paymentDate: String(body.paymentDate || getLocalDateIST()).trim(),
         screenshotData: body.screenshotData ? String(body.screenshotData) : '',
         notes: String(body.notes || '').trim(),
         status: 'Pending',
-        createdAt: String(body.createdAt || new Date().toISOString()),
+        createdAt: String(body.createdAt || getLocalTimestampIST()),
       };
 
       upiPaymentsStore = [record, ...upiPaymentsStore];
@@ -3815,7 +3896,7 @@ async function startServer() {
         bankName: upiSettingsStore.bankName,
         instructions: upiSettingsStore.instructions,
         hasStaticQr: Boolean(upiSettingsStore.staticQrImage),
-        updatedAt: upiSettingsStore.updatedAt || new Date().toISOString(),
+        updatedAt: upiSettingsStore.updatedAt || getLocalTimestampIST(),
       };
       const sheetSafePayments = upiPaymentsStore.map((p) => ({
         ...p,
@@ -3862,7 +3943,7 @@ async function startServer() {
         receiptNumber: receiptNumber || upiPaymentsStore[idx].receiptNumber || '',
         managerNote: managerNote !== undefined ? String(managerNote).trim() : (upiPaymentsStore[idx].managerNote || ''),
         verifiedBy: String(verifiedBy || 'School Manager').trim(),
-        verifiedAt: new Date().toISOString(),
+        verifiedAt: getLocalTimestampIST(),
       };
 
       upiPaymentsStore[idx] = updated;
@@ -3985,7 +4066,7 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'Valid exam mark record(s) required' });
       }
 
-      const nowIso = new Date().toISOString();
+      const nowIso = getLocalTimestampIST();
       const getCompKey = (m: any) =>
         `${String(m.session || '2026-27').toLowerCase()}::${String(m.exam_type || 'Quarterly').toLowerCase()}::${String(m.student_id || '').toLowerCase()}::${String(m.subject || '').toLowerCase()}`;
 
@@ -4112,7 +4193,7 @@ async function startServer() {
       const savedMeta = {
         ...m,
         reportKey,
-        updatedAt: new Date().toISOString(),
+        updatedAt: getLocalTimestampIST(),
       };
       reportCardMetaStore[reportKey] = savedMeta;
       saveReportCardMetaCache();
@@ -4152,7 +4233,7 @@ async function startServer() {
       const examMarks: any[] = Array.isArray(req.body?.examMarks) ? req.body.examMarks : examMarksStore;
 
       if (backups.length > 0) {
-        const nowIso = new Date().toISOString();
+        const nowIso = getLocalTimestampIST();
         for (const b of backups) {
           if (b?.reportKey && !reportCardMetaStore[b.reportKey]) {
             reportCardMetaStore[b.reportKey] = {
@@ -4317,10 +4398,10 @@ async function startServer() {
                       accuracy: existing?.accuracy || 8,
                       speed: finalSpeed,
                       heading: finalHeading,
-                      lastUpdated: lastUpdated || new Date().toISOString(),
+                      lastUpdated: lastUpdated || getLocalTimestampIST(),
                       status: finalSpeed > 2 ? 'running' : 'stopped',
                       isLiveFromSheet: true,
-                      lastServerSync: new Date().toISOString(),
+                      lastServerSync: getLocalTimestampIST(),
                     };
                     liveTelemetryStore[busId] = telemetry;
                     saveTelemetryCache();
@@ -4338,7 +4419,7 @@ async function startServer() {
                     if (Date.now() - prevTime > 15000) {
                       existing.speed = 0;
                       existing.status = 'stopped';
-                      existing.lastServerSync = new Date().toISOString();
+                      existing.lastServerSync = getLocalTimestampIST();
                       saveTelemetryCache();
                       const broadcastMsg = JSON.stringify({ type: 'BUS_UPDATE', telemetry: existing });
                       for (const client of clients) {

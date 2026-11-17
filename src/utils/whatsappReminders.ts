@@ -1,6 +1,7 @@
 // Clean 1-Click WhatsApp Reminder Helpers + Automatic Google Sheet Backup Logger
 import { getAppsScriptUrl } from './busTrackingService';
 import { dualSyncWriteToSheet } from './sheetDirectSync';
+import { getLocalDateYMD } from './localTime';
 
 export interface WhatsappAlertLog {
   id: string;
@@ -59,8 +60,8 @@ export const logWhatsappAlertBackup = async (
   const now = new Date();
   const entry: WhatsappAlertLog = {
     id: `WA-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    date: now.toISOString().split('T')[0],
-    time: now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+    date: getLocalDateYMD(now),
+    time: now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
     alertType: meta.alertType || 'WhatsApp Alert',
     recipientType: meta.recipientType || 'Parent',
     recipientId: String(meta.recipientId || '').trim(),

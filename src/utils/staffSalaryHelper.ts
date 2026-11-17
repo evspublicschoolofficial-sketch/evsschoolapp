@@ -2,6 +2,7 @@ import { StaffSalaryConfig } from '../types';
 import { StaffMonthlyReport } from './staffAttendanceMetrics';
 import { getAppsScriptUrl } from './busTrackingService';
 import { dualSyncWriteToSheet } from './sheetDirectSync';
+import { getLocalTimestamp } from './localTime';
 
 const SALARY_STORAGE_KEY = 'evs_staff_salary_config_v1';
 const SALARY_EVENT = 'evs-staff-salary-updated';
@@ -69,7 +70,7 @@ export const saveStaffSalaryConfigToServer = async (
   const payload: StaffSalaryConfig = {
     ...config,
     userId: key,
-    updatedAt: new Date().toISOString(),
+    updatedAt: getLocalTimestamp(),
   };
 
   const current = loadLocalSalaryConfigs();

@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { getLocalDateYMD, getLocalTimestamp } from '../utils/localTime';
 import {
   SchoolUser,
   Homework,
@@ -426,10 +427,10 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
       punctuality_discipline_score: Number(formPunctuality),
       monthly_total_score: liveScore.totalScore,
       grade: liveScore.grade,
-      evaluation_date: new Date().toISOString().split('T')[0],
+      evaluation_date: getLocalDateYMD(),
       evaluated_by: managerName,
       remarks: formRemarks,
-      timestamp: new Date().toISOString(),
+      timestamp: getLocalTimestamp(),
     };
 
     setSyncStatus('Google Sheet में सिंक किया जा रहा है...');

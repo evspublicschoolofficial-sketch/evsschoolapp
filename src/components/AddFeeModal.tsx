@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { getLocalDateYMD } from '../utils/localTime';
 import { StudentRecordForScan } from './StudentQRScannerModal';
 import { computeStudentFeeMetrics, isTuitionFeeRecord } from '../utils/feeCalculation';
 import {
@@ -426,7 +427,7 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
   // Initialize form when opened
   useEffect(() => {
     if (isOpen) {
-      const today = new Date().toISOString().split('T')[0];
+      const today = getLocalDateYMD();
       setDate(today);
       const randomSuffix = Math.floor(10000 + Math.random() * 90000);
       setReceiptNumber(`REC-${new Date().getFullYear()}-${randomSuffix}`);

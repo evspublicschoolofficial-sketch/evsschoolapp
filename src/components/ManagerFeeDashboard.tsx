@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useRef } from 'react';
+import { getLocalDateYMD } from '../utils/localTime';
 import {
   ResponsiveContainer,
   LineChart,
@@ -430,7 +431,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
       const newFeeRec: FeeCollectionRecord = {
         Receipt_Number: receiptNo,
         Student_ID: pay.studentId,
-        Date: pay.paymentDate || new Date().toISOString().split('T')[0],
+        Date: pay.paymentDate || getLocalDateYMD(),
         Fee_Type: pay.feeType || 'Monthly Tuition Fee',
         Month: pay.month || 'Current',
         Total_Amount: Number(pay.amount || 0),
@@ -576,7 +577,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
   const handleStartEditFee = (fee: FeeCollectionRecord) => {
     setEditingFee(fee);
     setEditReceiptNo(fee.Receipt_Number || '');
-    let cleanDate = fee.Date || new Date().toISOString().split('T')[0];
+    let cleanDate = fee.Date || getLocalDateYMD();
     if (cleanDate.includes('T')) cleanDate = cleanDate.split('T')[0];
     setEditDate(cleanDate);
     setEditFeeType(fee.Fee_Type || 'Monthly Tuition Fee (मासिक शिक्षण शुल्क)');
@@ -2870,7 +2871,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                   const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
                   const link = document.createElement('a');
                   link.href = URL.createObjectURL(blob);
-                  link.download = `EVS_UPI_Payments_Backup_${new Date().toISOString().split('T')[0]}.csv`;
+                  link.download = `EVS_UPI_Payments_Backup_${getLocalDateYMD()}.csv`;
                   link.click();
                 }}
                 className="px-3 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer"

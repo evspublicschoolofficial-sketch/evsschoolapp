@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { getLocalTimestamp } from '../utils/localTime';
 import { SchoolUser, Student } from '../App';
 import {
   BusTrackingRecord,
@@ -429,7 +430,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
       accuracy: Math.round(acc),
       speed: spd !== null ? Math.round(spd) : 0,
       heading: hdg,
-      lastUpdated: new Date().toISOString(),
+      lastUpdated: getLocalTimestamp(),
       status: currentStatus,
       sosAlert: sosActive,
       sosMessage: sosActive ? sosMessage || 'आपातकालीन सहायता आवश्यक है!' : undefined,
@@ -745,7 +746,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
       accuracy,
       speed,
       heading,
-      lastUpdated: new Date().toISOString(),
+      lastUpdated: getLocalTimestamp(),
       status: vanStatus,
       sosAlert: isNowActive,
       sosMessage: msg,

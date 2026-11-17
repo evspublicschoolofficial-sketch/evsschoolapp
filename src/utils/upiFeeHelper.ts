@@ -1,6 +1,7 @@
 import { UpiSettings, UpiPaymentRequest } from '../types';
 import { getAppsScriptUrl } from './busTrackingService';
 import { dualSyncWriteToSheet } from './sheetDirectSync';
+import { getLocalTimestamp } from './localTime';
 
 const UPI_SETTINGS_KEY = 'evs_upi_settings_v1';
 const UPI_PAYMENTS_KEY = 'evs_upi_payments_v1';
@@ -77,7 +78,7 @@ export const saveUpiSettingsToServer = async (
     payeeName: String(settings.payeeName || 'E.V.S. Public School').trim(),
     bankName: String(settings.bankName || '').trim(),
     instructions: String(settings.instructions || DEFAULT_UPI_SETTINGS.instructions).trim(),
-    updatedAt: new Date().toISOString(),
+    updatedAt: getLocalTimestamp(),
   };
   saveLocalUpiSettings(payload);
 
@@ -163,7 +164,7 @@ export const submitUpiPaymentToServer = async (
     ...payload,
     id: `upi_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     status: 'Pending',
-    createdAt: new Date().toISOString(),
+    createdAt: getLocalTimestamp(),
   };
 
   const activeUrl = getAppsScriptUrl();
@@ -256,7 +257,7 @@ export const syncAllUpiBackupToSheet = async (
     bankName: settings.bankName,
     instructions: settings.instructions,
     hasStaticQr: Boolean(settings.staticQrImage),
-    updatedAt: settings.updatedAt || new Date().toISOString(),
+    updatedAt: settings.updatedAt || getLocalTimestamp(),
   };
   const sheetSafePayments = payments.map((p) => ({
     ...p,

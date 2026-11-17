@@ -24,6 +24,7 @@ import {
   loadLocalReportCardMeta,
   subscribeReportCardUpdates,
 } from './utils/reportCardHelper';
+import { getLocalDateYMD, getLocalTimestamp } from './utils/localTime';
 
 // High-speed on-demand code splitting (React.lazy): Drops initial bundle size by ~85% for Parents on mobile!
 const StudentAttendanceChart = React.lazy(() => import('./components/StudentAttendanceChart'));
@@ -183,7 +184,7 @@ export const parseAssignedClasses = (val: string | string[] | null | undefined):
   return Array.from(new Set(parts));
 };
 
-// Helper to normalize any date into YYYY-MM-DD standard format
+// Helper to normalize any date into local YYYY-MM-DD standard format
 export const normalizeDateISO = (val: any): string => {
   if (!val) return '';
   const s = String(val).trim();
@@ -195,6 +196,9 @@ export const normalizeDateISO = (val: any): string => {
       const d = String(m[3]).padStart(2, '0');
       return `${y}-${mo}-${d}`;
     }
+  }
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s) && (s.endsWith('Z') || /[+-]\d{2}:?\d{2}$/.test(s))) {
+    return getLocalDateYMD(s);
   }
   const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
   if (dmy) {
@@ -1277,10 +1281,13 @@ export default function App() {
     } catch {}
   }, [activeTab]);
 
-  // Immediate pre-warming of GPS location & school location on app startup
+  // Immediate pre-warming of GPS location & deferred school location sync
   useEffect(() => {
     initGeolocationPrewarmer();
-    syncSchoolLocationFromServer().catch(() => {});
+    const timer = setTimeout(() => {
+      syncSchoolLocationFromServer().catch(() => {});
+    }, 600);
+    return () => clearTimeout(timer);
   }, []);
 
   // LocalStorage cached initial states (0.1s instant render)
@@ -1522,7 +1529,9 @@ export default function App() {
   };
 
   useEffect(() => {
-    fetchReportCardAllData(false);
+    const bootTimer = setTimeout(() => {
+      fetchReportCardAllData(false);
+    }, 700);
     const unsub = subscribeReportCardUpdates(() => {
       try {
         const rawWt = localStorage.getItem('evs_weekly_subject_tests_v1');
@@ -1533,13 +1542,15 @@ export default function App() {
       } catch {}
       setExamMarksList(loadLocalExamMarks());
       setReportCardMetaMap(loadLocalReportCardMeta());
-      fetchReportCardAllData(false);
     });
-    return unsub;
+    return () => {
+      clearTimeout(bootTimer);
+      unsub();
+    };
   }, []);
 
   // Teacher Dashboard State
-  const [hwDate, setHwDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [hwDate, setHwDate] = useState<string>(getLocalDateYMD());
   const [hwClass, setHwClass] = useState<string>('C12');
   const [hwSubject, setHwSubject] = useState<string>('Mathematics');
   const [hwDetail, setHwDetail] = useState<string>('');
@@ -1959,9 +1970,11 @@ export default function App() {
       let success = false;
       const cacheBust = `_t=${Date.now()}`;
 
-      // 1. Try Google Apps Script endpoint first
+      // 1. Try Google Apps Script endpoint first (fast 5s timeout so cold-starts fall back swiftly to GViz)
       try {
-        const res = await fetch(`${getEffectiveApiUrl()}?action=getStudents&${cacheBust}`);
+        const res = await fetch(`${getEffectiveApiUrl()}?action=getStudents&${cacheBust}`, {
+          signal: AbortSignal.timeout(5000),
+        });
         if (res.ok) {
           const data = await res.json();
           parsed = parseSheetData(data) as Student[];
@@ -1979,7 +1992,9 @@ export default function App() {
       if (!success) {
         try {
           const encoded = encodeURIComponent('Students');
-          const gvizRes = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}&${cacheBust}`);
+          const gvizRes = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}&${cacheBust}`, {
+            signal: AbortSignal.timeout(6000),
+          });
           if (gvizRes.ok) {
             const text = await gvizRes.text();
             parsed = parseGvizData(text) as Student[];
@@ -2103,9 +2118,11 @@ export default function App() {
       let parsed: Homework[] = [];
       let success = false;
 
-      // 1. Try Google Apps Script endpoint first
+      // 1. Try Google Apps Script endpoint first (5s timeout)
       try {
-        const res = await fetch(`${getEffectiveApiUrl()}?action=getHomework&${cacheBust}`);
+        const res = await fetch(`${getEffectiveApiUrl()}?action=getHomework&${cacheBust}`, {
+          signal: AbortSignal.timeout(5000),
+        });
         if (res.ok) {
           const data = await res.json();
           parsed = parseSheetData(data) as Homework[];
@@ -2123,7 +2140,9 @@ export default function App() {
       if (!success) {
         try {
           const encoded = encodeURIComponent('Homework');
-          const gvizRes = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}&${cacheBust}`);
+          const gvizRes = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}&${cacheBust}`, {
+            signal: AbortSignal.timeout(6000),
+          });
           if (gvizRes.ok) {
             const text = await gvizRes.text();
             parsed = parseGvizData(text) as Homework[];
@@ -2446,6 +2465,20 @@ export default function App() {
     }
   };
 
+  // Keep student fee balances reactive even when students and feeRecords arrive concurrently
+  useEffect(() => {
+    if (students.length === 0) return;
+    const balances: Record<string, number> = {};
+    students.forEach((st) => {
+      const metrics = computeStudentFeeMetrics(st, feeRecords);
+      balances[normalizeStudentId(st.Student_ID)] = metrics.dueBalance;
+    });
+    setFeeBalances(balances);
+    try {
+      localStorage.setItem(CACHE_KEY_FEES_BALANCES, JSON.stringify(balances));
+    } catch {}
+  }, [students, feeRecords]);
+
   // Fetch real School Notices directly from Google Sheets (School_Notices sheet)
   const fetchSchoolNotices = async () => {
     try {
@@ -2494,7 +2527,7 @@ export default function App() {
           if (m) dateVal = `${m[1]}-${String(Number(m[2]) + 1).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`;
         } else if (dateVal && typeof dateVal === 'string') {
           const d = new Date(dateVal);
-          if (!isNaN(d.getTime())) dateVal = d.toISOString().split('T')[0];
+          if (!isNaN(d.getTime())) dateVal = getLocalDateYMD(d);
         }
 
         const desc = String(cells[descIdx !== -1 ? descIdx : 4] || '').trim();
@@ -2508,7 +2541,7 @@ export default function App() {
           id,
           title,
           description: desc,
-          date: typeof dateVal === 'string' ? dateVal : new Date().toISOString().split('T')[0],
+          date: typeof dateVal === 'string' ? dateVal : getLocalDateYMD(),
           category: (cat as any) || 'general',
           targetClass: target,
           issuedBy: issued,
@@ -2686,7 +2719,7 @@ export default function App() {
 
       // 3. If tracker records are still empty, synthesize student tracker entries from student list so teachers can immediately track
       if (deduplicatedRecords.length === 0 && students.length > 0) {
-        const todayStr = new Date().toISOString().split('T')[0];
+        const todayStr = getLocalDateYMD();
         for (const st of students) {
           if (!st.Student_ID) continue;
           deduplicatedRecords.push({
@@ -2945,7 +2978,8 @@ export default function App() {
       try {
         const encoded = encodeURIComponent(tab);
         const gvizRes = await fetch(
-          `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}&_t=${Date.now()}`
+          `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}&_t=${Date.now()}`,
+          { signal: AbortSignal.timeout(5500) }
         );
         if (!gvizRes.ok) continue;
         const text = await gvizRes.text();
@@ -3013,7 +3047,7 @@ export default function App() {
               location: String((locIdx !== -1 ? cells[locIdx] : cells[11]) || 'School Campus').trim(),
               remark: (remIdx !== -1 ? cells[remIdx] : cells[12]) ? String(cells[remIdx !== -1 ? remIdx : 12]).trim() : '',
               timestamp: Date.now(),
-              created_at: new Date().toISOString(),
+              created_at: getLocalTimestamp(),
             });
           }
 
@@ -3074,7 +3108,7 @@ export default function App() {
 
   const handleStaffCheckInSuccess = async (rec: Partial<StaffAttendanceRecord>, isCheckOut = false) => {
     const now = new Date();
-    const dateStr = rec.date || now.toISOString().split('T')[0];
+    const dateStr = rec.date || getLocalDateYMD(now);
     const timeStr = rec.check_in_time || now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
     const recId = rec.id || `STAFF-ATT-${rec.user_id}-${dateStr}`;
 
@@ -3111,7 +3145,7 @@ export default function App() {
       location: rec.location || 'School Campus Gate',
       remark: rec.remark || '',
       timestamp: Date.now(),
-      created_at: existingRecord?.created_at || new Date().toISOString(),
+      created_at: existingRecord?.created_at || getLocalTimestamp(),
     };
 
     setStaffAttendanceList((prev) => {
@@ -3188,7 +3222,7 @@ export default function App() {
     const myId = String(activeStaff.User_ID || activeStaff.Mobile_number || '').trim().toLowerCase();
     const myName = (activeStaff.Name || '').trim().toLowerCase();
     const myUsername = (activeStaff.Username || '').trim().toLowerCase();
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = getLocalDateYMD();
     return staffAttendanceList.find((r) => {
       if (!r || r.date !== todayStr) return false;
       const rUid = String(r.user_id || '').trim().toLowerCase();
@@ -3372,14 +3406,12 @@ export default function App() {
       setSyncToastMessage('डेटा सिंक किया जा रहा है... (Syncing fresh records)');
     }
     try {
-      // 1. Fetch Students and Classes first so student records are parsed
-      const studentsRes = await fetchStudents(true);
-      await fetchClasses();
-
-      // 2. Fetch Fee Collection, School Notices, Homework, Behavior
+      // Run core data fetches in parallel so portal loads 3-4x faster on startup
       const isParentMode = activeTab === 'parent' || parentLoggedIn;
       const syncTasks: Promise<any>[] = [
-        fetchFeeCollection(studentsRes || undefined),
+        fetchStudents(true),
+        fetchClasses(),
+        fetchFeeCollection(),
         fetchSchoolNotices(),
         fetchHomework(true),
         fetchHomeworkTracker(),
@@ -3540,7 +3572,7 @@ export default function App() {
     const customStudent: Student = {
       ...newStudent,
       _isCustom: true,
-      _createdAt: new Date().toISOString(),
+      _createdAt: getLocalTimestamp(),
       _sheetSynced: false,
     } as any;
 
@@ -4156,7 +4188,7 @@ export default function App() {
     const isAbsent = Boolean(latestBehaviorRecord && !latestBehaviorRecord.Is_Present);
     const hwCount = parentHomework.length;
     const hwSubjects = Array.from(new Set(parentHomework.map((h) => h.Subject).filter(Boolean))).join(', ');
-    const recordDate = latestBehaviorRecord?.Date || new Date().toISOString().split('T')[0];
+    const recordDate = latestBehaviorRecord?.Date || getLocalDateYMD();
     const remark = latestBehaviorRecord?.Remark || '';
     const cacheKey = `${sId}_${recordDate}_${isAbsent}_${hwCount}_${remark}`;
 
@@ -5043,7 +5075,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     // Standardize all fields with reliable presence detection and ISO dates
     const formattedRecords: StudentBehaviorRecord[] = records.map((rec) => {
       const sId = String(rec.Student_ID || (rec as any).student_id || '').trim();
-      const rawDt = rec.Date || (rec as any).date || new Date().toISOString().split('T')[0];
+      const rawDt = rec.Date || (rec as any).date || getLocalDateYMD();
       const dt = normalizeDateISO(rawDt);
       const cls = rec.Class || (rec as any).class || '';
       const bId = rec.Behavior_ID || (rec as any).behavior_id || `BEH-${sId}-${dt}`;
@@ -5300,7 +5332,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     remark?: string
   ) => {
     const sId = String(studentId || '').trim();
-    const cleanDate = normalizeDateISO(date || new Date().toISOString().split('T')[0]);
+    const cleanDate = normalizeDateISO(date || getLocalDateYMD());
     const recId = recordId || `TRK-${sId}-${cleanDate}`;
     const cleanSubj = subject || 'General';
 
@@ -5385,7 +5417,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       const matched = prev.find(
         (r) => r.ID === recordId || (sId && String(r.Student_ID || '').toLowerCase() === sId.toLowerCase())
       );
-      const cleanDate = matched ? normalizeDateISO(matched.Date) : normalizeDateISO(new Date().toISOString().split('T')[0]);
+      const cleanDate = matched ? normalizeDateISO(matched.Date) : normalizeDateISO(getLocalDateYMD());
 
       // Filter out ANY older/conflicting records for this student on this date
       const filtered = prev.filter(
@@ -5468,7 +5500,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     targetStatus: 'Completed' | 'Incompleted'
   ) => {
     const sId = String(studentId || '').trim();
-    const cleanDate = normalizeDateISO(hwDate || new Date().toISOString().split('T')[0]);
+    const cleanDate = normalizeDateISO(hwDate || getLocalDateYMD());
     const recId = `TRK-${sId}-${cleanDate}`;
 
     setHwTrackerList((prev) => {
@@ -5558,7 +5590,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     hwSubject: string,
     targetStatus: 'Completed' | 'Incompleted'
   ) => {
-    const cleanDate = normalizeDateISO(hwDate || new Date().toISOString().split('T')[0]);
+    const cleanDate = normalizeDateISO(hwDate || getLocalDateYMD());
     const idSet = new Set(studentIds.map((id) => String(id).trim().toLowerCase()));
 
     setHwTrackerList((prev) => {
@@ -13856,7 +13888,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                   const clearRec: FeeCollectionRecord = {
                                     Receipt_Number: `CLR-${Date.now().toString().slice(-6)}`,
                                     Student_ID: selectedStudentDetail.Student_ID,
-                                    Date: new Date().toISOString().split('T')[0],
+                                    Date: getLocalDateYMD(),
                                     Fee_Type: 'Due Cleared / Zeroed',
                                     Month: 'Current',
                                     Total_Amount: bal,

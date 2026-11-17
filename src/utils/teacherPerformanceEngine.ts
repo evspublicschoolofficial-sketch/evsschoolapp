@@ -16,6 +16,7 @@ import {
 import { getAppsScriptUrl } from './busTrackingService';
 import { directGetFromSheet, dualSyncWriteToSheet } from './sheetDirectSync';
 import { countWorkingDaysInMonth, loadLocalSchoolHolidays } from './schoolHolidaysHelper';
+import { getLocalDateYMD, getLocalMonthYM, getLocalTimestamp } from './localTime';
 
 export const PERFORMANCE_CACHE_KEY = 'evs_teacher_performance_records_v1';
 export const CURRENT_ACADEMIC_YEAR = '2026-2027';
@@ -35,7 +36,7 @@ export const ACADEMIC_MONTHS = [
 ];
 
 export const getDefaultAcademicMonth = (): string => {
-  const ym = new Date().toISOString().slice(0, 7);
+  const ym = getLocalMonthYM();
   if (ACADEMIC_MONTHS.some((m) => m.key === ym)) return ym;
   return '2026-11';
 };
@@ -57,7 +58,7 @@ const normalizeDateYmd = (val: any): string => {
   }
   const parsed = new Date(s);
   if (!isNaN(parsed.getTime())) {
-    return parsed.toISOString().slice(0, 10);
+    return getLocalDateYMD(parsed);
   }
   return s;
 };
@@ -660,10 +661,10 @@ export const autoCalculateTeacherMonthlyScoreFromAppData = (params: {
     punctuality_percent: punctualityPercent,
     monthly_total_score: calculated.totalScore,
     grade: calculated.grade,
-    evaluation_date: new Date().toISOString().split('T')[0],
+    evaluation_date: getLocalDateYMD(),
     evaluated_by: evaluatedBy,
     remarks: `लाइव ऐप डेटा स्कोर: पाठ्यक्रम (${syllabusScore}/30), कक्षा परिणाम (${testScore}/25), हाजिरी (${attendanceScore}/15), होमवर्क (${homeworkScore}/15), समयबद्धता (${punctualityScore}/15)।`,
-    timestamp: new Date().toISOString(),
+    timestamp: getLocalTimestamp(),
     auto_metrics: {
       is_auto_calculated: true,
       syllabus_topics_count: teacherSyllabusList.length || uniqueHwDays,
@@ -744,7 +745,7 @@ export const DEFAULT_TEACHER_PERFORMANCE_SEED: TeacherPerformanceRecord[] = [
     evaluation_date: '2026-09-30',
     evaluated_by: 'प्रबंधक (Manager / Principal)',
     remarks: 'असाधारण समर्पण, शत-प्रतिशत कॉपी चेकिंग और समय की पाबंदी।',
-    timestamp: new Date().toISOString(),
+    timestamp: getLocalTimestamp(),
   },
   {
     id: 'tp_2026_09_t2',
@@ -769,7 +770,7 @@ export const DEFAULT_TEACHER_PERFORMANCE_SEED: TeacherPerformanceRecord[] = [
     evaluation_date: '2026-09-30',
     evaluated_by: 'प्रबंधक (Manager / Principal)',
     remarks: 'छात्रों के टेस्ट अंकों में बहुत अच्छा सुधार।',
-    timestamp: new Date().toISOString(),
+    timestamp: getLocalTimestamp(),
   },
   {
     id: 'tp_2026_09_t3',
@@ -794,7 +795,7 @@ export const DEFAULT_TEACHER_PERFORMANCE_SEED: TeacherPerformanceRecord[] = [
     evaluation_date: '2026-09-30',
     evaluated_by: 'प्रबंधक (Manager / Principal)',
     remarks: 'कक्षा अनुशासन और दैनिक होमवर्क नियमित रूप से दिया।',
-    timestamp: new Date().toISOString(),
+    timestamp: getLocalTimestamp(),
   },
   {
     id: 'tp_2026_09_t4',
@@ -819,7 +820,7 @@ export const DEFAULT_TEACHER_PERFORMANCE_SEED: TeacherPerformanceRecord[] = [
     evaluation_date: '2026-09-30',
     evaluated_by: 'प्रबंधक (Manager / Principal)',
     remarks: 'अच्छा प्रदर्शन, कमजोर छात्रों पर विशेष ध्यान आवश्यक है।',
-    timestamp: new Date().toISOString(),
+    timestamp: getLocalTimestamp(),
   },
 ];
 
@@ -934,8 +935,8 @@ function normalizeSheetPerformanceRows(rawRows: any[]): TeacherPerformanceRecord
       ).trim() || 'D') as TeacherPerformanceRecord['grade'],
       evaluated_by: String(obj.evaluated_by ?? obj.Evaluated_By ?? 'Principal / Manager').trim(),
       remarks: String(obj.remarks ?? obj.Remarks ?? '').trim(),
-      evaluation_date: String(obj.evaluation_date ?? new Date().toISOString().slice(0, 10)).slice(0, 10),
-      timestamp: String(obj.timestamp ?? obj.Timestamp ?? new Date().toISOString()),
+      evaluation_date: String(obj.evaluation_date ?? getLocalDateYMD()).slice(0, 10),
+      timestamp: String(obj.timestamp ?? obj.Timestamp ?? getLocalTimestamp()),
     });
   }
   return parsed;

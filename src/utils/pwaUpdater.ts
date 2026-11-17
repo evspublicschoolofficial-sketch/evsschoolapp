@@ -62,7 +62,13 @@ function showTemporaryFeedback(type: 'latest' | 'update' | 'error', text: string
   }, durationMs);
 }
 
-async function fetchLiveServerVersion(): Promise<string | null> {
+interface LiveVersionInfo {
+  version: string;
+  hasGitHubUpdate?: boolean;
+  githubLatestSha?: string | null;
+}
+
+async function fetchLiveServerVersion(): Promise<LiveVersionInfo | null> {
   const cacheBust = `?_t=${Date.now()}`;
   const endpoints = IS_PROD
     ? [`/version.json${cacheBust}`, `/api/app-version${cacheBust}`]
@@ -82,7 +88,11 @@ async function fetchLiveServerVersion(): Promise<string | null> {
         const data = await res.json();
         const ver = data?.version ? String(data.version).trim() : '';
         if (ver && ver !== 'dev') {
-          return ver;
+          return {
+            version: ver,
+            hasGitHubUpdate: Boolean(data?.hasGitHubUpdate),
+            githubLatestSha: data?.githubLatestSha ? String(data.githubLatestSha) : null,
+          };
         }
       }
     } catch {
@@ -127,10 +137,10 @@ export function initPWAUpdater() {
 
   // Capture initial server version in dev mode so we never show false positives on boot
   if (!IS_PROD || BUNDLED_BUILD_ID === 'dev') {
-    fetchLiveServerVersion().then((ver) => {
-      if (ver) {
-        bootServerVersion = ver;
-        setState({ currentVersion: ver });
+    fetchLiveServerVersion().then((info) => {
+      if (info?.version) {
+        bootServerVersion = info.version;
+        setState({ currentVersion: info.version });
       }
     });
   }
@@ -142,10 +152,10 @@ export function initPWAUpdater() {
         .register('/sw.js', { updateViaCache: 'none' })
         .then((reg) => {
           attachRegistrationListeners(reg);
-          // Check right after boot
+          // Defer initial update check slightly so main school data loads instantaneously first
           setTimeout(() => {
             checkForAppUpdate(false);
-          }, 2500);
+          }, 4000);
         })
         .catch((err) => {
           console.warn('ServiceWorker registration error:', err);
@@ -160,7 +170,7 @@ export function initPWAUpdater() {
   } else {
     setTimeout(() => {
       checkForAppUpdate(false);
-    }, 2500);
+    }, 4000);
   }
 
   // Re-check whenever user resumes/switches back to the installed PWA on phone
@@ -209,21 +219,24 @@ export async function checkForAppUpdate(isManual = false): Promise<boolean> {
       }
     }
 
-    // 2. Check live server build version (catches GitHub deploys even if sw.js wasn't updated yet)
-    const serverVer = await fetchLiveServerVersion();
-    if (serverVer) {
-      if (IS_PROD && BUNDLED_BUILD_ID !== 'dev') {
-        if (serverVer !== BUNDLED_BUILD_ID) {
+    // 2. Check live server build version & GitHub commit updates
+    const serverInfo = await fetchLiveServerVersion();
+    if (serverInfo?.version) {
+      if (serverInfo.hasGitHubUpdate) {
+        foundUpdate = true;
+        setState({ latestVersion: serverInfo.githubLatestSha || serverInfo.version });
+      } else if (IS_PROD && BUNDLED_BUILD_ID !== 'dev') {
+        if (serverInfo.version !== BUNDLED_BUILD_ID) {
           foundUpdate = true;
-          setState({ latestVersion: serverVer });
+          setState({ latestVersion: serverInfo.version });
         }
       } else {
         if (!bootServerVersion) {
-          bootServerVersion = serverVer;
-          setState({ currentVersion: serverVer });
-        } else if (serverVer !== bootServerVersion) {
+          bootServerVersion = serverInfo.version;
+          setState({ currentVersion: serverInfo.version });
+        } else if (serverInfo.version !== bootServerVersion) {
           foundUpdate = true;
-          setState({ latestVersion: serverVer });
+          setState({ latestVersion: serverInfo.version });
         }
       }
     }
@@ -231,7 +244,7 @@ export async function checkForAppUpdate(isManual = false): Promise<boolean> {
     setState({
       isChecking: false,
       updateAvailable: state.updateAvailable || foundUpdate,
-      lastCheckedAt: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+      lastCheckedAt: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
     });
 
     const effectiveUpdate = state.updateAvailable || foundUpdate;

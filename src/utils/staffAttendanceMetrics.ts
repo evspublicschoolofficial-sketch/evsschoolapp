@@ -1,5 +1,6 @@
 import { SchoolUser, StaffAttendanceRecord, SchoolHolidayRecord } from '../types';
 import { findHolidayForDate, loadLocalSchoolHolidays } from './schoolHolidaysHelper';
+import { getLocalDateYMD } from './localTime';
 
 export interface SchoolShiftSettings {
   schoolOpeningTime: string; // e.g. "08:30 AM"
@@ -405,7 +406,7 @@ export function calculateStaffMonthlyStats(
     : defaultWorkingDays;
 
   const today = new Date();
-  const todayStr = today.toISOString().split('T')[0];
+  const todayStr = getLocalDateYMD(today);
 
   const standardStartMin = parseTimeToMinutes(standardStartTimeStr) ?? (8 * 60 + 30); // 8:30 AM
   const standardEndMin = parseTimeToMinutes(standardEndTimeStr) ?? (14 * 60); // 2:00 PM

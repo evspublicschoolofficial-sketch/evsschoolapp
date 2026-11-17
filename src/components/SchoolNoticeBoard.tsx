@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { getLocalDateYMD } from '../utils/localTime';
 import { SchoolNotice } from '../types';
 import {
   startEmergencySiren,
@@ -124,7 +125,7 @@ export const SchoolNoticeBoard: React.FC<SchoolNoticeBoardProps> = ({
   // Form State for Adding Notice
   const [newTitle, setNewTitle] = useState<string>('');
   const [newCategory, setNewCategory] = useState<SchoolNotice['category']>('general');
-  const [newDate, setNewDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [newDate, setNewDate] = useState<string>(() => getLocalDateYMD());
   const [newTargetClass, setNewTargetClass] = useState<string>('All');
   const [newDescription, setNewDescription] = useState<string>('');
   const [newIsPinned, setNewIsPinned] = useState<boolean>(false);
@@ -262,7 +263,7 @@ export const SchoolNoticeBoard: React.FC<SchoolNoticeBoardProps> = ({
     const notice: SchoolNotice = {
       id: 'not-' + Date.now().toString().slice(-6),
       title: newTitle.trim(),
-      date: newDate || new Date().toISOString().slice(0, 10),
+      date: newDate || getLocalDateYMD(),
       category: newIsEmergency ? 'emergency' : newCategory,
       description: newDescription.trim(),
       targetClass: newTargetClass || 'All',

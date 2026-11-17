@@ -8,6 +8,7 @@ import {
 } from '../types';
 import { getAppsScriptUrl } from './busTrackingService';
 import { directGetFromSheet, dualSyncWriteToSheet } from './sheetDirectSync';
+import { getLocalTimestamp } from './localTime';
 
 export const EXAM_MARKS_STORAGE_KEY = 'evs_exam_marks_v1';
 export const REPORT_CARD_META_STORAGE_KEY = 'evs_report_card_meta_v1';
@@ -175,7 +176,7 @@ export const saveReportCardMetaToServer = async (
     ...local,
     [meta.reportKey]: {
       ...meta,
-      updatedAt: new Date().toISOString(),
+      updatedAt: getLocalTimestamp(),
     },
   };
   saveLocalReportCardMeta(next);

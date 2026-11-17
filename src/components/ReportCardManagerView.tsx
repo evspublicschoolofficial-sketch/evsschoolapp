@@ -17,6 +17,7 @@ import {
   saveReportCardMetaToServer,
   syncAllReportCardsBackupToSheet,
 } from '../utils/reportCardHelper';
+import { getLocalTimestamp } from '../utils/localTime';
 import { PrintableReportCard } from './PrintableReportCard';
 
 interface ReportCardManagerViewProps {
@@ -148,7 +149,7 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
         resultStatus: resultStatusDraft,
         publishedToParent: publishedDraft,
         updatedBy: currentUser.name || (isManager ? 'Manager' : 'Teacher'),
-        updatedAt: new Date().toISOString(),
+        updatedAt: getLocalTimestamp(),
       };
       const res = await saveReportCardMetaToServer(payload);
       onReportCardMetaUpdated(res.metaMap);
@@ -231,7 +232,7 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
           teacher_id: currentUser.id || '',
           teacher_name: currentUser.name || (isManager ? 'Manager' : 'Teacher'),
           remarks: entry.remarks.trim(),
-          updated_at: new Date().toISOString(),
+          updated_at: getLocalTimestamp(),
         });
       });
 
@@ -312,7 +313,7 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
           resultStatus: rc.meta.resultStatus || 'PROMOTED',
           publishedToParent: rc.meta.publishedToParent !== false,
           updatedBy: currentUser.name || (isManager ? 'Manager' : 'Teacher'),
-          updatedAt: new Date().toISOString(),
+          updatedAt: getLocalTimestamp(),
         };
       });
 

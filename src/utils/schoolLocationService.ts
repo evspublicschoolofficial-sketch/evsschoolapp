@@ -1,4 +1,5 @@
 import { DEFAULT_SCHOOL_COORDS } from './busTrackingService';
+import { getLocalTimestamp } from './localTime';
 
 export interface SchoolLocationConfig {
   lat: number;
@@ -140,7 +141,7 @@ export async function updateSchoolLocation(
   const merged: SchoolLocationConfig = {
     ...cachedSchoolLocation,
     ...config,
-    updated_at: new Date().toISOString(),
+    updated_at: getLocalTimestamp(),
     updated_by: updatedBy,
   };
 
