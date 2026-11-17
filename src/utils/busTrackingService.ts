@@ -3036,6 +3036,7 @@ function upsertExamMarksArray(sheet, records) {
 
   var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
   var count = 0;
+  var newRows = [];
   for (var i = 0; i < records.length; i++) {
     var rec = records[i];
     if (!rec || !rec.student_id || !rec.subject) continue;
@@ -3065,19 +3066,22 @@ function upsertExamMarksArray(sheet, records) {
     if (targetRow) {
       sheet.getRange(targetRow, 1, 1, 14).setValues([rowArr]);
     } else {
-      sheet.appendRow(rowArr);
-      var lastR = sheet.getLastRow();
-      idMap[markId.toLowerCase()] = lastR;
-      compositeMap[comp] = lastR;
+      newRows.push(rowArr);
+      var projectedRow = sheet.getLastRow() + newRows.length;
+      idMap[markId.toLowerCase()] = projectedRow;
+      compositeMap[comp] = projectedRow;
     }
     count++;
+  }
+  if (newRows.length > 0) {
+    var startRow = sheet.getLastRow() + 1;
+    sheet.getRange(startRow, 1, newRows.length, 14).setValues(newRows);
   }
   return count;
 }
 
 function handleSaveExamMarksBatch(ss, data) {
-  ensureFeatureBackupTabs(ss);
-  var sheet = findExistingSheet_(ss, ["Exam_Marks", "Exam Marks", "ExamMarks"]);
+  var sheet = ensureTabSafe_(ss, "Exam_Marks", ["Exam Marks", "ExamMarks"], ["Mark_ID", "Session", "Exam_Type", "Student_ID", "Student_Name", "Class", "Subject", "Max_Marks", "Marks_Obtained", "Attendance_Status", "Teacher_ID", "Teacher_Name", "Remarks", "Updated_At"]);
   var records = data.records;
   if (typeof records === "string") {
     try { records = JSON.parse(records); } catch(e) { records = []; }
@@ -3138,8 +3142,7 @@ function handleGetReportCardMeta(ss) {
 }
 
 function handleSaveReportCardMeta(ss, data) {
-  ensureFeatureBackupTabs(ss);
-  var sheet = findExistingSheet_(ss, ["Report_Cards_Backup", "Report Cards Backup", "Report_Cards", "ReportCardsBackup"]);
+  var sheet = ensureTabSafe_(ss, "Report_Cards_Backup", ["Report Cards Backup", "Report_Cards", "ReportCardsBackup"], ["Report_Key", "Session", "Student_ID", "Student_Name", "Class", "Roll_Number", "Weekly_Pct", "Quarterly_Pct", "HalfYearly_Pct", "Annual_Pct", "Overall_Pct", "Grade", "Attendance_Pct", "Present_Days", "Total_Days", "Teacher_Remark", "Principal_Remark", "Result_Status", "Published_For_Parent", "Updated_By", "Updated_At"]);
   var m = data.meta || data;
   if (typeof m === "string") {
     try { m = JSON.parse(m); } catch(e) { m = data; }
@@ -3192,9 +3195,8 @@ function handleSaveReportCardMeta(ss, data) {
 }
 
 function handleSyncReportCardsBatch(ss, data) {
-  ensureFeatureBackupTabs(ss);
-  var emSheet = findExistingSheet_(ss, ["Exam_Marks", "Exam Marks", "ExamMarks"]);
-  var rcSheet = findExistingSheet_(ss, ["Report_Cards_Backup", "Report Cards Backup", "Report_Cards", "ReportCardsBackup"]);
+  var emSheet = ensureTabSafe_(ss, "Exam_Marks", ["Exam Marks", "ExamMarks"], ["Mark_ID", "Session", "Exam_Type", "Student_ID", "Student_Name", "Class", "Subject", "Max_Marks", "Marks_Obtained", "Attendance_Status", "Teacher_ID", "Teacher_Name", "Remarks", "Updated_At"]);
+  var rcSheet = ensureTabSafe_(ss, "Report_Cards_Backup", ["Report Cards Backup", "Report_Cards", "ReportCardsBackup"], ["Report_Key", "Session", "Student_ID", "Student_Name", "Class", "Roll_Number", "Weekly_Pct", "Quarterly_Pct", "HalfYearly_Pct", "Annual_Pct", "Overall_Pct", "Grade", "Attendance_Pct", "Present_Days", "Total_Days", "Teacher_Remark", "Principal_Remark", "Result_Status", "Published_For_Parent", "Updated_By", "Updated_At"]);
 
   var examMarks = data.examMarks;
   if (typeof examMarks === "string") {
@@ -3217,6 +3219,7 @@ function handleSyncReportCardsBatch(ss, data) {
 
   var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
   var rcCount = 0;
+  var newRcRows = [];
   for (var i = 0; i < backups.length; i++) {
     var b = backups[i];
     if (!b || !b.reportKey) continue;
@@ -3248,10 +3251,13 @@ function handleSyncReportCardsBatch(ss, data) {
     if (tRow) {
       rcSheet.getRange(tRow, 1, 1, 21).setValues([rowArr]);
     } else {
-      rcSheet.appendRow(rowArr);
-      keyMap[rKey.toLowerCase()] = rcSheet.getLastRow();
+      newRcRows.push(rowArr);
+      keyMap[rKey.toLowerCase()] = rcSheet.getLastRow() + newRcRows.length;
     }
     rcCount++;
+  }
+  if (newRcRows.length > 0) {
+    rcSheet.getRange(rcSheet.getLastRow() + 1, 1, newRcRows.length, 21).setValues(newRcRows);
   }
 
   return ContentService.createTextOutput(JSON.stringify({

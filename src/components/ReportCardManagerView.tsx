@@ -250,7 +250,7 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
         type: res.sheetSynced ? 'success' : 'warning',
         text: res.sheetSynced
           ? `${EXAM_TERM_LABELS[examTerm]} (${effectiveSubject}) के ${recordsToSave.length} छात्रों के अंक Google Sheet 'Exam_Marks' में सेव हो गए!`
-          : `ऐप में ${recordsToSave.length} अंक सेव हो गए! Google Sheet सिंक हेतु Apps Script अपडेट करें।`,
+          : `ऐप में ${recordsToSave.length} अंक सेव हो गए! Google Sheet सिंक चेतावनी: ${res.sheetError || 'Apps Script सिंक टाइमआउट/त्रुटि'}`,
       });
     } catch (e: any) {
       setStatusBanner({ type: 'error', text: e?.message || 'अंक सेव करने में समस्या आई।' });
@@ -321,7 +321,7 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
         type: res.sheetSynced ? 'success' : 'warning',
         text: res.sheetSynced
           ? `✅ सभी ${backups.length} छात्रों के रिपोर्ट कार्ड ('Report_Cards_Backup') व ${examMarks.length} परीक्षा अंक ('Exam_Marks') Google Sheet में बैकअप हो गए!`
-          : `स्थानीय सर्वर बैकअप पूरा (${backups.length} छात्र)! Google Sheet टैब्स हेतु नया Apps Script वर्शन डिप्लॉय करें।`,
+          : `स्थानीय सर्वर बैकअप पूरा (${backups.length} छात्र)! Google Sheet सिंक चेतावनी: ${res.sheetError || 'Apps Script सिंक टाइमआउट/त्रुटि'}`,
       });
     } catch (e: any) {
       setStatusBanner({ type: 'error', text: e?.message || 'Google Sheet बैकअप में त्रुटि आई।' });

@@ -450,7 +450,7 @@ async function forwardToGoogleAppsScript(payload: any) {
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(formattedPayload),
         redirect: 'follow',
-        signal: AbortSignal.timeout(12000),
+        signal: AbortSignal.timeout(25000),
       });
       lastPostStatus = res.status;
       lastPostText = await res.text();
@@ -529,14 +529,37 @@ async function forwardToGoogleAppsScript(payload: any) {
     } else if (
       formattedPayload.action === 'deleteSyllabusTopic' ||
       formattedPayload.action === 'deleteSchoolHoliday' ||
-      formattedPayload.action === 'deleteWeeklyTest'
+      formattedPayload.action === 'deleteWeeklyTest' ||
+      formattedPayload.action === 'deleteExamMark'
     ) {
       try {
         const getUrl = `${targetUrl}?action=${encodeURIComponent(formattedPayload.action)}&id=${encodeURIComponent(formattedPayload.id || '')}`;
-        const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(8000) });
+        const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(12000) });
         const gText = await gRes.text();
         const gCheck = parseAppsScriptResponse(gText);
         if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
+      } catch {}
+    } else if (formattedPayload.action === 'saveReportCardMeta') {
+      try {
+        const metaStr = typeof formattedPayload.meta === 'string' ? formattedPayload.meta : JSON.stringify(formattedPayload.meta || formattedPayload);
+        const getUrl = `${targetUrl}?action=saveReportCardMeta&meta=${encodeURIComponent(metaStr)}`;
+        if (getUrl.length < 7500) {
+          const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(15000) });
+          const gText = await gRes.text();
+          const gCheck = parseAppsScriptResponse(gText);
+          if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
+        }
+      } catch {}
+    } else if (formattedPayload.action === 'saveExamMarksBatch') {
+      try {
+        const recStr = typeof formattedPayload.records === 'string' ? formattedPayload.records : JSON.stringify(formattedPayload.records || []);
+        const getUrl = `${targetUrl}?action=saveExamMarksBatch&records=${encodeURIComponent(recStr)}`;
+        if (getUrl.length < 7500) {
+          const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(15000) });
+          const gText = await gRes.text();
+          const gCheck = parseAppsScriptResponse(gText);
+          if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
+        }
       } catch {}
     }
 

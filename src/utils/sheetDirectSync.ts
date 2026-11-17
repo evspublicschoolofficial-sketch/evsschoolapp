@@ -61,7 +61,7 @@ export async function directPostToSheet(
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify(payload),
       redirect: 'follow',
-      signal: AbortSignal.timeout(14000),
+      signal: AbortSignal.timeout(25000),
     });
     const text = await res.text();
     const check = parseGasText(text);
@@ -86,8 +86,16 @@ export async function directPostToSheet(
     } else if (action === 'saveSchoolHoliday') {
       const holStr = typeof payload.holiday === 'string' ? payload.holiday : JSON.stringify(payload);
       getUrl = `${targetUrl}?action=saveSchoolHoliday&holiday=${encodeURIComponent(holStr)}`;
-    } else if (action === 'deleteSyllabusTopic' || action === 'deleteSchoolHoliday') {
+    } else if (action === 'deleteSyllabusTopic' || action === 'deleteSchoolHoliday' || action === 'deleteExamMark') {
       getUrl = `${targetUrl}?action=${encodeURIComponent(action)}&id=${encodeURIComponent(String(payload.id || ''))}`;
+    } else if (action === 'saveReportCardMeta') {
+      const metaStr = typeof payload.meta === 'string' ? payload.meta : JSON.stringify(payload.meta || payload);
+      const candidate = `${targetUrl}?action=saveReportCardMeta&meta=${encodeURIComponent(metaStr)}`;
+      if (candidate.length < 7500) getUrl = candidate;
+    } else if (action === 'saveExamMarksBatch') {
+      const recStr = typeof payload.records === 'string' ? payload.records : JSON.stringify(payload.records || []);
+      const candidate = `${targetUrl}?action=saveExamMarksBatch&records=${encodeURIComponent(recStr)}`;
+      if (candidate.length < 7500) getUrl = candidate;
     }
 
     if (getUrl) {
@@ -158,7 +166,7 @@ export async function dualSyncWriteToSheet(params: {
         'x-apps-script-url': activeUrl,
       },
       body: params.method === 'DELETE' ? undefined : JSON.stringify({ ...(params.apiBody || {}), appsScriptUrl: activeUrl }),
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(28000),
     });
 
     if (res.ok) {
