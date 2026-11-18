@@ -404,6 +404,41 @@ function saveReportCardMetaCache() {
   }
 }
 
+// =========================================================================
+// EXAM HALL PASS / ADMIT CARD CONFIGURATION & FEE-OVERRIDE PERSISTENCE
+// =========================================================================
+const HALL_PASS_CONFIG_FILE = '/tmp/evs_hall_pass_config.json';
+const DEFAULT_HALL_PASS_CONFIG = {
+  examType: 'Half-Yearly',
+  session: '2026-27',
+  customExamTitle: '',
+  examScheduleLine: 'Timing: 09:00 AM - 12:00 PM',
+  instructionLine: 'Bring Hall Pass & School ID daily. Report 15 min prior.',
+  publishedToParent: true,
+  allowedOverrides: {} as Record<string, any>,
+  updatedAt: '',
+};
+let hallPassConfigStore: any = { ...DEFAULT_HALL_PASS_CONFIG };
+try {
+  if (fs.existsSync(HALL_PASS_CONFIG_FILE)) {
+    const rawHp = fs.readFileSync(HALL_PASS_CONFIG_FILE, 'utf-8');
+    const parsedHp = JSON.parse(rawHp);
+    if (parsedHp && typeof parsedHp === 'object' && !Array.isArray(parsedHp)) {
+      hallPassConfigStore = { ...DEFAULT_HALL_PASS_CONFIG, ...parsedHp };
+    }
+  }
+} catch {
+  hallPassConfigStore = { ...DEFAULT_HALL_PASS_CONFIG };
+}
+
+function saveHallPassConfigCache() {
+  try {
+    fs.writeFileSync(HALL_PASS_CONFIG_FILE, JSON.stringify(hallPassConfigStore, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Could not write hall pass config cache file:', e);
+  }
+}
+
 function parseAppsScriptResponse(text: string): { ok: boolean; error?: string } {
   const trimmed = String(text || '').trim();
   if (!trimmed) return { ok: false, error: 'Google Apps Script से खाली जवाब मिला' };
@@ -4284,6 +4319,47 @@ async function startServer() {
       });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err?.message || 'Batch report card backup failed' });
+    }
+  });
+
+  app.get('/api/hall-pass-config', (_req, res) => {
+    return res.json({
+      success: true,
+      config: hallPassConfigStore,
+    });
+  });
+
+  app.post('/api/hall-pass-config', (req, res) => {
+    try {
+      const incoming = req.body?.config || req.body || {};
+      hallPassConfigStore = {
+        ...DEFAULT_HALL_PASS_CONFIG,
+        ...hallPassConfigStore,
+        ...incoming,
+        allowedOverrides:
+          incoming.allowedOverrides && typeof incoming.allowedOverrides === 'object'
+            ? incoming.allowedOverrides
+            : hallPassConfigStore.allowedOverrides || {},
+        updatedAt: getLocalTimestampIST(),
+      };
+      saveHallPassConfigCache();
+
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'hall_pass_config',
+        action: 'update',
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) client.send(broadcastMsg);
+      }
+
+      return res.json({
+        success: true,
+        config: hallPassConfigStore,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Could not save hall pass config' });
     }
   });
 

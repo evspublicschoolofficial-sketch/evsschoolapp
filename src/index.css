@@ -238,5 +238,62 @@
   body.printing-family-receipt #printable-family-receipt-sheet * {
     visibility: visible !important;
   }
+
+  @page hallpass {
+    size: A4 portrait;
+    margin: 5mm;
+  }
+
+  body.printing-hall-passes * {
+    visibility: hidden !important;
+  }
+
+  body.printing-hall-passes #printable-hall-passes-root,
+  body.printing-hall-passes #printable-hall-passes-root * {
+    visibility: visible !important;
+  }
+
+  body.printing-hall-passes #printable-hall-passes-root {
+    page: hallpass;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 200mm;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  body.printing-hall-passes .hall-pass-a4-page {
+    width: 200mm !important;
+    height: 286mm !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    grid-template-rows: repeat(3, minmax(0, 1fr)) !important;
+    gap: 2.5mm !important;
+    page-break-after: always;
+    break-after: page;
+    background: #ffffff !important;
+  }
+
+  body.printing-hall-passes .hall-pass-a4-page:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+
+  body.printing-hall-passes .hall-pass-slot {
+    width: 100% !important;
+    height: 100% !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
 }
 

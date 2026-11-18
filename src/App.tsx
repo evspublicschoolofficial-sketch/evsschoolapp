@@ -5,7 +5,12 @@ import { SchoolNoticeBoard, DEFAULT_SEED_NOTICES } from './components/SchoolNoti
 import { EmergencyAlertBanner } from './components/EmergencyAlertBanner';
 import { playSirenPreview, playAnnouncementPreview, speakAnnouncement, unlockAudioContext } from './utils/sirenAudio';
 import { InstallAppModal } from './components/InstallAppModal';
-import { ExamMarkRecord, ReportCardRemarkRecord, SchoolNotice, StaffAttendanceRecord, WeeklyTestRecord } from './types';
+import { ExamMarkRecord, HallPassConfig, ReportCardRemarkRecord, SchoolNotice, StaffAttendanceRecord, WeeklyTestRecord } from './types';
+import {
+  fetchHallPassConfigFromServer,
+  HALL_PASS_CONFIG_STORAGE_KEY,
+  loadLocalHallPassConfig,
+} from './utils/hallPassHelper';
 import { FloatingSocialBar } from './components/FloatingSocialBar';
 import { fetchFeeMasterDirectGViz, FREE_STUDENTS_UPDATED_EVENT } from './utils/feeMaster';
 import { initGeolocationPrewarmer, syncSchoolLocationFromServer } from './utils/schoolLocationService';
@@ -64,6 +69,8 @@ const WeeklySubjectTestManager = React.lazy(() => import('./components/WeeklySub
 const ParentUpiFeeSection = React.lazy(() => import('./components/ParentUpiFeeSection').then((m) => ({ default: m.ParentUpiFeeSection })));
 const ReportCardManagerView = React.lazy(() => import('./components/ReportCardManagerView').then((m) => ({ default: m.ReportCardManagerView })));
 const PrintableReportCard = React.lazy(() => import('./components/PrintableReportCard').then((m) => ({ default: m.PrintableReportCard })));
+const HallPassManagerView = React.lazy(() => import('./components/HallPassManagerView').then((m) => ({ default: m.HallPassManagerView })));
+const ParentHallPassView = React.lazy(() => import('./components/ParentHallPassView').then((m) => ({ default: m.ParentHallPassView })));
 
 // Non-inlined static asset paths (prevents 1.4 MB image bloat inside main JS bundle)
 const studentFarahPhoto = '/assets/student_farah_1789483069291.jpg';
@@ -1399,7 +1406,7 @@ export default function App() {
   const [manualLinkSuccess, setManualLinkSuccess] = useState<string | null>(null);
   const [hwFilterType, setHwFilterType] = useState<'all' | 'class' | 'student'>('all');
   const [hwDaysFilter, setHwDaysFilter] = useState<'latest' | 'all'>('latest');
-  const [parentActiveSection, setParentActiveSection] = useState<'overview' | 'homework' | 'tracker' | 'behavior' | 'fees' | 'calendar' | 'notices' | 'profile' | 'reportCard'>('overview');
+  const [parentActiveSection, setParentActiveSection] = useState<'overview' | 'homework' | 'tracker' | 'behavior' | 'fees' | 'calendar' | 'notices' | 'profile' | 'reportCard' | 'hallPass'>('overview');
   const [trackerStatusFilter, setTrackerStatusFilter] = useState<'all' | 'completed' | 'incompleted'>('all');
 
   // AI Daily Greeting & Activity Summary for Parent Portal
@@ -1515,17 +1522,19 @@ export default function App() {
   });
   const [examMarksList, setExamMarksList] = useState<ExamMarkRecord[]>(() => loadLocalExamMarks());
   const [reportCardMetaMap, setReportCardMetaMap] = useState<Record<string, ReportCardRemarkRecord>>(() => loadLocalReportCardMeta());
+  const [hallPassConfig, setHallPassConfig] = useState<HallPassConfig>(() => loadLocalHallPassConfig());
 
   const fetchReportCardAllData = async (forceRefresh = false) => {
     try {
       const activeUrl = getEffectiveApiUrl();
-      const [wtRes, emRes, rcRes] = await Promise.allSettled([
+      const [wtRes, emRes, rcRes, hpRes] = await Promise.allSettled([
         fetch(`/api/weekly-tests${forceRefresh ? '?refresh=1' : ''}`, {
           headers: { 'x-apps-script-url': activeUrl },
           cache: 'no-store',
         }).then((r) => (r.ok ? r.json() : null)),
         fetchExamMarksFromServer(forceRefresh),
         fetchReportCardMetaFromServer(forceRefresh),
+        fetchHallPassConfigFromServer(),
       ]);
 
       if (wtRes.status === 'fulfilled' && Array.isArray(wtRes.value)) {
@@ -1537,6 +1546,9 @@ export default function App() {
       }
       if (rcRes.status === 'fulfilled' && rcRes.value && typeof rcRes.value === 'object') {
         setReportCardMetaMap(rcRes.value);
+      }
+      if (hpRes.status === 'fulfilled' && hpRes.value && typeof hpRes.value === 'object') {
+        setHallPassConfig(hpRes.value);
       }
     } catch {}
   };
@@ -1842,10 +1854,10 @@ export default function App() {
   const [managerSelectedFeeStudent, setManagerSelectedFeeStudent] = useState<Student | null>(null);
 
   // Manager Dashboard State
-  const [managerTab, setManagerTab] = useState<'students' | 'homework' | 'behavior' | 'fees' | 'users' | 'vanTracking' | 'attendance' | 'notices' | 'autoTransport' | 'staffAttendance' | 'teacherPerformance' | 'reportCards'>(() => {
+  const [managerTab, setManagerTab] = useState<'students' | 'homework' | 'behavior' | 'fees' | 'users' | 'vanTracking' | 'attendance' | 'notices' | 'autoTransport' | 'staffAttendance' | 'teacherPerformance' | 'reportCards' | 'hallPass'>(() => {
     try {
       const saved = localStorage.getItem('evs_manager_tab');
-      if (saved && ['students', 'homework', 'behavior', 'fees', 'users', 'vanTracking', 'attendance', 'notices', 'autoTransport', 'staffAttendance', 'teacherPerformance', 'reportCards'].includes(saved)) {
+      if (saved && ['students', 'homework', 'behavior', 'fees', 'users', 'vanTracking', 'attendance', 'notices', 'autoTransport', 'staffAttendance', 'teacherPerformance', 'reportCards', 'hallPass'].includes(saved)) {
         return saved as any;
       }
     } catch {}
@@ -3768,6 +3780,7 @@ export default function App() {
         'evs_weekly_subject_tests_v1',
         EXAM_MARKS_STORAGE_KEY,
         REPORT_CARD_META_STORAGE_KEY,
+        HALL_PASS_CONFIG_STORAGE_KEY,
         CACHE_KEY_TIMESTAMP,
       ]);
       if (!isMounted) return;
@@ -3812,6 +3825,9 @@ export default function App() {
       }
       if (Object.keys(reportCardMetaMap).length === 0 && hydrated[REPORT_CARD_META_STORAGE_KEY]) {
         setReportCardMetaMap(hydrated[REPORT_CARD_META_STORAGE_KEY]);
+      }
+      if (hydrated[HALL_PASS_CONFIG_STORAGE_KEY]) {
+        setHallPassConfig((prev) => ({ ...prev, ...hydrated[HALL_PASS_CONFIG_STORAGE_KEY] }));
       }
       if (!hasTimestamp && hydrated[CACHE_KEY_TIMESTAMP]) {
         const ts = parseInt(String(hydrated[CACHE_KEY_TIMESTAMP]), 10) || 0;
@@ -3888,6 +3904,8 @@ export default function App() {
         fetchStudentBehavior();
       } else if (event.entity === 'users') {
         fetchUsers();
+      } else if (event.entity === 'hall_pass_config') {
+        fetchHallPassConfigFromServer().then(setHallPassConfig);
       } else {
         syncAllData(false, false);
       }
@@ -8250,6 +8268,18 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         <i className="fa-solid fa-user"></i>
                         <span>7. पूरी प्रोफ़ाइल देखें</span>
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          fetchHallPassConfigFromServer().then(setHallPassConfig);
+                          setParentActiveSection('hallPass');
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        className="px-3.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-extrabold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 shadow-xs"
+                      >
+                        <i className="fa-solid fa-ticket"></i>
+                        <span>9. परीक्षा हॉल पास</span>
+                      </button>
                     </div>
                   </div>
                 ) : (
@@ -8334,6 +8364,17 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         }`}
                       >
                         🎓 8. रिपोर्ट कार्ड
+                      </button>
+                      <button
+                        onClick={() => {
+                          fetchHallPassConfigFromServer().then(setHallPassConfig);
+                          setParentActiveSection('hallPass');
+                        }}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                          parentActiveSection === 'hallPass' ? 'bg-amber-400 text-slate-950 shadow-xs' : 'bg-white/15 hover:bg-white/25 text-white'
+                        }`}
+                      >
+                        🎫 9. हॉल पास
                       </button>
                       <button
                         type="button"
@@ -10235,6 +10276,46 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           metaMap: reportCardMetaMap,
                           session: CURRENT_ACADEMIC_SESSION,
                         })}
+                      />
+                    </Suspense>
+
+                    <div className="pt-4 border-t border-slate-200 flex justify-center">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setParentActiveSection('overview');
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        className="px-5 py-2.5 bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-bold rounded-xl text-xs sm:text-sm flex items-center gap-2 shadow-sm cursor-pointer transition-all active:scale-95"
+                      >
+                        <i className="fa-solid fa-arrow-left"></i>
+                        <span>← वापस मुख्य कार्ड्स पर जाएं (Back to Cards)</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* VIEW 7: DIGITAL EXAM HALL PASS / ADMIT CARD */}
+                {parentActiveSection === 'hallPass' && selectedStudent && (
+                  <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-6 space-y-4 animate-fadeIn">
+                    <Suspense
+                      fallback={
+                        <div className="p-10 text-center text-slate-500 font-bold">
+                          <i className="fa-solid fa-circle-notch fa-spin text-blue-900 mr-2"></i>
+                          परीक्षा हॉल पास लोड हो रहा है...
+                        </div>
+                      }
+                    >
+                      <ParentHallPassView
+                        student={selectedStudent}
+                        feeRecords={feeRecords}
+                        config={hallPassConfig}
+                        getClassName={getClassName}
+                        photoUrl={getStudentPhoto(selectedStudent)}
+                        onGoToFees={() => {
+                          setParentActiveSection('fees');
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
                       />
                     </Suspense>
 
@@ -12185,6 +12266,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       {managerTab === 'autoTransport' && <><i className="fa-solid fa-route text-amber-700"></i> ऑटो व रूट फीस</>}
                       {managerTab === 'teacherPerformance' && <><i className="fa-solid fa-trophy text-amber-600"></i> 🏆 शिक्षक लीडरबोर्ड (100 Pts)</>}
                       {managerTab === 'reportCards' && <><i className="fa-solid fa-graduation-cap text-indigo-800"></i> 🎓 मार्कशीट व रिपोर्ट कार्ड (PDF)</>}
+                      {managerTab === 'hallPass' && <><i className="fa-solid fa-ticket text-blue-900"></i> परीक्षा हॉल पास (9/A4 पेज)</>}
                     </span>
                     <span className="px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-900 text-[10px] font-black shrink-0 border border-blue-200">
                       {managerTab === 'students' && `${filteredStudents.length}`}
@@ -12199,6 +12281,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       {managerTab === 'autoTransport' && 'रूट्स'}
                       {managerTab === 'teacherPerformance' && '100 Pts'}
                       {managerTab === 'reportCards' && 'PDF'}
+                      {managerTab === 'hallPass' && '9/A4'}
                     </span>
                   </div>
                 </div>
@@ -12406,7 +12489,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             setManagerTab('reportCards');
                             setIsManagerMenuOpen(false);
                           }}
-                          className={`p-3 rounded-2xl border text-left transition-all flex items-center justify-between gap-3 cursor-pointer sm:col-span-2 ${
+                          className={`p-3 rounded-2xl border text-left transition-all flex items-center justify-between gap-3 cursor-pointer ${
                             managerTab === 'reportCards'
                               ? 'bg-indigo-50 border-indigo-900 ring-2 ring-indigo-900/20 shadow-sm'
                               : 'bg-white hover:bg-slate-50 border-slate-200'
@@ -12418,15 +12501,48 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             </span>
                             <div className="min-w-0">
                               <h4 className="font-black text-xs sm:text-sm text-slate-900 truncate">
-                                🎓 मार्कशीट व रिपोर्ट कार्ड (Report Card PDF)
+                                🎓 मार्कशीट व रिपोर्ट कार्ड
                               </h4>
                               <p className="text-[11px] text-slate-500 truncate">
-                                साप्ताहिक + तिमाही + छमाही + सालाना अंक, हाजिरी व Sheet बैकअप
+                                तिमाही + छमाही + सालाना अंक व PDF
                               </p>
                             </div>
                           </div>
                           <span className="px-2 py-0.5 rounded-lg text-xs font-black bg-indigo-900 text-amber-300 shrink-0">
                             PDF
+                          </span>
+                        </button>
+
+                        {/* Exam Hall Pass (9 per A4) */}
+                        <button
+                          type="button"
+                          id="manager-tab-hall-pass"
+                          onClick={() => {
+                            fetchHallPassConfigFromServer().then(setHallPassConfig);
+                            setManagerTab('hallPass');
+                            setIsManagerMenuOpen(false);
+                          }}
+                          className={`p-3 rounded-2xl border text-left transition-all flex items-center justify-between gap-3 cursor-pointer ${
+                            managerTab === 'hallPass'
+                              ? 'bg-blue-50 border-blue-900 ring-2 ring-blue-900/20 shadow-sm'
+                              : 'bg-white hover:bg-slate-50 border-slate-200'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <span className="w-10 h-10 rounded-xl bg-blue-100 text-blue-900 flex items-center justify-center text-lg shrink-0">
+                              <i className="fa-solid fa-ticket"></i>
+                            </span>
+                            <div className="min-w-0">
+                              <h4 className="font-black text-xs sm:text-sm text-slate-900 truncate">
+                                परीक्षा हॉल पास / एडमिट कार्ड
+                              </h4>
+                              <p className="text-[11px] text-slate-500 truncate">
+                                1 A4 पेपर पर 9 पास · फ़ीस पात्रता व Allow छुट
+                              </p>
+                            </div>
+                          </div>
+                          <span className="px-2 py-0.5 rounded-lg text-xs font-black bg-[#0c2340] text-amber-300 shrink-0">
+                            9/A4
                           </span>
                         </button>
                       </div>
@@ -14097,6 +14213,28 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     role: 'Manager',
                   }}
                   isManager={true}
+                />
+              </Suspense>
+            )}
+
+            {/* VIEW 12: EXAM HALL PASS / ADMIT CARD (9 HALL PASSES PER A4 SHEET) */}
+            {managerTab === 'hallPass' && (
+              <Suspense
+                fallback={
+                  <div className="bg-white rounded-3xl p-12 text-center text-slate-500 font-bold border border-slate-200">
+                    <i className="fa-solid fa-circle-notch fa-spin text-amber-500 mr-2 text-2xl"></i>
+                    <span>परीक्षा हॉल पास जनरेटर लोड हो रहा है...</span>
+                  </div>
+                }
+              >
+                <HallPassManagerView
+                  students={students}
+                  feeRecords={feeRecords}
+                  config={hallPassConfig}
+                  onConfigChange={setHallPassConfig}
+                  getClassName={getClassName}
+                  getStudentPhoto={getStudentPhoto}
+                  managerName={managerUser?.Name || 'प्रबंधक / प्रधानाचार्य'}
                 />
               </Suspense>
             )}

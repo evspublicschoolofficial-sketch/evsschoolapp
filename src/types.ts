@@ -253,3 +253,21 @@ export interface ReportCardRemarkRecord {
   updatedBy?: string;
   updatedAt?: string;
 }
+
+export interface HallPassOverride {
+  allowed: boolean;
+  note?: string;
+  updatedBy?: string;
+  updatedAt?: string;
+}
+
+export interface HallPassConfig {
+  examType: ExamTermType;
+  session: string;
+  customExamTitle?: string;
+  examScheduleLine: string;
+  instructionLine: string;
+  publishedToParent: boolean;
+  allowedOverrides: Record<string, HallPassOverride>;
+  updatedAt?: string;
+}
