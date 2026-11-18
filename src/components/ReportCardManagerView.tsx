@@ -13,6 +13,7 @@ import {
   REPORT_CARD_SUBJECTS,
   ReportCardBackupRow,
   computeStudentReportCardData,
+  normalizeSubjectKey,
   saveExamMarksBatchToServer,
   saveReportCardMetaToServer,
   syncAllReportCardsBackupToSheet,
@@ -126,7 +127,7 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
   useEffect(() => {
     if (selectedReportData) {
       setTeacherRemarkDraft(selectedReportData.meta.teacherRemark || selectedReportData.autoTeacherRemark);
-      setPrincipalRemarkDraft(selectedReportData.meta.principalRemark || 'उज्ज्वल भविष्य की शुभकामनाएँ!');
+      setPrincipalRemarkDraft(selectedReportData.meta.principalRemark || selectedReportData.autoPrincipalRemark);
       setResultStatusDraft((selectedReportData.meta.resultStatus as any) || 'PROMOTED');
       setPublishedDraft(selectedReportData.meta.publishedToParent !== false);
     }
@@ -145,7 +146,7 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
         className: selectedReportData.student.Class,
         rollNumber: String(selectedReportData.student.Roll_Number || ''),
         teacherRemark: teacherRemarkDraft.trim() || selectedReportData.autoTeacherRemark,
-        principalRemark: principalRemarkDraft.trim() || 'उज्ज्वल भविष्य की शुभकामनाएँ!',
+        principalRemark: principalRemarkDraft.trim() || selectedReportData.autoPrincipalRemark,
         resultStatus: resultStatusDraft,
         publishedToParent: publishedDraft,
         updatedBy: currentUser.name || (isManager ? 'Manager' : 'Teacher'),
@@ -187,12 +188,14 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
   useEffect(() => {
     const draft: Record<string, { obtained: string; absent: boolean; remarks: string }> = {};
     const subjLower = effectiveSubject.trim().toLowerCase();
+    const subjKey = normalizeSubjectKey(effectiveSubject);
     classStudents.forEach((st) => {
       const existing = examMarks.find(
         (m) =>
           String(m.student_id || '').trim().toLowerCase() === String(st.Student_ID || '').trim().toLowerCase() &&
           m.exam_type === examTerm &&
-          String(m.subject || '').trim().toLowerCase() === subjLower &&
+          (String(m.subject || '').trim().toLowerCase() === subjLower ||
+            (subjKey && normalizeSubjectKey(m.subject) === subjKey)) &&
           (!m.session || m.session === CURRENT_ACADEMIC_SESSION)
       );
       draft[st.Student_ID] = {
@@ -539,30 +542,95 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
                       onClick={() => setTeacherRemarkDraft(selectedReportData.autoTeacherRemark)}
                       className="text-[10px] font-bold text-blue-700 hover:underline cursor-pointer"
                     >
-                      ✨ ऑटो-सुझाव भरें
+                      ✨ Smart English Auto-Fill
                     </button>
                   )}
                 </div>
                 <textarea
-                  rows={2}
+                  rows={3}
                   value={teacherRemarkDraft}
                   onChange={(e) => setTeacherRemarkDraft(e.target.value)}
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 focus:border-blue-800 outline-none"
-                  placeholder="छात्र की प्रगति के बारे में शिक्षक की टिप्पणी लिखें..."
+                  placeholder="Write personalized English remark about student's academic progress..."
                 />
+                {selectedReportData && (
+                  <div className="flex flex-wrap gap-1.5 mt-1.5">
+                    {[
+                      {
+                        label: 'Merit / Top',
+                        text: `${selectedReportData.student.Student_Name.split(' ')[0]} is an exceptionally bright, disciplined, and conscientious learner who excels consistently across subjects.`,
+                      },
+                      {
+                        label: 'Steady Growth',
+                        text: `${selectedReportData.student.Student_Name.split(' ')[0]} shows steady progress and active curiosity in class. Daily written practice will elevate scores even further.`,
+                      },
+                      {
+                        label: 'Focus & Attendance',
+                        text: `${selectedReportData.student.Student_Name.split(' ')[0]} has good learning potential. Regular school attendance and daily home revision are strongly encouraged.`,
+                      },
+                    ].map((preset) => (
+                      <button
+                        key={preset.label}
+                        type="button"
+                        onClick={() => setTeacherRemarkDraft(preset.text)}
+                        className="px-2 py-0.5 rounded-md bg-blue-50 hover:bg-blue-100 text-blue-900 border border-blue-200 text-[10px] font-bold cursor-pointer"
+                      >
+                        + {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div>
-                <label className="block text-[11px] font-black text-slate-700 mb-1">
-                  प्रधानाचार्य / प्रबंधक रिमार्क (Principal Remark):
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[11px] font-black text-slate-700">
+                    प्रधानाचार्य / प्रबंधक रिमार्क (Principal Remark):
+                  </label>
+                  {selectedReportData && (
+                    <button
+                      type="button"
+                      onClick={() => setPrincipalRemarkDraft(selectedReportData.autoPrincipalRemark)}
+                      className="text-[10px] font-bold text-indigo-700 hover:underline cursor-pointer"
+                    >
+                      ✨ Smart English Auto-Fill
+                    </button>
+                  )}
+                </div>
                 <textarea
-                  rows={2}
+                  rows={3}
                   value={principalRemarkDraft}
                   onChange={(e) => setPrincipalRemarkDraft(e.target.value)}
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 focus:border-blue-800 outline-none"
-                  placeholder="प्रधानाचार्य या प्रबंधक की टिप्पणी..."
+                  placeholder="Write Principal's encouraging English remark..."
                 />
+                {selectedReportData && (
+                  <div className="flex flex-wrap gap-1.5 mt-1.5">
+                    {[
+                      {
+                        label: 'Honour Roll',
+                        text: `Heartiest congratulations! Proud of ${selectedReportData.student.Student_Name.split(' ')[0]}'s outstanding dedication and conduct.`,
+                      },
+                      {
+                        label: 'Good Potential',
+                        text: `Keep striving for excellence! Consistent effort and discipline will bring even brighter achievements ahead.`,
+                      },
+                      {
+                        label: 'Parent Support',
+                        text: `With regular attendance and guided practice at home, ${selectedReportData.student.Student_Name.split(' ')[0]} can achieve distinction in upcoming terms.`,
+                      },
+                    ].map((preset) => (
+                      <button
+                        key={preset.label}
+                        type="button"
+                        onClick={() => setPrincipalRemarkDraft(preset.text)}
+                        className="px-2 py-0.5 rounded-md bg-amber-50 hover:bg-amber-100 text-amber-950 border border-amber-200 text-[10px] font-bold cursor-pointer"
+                      >
+                        + {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 

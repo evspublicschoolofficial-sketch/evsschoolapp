@@ -1,5 +1,5 @@
 import { Student, FeeCollectionRecord } from '../types';
-import { getActiveFeeMasterConfig, normalizeClassKey } from './feeMaster';
+import { getActiveFeeMasterConfig, isFreeStudent, normalizeClassKey } from './feeMaster';
 
 export interface StudentFeeMetrics {
   totalSessionFee: number; // Unique billed total fee (till current month, including books/exam/uniform if billed)
@@ -172,16 +172,11 @@ export const getStudentMonthlyTuition = (student?: any, studentReceipts?: FeeCol
 
 /**
  * Check if student has 100% Fee Waiver (Free Student)
+ * Checks both Google Sheet profile columns AND Manager's local fee-waiver tag map.
  */
 export const isStudentFeeExempt = (student?: any): boolean => {
   if (!student) return false;
-  const waiver = String(student.fee_waiver || student.Fee_Waiver || student.is_free_student || '').toLowerCase();
-  if (waiver === 'true' || waiver === 'yes' || waiver.includes('100') || waiver.includes('free') || waiver.includes('माफ')) return true;
-  const cat = String(student.Category || student.category || '').toLowerCase();
-  if (cat.includes('rte') || cat.includes('free') || cat.includes('माफ')) return true;
-  const rem = String(student.Remark || student.Remarks || student.remark || '').toLowerCase();
-  if (rem.includes('फीस माफ') || rem.includes('100% waiver') || rem.includes('free student')) return true;
-  return false;
+  return isFreeStudent(student).isFree;
 };
 
 /**
@@ -313,11 +308,12 @@ export const calculateStudentSummary = (
   const reconciled = reconcileFeeRecords(rawStudentReceipts);
 
   // 3. Monthly tuition fee (from profile, existing receipts, or class master)
-  // Per School Rule: 100% waiver applies ONLY to monthly tuition fee (0). Admission, Books & Exam fees are charged from them!
+  // Per School Rule: For Fee-Waived students, ALL auto-calculated tuition/default fees MUST be 0.
   const monthlyTuition = isExempt ? 0 : getStudentMonthlyTuition(studentProfile, reconciled);
 
   // 4. Admission Fee (if applicable)
-  // Admission fee is charged from ALL students (including tuition-waived students)
+  // For regular students: defaults to Fee Master admissionFee (e.g., ₹1000).
+  // For Fee-Waived students: ₹0 by default! Only charged if Admission Fee was explicitly added/billed!
   let defaultAdmissionFee = 1000;
   try {
     const feeConfig = getActiveFeeMasterConfig();
@@ -327,9 +323,31 @@ export const calculateStudentSummary = (
     }
   } catch {}
 
-  const admissionFee = studentProfile?.Admission_Fee !== undefined && studentProfile?.Admission_Fee !== null && studentProfile?.Admission_Fee !== ''
-    ? (Number(studentProfile.Admission_Fee) || 0)
-    : defaultAdmissionFee;
+  const admissionRecordsAll = reconciled.filter((r) => isAdmissionFeeRecord(r.Fee_Type));
+  const admissionRecordsBilled =
+    admissionRecordsAll.length > 0
+      ? Math.max(
+          ...admissionRecordsAll.map((r) => Number(r.Total_Amount) || 0),
+          admissionRecordsAll.reduce(
+            (sum, r) => sum + (Number(r.Amount_Paid) || 0) + (Number(r.Balance_Amount) || 0),
+            0
+          )
+        )
+      : 0;
+
+  const hasExplicitProfileAdm =
+    studentProfile?.Admission_Fee !== undefined &&
+    studentProfile?.Admission_Fee !== null &&
+    String(studentProfile.Admission_Fee).trim() !== '';
+  const explicitProfileAdmVal = hasExplicitProfileAdm ? (Number(studentProfile.Admission_Fee) || 0) : 0;
+
+  const admissionFee = isExempt
+    ? hasExplicitProfileAdm
+      ? explicitProfileAdmVal
+      : admissionRecordsBilled
+    : hasExplicitProfileAdm
+      ? explicitProfileAdmVal
+      : Math.max(defaultAdmissionFee, admissionRecordsBilled);
 
   // 4b. Other Billed Fees (Books & Stationery, Exam Fee, Uniform, Annual Fee, etc.)
   // Charged from ALL students including tuition-waived students

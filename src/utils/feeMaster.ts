@@ -1,4 +1,7 @@
 import { Student, FeeCollectionRecord } from '../types';
+import { saveToPhoneMemory } from './phoneMemoryCache';
+
+export const FREE_STUDENTS_UPDATED_EVENT = 'evs-free-students-updated';
 
 /**
  * Standard Fee Structure per Class (Strictly 4 Fees per School Brief:
@@ -376,33 +379,53 @@ export const isFreeStudent = (
 
   const sId = String(student.Student_ID || '').toLowerCase().trim();
 
-  // Check LocalStorage Tagged Waiver Map
+  // 1. Check LocalStorage Tagged Waiver Map (supports explicit true OR explicit untag false)
   try {
     const savedMap = localStorage.getItem('evs_free_students_map');
-    if (savedMap) {
+    if (savedMap && sId) {
       const map: Record<string, { isFree: boolean; reason: string }> = JSON.parse(savedMap);
-      if (map[sId] && map[sId].isFree) {
-        return { isFree: true, reason: map[sId].reason || '100% Fee Waived (स्कूल द्वारा फीस माफ)' };
+      if (map[sId] !== undefined) {
+        if (map[sId].isFree) {
+          return { isFree: true, reason: map[sId].reason || '100% Fee Waived (स्कूल द्वारा फीस माफ)' };
+        }
+        return { isFree: false, reason: '' };
       }
     }
   } catch {}
 
-  // Explicit property on student record
-  if (student.Is_Free_Student === true || String(student.Is_Free_Student).toLowerCase() === 'true') {
+  // 2. Explicit boolean property on student record
+  if (student.Is_Free_Student === true || String(student.Is_Free_Student || '').trim().toLowerCase() === 'true') {
     return { isFree: true, reason: '100% Fee Waived (फीस माफ छात्र)' };
   }
 
-  // Fee_Waiver column in Google Sheet
-  const waiverVal = String(student.Fee_Waiver || student.fee_waiver || '').toLowerCase();
-  if (waiverVal === 'true' || waiverVal === 'yes' || waiverVal.includes('100') || waiverVal.includes('free') || waiverVal.includes('माफ')) {
+  // 3. Fee_Waiver / Category / Remark columns from Google Sheet
+  const waiverVal = String(
+    student.Fee_Waiver || (student as any).fee_waiver || (student as any).is_free_student || ''
+  )
+    .trim()
+    .toLowerCase();
+  const isNegativeExplicit = /^(false|no|none|0|नहीं|normal)$/i.test(waiverVal);
+  if (!isNegativeExplicit && waiverVal && /(true|yes|100|free|waiv|exempt|rte|माफ|निःशुल्क|फ्री)/i.test(waiverVal)) {
     return { isFree: true, reason: student.Fee_Waiver_Reason || '100% Fee Waived (शुल्क माफी अधिकृत)' };
   }
 
-  // Category or remarks check
-  const cat = String(student.Category || student.category || '').toLowerCase();
-  const remark = String(student.Remark || student.remark || '').toLowerCase();
-  if (cat.includes('rte') || cat.includes('free') || cat.includes('माफ') || remark.includes('फीस माफ') || remark.includes('100% waiver')) {
+  const cat = String(student.Category || (student as any).category || '').trim().toLowerCase();
+  const remark = String(
+    student.Remark || (student as any).Remarks || (student as any).remark || ''
+  )
+    .trim()
+    .toLowerCase();
+  if (
+    /(rte|free|waiv|exempt|माफ|निःशुल्क)/i.test(cat) ||
+    /(फीस माफ|fee\s*waiv|100%\s*waiv|free\s*student|निःशुल्क)/i.test(remark)
+  ) {
     return { isFree: true, reason: 'RTE / 100% Fee Waived (निःशुल्क प्रवेश श्रेणी)' };
+  }
+
+  // 4. Explicit Monthly_Fee === 0 in student profile
+  const rawMonthlyFee = (student as any).Monthly_Fee ?? (student as any).monthly_fee;
+  if (rawMonthlyFee !== undefined && rawMonthlyFee !== null && String(rawMonthlyFee).trim() === '0') {
+    return { isFree: true, reason: '100% Tuition Waived (मासिक ट्यूशन ₹0)' };
   }
 
   return { isFree: false, reason: '' };
@@ -421,7 +444,12 @@ export const tagStudentWaiver = (
     const savedMap = localStorage.getItem('evs_free_students_map');
     const map: Record<string, { isFree: boolean; reason: string }> = savedMap ? JSON.parse(savedMap) : {};
     map[sId] = { isFree, reason };
-    localStorage.setItem('evs_free_students_map', JSON.stringify(map));
+    saveToPhoneMemory('evs_free_students_map', map);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent(FREE_STUDENTS_UPDATED_EVENT, { detail: { studentId: sId, isFree, reason } })
+      );
+    }
   } catch (e) {
     console.warn('Could not save free student map:', e);
   }

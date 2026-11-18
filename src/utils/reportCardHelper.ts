@@ -9,6 +9,7 @@ import {
 import { getAppsScriptUrl } from './busTrackingService';
 import { directGetFromSheet, dualSyncWriteToSheet } from './sheetDirectSync';
 import { getLocalTimestamp } from './localTime';
+import { saveToPhoneMemory } from './phoneMemoryCache';
 
 export const EXAM_MARKS_STORAGE_KEY = 'evs_exam_marks_v1';
 export const REPORT_CARD_META_STORAGE_KEY = 'evs_report_card_meta_v1';
@@ -26,6 +27,18 @@ export const REPORT_CARD_SUBJECTS = [
   'कंप्यूटर (Computer)',
   'सामान्य ज्ञान (GK)',
 ];
+
+export const ENGLISH_SUBJECT_LABELS: Record<string, string> = {
+  hindi: 'Hindi',
+  english: 'English',
+  math: 'Mathematics',
+  science: 'Science',
+  evs: 'Environmental Studies (EVS)',
+  social: 'Social Studies',
+  urdu: 'Urdu / Arabic',
+  computer: 'Computer Science',
+  gk: 'General Knowledge',
+};
 
 export const EXAM_TERM_LABELS: Record<ExamTermType, string> = {
   Quarterly: 'तिमाही परीक्षा (Quarterly Exam)',
@@ -46,7 +59,7 @@ export const loadLocalExamMarks = (): ExamMarkRecord[] => {
 
 export const saveLocalExamMarks = (records: ExamMarkRecord[]) => {
   try {
-    localStorage.setItem(EXAM_MARKS_STORAGE_KEY, JSON.stringify(records));
+    saveToPhoneMemory(EXAM_MARKS_STORAGE_KEY, records);
     window.dispatchEvent(new CustomEvent(REPORT_CARD_UPDATED_EVENT, { detail: { type: 'marks', records } }));
   } catch {}
 };
@@ -64,7 +77,7 @@ export const loadLocalReportCardMeta = (): Record<string, ReportCardRemarkRecord
 
 export const saveLocalReportCardMeta = (map: Record<string, ReportCardRemarkRecord>) => {
   try {
-    localStorage.setItem(REPORT_CARD_META_STORAGE_KEY, JSON.stringify(map));
+    saveToPhoneMemory(REPORT_CARD_META_STORAGE_KEY, map);
     window.dispatchEvent(new CustomEvent(REPORT_CARD_UPDATED_EVENT, { detail: { type: 'meta', map } }));
   } catch {}
 };
@@ -302,13 +315,13 @@ export const normalizeSubjectKey = (subj: string): string => {
 };
 
 export const getGradeFromPercentage = (pct: number): { grade: string; label: string; colorClass: string } => {
-  if (pct >= 90) return { grade: 'A+', label: 'उत्कृष्ट (Outstanding)', colorClass: 'text-emerald-700 bg-emerald-50 border-emerald-300' };
-  if (pct >= 80) return { grade: 'A', label: 'अति उत्तम (Very Good)', colorClass: 'text-emerald-700 bg-emerald-50 border-emerald-200' };
-  if (pct >= 70) return { grade: 'B+', label: 'उत्तम (Good)', colorClass: 'text-blue-800 bg-blue-50 border-blue-200' };
-  if (pct >= 60) return { grade: 'B', label: 'संतोषजनक (Above Avg)', colorClass: 'text-indigo-800 bg-indigo-50 border-indigo-200' };
-  if (pct >= 50) return { grade: 'C', label: 'औसत (Satisfactory)', colorClass: 'text-amber-800 bg-amber-50 border-amber-200' };
-  if (pct >= 33) return { grade: 'D', label: 'उत्तीर्ण (Pass)', colorClass: 'text-orange-800 bg-orange-50 border-orange-200' };
-  return { grade: 'E', label: 'सुधार आवश्यक (Needs Effort)', colorClass: 'text-rose-800 bg-rose-50 border-rose-200' };
+  if (pct >= 90) return { grade: 'A+', label: 'Outstanding Performance', colorClass: 'text-emerald-700 bg-emerald-50 border-emerald-300' };
+  if (pct >= 80) return { grade: 'A', label: 'Very Good Achievement', colorClass: 'text-emerald-700 bg-emerald-50 border-emerald-200' };
+  if (pct >= 70) return { grade: 'B+', label: 'Good & Consistent', colorClass: 'text-blue-800 bg-blue-50 border-blue-200' };
+  if (pct >= 60) return { grade: 'B', label: 'Commendable Effort', colorClass: 'text-indigo-800 bg-indigo-50 border-indigo-200' };
+  if (pct >= 50) return { grade: 'C', label: 'Satisfactory Progress', colorClass: 'text-amber-800 bg-amber-50 border-amber-200' };
+  if (pct >= 33) return { grade: 'D', label: 'Pass — Needs Consistency', colorClass: 'text-orange-800 bg-orange-50 border-orange-200' };
+  return { grade: 'E', label: 'Needs Focused Effort', colorClass: 'text-rose-800 bg-rose-50 border-rose-200' };
 };
 
 export interface SubjectScoreRow {
@@ -351,6 +364,7 @@ export interface ComputedReportCardData {
   };
   meta: ReportCardRemarkRecord;
   autoTeacherRemark: string;
+  autoPrincipalRemark: string;
 }
 
 export const computeStudentAttendanceForReportCard = (
@@ -418,11 +432,14 @@ export const computeStudentReportCardData = (params: {
     const key = normalizeSubjectKey(rawLabel) || rawLabel.trim().toLowerCase();
     const existing = subjectMap.get(key);
     if (existing) return existing;
-    const niceLabel =
-      REPORT_CARD_SUBJECTS.find((s) => normalizeSubjectKey(s) === key) || rawLabel.trim() || 'अन्य विषय';
+    const strippedRaw = String(rawLabel || '').replace(/\s*\([^)]*\)\s*/g, ' ').trim();
+    const cleanEnglish =
+      ENGLISH_SUBJECT_LABELS[key] ||
+      (/^[A-Za-z0-9\s/&.-]+$/.test(strippedRaw) ? strippedRaw : rawLabel.trim()) ||
+      'Other Subject';
     const created: SubjectScoreRow = {
       subjectKey: key,
-      subjectLabel: niceLabel,
+      subjectLabel: cleanEnglish,
       weeklyObtained: 0,
       weeklyMax: 0,
       weeklyCount: 0,
@@ -456,7 +473,12 @@ export const computeStudentReportCardData = (params: {
     if (isAbs) row.weeklyAbsentCount += 1;
   });
 
-  studentExams.forEach((em) => {
+  // Sort ascending by updated_at so newer edits override any duplicate older records cleanly
+  const sortedExams = [...studentExams].sort((a, b) =>
+    String(a.updated_at || '').localeCompare(String(b.updated_at || ''))
+  );
+
+  sortedExams.forEach((em) => {
     const row = ensureSubjectRow(em.subject || 'General');
     const maxM = Math.max(1, Number(em.max_marks) || 50);
     const isAbs = em.attendance_status === 'Absent';
@@ -546,26 +568,78 @@ export const computeStudentReportCardData = (params: {
   const reportKey = `${session}::${student.Student_ID}`;
   const existingMeta = metaMap[reportKey] || metaMap[student.Student_ID];
 
-  const autoTeacherRemark =
-    overallPct >= 85
-      ? 'उत्कृष्ट शैक्षणिक प्रदर्शन! छात्र अत्यंत मेहनती एवं अनुशासित है।'
-      : overallPct >= 70
-      ? 'बहुत अच्छा प्रदर्शन। निरंतर अभ्यास से और श्रेष्ठ परिणाम प्राप्त किए जा सकते हैं।'
-      : overallPct >= 50
-      ? 'संतोषजनक प्रगति। गणित व लेखन पर थोड़ा और ध्यान देने से परिणाम और बेहतर होंगे।'
-      : grandMax > 0
-      ? 'नियमित विद्यालय उपस्थिति व प्रतिदिन गृहकार्य अभ्यास की आवश्यकता है।'
-      : 'साप्ताहिक टेस्ट एवं परीक्षा अंक जुड़ने पर शैक्षणिक प्रगति यहाँ प्रदर्शित होगी।';
+  const firstName = String(student.Student_Name || 'Student').trim().split(/\s+/)[0] || 'Student';
+  const scoredSubjects = [...subjects]
+    .filter((s) => s.combinedMax > 0)
+    .sort((a, b) => b.combinedPct - a.combinedPct);
+  const strongestSub = scoredSubjects[0];
+  const weakestSub = scoredSubjects.length > 1 ? scoredSubjects[scoredSubjects.length - 1] : undefined;
 
-  const meta: ReportCardRemarkRecord = existingMeta || {
-    reportKey,
-    session,
-    studentId: student.Student_ID,
-    teacherRemark: autoTeacherRemark,
-    principalRemark: overallPct >= 75 ? 'उज्ज्वल भविष्य की शुभकामनाएँ!' : 'मेहनत व नियमितता बनाए रखें।',
-    resultStatus: grandMax === 0 || overallPct >= 33 ? 'PROMOTED' : 'NEEDS IMPROVEMENT',
-    publishedToParent: true,
-  };
+  const hasLowAttendance = attendance.totalDays > 0 && attendance.attendancePct < 75;
+  const hasStrongConduct = attendance.cleanConductPct >= 90;
+
+  let autoTeacherRemark = '';
+  if (grandMax === 0) {
+    autoTeacherRemark = `${firstName} maintains good classroom discipline. Academic remarks will be updated once term assessments are recorded.`;
+  } else if (overallPct >= 85) {
+    autoTeacherRemark = `${firstName} has demonstrated outstanding academic excellence, particularly in ${strongestSub?.subjectLabel || 'core subjects'} (${strongestSub?.combinedPct ?? overallPct}%). ${hasStrongConduct ? 'Exemplary classroom conduct, neatness, and active participation are highly commendable.' : 'Keep up this brilliant dedication and consistent effort!'}`;
+  } else if (overallPct >= 70) {
+    autoTeacherRemark = `${firstName} has shown a commendable performance with notable strength in ${strongestSub?.subjectLabel || 'key subjects'} (${strongestSub?.combinedPct ?? overallPct}%). ${weakestSub && weakestSub.combinedPct < 75 ? `Targeted revision in ${weakestSub.subjectLabel} will help achieve top distinction.` : 'Sustained practice will lead to even greater heights.'}`;
+  } else if (overallPct >= 50) {
+    autoTeacherRemark = `${firstName} exhibits ${hasStrongConduct ? 'exemplary discipline & neatness' : 'steady classroom effort'} with promising progress in ${strongestSub?.subjectLabel || 'studies'} (${strongestSub?.combinedPct ?? overallPct}%). ${weakestSub && weakestSub.combinedPct < 65 ? `Focused daily practice in ${weakestSub.subjectLabel} (${weakestSub.combinedPct}%)` : 'Regular written revision'}${hasLowAttendance ? ' along with more regular school attendance' : ''} will significantly boost overall grades.`;
+  } else {
+    autoTeacherRemark = `${firstName} shows potential and needs structured daily revision${weakestSub ? `, especially in ${weakestSub.subjectLabel}` : ''}. Consistent homework completion${hasLowAttendance ? ' and improved attendance' : ''} with supportive guidance at home will build strong academic confidence.`;
+  }
+
+  let autoPrincipalRemark = '';
+  if (grandMax === 0) {
+    autoPrincipalRemark = `Wishing ${firstName} a joyful and productive academic session at E.V.S. Public School.`;
+  } else if (overallPct >= 85) {
+    autoPrincipalRemark = `Heartiest congratulations on an exceptional result! Proud of ${firstName}'s dedication, discipline, and academic excellence.`;
+  } else if (overallPct >= 70) {
+    autoPrincipalRemark = `Well done, ${firstName}! Consistent curiosity and disciplined study habits will surely place you among the top merit scholars.`;
+  } else if (overallPct >= 50) {
+    autoPrincipalRemark = `${firstName} possesses bright potential and good conduct. With steady home revision${hasLowAttendance ? ' and regular attendance' : ''}, an A-grade milestone is well within reach.`;
+  } else {
+    autoPrincipalRemark = `Every step forward counts. Regular school attendance and focused daily study will help ${firstName} achieve strong progress ahead.`;
+  }
+
+  // Upgrade legacy auto-generated Hindi boilerplate remarks cleanly while preserving custom teacher/principal edits
+  const LEGACY_HINDI_TEACHER_DEFAULTS = new Set([
+    'उत्कृष्ट शैक्षणिक प्रदर्शन! छात्र अत्यंत मेहनती एवं अनुशासित है।',
+    'बहुत अच्छा प्रदर्शन। निरंतर अभ्यास से और श्रेष्ठ परिणाम प्राप्त किए जा सकते हैं।',
+    'संतोषजनक प्रगति। गणित व लेखन पर थोड़ा और ध्यान देने से परिणाम और बेहतर होंगे।',
+    'नियमित विद्यालय उपस्थिति व प्रतिदिन गृहकार्य अभ्यास की आवश्यकता है।',
+    'साप्ताहिक टेस्ट एवं परीक्षा अंक जुड़ने पर शैक्षणिक प्रगति यहाँ प्रदर्शित होगी।',
+  ]);
+  const LEGACY_HINDI_PRINCIPAL_DEFAULTS = new Set([
+    'उज्ज्वल भविष्य की शुभकामनाएँ!',
+    'मेहनत व नियमितता बनाए रखें।',
+  ]);
+
+  const savedTeacher = existingMeta?.teacherRemark?.trim() || '';
+  const savedPrincipal = existingMeta?.principalRemark?.trim() || '';
+
+  const resolvedTeacherRemark =
+    !savedTeacher || LEGACY_HINDI_TEACHER_DEFAULTS.has(savedTeacher) ? autoTeacherRemark : savedTeacher;
+  const resolvedPrincipalRemark =
+    !savedPrincipal || LEGACY_HINDI_PRINCIPAL_DEFAULTS.has(savedPrincipal) ? autoPrincipalRemark : savedPrincipal;
+
+  const meta: ReportCardRemarkRecord = existingMeta
+    ? {
+        ...existingMeta,
+        teacherRemark: resolvedTeacherRemark,
+        principalRemark: resolvedPrincipalRemark,
+      }
+    : {
+        reportKey,
+        session,
+        studentId: student.Student_ID,
+        teacherRemark: autoTeacherRemark,
+        principalRemark: autoPrincipalRemark,
+        resultStatus: grandMax === 0 || overallPct >= 33 ? 'PROMOTED' : 'NEEDS IMPROVEMENT',
+        publishedToParent: true,
+      };
 
   return {
     student,
@@ -600,11 +674,12 @@ export const computeStudentReportCardData = (params: {
       max: Math.round(grandMax * 10) / 10,
       pct: overallPct,
       grade: grandMax > 0 ? gradeInfo.grade : '-',
-      gradeLabel: grandMax > 0 ? gradeInfo.label : 'अंक प्रतीक्षित',
+      gradeLabel: grandMax > 0 ? gradeInfo.label : 'Awaiting Scores',
       hasAnyScore: grandMax > 0,
     },
     attendance,
     meta,
     autoTeacherRemark,
+    autoPrincipalRemark,
   };
 };

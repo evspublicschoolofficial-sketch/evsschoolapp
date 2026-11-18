@@ -13,10 +13,15 @@ export const PrintableReportCard: React.FC<PrintableReportCardProps> = ({
   onPrintTriggered,
 }) => {
   const isParentProtected = mode === 'parent_view_only';
+  const [imgError, setImgError] = useState(false);
   const [screenShieldActive, setScreenShieldActive] = useState(false);
   const [shieldReason, setShieldReason] = useState(
-    'स्क्रीनशॉट, प्रिंट व कॉपी से सुरक्षा हेतु दृश्य अस्थायी रूप से छिपाया गया है।'
+    'Display temporarily hidden to prevent screenshots, printing, or copying.'
   );
+
+  useEffect(() => {
+    setImgError(false);
+  }, [data.student.Student_ID, data.student.Student_Photo]);
 
   const triggerShield = (reason: string) => {
     if (!isParentProtected) return;
@@ -98,9 +103,9 @@ export const PrintableReportCard: React.FC<PrintableReportCardProps> = ({
         <div className="w-12 h-12 mx-auto rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center text-xl">
           <i className="fa-solid fa-hourglass-half"></i>
         </div>
-        <h3 className="text-base font-black text-amber-950">रिपोर्ट कार्ड अभी प्रकाशन प्रक्रिया में है</h3>
+        <h3 className="text-base font-black text-amber-950">Report Card Under Review</h3>
         <p className="text-xs text-amber-800 font-medium max-w-md mx-auto">
-          कक्षा अध्यापक या स्कूल प्रबंधक द्वारा अंतिम सत्यापन के बाद आपकी मार्कशीट यहाँ व्यू-ओनली मोड में दिखाई देगी।
+          Your child&apos;s digital report card will appear here in view-only mode once finalized by the Class Teacher &amp; Principal.
         </p>
       </div>
     );
@@ -110,12 +115,13 @@ export const PrintableReportCard: React.FC<PrintableReportCardProps> = ({
   const cleanPhone = String(data.student.Parent_Mobile || '').replace(/[^0-9]/g, '');
   const waPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
   const waSummaryText = encodeURIComponent(
-    `*E.V.S. PUBLIC SCHOOL — प्रगति रिपोर्ट (${data.session})*\n` +
-      `छात्र: ${data.student.Student_Name} (कक्षा ${data.student.Class}, ID: ${data.student.Student_ID})\n` +
-      `• साप्ताहिक टेस्ट: ${data.weeklySummary.pct}% (${data.weeklySummary.testsCount} टेस्ट)\n` +
-      `• तिमाही: ${data.quarterlySummary.hasData ? `${data.quarterlySummary.pct}%` : 'प्रतीक्षित'} | छमाही: ${data.halfYearlySummary.hasData ? `${data.halfYearlySummary.pct}%` : 'प्रतीक्षित'} | सालाना: ${data.annualSummary.hasData ? `${data.annualSummary.pct}%` : 'प्रतीक्षित'}\n` +
-      `• कुल परिणाम: ${data.overall.pct}% (${data.overall.grade}) | उपस्थिति: ${data.attendance.attendancePct}%\n` +
-      `• रिमार्क: ${data.meta.teacherRemark || data.autoTeacherRemark}`
+    `*E.V.S. PUBLIC SCHOOL — Academic Progress Report (${data.session})*\n` +
+      `Student: ${data.student.Student_Name} (Class ${data.student.Class}, ID: ${data.student.Student_ID})\n` +
+      `• Weekly Tests: ${data.weeklySummary.testsCount > 0 ? `${data.weeklySummary.obtained}/${data.weeklySummary.max} (${data.weeklySummary.pct}%)` : 'Pending'}\n` +
+      `• Quarterly: ${data.quarterlySummary.hasData ? `${data.quarterlySummary.obtained}/${data.quarterlySummary.max} (${data.quarterlySummary.pct}%)` : 'Pending'} | Half-Yearly: ${data.halfYearlySummary.hasData ? `${data.halfYearlySummary.obtained}/${data.halfYearlySummary.max} (${data.halfYearlySummary.pct}%)` : 'Pending'} | Annual: ${data.annualSummary.hasData ? `${data.annualSummary.obtained}/${data.annualSummary.max} (${data.annualSummary.pct}%)` : 'Pending'}\n` +
+      `• Overall: ${data.overall.obtained}/${data.overall.max} (${data.overall.pct}% • Grade ${data.overall.grade}) | Attendance: ${data.attendance.attendancePct}%\n` +
+      `• Teacher Remark: ${data.meta.teacherRemark || data.autoTeacherRemark}\n` +
+      `• Principal Remark: ${data.meta.principalRemark || data.autoPrincipalRemark}`
   );
   const waShareHref = waPhone ? `https://wa.me/${waPhone}?text=${waSummaryText}` : `https://wa.me/?text=${waSummaryText}`;
 
@@ -294,76 +300,98 @@ export const PrintableReportCard: React.FC<PrintableReportCardProps> = ({
           <div className="bg-gradient-to-r from-blue-950 via-indigo-950 to-blue-900 text-white rounded-xl p-4 sm:p-5 border-b-4 border-amber-400 flex flex-col sm:flex-row items-center justify-between gap-3">
             <div className="flex items-center gap-3 text-center sm:text-left">
               <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center text-2xl font-black shrink-0 shadow">
-                <i className="fa-solid fa-school"></i>
+                <i className="fa-solid fa-graduation-cap"></i>
               </div>
               <div>
-                <h2 className="text-lg sm:text-xl font-black tracking-wide uppercase">
+                <h2 className="text-lg sm:text-xl font-black tracking-wider uppercase">
                   E.V.S. PUBLIC SCHOOL
                 </h2>
-                <p className="text-[11px] sm:text-xs text-blue-200 font-medium">
-                  Chilkana Sultanpur, Saharanpur (U.P.) • शैक्षणिक प्रगति पत्र (Digital Report Card)
+                <p className="text-[11px] sm:text-xs text-blue-100 font-semibold tracking-wide">
+                  Chilkana Sultanpur, Saharanpur (U.P.) • An English Medium Co-Educational Institution
                 </p>
+                <span className="inline-block mt-1 px-2.5 py-0.5 rounded bg-amber-400/20 border border-amber-300/40 text-[10px] font-extrabold tracking-widest uppercase text-amber-200">
+                  Official Academic Progress Report Card
+                </span>
               </div>
             </div>
 
-            <div className="text-center sm:text-right bg-white/10 px-3.5 py-2 rounded-xl border border-white/15">
+            <div className="text-center sm:text-right bg-white/10 px-4 py-2 rounded-xl border border-white/15 shrink-0">
               <div className="text-[10px] uppercase tracking-wider text-amber-300 font-bold">
-                शैक्षणिक सत्र (Session)
+                Academic Session
               </div>
-              <div className="text-sm font-black">{data.session}</div>
+              <div className="text-sm font-black tracking-wide">{data.session}</div>
             </div>
           </div>
 
           {/* Student Profile Grid */}
           <div className="grid grid-cols-1 md:grid-cols-12 gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3.5">
-            <div className="md:col-span-9 grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2 text-xs">
+            <div className="md:col-span-9 grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2.5 text-xs">
               <div>
-                <span className="text-[10px] font-bold text-slate-500 uppercase block">छात्र / छात्रा का नाम</span>
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                  Student Name
+                </span>
                 <span className="font-black text-slate-900 text-sm">{data.student.Student_Name}</span>
               </div>
               <div>
-                <span className="text-[10px] font-bold text-slate-500 uppercase block">कक्षा (Class)</span>
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                  Class
+                </span>
                 <span className="font-black text-blue-900">{data.student.Class}</span>
               </div>
               <div>
-                <span className="text-[10px] font-bold text-slate-500 uppercase block">रोल नंबर / छात्र ID</span>
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                  Roll No. / Student ID
+                </span>
                 <span className="font-bold text-slate-800">
                   #{data.student.Roll_Number || '—'} • {data.student.Student_ID}
                 </span>
               </div>
               <div>
-                <span className="text-[10px] font-bold text-slate-500 uppercase block">पिता का नाम</span>
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                  Father&apos;s Name
+                </span>
                 <span className="font-semibold text-slate-800">{data.student.Father_Name || '—'}</span>
               </div>
               <div>
-                <span className="text-[10px] font-bold text-slate-500 uppercase block">माता का नाम</span>
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                  Mother&apos;s Name
+                </span>
                 <span className="font-semibold text-slate-800">{data.student.Mother_Name || '—'}</span>
               </div>
               <div>
-                <span className="text-[10px] font-bold text-slate-500 uppercase block">परिणाम स्थिति (Result)</span>
-                <span className="inline-block px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-black text-[11px]">
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                  Result Status
+                </span>
+                <span className="inline-block px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-black text-[11px] uppercase tracking-wide">
                   {data.meta.resultStatus || 'PROMOTED'}
                 </span>
               </div>
             </div>
 
             <div className="md:col-span-3 flex items-center md:justify-end gap-3 border-t md:border-t-0 md:border-l border-slate-200 pt-2.5 md:pt-0 md:pl-3">
-              {data.student.Student_Photo ? (
+              {data.student.Student_Photo && !imgError ? (
                 <img
                   src={data.student.Student_Photo}
                   alt={data.student.Student_Name}
+                  onError={() => setImgError(true)}
                   className="w-16 h-16 rounded-xl object-cover border-2 border-blue-900/20"
                   draggable={false}
                 />
               ) : (
-                <div className="w-16 h-16 rounded-xl bg-blue-100 text-blue-900 flex items-center justify-center text-2xl font-black">
-                  {data.student.Student_Name?.charAt(0) || 'S'}
+                <div
+                  className="w-16 h-16 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-100 border border-blue-200 text-blue-900 flex flex-col items-center justify-center shrink-0"
+                  title="Student Portrait"
+                >
+                  <i className="fa-solid fa-user-graduate text-xl"></i>
+                  <span className="text-[8px] font-extrabold uppercase tracking-wider text-blue-700 mt-1">
+                    Student
+                  </span>
                 </div>
               )}
-              <div className={`px-3 py-2 rounded-xl border text-center ${gradeMeta.colorClass}`}>
-                <div className="text-[10px] font-bold uppercase">ग्रेड (Grade)</div>
+              <div className={`px-3.5 py-2 rounded-xl border text-center min-w-[78px] ${gradeMeta.colorClass}`}>
+                <div className="text-[9px] font-extrabold uppercase tracking-wider">Grade</div>
                 <div className="text-xl font-black leading-none mt-0.5">{data.overall.grade}</div>
-                <div className="text-[10px] font-bold mt-0.5">{data.overall.pct}%</div>
+                <div className="text-[10px] font-bold mt-0.5 tabular-nums">{data.overall.pct}%</div>
               </div>
             </div>
           </div>
@@ -373,64 +401,66 @@ export const PrintableReportCard: React.FC<PrintableReportCardProps> = ({
             <table className="w-full text-left border-collapse text-xs min-w-[640px]">
               <thead>
                 <tr className="bg-blue-950 text-white">
-                  <th className="py-2.5 px-3 font-black">विषय (Subject)</th>
+                  <th className="py-2.5 px-3 font-black uppercase tracking-wide text-[11px]">Subject</th>
                   <th className="py-2.5 px-2.5 text-center font-bold">
-                    साप्ताहिक टेस्ट
-                    <span className="block text-[9px] font-normal text-blue-200">Weekly Tests</span>
+                    Weekly Tests
+                    <span className="block text-[9px] font-normal text-blue-200">Continuous Eval.</span>
                   </th>
                   <th className="py-2.5 px-2.5 text-center font-bold">
-                    तिमाही परीक्षा
-                    <span className="block text-[9px] font-normal text-blue-200">Quarterly Exam</span>
+                    Quarterly Exam
+                    <span className="block text-[9px] font-normal text-blue-200">Term I</span>
                   </th>
                   <th className="py-2.5 px-2.5 text-center font-bold">
-                    छमाही परीक्षा
-                    <span className="block text-[9px] font-normal text-blue-200">Half-Yearly</span>
+                    Half-Yearly Exam
+                    <span className="block text-[9px] font-normal text-blue-200">Mid-Term</span>
                   </th>
                   <th className="py-2.5 px-2.5 text-center font-bold">
-                    सालाना परीक्षा
-                    <span className="block text-[9px] font-normal text-blue-200">Annual Exam</span>
+                    Annual Exam
+                    <span className="block text-[9px] font-normal text-blue-200">Final Term</span>
                   </th>
                   <th className="py-2.5 px-2.5 text-center font-black bg-indigo-900">
-                    कुल योग
-                    <span className="block text-[9px] font-normal text-amber-300">Total (%)</span>
+                    Grand Total
+                    <span className="block text-[9px] font-normal text-amber-300">Marks (%)</span>
                   </th>
-                  <th className="py-2.5 px-2.5 text-center font-black bg-indigo-950">ग्रेड</th>
+                  <th className="py-2.5 px-2.5 text-center font-black bg-indigo-950 uppercase">Grade</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
                 {data.subjects.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="py-8 text-center text-slate-500 font-semibold">
-                      इस छात्र के साप्ताहिक टेस्ट या तिमाही / छमाही / सालाना परीक्षा के अंक अभी दर्ज नहीं किए गए हैं।
+                      Assessment marks for Weekly Tests or Term Examinations have not been recorded yet.
                     </td>
                   </tr>
                 ) : (
                   data.subjects.map((row) => (
                     <tr key={row.subjectKey} className="hover:bg-slate-50/70">
                       <td className="py-2.5 px-3 font-bold text-slate-900">{row.subjectLabel}</td>
-                      <td className="py-2.5 px-2.5 text-center">
+                      <td className="py-2.5 px-2.5 text-center tabular-nums">
                         {row.weeklyMax > 0 ? (
                           <div>
                             <span className="font-bold text-slate-900">
                               {row.weeklyObtained}
                               <span className="text-slate-400 font-normal text-[10px]">/{row.weeklyMax}</span>
                             </span>
-                            <span className="block text-[9px] text-slate-500">({row.weeklyCount} टेस्ट)</span>
+                            <span className="block text-[9px] text-slate-500">
+                              ({row.weeklyCount} {row.weeklyCount === 1 ? 'Test' : 'Tests'})
+                            </span>
                           </div>
                         ) : (
                           <span className="text-slate-400">—</span>
                         )}
                       </td>
-                      <td className="py-2.5 px-2.5 text-center">
+                      <td className="py-2.5 px-2.5 text-center tabular-nums">
                         {renderMarkCell(row.quarterlyObtained, row.quarterlyMax, row.quarterlyAbsent)}
                       </td>
-                      <td className="py-2.5 px-2.5 text-center">
+                      <td className="py-2.5 px-2.5 text-center tabular-nums">
                         {renderMarkCell(row.halfYearlyObtained, row.halfYearlyMax, row.halfYearlyAbsent)}
                       </td>
-                      <td className="py-2.5 px-2.5 text-center">
+                      <td className="py-2.5 px-2.5 text-center tabular-nums">
                         {renderMarkCell(row.annualObtained, row.annualMax, row.annualAbsent)}
                       </td>
-                      <td className="py-2.5 px-2.5 text-center bg-indigo-50/50 font-black text-blue-950">
+                      <td className="py-2.5 px-2.5 text-center bg-indigo-50/50 font-black text-blue-950 tabular-nums">
                         {row.combinedMax > 0 ? (
                           <>
                             {row.combinedObtained}/{row.combinedMax}{' '}
@@ -449,24 +479,67 @@ export const PrintableReportCard: React.FC<PrintableReportCardProps> = ({
               </tbody>
               {data.subjects.length > 0 && (
                 <tfoot>
-                  <tr className="bg-blue-50 font-black text-blue-950 border-t-2 border-blue-900/30">
-                    <td className="py-2.5 px-3">महायोग / प्रतिशत (Grand Total)</td>
-                    <td className="py-2.5 px-2.5 text-center">
-                      {data.weeklySummary.max > 0 ? `${data.weeklySummary.pct}%` : '—'}
+                  <tr className="bg-blue-50 font-black text-blue-950 border-t-2 border-blue-900/30 tabular-nums">
+                    <td className="py-2.5 px-3 uppercase tracking-wide text-[11px]">
+                      Grand Total &amp; Percentage
                     </td>
                     <td className="py-2.5 px-2.5 text-center">
-                      {data.quarterlySummary.hasData ? `${data.quarterlySummary.pct}%` : '—'}
+                      {data.weeklySummary.max > 0 ? (
+                        <div>
+                          <span>{data.weeklySummary.obtained}/{data.weeklySummary.max}</span>
+                          <span className="block text-[10px] text-indigo-700 font-bold">
+                            ({data.weeklySummary.pct}%)
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-slate-400 font-normal">—</span>
+                      )}
                     </td>
                     <td className="py-2.5 px-2.5 text-center">
-                      {data.halfYearlySummary.hasData ? `${data.halfYearlySummary.pct}%` : '—'}
+                      {data.quarterlySummary.hasData ? (
+                        <div>
+                          <span>{data.quarterlySummary.obtained}/{data.quarterlySummary.max}</span>
+                          <span className="block text-[10px] text-indigo-700 font-bold">
+                            ({data.quarterlySummary.pct}%)
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-slate-400 font-normal">—</span>
+                      )}
                     </td>
                     <td className="py-2.5 px-2.5 text-center">
-                      {data.annualSummary.hasData ? `${data.annualSummary.pct}%` : '—'}
+                      {data.halfYearlySummary.hasData ? (
+                        <div>
+                          <span>{data.halfYearlySummary.obtained}/{data.halfYearlySummary.max}</span>
+                          <span className="block text-[10px] text-indigo-700 font-bold">
+                            ({data.halfYearlySummary.pct}%)
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-slate-400 font-normal">—</span>
+                      )}
+                    </td>
+                    <td className="py-2.5 px-2.5 text-center">
+                      {data.annualSummary.hasData ? (
+                        <div>
+                          <span>{data.annualSummary.obtained}/{data.annualSummary.max}</span>
+                          <span className="block text-[10px] text-indigo-700 font-bold">
+                            ({data.annualSummary.pct}%)
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-slate-400 font-normal">—</span>
+                      )}
                     </td>
                     <td className="py-2.5 px-2.5 text-center bg-indigo-100">
-                      {data.overall.obtained}/{data.overall.max} ({data.overall.pct}%)
+                      <div>
+                        <span>{data.overall.obtained}/{data.overall.max}</span>
+                        <span className="block text-[10px] text-indigo-800 font-extrabold">
+                          ({data.overall.pct}%)
+                        </span>
+                      </div>
                     </td>
-                    <td className="py-2.5 px-2.5 text-center bg-amber-100 text-amber-950">
+                    <td className="py-2.5 px-2.5 text-center bg-amber-100 text-amber-950 text-sm">
                       {data.overall.grade}
                     </td>
                   </tr>
@@ -476,53 +549,61 @@ export const PrintableReportCard: React.FC<PrintableReportCardProps> = ({
           </div>
 
           {/* Attendance, Discipline & Overall Performance Strip */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 tabular-nums">
             <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200">
-              <div className="text-[10px] font-bold text-emerald-700 uppercase">हाजिरी प्रतिशत (Attendance)</div>
+              <div className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider">Attendance</div>
               <div className="text-lg font-black text-emerald-950 mt-0.5">{data.attendance.attendancePct}%</div>
               <div className="text-[10px] text-emerald-800">
-                उपस्थित: {data.attendance.presentDays} / {data.attendance.totalDays} दिन
+                Present: {data.attendance.presentDays} / {data.attendance.totalDays} Days
               </div>
             </div>
 
             <div className="p-3 rounded-xl bg-blue-50 border border-blue-200">
-              <div className="text-[10px] font-bold text-blue-700 uppercase">साप्ताहिक टेस्ट औसत</div>
-              <div className="text-lg font-black text-blue-950 mt-0.5">{data.weeklySummary.pct}%</div>
-              <div className="text-[10px] text-blue-800">कुल टेस्ट: {data.weeklySummary.testsCount}</div>
+              <div className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">Weekly Tests Avg.</div>
+              <div className="text-lg font-black text-blue-950 mt-0.5">
+                {data.weeklySummary.testsCount > 0 ? `${data.weeklySummary.pct}%` : '—'}
+              </div>
+              <div className="text-[10px] text-blue-800">
+                {data.weeklySummary.testsCount > 0
+                  ? `${data.weeklySummary.testsCount} ${data.weeklySummary.testsCount === 1 ? 'Test' : 'Tests'} Conducted`
+                  : 'No Tests Yet'}
+              </div>
             </div>
 
             <div className="p-3 rounded-xl bg-purple-50 border border-purple-200">
-              <div className="text-[10px] font-bold text-purple-700 uppercase">आचरण व स्वच्छता</div>
+              <div className="text-[10px] font-bold text-purple-700 uppercase tracking-wider">Conduct &amp; Hygiene</div>
               <div className="text-lg font-black text-purple-950 mt-0.5">{data.attendance.cleanConductPct}%</div>
-              <div className="text-[10px] text-purple-800">वर्दी, अनुशासन एवं स्वच्छता</div>
+              <div className="text-[10px] text-purple-800">Uniform, Discipline &amp; Neatness</div>
             </div>
 
             <div className="p-3 rounded-xl bg-amber-50 border border-amber-200">
-              <div className="text-[10px] font-bold text-amber-800 uppercase">समग्र मूल्यांकन</div>
-              <div className="text-lg font-black text-amber-950 mt-0.5">{data.overall.grade} Grade</div>
-              <div className="text-[10px] text-amber-900 truncate">{data.overall.gradeLabel}</div>
+              <div className="text-[10px] font-bold text-amber-800 uppercase tracking-wider">Overall Evaluation</div>
+              <div className="text-lg font-black text-amber-950 mt-0.5">
+                {data.overall.hasAnyScore ? `Grade ${data.overall.grade}` : 'Pending'}
+              </div>
+              <div className="text-[10px] text-amber-900 truncate font-semibold">{data.overall.gradeLabel}</div>
             </div>
           </div>
 
           {/* Teacher & Principal Remarks + Signatures */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
-              <div className="text-[11px] font-black text-blue-950 flex items-center gap-1.5">
+            <div className="p-3.5 rounded-xl bg-gradient-to-br from-slate-50 to-blue-50/40 border border-blue-200/70 space-y-1.5">
+              <div className="text-[11px] font-black text-blue-950 flex items-center gap-1.5 uppercase tracking-wide">
                 <i className="fa-solid fa-chalkboard-user text-blue-700"></i>
-                <span>कक्षा अध्यापक की टिप्पणी (Teacher Remark):</span>
+                <span>Class Teacher&apos;s Remarks</span>
               </div>
-              <p className="text-xs text-slate-800 font-medium leading-relaxed">
-                “{data.meta.teacherRemark || data.autoTeacherRemark}”
+              <p className="text-xs text-slate-800 font-medium leading-relaxed italic">
+                &ldquo;{data.meta.teacherRemark || data.autoTeacherRemark}&rdquo;
               </p>
             </div>
 
-            <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
-              <div className="text-[11px] font-black text-indigo-950 flex items-center gap-1.5">
+            <div className="p-3.5 rounded-xl bg-gradient-to-br from-slate-50 to-amber-50/40 border border-amber-200/70 space-y-1.5">
+              <div className="text-[11px] font-black text-indigo-950 flex items-center gap-1.5 uppercase tracking-wide">
                 <i className="fa-solid fa-user-tie text-indigo-700"></i>
-                <span>प्रधानाचार्य / प्रबंधक टिप्पणी (Principal Remark):</span>
+                <span>Principal&apos;s Remarks</span>
               </div>
-              <p className="text-xs text-slate-800 font-medium leading-relaxed">
-                “{data.meta.principalRemark || 'उज्ज्वल भविष्य की शुभकामनाएँ!'}”
+              <p className="text-xs text-slate-800 font-medium leading-relaxed italic">
+                &ldquo;{data.meta.principalRemark || data.autoPrincipalRemark}&rdquo;
               </p>
             </div>
           </div>
@@ -531,17 +612,17 @@ export const PrintableReportCard: React.FC<PrintableReportCardProps> = ({
           <div className="pt-4 border-t border-dashed border-slate-300 grid grid-cols-3 gap-3 text-center text-[11px] text-slate-700">
             <div>
               <div className="h-7"></div>
-              <div className="border-t border-slate-300 pt-1 font-bold">अभिभावक हस्ताक्षर</div>
+              <div className="border-t border-slate-300 pt-1 font-bold">Parent / Guardian&apos;s Signature</div>
             </div>
             <div>
               <div className="h-7"></div>
-              <div className="border-t border-slate-300 pt-1 font-bold">कक्षा अध्यापक (Class Teacher)</div>
+              <div className="border-t border-slate-300 pt-1 font-bold">Class Teacher&apos;s Signature</div>
             </div>
             <div>
-              <div className="h-7 font-black text-blue-900 text-[10px] flex items-end justify-center pb-0.5">
+              <div className="h-7 font-black text-blue-900 text-[10px] tracking-wider flex items-end justify-center pb-0.5 uppercase">
                 E.V.S. PUBLIC SCHOOL
               </div>
-              <div className="border-t border-slate-300 pt-1 font-bold">प्रधानाचार्य / प्रबंधक मोहर</div>
+              <div className="border-t border-slate-300 pt-1 font-bold">Principal&apos;s Signature &amp; Seal</div>
             </div>
           </div>
         </div>

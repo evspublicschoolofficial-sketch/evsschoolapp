@@ -7,10 +7,11 @@ import { playSirenPreview, playAnnouncementPreview, speakAnnouncement, unlockAud
 import { InstallAppModal } from './components/InstallAppModal';
 import { ExamMarkRecord, ReportCardRemarkRecord, SchoolNotice, StaffAttendanceRecord, WeeklyTestRecord } from './types';
 import { FloatingSocialBar } from './components/FloatingSocialBar';
-import { fetchFeeMasterDirectGViz } from './utils/feeMaster';
+import { fetchFeeMasterDirectGViz, FREE_STUDENTS_UPDATED_EVENT } from './utils/feeMaster';
 import { initGeolocationPrewarmer, syncSchoolLocationFromServer } from './utils/schoolLocationService';
-import { computeStudentFeeMetrics, computeSchoolFeeTotals, normalizeStudentId, reconcileFeeRecords, calculateStudentSummary } from './utils/feeCalculation';
+import { computeStudentFeeMetrics, computeSchoolFeeTotals, normalizeStudentId, reconcileFeeRecords, calculateStudentSummary, isStudentFeeExempt } from './utils/feeCalculation';
 import { computeFamilyFeeSummary, FamilyFeeSummary } from './utils/familyFeeHelper';
+import { useFeeSettlementTransition, AnimatedSettledCurrency } from './components/FeeSettlementAnimator';
 import { realtimeSync } from './utils/realtimeSync';
 import { AppLanguage, getStoredLanguage, setStoredLanguage, TRANSLATIONS } from './utils/translations';
 import { NotificationPermissionBanner } from './components/NotificationPermissionBanner';
@@ -26,6 +27,16 @@ import {
   subscribeReportCardUpdates,
 } from './utils/reportCardHelper';
 import { getLocalDateYMD, getLocalTimestamp } from './utils/localTime';
+import {
+  consumePendingFullReloadAfterUpdate,
+  getSyncedBuildSignature,
+  GITHUB_FULL_RELOAD_EVENT,
+  hydrateKeysFromIndexedDB,
+  saveRawToPhoneMemory,
+  saveToPhoneMemory,
+  setSyncedBuildSignature,
+} from './utils/phoneMemoryCache';
+import { EXAM_MARKS_STORAGE_KEY, REPORT_CARD_META_STORAGE_KEY } from './utils/reportCardHelper';
 
 // High-speed on-demand code splitting (React.lazy): Drops initial bundle size by ~85% for Parents on mobile!
 const StudentAttendanceChart = React.lazy(() => import('./components/StudentAttendanceChart'));
@@ -1282,13 +1293,9 @@ export default function App() {
     } catch {}
   }, [activeTab]);
 
-  // Immediate pre-warming of GPS location & deferred school location sync
+  // Immediate pre-warming of GPS location (server location sync runs only on initial seed / GitHub update / manual sync)
   useEffect(() => {
     initGeolocationPrewarmer();
-    const timer = setTimeout(() => {
-      syncSchoolLocationFromServer().catch(() => {});
-    }, 600);
-    return () => clearTimeout(timer);
   }, []);
 
   // LocalStorage cached initial states (0.1s instant render)
@@ -1318,6 +1325,13 @@ export default function App() {
   const [feeBalances, setFeeBalances] = useState<Record<string, number>>(() => getCachedData<Record<string, number>>(CACHE_KEY_FEES_BALANCES, {}));
   const [feeRecords, setFeeRecords] = useState<FeeCollectionRecord[]>(() => getCachedData<FeeCollectionRecord[]>(CACHE_KEY_FEES_RECORDS, []));
   const [loadingFees, setLoadingFees] = useState<boolean>(false);
+  const [waiverVersion, setWaiverVersion] = useState<number>(0);
+
+  useEffect(() => {
+    const handleWaiverUpdated = () => setWaiverVersion((v) => v + 1);
+    window.addEventListener(FREE_STUDENTS_UPDATED_EVENT, handleWaiverUpdated);
+    return () => window.removeEventListener(FREE_STUDENTS_UPDATED_EVENT, handleWaiverUpdated);
+  }, []);
 
   // Background Sync & Caching States
   const [isBackgroundSyncing, setIsBackgroundSyncing] = useState<boolean>(false);
@@ -1516,9 +1530,7 @@ export default function App() {
 
       if (wtRes.status === 'fulfilled' && Array.isArray(wtRes.value)) {
         setWeeklyTestsList(wtRes.value);
-        try {
-          localStorage.setItem('evs_weekly_subject_tests_v1', JSON.stringify(wtRes.value));
-        } catch {}
+        saveToPhoneMemory('evs_weekly_subject_tests_v1', wtRes.value);
       }
       if (emRes.status === 'fulfilled' && Array.isArray(emRes.value)) {
         setExamMarksList(emRes.value);
@@ -1530,9 +1542,6 @@ export default function App() {
   };
 
   useEffect(() => {
-    const bootTimer = setTimeout(() => {
-      fetchReportCardAllData(false);
-    }, 700);
     const unsub = subscribeReportCardUpdates(() => {
       try {
         const rawWt = localStorage.getItem('evs_weekly_subject_tests_v1');
@@ -1545,7 +1554,6 @@ export default function App() {
       setReportCardMetaMap(loadLocalReportCardMeta());
     });
     return () => {
-      clearTimeout(bootTimer);
       unsub();
     };
   }, []);
@@ -1820,9 +1828,7 @@ export default function App() {
 
   const handleUpdateSchoolNotices = (updatedNotices: SchoolNotice[]) => {
     setSchoolNotices(updatedNotices);
-    try {
-      localStorage.setItem('evs_school_notices', JSON.stringify(updatedNotices));
-    } catch (e) {}
+    saveToPhoneMemory('evs_school_notices', updatedNotices);
   };
 
   // Background lock-screen / status-bar push notifications for parents & staff when school notices are published
@@ -2079,11 +2085,7 @@ export default function App() {
         const mergedStudents = [...uniqueCustom, ...valid];
 
         setStudents(mergedStudents);
-        try {
-          localStorage.setItem(CACHE_KEY_STUDENTS, JSON.stringify(mergedStudents));
-        } catch (e) {
-          console.warn('Could not cache students in localStorage:', e);
-        }
+        saveToPhoneMemory(CACHE_KEY_STUDENTS, mergedStudents);
         setApiError(null);
         return mergedStudents;
       } else {
@@ -2253,16 +2255,14 @@ export default function App() {
       });
 
       setHomeworkList(valid);
+      saveToPhoneMemory(CACHE_KEY_HOMEWORK, valid);
       try {
-        localStorage.setItem(CACHE_KEY_HOMEWORK, JSON.stringify(valid));
         // Clean cached custom homework as well to prevent re-infecting on next reload
         const cleanedCustom = valid.filter((h) => (h as any)._isCustom || (h as any).isLocal);
         if (cleanedCustom.length > 0) {
           localStorage.setItem('evs_custom_homework', JSON.stringify(cleanedCustom));
         }
-      } catch (e) {
-        console.warn('Could not cache homework in localStorage:', e);
-      }
+      } catch {}
       setApiError(null);
 
       if (showToast) {
@@ -2298,9 +2298,7 @@ export default function App() {
         }
       }
       setClassMap(newMap);
-      try {
-        localStorage.setItem(CACHE_KEY_CLASSES, JSON.stringify(newMap));
-      } catch {}
+      saveToPhoneMemory(CACHE_KEY_CLASSES, newMap);
     } catch (err) {
       console.warn('Could not fetch classes sheet, using default class map:', err);
     }
@@ -2456,10 +2454,8 @@ export default function App() {
 
       setFeeBalances(balances);
       setFeeRecords(reconciledRecords);
-      try {
-        localStorage.setItem(CACHE_KEY_FEES_BALANCES, JSON.stringify(balances));
-        localStorage.setItem(CACHE_KEY_FEES_RECORDS, JSON.stringify(reconciledRecords));
-      } catch {}
+      saveToPhoneMemory(CACHE_KEY_FEES_BALANCES, balances);
+      saveToPhoneMemory(CACHE_KEY_FEES_RECORDS, reconciledRecords);
     } catch (err) {
       console.warn('Could not fetch fee collection sheet:', err);
     } finally {
@@ -2476,10 +2472,8 @@ export default function App() {
       balances[normalizeStudentId(st.Student_ID)] = metrics.dueBalance;
     });
     setFeeBalances(balances);
-    try {
-      localStorage.setItem(CACHE_KEY_FEES_BALANCES, JSON.stringify(balances));
-    } catch {}
-  }, [students, feeRecords]);
+    saveToPhoneMemory(CACHE_KEY_FEES_BALANCES, balances);
+  }, [students, feeRecords, waiverVersion]);
 
   // Fetch real School Notices directly from Google Sheets (School_Notices sheet)
   const fetchSchoolNotices = async () => {
@@ -2554,9 +2548,7 @@ export default function App() {
 
       if (parsed.length > 0) {
         setSchoolNotices(parsed);
-        try {
-          localStorage.setItem('evs_school_notices', JSON.stringify(parsed));
-        } catch {}
+        saveToPhoneMemory('evs_school_notices', parsed);
       }
     } catch (err) {
       console.warn('Error fetching School_Notices sheet:', err);
@@ -2736,8 +2728,8 @@ export default function App() {
       }
 
       setHwTrackerList(deduplicatedRecords);
+      saveToPhoneMemory(CACHE_KEY_HW_TRACKER, deduplicatedRecords);
       try {
-        localStorage.setItem(CACHE_KEY_HW_TRACKER, JSON.stringify(deduplicatedRecords));
         // Keep custom tracker store clean as well
         const customOnly = deduplicatedRecords.filter((r) => r.ID.startsWith('TRK-') || (r as any)._isCustom);
         localStorage.setItem('evs_custom_hw_tracker', JSON.stringify(customOnly));
@@ -2882,9 +2874,7 @@ export default function App() {
       }
 
       setBehaviorList(mergedBeh);
-      try {
-        localStorage.setItem(CACHE_KEY_BEHAVIOR, JSON.stringify(mergedBeh));
-      } catch {}
+      saveToPhoneMemory(CACHE_KEY_BEHAVIOR, mergedBeh);
 
       if (showToast) {
         setSyncToastMessage('✅ छात्र आचरण व अनुशासन डेटा (Student Behavior) ताज़ा हो गया!');
@@ -3082,11 +3072,9 @@ export default function App() {
         finalList = [...recentSessionCheckIns, ...finalList];
       }
 
-      // Save this authoritative sheet data into localStorage so next time the app opens,
+      // Save this authoritative sheet data into Phone Memory (localStorage + IndexedDB) so next time the app opens,
       // it loads this exact sheet data from phone storage without waiting!
-      try {
-        localStorage.setItem(CACHE_KEY_STAFF_ATTENDANCE, JSON.stringify(finalList));
-      } catch {}
+      saveToPhoneMemory(CACHE_KEY_STAFF_ATTENDANCE, finalList);
 
       setStaffAttendanceList(finalList);
     } else {
@@ -3170,9 +3158,7 @@ export default function App() {
       } else {
         updated = [newRecord, ...prev];
       }
-      try {
-        localStorage.setItem(CACHE_KEY_STAFF_ATTENDANCE, JSON.stringify(updated));
-      } catch {}
+      saveToPhoneMemory(CACHE_KEY_STAFF_ATTENDANCE, updated);
       return updated;
     });
 
@@ -3338,9 +3324,7 @@ export default function App() {
         }
       }
       setUsersList(userRecords);
-      try {
-        localStorage.setItem(CACHE_KEY_USERS, JSON.stringify(userRecords));
-      } catch {}
+      saveToPhoneMemory(CACHE_KEY_USERS, userRecords);
 
       // If active teacherUser is logged in, sync their Assigned_Class immediately!
       if (teacherUser) {
@@ -3401,15 +3385,21 @@ export default function App() {
     return metrics.dueBalance;
   };
 
-  // Background Synchronization with LocalStorage persistence & Stale-While-Revalidate
-  const syncAllData = async (manual = false) => {
+  const syncInFlightRef = useRef<boolean>(false);
+
+  // Phone-Memory-First Synchronization:
+  // Loads from Google Sheets & Server into Phone Memory (localStorage + IndexedDB) on first setup, manual sync, or GitHub update.
+  const syncAllData = async (manual = false, forceFullAll = false) => {
+    if (syncInFlightRef.current) return;
+    syncInFlightRef.current = true;
     setIsBackgroundSyncing(true);
     if (manual) {
       setSyncToastMessage('डेटा सिंक किया जा रहा है... (Syncing fresh records)');
     }
     try {
-      // Run core data fetches in parallel so portal loads 3-4x faster on startup
+      // Run core data fetches in parallel so portal loads cleanly into Phone Memory
       const isParentMode = activeTab === 'parent' || parentLoggedIn;
+      const shouldLoadAllModules = forceFullAll || manual || !isParentMode;
       const syncTasks: Promise<any>[] = [
         fetchStudents(true),
         fetchClasses(),
@@ -3420,30 +3410,39 @@ export default function App() {
         fetchStudentBehavior(),
       ];
 
-      // Defer staff/admin datasets if on Parent Portal to maximize speed on mobile
-      if (!isParentMode) {
-        syncTasks.push(fetchFeeMaster(), fetchUsers(), fetchStaffAttendance(true));
+      // On first seed, GitHub update, manual sync, or staff portal load: reload ALL modules into Phone Memory
+      if (shouldLoadAllModules) {
+        syncTasks.push(
+          fetchFeeMaster(),
+          fetchUsers(),
+          fetchStaffAttendance(true),
+          fetchReportCardAllData(true),
+          syncSchoolLocationFromServer().catch(() => null)
+        );
       }
 
       await Promise.allSettled(syncTasks);
       const now = Date.now();
       setLastSyncTimestamp(now);
-      try {
-        localStorage.setItem(CACHE_KEY_TIMESTAMP, String(now));
-      } catch {}
+      await saveRawToPhoneMemory(CACHE_KEY_TIMESTAMP, String(now));
+      const runningBuildId = typeof __APP_BUILD_ID__ !== 'undefined' && __APP_BUILD_ID__ ? String(__APP_BUILD_ID__) : 'dev';
+      if (runningBuildId !== 'dev') {
+        setSyncedBuildSignature(runningBuildId);
+      }
 
       if (manual) {
-        setSyncToastMessage('ताज़ा डेटा सफलतापूर्वक अपडेट हो गया! (Data synced)');
+        setSyncToastMessage('✅ ताज़ा डेटा फोन मेमोरी में सफलतापूर्वक अपडेट हो गया!');
         setTimeout(() => setSyncToastMessage(null), 3000);
       }
     } catch (err) {
       console.warn('Sync failed:', err);
       if (manual) {
-        setSyncToastMessage('सिंक में त्रुटि हुई, स्थानीय डेटा सुरक्षित है।');
+        setSyncToastMessage('सिंक में त्रुटि हुई, फोन मेमोरी डेटा सुरक्षित है।');
         setTimeout(() => setSyncToastMessage(null), 3500);
       }
     } finally {
       setIsBackgroundSyncing(false);
+      syncInFlightRef.current = false;
     }
   };
 
@@ -3475,6 +3474,7 @@ export default function App() {
       student_photo: studentToSync.Student_Photo || '',
       balance_amount: studentToSync.Balance_Amount || 0,
       session_start_month: studentToSync.Session_Start_Month || 'April',
+      fee_waiver: (studentToSync as any).Fee_Waiver || '',
     };
 
     let syncSuccess = false;
@@ -3605,11 +3605,7 @@ export default function App() {
       } else {
         updated = [customStudent, ...prev];
       }
-      try {
-        localStorage.setItem(CACHE_KEY_STUDENTS, JSON.stringify(updated));
-      } catch (e) {
-        console.warn('Error saving added student to cache:', e);
-      }
+      saveToPhoneMemory(CACHE_KEY_STUDENTS, updated);
       return updated;
     });
 
@@ -3684,9 +3680,7 @@ export default function App() {
     // 2. Remove from local students state immediately
     setStudents((prev) => {
       const updated = prev.filter((s) => String(s.Student_ID || '').trim().toLowerCase() !== sId.toLowerCase());
-      try {
-        localStorage.setItem(CACHE_KEY_STUDENTS, JSON.stringify(updated));
-      } catch {}
+      saveToPhoneMemory(CACHE_KEY_STUDENTS, updated);
       return updated;
     });
 
@@ -3742,12 +3736,132 @@ export default function App() {
     return true;
   };
 
-  // Real-Time Synchronization & Automatic Background Polling
+  // Instant Phone-Memory Launch + GitHub-Update-Triggered Full Reload + Live WebSocket Push
   useEffect(() => {
-    // 1. Instantly renders cached state, and executes background sync
-    syncAllData(false);
+    let isMounted = true;
 
-    // 2. Subscribe to real-time data updates (cross-tab via BroadcastChannel & cross-device via WebSocket)
+    // 1. Hydrate oversized datasets from IndexedDB Phone Memory in ~5-15ms and ONLY reload all sheets
+    // if (a) this is the very first load on this phone, OR (b) a new GitHub update/build arrived.
+    const bootstrapPhoneMemory = async () => {
+      const pendingPostUpdate = consumePendingFullReloadAfterUpdate();
+      const runningBuildId =
+        typeof __APP_BUILD_ID__ !== 'undefined' && __APP_BUILD_ID__ ? String(__APP_BUILD_ID__) : 'dev';
+      const prevBuildSig = getSyncedBuildSignature();
+      const isBuildUpdated = Boolean(prevBuildSig && runningBuildId !== 'dev' && prevBuildSig !== runningBuildId);
+
+      let hasCachedStudents = students.length > 0;
+      let hasCachedHomework = homeworkList.length > 0;
+      let hasTimestamp = lastSyncTimestamp > 0;
+
+      // Always hydrate any oversized or missing keys from IndexedDB Phone Memory
+      const hydrated = await hydrateKeysFromIndexedDB([
+        CACHE_KEY_STUDENTS,
+        CACHE_KEY_HOMEWORK,
+        CACHE_KEY_CLASSES,
+        CACHE_KEY_FEES_RECORDS,
+        CACHE_KEY_FEES_BALANCES,
+        CACHE_KEY_HW_TRACKER,
+        CACHE_KEY_BEHAVIOR,
+        CACHE_KEY_USERS,
+        CACHE_KEY_STAFF_ATTENDANCE,
+        'evs_school_notices',
+        'evs_weekly_subject_tests_v1',
+        EXAM_MARKS_STORAGE_KEY,
+        REPORT_CARD_META_STORAGE_KEY,
+        CACHE_KEY_TIMESTAMP,
+      ]);
+      if (!isMounted) return;
+
+      if (!hasCachedStudents && Array.isArray(hydrated[CACHE_KEY_STUDENTS]) && hydrated[CACHE_KEY_STUDENTS].length > 0) {
+        setStudents(hydrated[CACHE_KEY_STUDENTS]);
+        hasCachedStudents = true;
+      }
+      if (!hasCachedHomework && Array.isArray(hydrated[CACHE_KEY_HOMEWORK]) && hydrated[CACHE_KEY_HOMEWORK].length > 0) {
+        setHomeworkList(hydrated[CACHE_KEY_HOMEWORK]);
+        hasCachedHomework = true;
+      }
+      if (hydrated[CACHE_KEY_CLASSES] && Object.keys(hydrated[CACHE_KEY_CLASSES]).length > 0) {
+        setClassMap(hydrated[CACHE_KEY_CLASSES]);
+      }
+      if (feeRecords.length === 0 && Array.isArray(hydrated[CACHE_KEY_FEES_RECORDS]) && hydrated[CACHE_KEY_FEES_RECORDS].length > 0) {
+        setFeeRecords(hydrated[CACHE_KEY_FEES_RECORDS]);
+      }
+      if (Object.keys(feeBalances).length === 0 && hydrated[CACHE_KEY_FEES_BALANCES]) {
+        setFeeBalances(hydrated[CACHE_KEY_FEES_BALANCES]);
+      }
+      if (hwTrackerList.length === 0 && Array.isArray(hydrated[CACHE_KEY_HW_TRACKER]) && hydrated[CACHE_KEY_HW_TRACKER].length > 0) {
+        setHwTrackerList(hydrated[CACHE_KEY_HW_TRACKER]);
+      }
+      if (behaviorList.length === 0 && Array.isArray(hydrated[CACHE_KEY_BEHAVIOR]) && hydrated[CACHE_KEY_BEHAVIOR].length > 0) {
+        setBehaviorList(hydrated[CACHE_KEY_BEHAVIOR]);
+      }
+      if (usersList.length === 0 && Array.isArray(hydrated[CACHE_KEY_USERS]) && hydrated[CACHE_KEY_USERS].length > 0) {
+        setUsersList(hydrated[CACHE_KEY_USERS]);
+      }
+      if (staffAttendanceList.length === 0 && Array.isArray(hydrated[CACHE_KEY_STAFF_ATTENDANCE]) && hydrated[CACHE_KEY_STAFF_ATTENDANCE].length > 0) {
+        setStaffAttendanceList(hydrated[CACHE_KEY_STAFF_ATTENDANCE]);
+      }
+      if (Array.isArray(hydrated['evs_school_notices']) && hydrated['evs_school_notices'].length > 0 && schoolNotices === DEFAULT_SEED_NOTICES) {
+        setSchoolNotices(hydrated['evs_school_notices']);
+      }
+      if (weeklyTestsList.length === 0 && Array.isArray(hydrated['evs_weekly_subject_tests_v1']) && hydrated['evs_weekly_subject_tests_v1'].length > 0) {
+        setWeeklyTestsList(hydrated['evs_weekly_subject_tests_v1']);
+      }
+      if (examMarksList.length === 0 && Array.isArray(hydrated[EXAM_MARKS_STORAGE_KEY]) && hydrated[EXAM_MARKS_STORAGE_KEY].length > 0) {
+        setExamMarksList(hydrated[EXAM_MARKS_STORAGE_KEY]);
+      }
+      if (Object.keys(reportCardMetaMap).length === 0 && hydrated[REPORT_CARD_META_STORAGE_KEY]) {
+        setReportCardMetaMap(hydrated[REPORT_CARD_META_STORAGE_KEY]);
+      }
+      if (!hasTimestamp && hydrated[CACHE_KEY_TIMESTAMP]) {
+        const ts = parseInt(String(hydrated[CACHE_KEY_TIMESTAMP]), 10) || 0;
+        if (ts > 0) {
+          setLastSyncTimestamp(ts);
+          hasTimestamp = true;
+        }
+      }
+
+      if (hasCachedStudents) setLoadingStudents(false);
+      if (hasCachedHomework) setLoadingHomework(false);
+
+      const needsFirstEverSeed = !hasTimestamp || (!hasCachedStudents && !hasCachedHomework);
+
+      if (pendingPostUpdate || isBuildUpdated) {
+        setSyncToastMessage('🔄 नया GitHub अपडेट मिला — पूरा स्कूल डेटा फोन मेमोरी में ताज़ा लोड हो रहा है...');
+        await syncAllData(false, true);
+        if (isMounted) {
+          setSyncToastMessage('✅ नया अपडेट व पूरा स्कूल डेटा फोन मेमोरी में सेव हो गया!');
+          setTimeout(() => setSyncToastMessage(null), 4000);
+        }
+      } else if (needsFirstEverSeed) {
+        // First time opening on this phone: load full school data & save into Phone Memory
+        await syncAllData(false, true);
+      } else {
+        // Phone memory already populated & NO GitHub update -> instant open with ZERO startup sheet reload!
+        setLoadingStudents(false);
+        setLoadingHomework(false);
+        if (!prevBuildSig && runningBuildId !== 'dev') {
+          setSyncedBuildSignature(runningBuildId);
+        }
+      }
+    };
+
+    bootstrapPhoneMemory();
+
+    // 2. Listen for live GitHub update events from pwaUpdater (automatically performs full reload into Phone Memory)
+    const handleGitHubUpdateFullReload = async () => {
+      if (!isMounted) return;
+      setSyncToastMessage('🆕 GitHub पर नया अपडेट मिला — पूरा डेटा ताज़ा लोड हो रहा है...');
+      await syncAllData(false, true);
+      if (isMounted) {
+        setSyncToastMessage('✅ नया GitHub डेटा फोन मेमोरी में सफलतापूर्वक अपडेट हो गया!');
+        setTimeout(() => setSyncToastMessage(null), 4000);
+      }
+    };
+    window.addEventListener(GITHUB_FULL_RELOAD_EVENT, handleGitHubUpdateFullReload);
+
+    // 3. Subscribe to real-time push updates (cross-tab via BroadcastChannel & cross-device via WebSocket)
+    // Targeted entity refresh only when an actual write/edit occurs elsewhere; zero periodic polling storm.
     const unsubscribe = realtimeSync.subscribe((event) => {
       console.log('[RealtimeSync] Auto-refreshing data for entity:', event.entity);
       if (event.entity === 'fee') {
@@ -3775,28 +3889,17 @@ export default function App() {
       } else if (event.entity === 'users') {
         fetchUsers();
       } else {
-        syncAllData(false);
+        syncAllData(false, false);
       }
 
       setSyncToastMessage('⚡ लाइव अपडेट: नया डेटा अपने-आप रिफ्रेश हो गया!');
       setTimeout(() => setSyncToastMessage(null), 3000);
     });
 
-    // 3. Smart Background Polling (Every 20 seconds)
-    // Refreshes data silently without disturbing user if typing in input
-    const pollingInterval = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        const activeEl = document.activeElement;
-        const isUserTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT');
-        if (!isUserTyping) {
-          syncAllData(false);
-        }
-      }
-    }, 20000);
-
     return () => {
+      isMounted = false;
+      window.removeEventListener(GITHUB_FULL_RELOAD_EVENT, handleGitHubUpdateFullReload);
       unsubscribe();
-      clearInterval(pollingInterval);
     };
   }, []);
 
@@ -4346,13 +4449,23 @@ export default function App() {
       advanceAmount: summary.advanceAmount,
       receiptsCount: summary.recordsCount,
     };
-  }, [selectedStudent, feeRecords]);
+  }, [selectedStudent, feeRecords, waiverVersion]);
 
   // Combined Family Fee Summary when Parent has 2+ linked children on same mobile
   const parentFamilyFeeSummary = useMemo(() => {
     if (!parentChildren || parentChildren.length <= 1) return null;
     return computeFamilyFeeSummary(parentChildren, feeRecords);
-  }, [parentChildren, feeRecords]);
+  }, [parentChildren, feeRecords, waiverVersion]);
+
+  // Debt-settlement animation states (Fee Due -> Paid / Cleared) for Parent Portal
+  const studentFeeSettlement = useFeeSettlementTransition(
+    selectedStudent?.Student_ID,
+    studentFeeSummary.hasDues ? studentFeeSummary.balance : 0
+  );
+  const familyFeeSettlement = useFeeSettlementTransition(
+    parentFamilyFeeSummary ? `family:${parentFamilyFeeSummary.mobileKey}` : null,
+    parentFamilyFeeSummary ? parentFamilyFeeSummary.totalDue : 0
+  );
 
   // Attendance Trend Data (Last 30 Days) for Recharts Line Chart
   const attendanceChartData = useMemo(() => {
@@ -5238,9 +5351,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         }
         return u;
       });
-      try {
-        localStorage.setItem(CACHE_KEY_USERS, JSON.stringify(updated));
-      } catch {}
+      saveToPhoneMemory(CACHE_KEY_USERS, updated);
       return updated;
     });
 
@@ -5809,7 +5920,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         list.unshift(updatedRec);
       }
       localStorage.setItem('evs_custom_fee_records', JSON.stringify(list));
-      localStorage.setItem(CACHE_KEY_FEES_RECORDS, JSON.stringify(updatedRecords));
+      saveToPhoneMemory(CACHE_KEY_FEES_RECORDS, updatedRecords);
     } catch (e) {
       console.warn('Could not update custom fee cache:', e);
     }
@@ -5891,7 +6002,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         });
         localStorage.setItem('evs_custom_fee_records', JSON.stringify(filtered));
       }
-      localStorage.setItem(CACHE_KEY_FEES_RECORDS, JSON.stringify(updatedRecords));
+      saveToPhoneMemory(CACHE_KEY_FEES_RECORDS, updatedRecords);
     } catch (e) {
       console.warn('Could not update cache after deleting fee:', e);
     }
@@ -5990,7 +6101,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
           if (itemComposite === compositeKey) return false;
           return true;
         });
-        localStorage.setItem(CACHE_KEY_HOMEWORK, JSON.stringify(filtered));
+        saveToPhoneMemory(CACHE_KEY_HOMEWORK, filtered);
       }
     } catch {}
 
@@ -6303,13 +6414,13 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       setParentActiveSection('fees');
                       window.scrollTo({ top: 0, behavior: 'smooth' });
                     }}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer shadow-xs active:scale-95 shrink-0 ${
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all duration-500 cursor-pointer shadow-xs active:scale-95 shrink-0 ${
                       studentFeeSummary.hasDues
                         ? 'bg-rose-500/25 hover:bg-rose-500/35 text-rose-100 border-rose-400/50 hover:border-rose-300'
                         : studentFeeSummary.isAdvance
                         ? 'bg-purple-500/25 hover:bg-purple-500/35 text-purple-100 border-purple-400/50 hover:border-purple-300'
                         : 'bg-emerald-500/25 hover:bg-emerald-500/35 text-emerald-100 border-emerald-400/50 hover:border-emerald-300'
-                    }`}
+                    } ${studentFeeSettlement.justSettled ? 'animate-fee-card-settle ring-2 ring-emerald-300/60' : ''}`}
                     title="फ़ीस विवरण देखने हेतु क्लिक करें"
                   >
                     <i
@@ -6325,15 +6436,17 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       {studentFeeSummary.isAdvance ? 'अग्रिम फ़ीस:' : 'बाकी फ़ीस:'}
                     </span>
                     <span
-                      className={`font-black text-xs ${
+                      className={`font-black text-xs tabular-nums ${
                         studentFeeSummary.hasDues
                           ? 'text-amber-200'
                           : studentFeeSummary.isAdvance
                           ? 'text-purple-200'
                           : 'text-emerald-200'
-                      }`}
+                      } ${studentFeeSettlement.justSettled ? 'animate-fee-text-settle' : ''}`}
                     >
-                      {studentFeeSummary.isAdvance
+                      {studentFeeSettlement.justSettled && studentFeeSettlement.isCountingDown
+                        ? `₹${studentFeeSettlement.displayAmount.toLocaleString('en-IN')}`
+                        : studentFeeSummary.isAdvance
                         ? `-₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')}`
                         : `₹${studentFeeSummary.balance.toLocaleString('en-IN')}`}
                     </span>
@@ -6342,15 +6455,54 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         Due
                       </span>
                     ) : studentFeeSummary.isAdvance ? (
-                      <span className="text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0.2 rounded bg-purple-600/80 text-white ml-0.5">
+                      <span
+                        className={`text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0.2 rounded bg-purple-600/80 text-white ml-0.5 ${
+                          studentFeeSettlement.justSettled ? 'animate-fee-badge-pop' : ''
+                        }`}
+                      >
                         Advance
                       </span>
                     ) : (
-                      <span className="text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0.2 rounded bg-emerald-600/80 text-white ml-0.5">
+                      <span
+                        className={`text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0.2 rounded bg-emerald-600/80 text-white ml-0.5 ${
+                          studentFeeSettlement.justSettled ? 'animate-fee-badge-pop' : ''
+                        }`}
+                      >
                         Paid ✓
                       </span>
                     )}
                   </button>
+
+                  {/* Combined Family Due Badge in Header when 2+ children are linked */}
+                  {parentFamilyFeeSummary && parentFamilyFeeSummary.members.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setParentActiveSection('fees');
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }}
+                      className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold border transition-all duration-300 cursor-pointer shadow-xs active:scale-95 shrink-0 ${
+                        parentFamilyFeeSummary.totalDue > 0
+                          ? 'bg-amber-400/20 hover:bg-amber-400/30 text-amber-100 border-amber-300/60'
+                          : 'bg-emerald-500/25 hover:bg-emerald-500/35 text-emerald-100 border-emerald-400/50'
+                      } ${familyFeeSettlement.justSettled ? 'animate-fee-card-settle ring-2 ring-emerald-300/60' : ''}`}
+                      title={`सभी ${parentFamilyFeeSummary.members.length} बच्चों की कुल संयुक्त फ़ीस देखें`}
+                    >
+                      <i className="fa-solid fa-users text-[11px] text-amber-300"></i>
+                      <span className="text-[11px] text-white/85 font-semibold">
+                        कुल ({parentFamilyFeeSummary.members.length} बच्चे):
+                      </span>
+                      <span className={`font-black text-xs tabular-nums ${
+                        parentFamilyFeeSummary.totalDue > 0 ? 'text-amber-200' : 'text-emerald-200'
+                      }`}>
+                        {familyFeeSettlement.justSettled && familyFeeSettlement.isCountingDown
+                          ? `₹${familyFeeSettlement.displayAmount.toLocaleString('en-IN')}`
+                          : parentFamilyFeeSummary.totalDue > 0
+                          ? `₹${parentFamilyFeeSummary.totalDue.toLocaleString('en-IN')}`
+                          : '₹0 ✓'}
+                      </span>
+                    </button>
+                  )}
 
                   {/* Install App button for parents */}
                   {!isStandaloneApp && (
@@ -7323,6 +7475,111 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 {/* Device Push Notification Opt-in for Parents */}
                 <NotificationPermissionBanner lang={currentLang} />
 
+                {/* COMBINED MULTI-CHILD FAMILY FEE SUMMARY CARD (Top lightweight overview for 2, 3+ kids) */}
+                {parentChildren.length > 1 && parentFamilyFeeSummary && (
+                  <div
+                    className={`relative overflow-hidden rounded-2xl border p-3 sm:p-3.5 shadow-2xs transition-all duration-500 ${
+                      parentFamilyFeeSummary.totalDue > 0
+                        ? 'bg-gradient-to-r from-amber-50/90 via-white to-rose-50/70 border-amber-200/90'
+                        : 'bg-gradient-to-r from-emerald-50/90 via-white to-teal-50/60 border-emerald-200/90'
+                    } ${familyFeeSettlement.justSettled && parentFamilyFeeSummary.totalDue === 0 ? 'animate-fee-card-settle ring-2 ring-emerald-400/70' : ''}`}
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                      <div className="space-y-1.5 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs shrink-0 ${
+                            parentFamilyFeeSummary.totalDue > 0
+                              ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                              : 'bg-emerald-100 text-emerald-700 border border-emerald-200'
+                          }`}>
+                            <i className="fa-solid fa-coins"></i>
+                          </span>
+                          <span className="text-xs sm:text-sm font-extrabold text-slate-900">
+                            परिवार की कुल संयुक्त फ़ीस ({parentFamilyFeeSummary.members.length} बच्चे)
+                          </span>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                            parentFamilyFeeSummary.totalDue > 0
+                              ? 'bg-rose-100 text-rose-800 border-rose-200'
+                              : 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                          }`}>
+                            {parentFamilyFeeSummary.totalDue > 0 ? 'कुल बकाया सक्रिय' : 'सभी बच्चों की फ़ीस जमा ✓'}
+                          </span>
+                        </div>
+
+                        {/* Inline per-child due chips (works dynamically for 2, 3, or any number of kids) */}
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {parentFamilyFeeSummary.members.map((m) => {
+                            const isSelectedChild = selectedStudent?.Student_ID === m.student.Student_ID;
+                            const isExemptChild = isStudentFeeExempt(m.student);
+                            return (
+                              <button
+                                key={m.student.Student_ID}
+                                type="button"
+                                onClick={() => setSelectedStudent(m.student)}
+                                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer ${
+                                  isSelectedChild
+                                    ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
+                                    : 'bg-white/90 text-slate-700 border-slate-200 hover:bg-slate-100'
+                                }`}
+                              >
+                                <span className="truncate max-w-[120px]">{m.student.Student_Name}:</span>
+                                <span className={`font-black tabular-nums ${
+                                  m.dueAmount > 0
+                                    ? (isSelectedChild ? 'text-amber-300' : 'text-rose-700')
+                                    : (isSelectedChild ? 'text-emerald-300' : 'text-emerald-700')
+                                }`}>
+                                  {m.dueAmount > 0
+                                    ? `₹${m.dueAmount.toLocaleString('en-IN')}`
+                                    : m.advanceAmount > 0
+                                    ? `-₹${m.advanceAmount.toLocaleString('en-IN')} Adv`
+                                    : isExemptChild
+                                    ? '₹0 (माफ ✓)'
+                                    : '₹0 ✓'}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-amber-200/60 shrink-0">
+                        <div className="sm:text-right">
+                          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                            {parentFamilyFeeSummary.totalDue > 0
+                              ? `कुल बाकी (${parentFamilyFeeSummary.members.length} बच्चे)`
+                              : 'संयुक्त स्थिति'}
+                          </div>
+                          <div className={`text-lg sm:text-xl font-black tabular-nums leading-tight ${
+                            parentFamilyFeeSummary.totalDue > 0 ? 'text-rose-700' : 'text-emerald-700'
+                          } ${familyFeeSettlement.justSettled ? 'animate-fee-text-settle' : ''}`}>
+                            {familyFeeSettlement.justSettled && familyFeeSettlement.isCountingDown
+                              ? `₹${familyFeeSettlement.displayAmount.toLocaleString('en-IN')}`
+                              : parentFamilyFeeSummary.totalDue > 0
+                              ? `₹${parentFamilyFeeSummary.totalDue.toLocaleString('en-IN')}`
+                              : '₹0 Paid ✓'}
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setParentActiveSection('fees');
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }}
+                          className={`px-3.5 py-2 rounded-xl text-xs font-extrabold transition-all shadow-xs active:scale-95 cursor-pointer flex items-center gap-1.5 ${
+                            parentFamilyFeeSummary.totalDue > 0
+                              ? 'bg-[#0c2340] hover:bg-blue-950 text-amber-300'
+                              : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                          }`}
+                        >
+                          <span>{parentFamilyFeeSummary.totalDue > 0 ? 'फ़ीस देखें / भरें' : 'रसीदें देखें'}</span>
+                          <i className="fa-solid fa-arrow-right text-[10px]"></i>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* SIBLINGS / MULTI-CHILD SELECTION TOOLBAR (Clean, Compact, Uncluttered) */}
                 {parentChildren.length > 1 && (
                   <div className="bg-slate-50 border border-slate-200/90 rounded-2xl p-3 sm:p-3.5 flex flex-wrap items-center justify-between gap-2.5 shadow-2xs">
@@ -7568,22 +7825,28 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         )}
 
                         {/* Fee highlight */}
-                        <span className={`px-2.5 py-1 rounded-lg font-semibold flex items-center gap-1.5 border ${
-                          studentFeeSummary.hasDues
-                            ? 'bg-rose-500/20 text-rose-200 border-rose-500/40'
-                            : studentFeeSummary.isAdvance
-                            ? 'bg-purple-500/20 text-purple-200 border-purple-500/40'
-                            : 'bg-emerald-500/20 text-emerald-200 border-emerald-500/40'
-                        }`}>
-                          <i className={`fa-solid ${
+                        <span
+                          className={`px-2.5 py-1 rounded-lg font-semibold flex items-center gap-1.5 border transition-colors duration-500 ${
                             studentFeeSummary.hasDues
-                              ? 'fa-receipt'
+                              ? 'bg-rose-500/20 text-rose-200 border-rose-500/40'
                               : studentFeeSummary.isAdvance
-                              ? 'fa-hand-holding-dollar'
-                              : 'fa-circle-check'
-                          }`}></i>
-                          <span>
-                            {studentFeeSummary.hasDues
+                              ? 'bg-purple-500/20 text-purple-200 border-purple-500/40'
+                              : 'bg-emerald-500/20 text-emerald-200 border-emerald-500/40'
+                          } ${studentFeeSettlement.justSettled ? 'animate-fee-badge-pop ring-2 ring-emerald-300/60' : ''}`}
+                        >
+                          <i
+                            className={`fa-solid ${
+                              studentFeeSummary.hasDues
+                                ? 'fa-receipt'
+                                : studentFeeSummary.isAdvance
+                                ? 'fa-hand-holding-dollar'
+                                : 'fa-circle-check'
+                            }`}
+                          ></i>
+                          <span className={`tabular-nums ${studentFeeSettlement.justSettled ? 'animate-fee-text-settle' : ''}`}>
+                            {studentFeeSettlement.justSettled && studentFeeSettlement.isCountingDown
+                              ? `बकाया चुकता हो रहा है: ₹${studentFeeSettlement.displayAmount.toLocaleString('en-IN')}`
+                              : studentFeeSummary.hasDues
                               ? `बकाया फ़ीस: ₹${studentFeeSummary.balance.toLocaleString('en-IN')}`
                               : studentFeeSummary.isAdvance
                               ? `अग्रिम फ़ीस: -₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')} (Advance)`
@@ -7771,20 +8034,29 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           setParentActiveSection('fees');
                           window.scrollTo({ top: 0, behavior: 'smooth' });
                         }}
-                        className="p-4 rounded-2xl border text-left transition-all cursor-pointer relative overflow-hidden flex flex-col justify-between group bg-white hover:bg-slate-50 text-slate-800 border-slate-200 shadow-xs hover:border-slate-300 active:scale-[0.98]"
+                        className={`p-4 rounded-2xl border text-left transition-all duration-500 cursor-pointer relative overflow-hidden flex flex-col justify-between group shadow-xs active:scale-[0.98] ${
+                          studentFeeSettlement.justSettled && !studentFeeSummary.hasDues
+                            ? 'bg-emerald-50/70 border-emerald-400 text-slate-900 animate-fee-card-settle'
+                            : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200 hover:border-slate-300'
+                        }`}
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg shrink-0 transition-transform group-hover:scale-105 bg-amber-100 text-amber-900">
                             <i className="fa-solid fa-indian-rupee-sign"></i>
                           </div>
-                          <span className={`text-[10px] sm:text-xs font-black px-2.5 py-0.5 rounded-full ${
-                            studentFeeSummary.hasDues
-                              ? 'bg-rose-100 text-rose-800 border border-rose-200'
-                              : studentFeeSummary.isAdvance
-                              ? 'bg-purple-100 text-purple-800 border border-purple-200'
-                              : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                          }`}>
-                            {studentFeeSummary.hasDues
+                          <span
+                            key={studentFeeSettlement.justSettled ? `ov-settled-${studentFeeSettlement.settlementEpoch}` : 'ov-status'}
+                            className={`text-[10px] sm:text-xs font-black px-2.5 py-0.5 rounded-full transition-colors duration-500 tabular-nums ${
+                              studentFeeSummary.hasDues
+                                ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                                : studentFeeSummary.isAdvance
+                                ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                                : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                            } ${studentFeeSettlement.justSettled ? 'animate-fee-badge-pop' : ''}`}
+                          >
+                            {studentFeeSettlement.justSettled && studentFeeSettlement.isCountingDown
+                              ? `₹${studentFeeSettlement.displayAmount.toLocaleString('en-IN')}`
+                              : studentFeeSummary.hasDues
                               ? (currentLang === 'en' ? `Due ₹${studentFeeSummary.balance.toLocaleString('en-IN')}` : `बकाया ₹${studentFeeSummary.balance.toLocaleString('en-IN')}`)
                               : studentFeeSummary.isAdvance
                               ? (currentLang === 'en' ? `Advance -₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')}` : `अग्रिम -₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')}`)
@@ -7797,16 +8069,20 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             <span>{currentLang === 'en' ? '3. Fees & Receipts' : '3. स्कूल फीस व रसीदें'}</span>
                             <i className="fa-solid fa-chevron-right text-xs text-slate-300 group-hover:text-slate-500"></i>
                           </div>
-                          <div className="text-[11px] mt-0.5 text-slate-500">
+                          <div className={`text-[11px] mt-0.5 ${studentFeeSettlement.justSettled && !studentFeeSummary.hasDues ? 'text-emerald-700 font-bold animate-fee-text-settle' : 'text-slate-500'}`}>
                             {parentFamilyFeeSummary
-                              ? currentLang === 'en'
+                              ? parentFamilyFeeSummary.totalDue <= 0
+                                ? currentLang === 'en'
+                                  ? `Family (${parentFamilyFeeSummary.members.length} kids): All Paid ✓`
+                                  : `परिवार कुल (${parentFamilyFeeSummary.members.length} बच्चे): पूरी जमा ✓`
+                                : currentLang === 'en'
                                 ? `Family (${parentFamilyFeeSummary.members.length} kids): Due ₹${parentFamilyFeeSummary.totalDue.toLocaleString('en-IN')}`
                                 : `परिवार कुल (${parentFamilyFeeSummary.members.length} बच्चे): ₹${parentFamilyFeeSummary.totalDue.toLocaleString('en-IN')} बकाया`
                               : studentFeeSummary.hasDues
                               ? (currentLang === 'en' ? 'View fee breakdown' : 'जमा विवरण देखें')
                               : studentFeeSummary.isAdvance
                               ? (currentLang === 'en' ? 'View advance receipts' : 'अग्रिम जमा रसीदें देखें')
-                              : (currentLang === 'en' ? 'All receipts saved' : 'सभी रसीदें सुरक्षित')}
+                              : (currentLang === 'en' ? 'All dues settled ✓' : 'सभी बकाया चुकता ✓')}
                           </div>
                         </div>
                       </button>
@@ -9395,10 +9671,30 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                 ₹{parentFamilyFeeSummary.totalPaid.toLocaleString('en-IN')}
                               </div>
                             </div>
-                            <div className="bg-amber-400/20 border border-amber-300/40 rounded-xl px-2.5 py-1.5">
-                              <div className="text-[10px] text-amber-200">कुल शेष बकाया</div>
-                              <div className="text-xs sm:text-sm font-black text-amber-300">
-                                ₹{parentFamilyFeeSummary.totalDue.toLocaleString('en-IN')}
+                            <div
+                              className={`rounded-xl px-2.5 py-1.5 border transition-colors duration-500 ${
+                                parentFamilyFeeSummary.totalDue <= 0
+                                  ? 'bg-emerald-500/25 border-emerald-300/60'
+                                  : 'bg-amber-400/20 border-amber-300/40'
+                              } ${familyFeeSettlement.justSettled ? 'animate-fee-card-settle' : ''}`}
+                            >
+                              <div
+                                className={`text-[10px] ${
+                                  parentFamilyFeeSummary.totalDue <= 0 ? 'text-emerald-200' : 'text-amber-200'
+                                }`}
+                              >
+                                {parentFamilyFeeSummary.totalDue <= 0 ? 'पारिवारिक बकाया चुकता' : 'कुल शेष बकाया'}
+                              </div>
+                              <div
+                                className={`text-xs sm:text-sm font-black ${
+                                  parentFamilyFeeSummary.totalDue <= 0 ? 'text-emerald-200' : 'text-amber-300'
+                                } ${familyFeeSettlement.justSettled ? 'animate-fee-text-settle' : ''}`}
+                              >
+                                {familyFeeSettlement.justSettled && familyFeeSettlement.isCountingDown
+                                  ? `₹${familyFeeSettlement.displayAmount.toLocaleString('en-IN')}`
+                                  : parentFamilyFeeSummary.totalDue <= 0
+                                  ? '₹0 · पूरी जमा ✓'
+                                  : `₹${parentFamilyFeeSummary.totalDue.toLocaleString('en-IN')}`}
                               </div>
                             </div>
                           </div>
@@ -9473,8 +9769,16 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         <div className="text-2xl font-black text-slate-900">
                           ₹{studentFeeSummary.totalFee.toLocaleString('en-IN')}
                         </div>
-                        <div className="text-[11px] text-slate-600 mt-1.5 pt-1.5 border-t border-slate-200/80 leading-relaxed">
-                          <span className="font-semibold text-slate-700">सत्र गणना:</span> प्रवेश ₹{(studentFeeSummary.admissionFee || 1000).toLocaleString('en-IN')} + {studentFeeSummary.elapsedMonths} माह ({selectedStudent.Session_Start_Month || 'April'} से {studentFeeSummary.currentMonth || 'October'}) × ₹{(studentFeeSummary.monthlyTuition || 450).toLocaleString('en-IN')}{Number((studentFeeSummary as any).otherBilledFees || 0) > 0 ? ` + पुस्तकें/अन्य ₹${Number((studentFeeSummary as any).otherBilledFees).toLocaleString('en-IN')}` : ''} = ₹{studentFeeSummary.totalFee.toLocaleString('en-IN')}
+                        <div className="text-[11px] text-slate-600 mt-1.5 pt-1.5 border-t border-slate-200/80 leading-relaxed space-y-1">
+                          <div>
+                            <span className="font-semibold text-slate-700">सत्र गणना:</span> प्रवेश ₹{(studentFeeSummary.admissionFee ?? 0).toLocaleString('en-IN')} + {studentFeeSummary.elapsedMonths} माह ({selectedStudent.Session_Start_Month || 'April'} से {studentFeeSummary.currentMonth || 'October'}) × ₹{(studentFeeSummary.monthlyTuition ?? 0).toLocaleString('en-IN')}{Number((studentFeeSummary as any).otherBilledFees || 0) > 0 ? ` + जोड़ी गई मदें ₹${Number((studentFeeSummary as any).otherBilledFees).toLocaleString('en-IN')}` : ''} = ₹{studentFeeSummary.totalFee.toLocaleString('en-IN')}
+                          </div>
+                          {isStudentFeeExempt(selectedStudent) && (
+                            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] font-bold">
+                              <i className="fa-solid fa-graduation-cap text-emerald-600"></i>
+                              <span>फ़ीस माफी (Fee Waiver): ऑटो ट्यूशन व डिफ़ॉल्ट शुल्क ₹0 — केवल जोड़ी गई मदें ही देय</span>
+                            </div>
+                          )}
                         </div>
                       </div>
 
@@ -9493,14 +9797,23 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       </div>
 
                       {/* Balance Due / Advance Card */}
-                      <div className={`rounded-2xl p-4 border ${
-                        studentFeeSummary.hasDues
-                          ? 'bg-rose-50 border-rose-300'
-                          : studentFeeSummary.isAdvance
-                          ? 'bg-purple-50 border-purple-300'
-                          : 'bg-emerald-50 border-emerald-300'
-                      }`}>
-                        <div className="flex items-center justify-between text-xs font-semibold mb-1">
+                      <div
+                        className={`relative overflow-hidden rounded-2xl p-4 border transition-all duration-500 ${
+                          studentFeeSummary.hasDues
+                            ? 'bg-rose-50 border-rose-300'
+                            : studentFeeSummary.isAdvance
+                            ? 'bg-purple-50 border-purple-300'
+                            : 'bg-emerald-50 border-emerald-300'
+                        } ${studentFeeSettlement.justSettled && !studentFeeSummary.hasDues ? 'animate-fee-card-settle ring-2 ring-emerald-400/70' : ''}`}
+                      >
+                        {studentFeeSettlement.justSettled && !studentFeeSummary.hasDues && (
+                          <div
+                            key={`shimmer-${studentFeeSettlement.settlementEpoch}`}
+                            className="pointer-events-none absolute inset-0 w-1/2 bg-gradient-to-r from-transparent via-white/75 to-transparent animate-fee-shimmer-sweep"
+                            aria-hidden="true"
+                          />
+                        )}
+                        <div className="relative flex items-center justify-between text-xs font-semibold mb-1">
                           <span className={
                             studentFeeSummary.hasDues
                               ? 'text-rose-800'
@@ -9510,44 +9823,60 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           }>
                             {studentFeeSummary.isAdvance
                               ? 'अग्रिम जमा (Advance Payment)'
-                              : 'बकाया फीस (Pending Due Balance)'}
+                              : studentFeeSummary.hasDues
+                              ? 'बकाया फीस (Pending Due Balance)'
+                              : 'बकाया स्थिति (Balance Cleared ✓)'}
                           </span>
-                          <span className={`text-[10px] px-2 py-0.2 rounded font-extrabold uppercase ${
-                            studentFeeSummary.hasDues
-                              ? 'bg-rose-200 text-rose-900 border border-rose-300'
-                              : studentFeeSummary.isAdvance
-                              ? 'bg-purple-200 text-purple-900 border border-purple-300'
-                              : 'bg-emerald-200 text-emerald-900 border border-emerald-300'
-                          }`}>
+                          <span
+                            key={studentFeeSettlement.justSettled ? `badge-${studentFeeSettlement.settlementEpoch}` : studentFeeSummary.hasDues ? 'b-due' : studentFeeSummary.isAdvance ? 'b-adv' : 'b-paid'}
+                            className={`text-[10px] px-2 py-0.5 rounded font-extrabold uppercase transition-colors duration-500 ${
+                              studentFeeSummary.hasDues
+                                ? 'bg-rose-200 text-rose-900 border border-rose-300'
+                                : studentFeeSummary.isAdvance
+                                ? 'bg-purple-200 text-purple-900 border border-purple-300'
+                                : 'bg-emerald-200 text-emerald-900 border border-emerald-300'
+                            } ${studentFeeSettlement.justSettled && !studentFeeSummary.hasDues ? 'animate-fee-badge-pop' : ''}`}
+                          >
                             {studentFeeSummary.hasDues
                               ? 'बकाया है'
                               : studentFeeSummary.isAdvance
                               ? 'अग्रिम जमा'
-                              : 'पूरी जमा'}
+                              : 'पूरी जमा ✓'}
                           </span>
                         </div>
-                        <div className={`text-2xl font-black ${
-                          studentFeeSummary.hasDues
-                            ? 'text-rose-950'
-                            : studentFeeSummary.isAdvance
-                            ? 'text-purple-950'
-                            : 'text-emerald-950'
-                        }`}>
-                          {studentFeeSummary.isAdvance
-                            ? `-₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')}`
-                            : `₹${studentFeeSummary.balance.toLocaleString('en-IN')}`}
+                        <div
+                          className={`relative text-2xl font-black transition-colors duration-500 ${
+                            studentFeeSummary.hasDues
+                              ? 'text-rose-950'
+                              : studentFeeSummary.isAdvance
+                              ? 'text-purple-950'
+                              : 'text-emerald-950'
+                          }`}
+                        >
+                          <AnimatedSettledCurrency
+                            hasDues={studentFeeSummary.hasDues}
+                            isAdvance={studentFeeSummary.isAdvance}
+                            balance={studentFeeSummary.balance}
+                            advanceAmount={studentFeeSummary.advanceAmount}
+                            settlement={studentFeeSettlement}
+                          />
                         </div>
-                        <div className={`text-[11px] mt-1 ${
-                          studentFeeSummary.hasDues
-                            ? 'text-rose-700'
-                            : studentFeeSummary.isAdvance
-                            ? 'text-purple-700'
-                            : 'text-emerald-700'
-                        }`}>
+                        <div
+                          key={studentFeeSettlement.justSettled ? `sub-${studentFeeSettlement.settlementEpoch}` : 'sub-normal'}
+                          className={`relative text-[11px] mt-1 transition-colors duration-500 ${
+                            studentFeeSummary.hasDues
+                              ? 'text-rose-700'
+                              : studentFeeSummary.isAdvance
+                              ? 'text-purple-700'
+                              : 'text-emerald-700 font-semibold'
+                          } ${studentFeeSettlement.justSettled && !studentFeeSummary.hasDues ? 'animate-fee-text-settle' : ''}`}
+                        >
                           {studentFeeSummary.hasDues
                             ? 'कृपया अंतिम तिथि से पूर्व स्कूल कार्यालय में जमा कराएं'
                             : studentFeeSummary.isAdvance
                             ? `₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')} अग्रिम जमा है (भविष्य के शुल्क में समायोजित होगा)`
+                            : studentFeeSettlement.justSettled
+                            ? '✨ बधाई! आपका बकाया शुल्क सफलतापूर्वक चुकता हो गया है।'
                             : 'धन्यवाद! सभी वर्तमान देय राशि जमा है'}
                         </div>
                       </div>
@@ -9565,7 +9894,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       <ParentUpiFeeSection
                         student={selectedStudent}
                         pendingDue={studentFeeSummary.hasDues ? studentFeeSummary.balance : 0}
-                        monthlyTuition={studentFeeSummary.monthlyTuition || 450}
+                        monthlyTuition={studentFeeSummary.monthlyTuition ?? 0}
                         getClassName={getClassName}
                         onFeeSynced={() => fetchFeeCollection()}
                         siblings={
@@ -9573,7 +9902,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             ? parentFamilyFeeSummary.members.map((m) => ({
                                 student: m.student,
                                 pendingDue: m.dueAmount,
-                                monthlyTuition: m.metrics.monthlyTuition || 450,
+                                monthlyTuition: m.metrics.monthlyTuition ?? 0,
                               }))
                             : undefined
                         }
@@ -13974,7 +14303,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             <span className="text-blue-950 font-black">कुल सत्र शुल्क: ₹{metrics.totalSessionFee.toLocaleString('en-IN')}</span>
                           </div>
                           <div className="text-slate-600 leading-normal">
-                            प्रवेश शुल्क: <strong>₹{(metrics.admissionFee || 1000).toLocaleString('en-IN')}</strong> + {metrics.totalSessionFee - (metrics.admissionFee || 1000) - (metrics.otherBilledFees || 0)} ({selectedStudentDetail.Session_Start_Month || 'April'} से {new Date().toLocaleString('en-US', { month: 'long' })}) • दर: ₹{(metrics.monthlyTuition || 450).toLocaleString('en-IN')}/माह{Number(metrics.otherBilledFees || 0) > 0 ? <span> • पुस्तकें/अन्य: <strong>+₹{Number(metrics.otherBilledFees).toLocaleString('en-IN')}</strong></span> : null} • कुल जमा: <strong>₹{metrics.totalPaid.toLocaleString('en-IN')}</strong>{Number(metrics.totalDiscount || 0) > 0 ? <span> • छूट/रियायत: <strong className="text-amber-700 font-bold">-₹{Number(metrics.totalDiscount).toLocaleString('en-IN')}</strong></span> : null} • {isDue ? `शुद्ध बकाया: ₹${bal}` : bal < 0 ? `अग्रिम: ₹${Math.abs(bal)}` : 'पूर्ण चुकता'}
+                            प्रवेश शुल्क: <strong>₹{(metrics.admissionFee ?? 0).toLocaleString('en-IN')}</strong> + {Math.max(0, metrics.totalSessionFee - (metrics.admissionFee ?? 0) - (metrics.otherBilledFees || 0))} ({selectedStudentDetail.Session_Start_Month || 'April'} से {new Date().toLocaleString('en-US', { month: 'long' })}) • दर: ₹{(metrics.monthlyTuition ?? 0).toLocaleString('en-IN')}/माह{isStudentFeeExempt(selectedStudentDetail) ? <span className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 font-bold text-[10px]">फ़ीस माफ (₹0 Auto)</span> : null}{Number(metrics.otherBilledFees || 0) > 0 ? <span> • जोड़ी गई मदें: <strong>+₹{Number(metrics.otherBilledFees).toLocaleString('en-IN')}</strong></span> : null} • कुल जमा: <strong>₹{metrics.totalPaid.toLocaleString('en-IN')}</strong>{Number(metrics.totalDiscount || 0) > 0 ? <span> • छूट/रियायत: <strong className="text-amber-700 font-bold">-₹{Number(metrics.totalDiscount).toLocaleString('en-IN')}</strong></span> : null} • {isDue ? `शुद्ध बकाया: ₹${bal}` : bal < 0 ? `अग्रिम: ₹${Math.abs(bal)}` : 'पूर्ण चुकता'}
                           </div>
                         </div>
                       );

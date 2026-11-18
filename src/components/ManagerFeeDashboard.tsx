@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { getLocalDateYMD } from '../utils/localTime';
 import {
   ResponsiveContainer,
@@ -22,13 +22,14 @@ import {
   computeSchoolFeeTotals,
   computeReceiptBalance,
   calculateStudentSummary,
+  isStudentFeeExempt,
 } from '../utils/feeCalculation';
 import {
   buildFamilyGroups,
   buildFamilyWhatsappDueReminder,
   FamilyFeeSummary,
 } from '../utils/familyFeeHelper';
-import { APPS_SCRIPT_FEE_CODE } from '../utils/feeMaster';
+import { APPS_SCRIPT_FEE_CODE, FREE_STUDENTS_UPDATED_EVENT } from '../utils/feeMaster';
 import {
   DEFAULT_UPI_SETTINGS,
   loadLocalUpiSettings,
@@ -310,6 +311,13 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [classFilter, setClassFilter] = useState<string>('all');
   const [selectedStudent, setSelectedStudent] = useState<StudentRecordForScan | null>(initialSelectedStudent);
+  const [waiverVersion, setWaiverVersion] = useState<number>(0);
+
+  useEffect(() => {
+    const handleWaiverChange = () => setWaiverVersion((v) => v + 1);
+    window.addEventListener(FREE_STUDENTS_UPDATED_EVENT, handleWaiverChange);
+    return () => window.removeEventListener(FREE_STUDENTS_UPDATED_EVENT, handleWaiverChange);
+  }, []);
   const [activeViewMode, setActiveViewMode] = useState<'trends' | 'student' | 'family' | 'allLedger' | 'upiQueue'>('trends');
   const [familySearchQuery, setFamilySearchQuery] = useState<string>('');
   const [familyFilterMode, setFamilyFilterMode] = useState<'all' | 'multi' | 'dues'>('multi');
@@ -708,7 +716,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
   // All families grouped by normalized 10-digit Parent Mobile
   const allFamilyGroups = useMemo(() => {
     return buildFamilyGroups(students as Student[], feeRecords);
-  }, [students, feeRecords]);
+  }, [students, feeRecords, waiverVersion]);
 
   // Filtered family groups for Family Fee tab
   const filteredFamilies = useMemo(() => {
@@ -735,7 +743,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
     return buildFamilyGroups(students as Student[], feeRecords, searchTerm).filter(
       (f) => f.members.length > 1 || /^\d{4,}$/.test(searchTerm.trim().replace(/\D/g, ''))
     );
-  }, [students, feeRecords, searchTerm]);
+  }, [students, feeRecords, searchTerm, waiverVersion]);
 
   const activeSelectedFamily = useMemo(() => {
     if (selectedFamilyKey) {
@@ -816,7 +824,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
       startMonth: summary.startMonth,
       currentMonth: summary.currentMonth,
     };
-  }, [selectedStudent, feeRecords]);
+  }, [selectedStudent, feeRecords, waiverVersion]);
 
   // Overall School Fee Metrics (Calculated on individual student totals to prevent duplicate entries)
   const schoolFeeTotals = useMemo(() => {
@@ -828,7 +836,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
       totalAdvance: totals.totalAdvance,
       totalBilled: totals.totalBilled,
     };
-  }, [students, feeRecords]);
+  }, [students, feeRecords, waiverVersion]);
 
   // Filtered All School Ledger (Default sorting order: Newest / Latest entries at the TOP)
   const filteredAllLedger = useMemo(() => {
@@ -2433,15 +2441,19 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                         <span>मासिक शिक्षण शुल्क ({studentFeeSummary.elapsedMonths} माह)</span>
                       </div>
                       <div className="text-xs text-blue-900 mt-0.5">
-                        देय: <strong>₹{(studentFeeSummary.tuitionBilled || (studentFeeSummary.monthlyTuition * studentFeeSummary.elapsedMonths)).toLocaleString('en-IN')}</strong> • जमा: <strong>₹{(studentFeeSummary.tuitionPaid || 0).toLocaleString('en-IN')}</strong>
+                        देय: <strong>₹{(studentFeeSummary.tuitionBilled ?? (studentFeeSummary.monthlyTuition * studentFeeSummary.elapsedMonths)).toLocaleString('en-IN')}</strong> • जमा: <strong>₹{(studentFeeSummary.tuitionPaid || 0).toLocaleString('en-IN')}</strong>
                       </div>
                     </div>
                     <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${
-                      (studentFeeSummary.tuitionDue || 0) <= 0
+                      isStudentFeeExempt(selectedStudent) && (studentFeeSummary.tuitionDue || 0) <= 0
+                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                        : (studentFeeSummary.tuitionDue || 0) <= 0
                         ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
                         : 'bg-rose-100 text-rose-800 border-rose-300'
                     }`}>
-                      {(studentFeeSummary.tuitionDue || 0) <= 0
+                      {isStudentFeeExempt(selectedStudent) && (studentFeeSummary.tuitionDue || 0) <= 0
+                        ? 'फ़ीस माफ (₹0 Auto)'
+                        : (studentFeeSummary.tuitionDue || 0) <= 0
                         ? 'पूर्ण चुकता'
                         : `बकाया ₹${(studentFeeSummary.tuitionDue || 0).toLocaleString('en-IN')}`}
                     </span>
@@ -4028,7 +4040,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                     <span>100% फीस माफी छात्र सुरक्षा</span>
                   </div>
                   <p className="text-[11px] text-emerald-900 leading-relaxed">
-                    जिन छात्रों पर 'Fee_Waiver' या '100% Free Student' या 'RTE' टैग है, उनकी <strong>केवल मासिक ट्यूशन फीस माफ</strong> है। एडमिशन, बुक्स व एग्जाम फीस सामान्य रूप से देय रहेगी।
+                    जिन छात्रों पर 'Fee_Waiver' या '100% Free Student' या 'RTE' टैग है, उनकी <strong>ऑटो-कैलकुलेटेड ट्यूशन व डिफ़ॉल्ट फीस ₹0</strong> रहती है। केवल वही फीस (जैसे एडमिशन, ऑटो/वाहन, बुक्स, एग्जाम आदि) देय होगी जो अलग से जोड़ी गई है।
                   </p>
                 </div>
               </div>

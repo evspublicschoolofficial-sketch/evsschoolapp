@@ -9,6 +9,7 @@ import {
   FamilyFeeSummary,
 } from '../utils/familyFeeHelper';
 import { getStandardFeeAmount } from '../utils/feeMaster';
+import { isStudentFeeExempt } from '../utils/feeCalculation';
 import { openWhatsappAlert } from '../utils/whatsappReminders';
 
 interface FamilyFeeCollectionModalProps {
@@ -141,7 +142,9 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
     activeFamily.members.forEach((m) => {
       const st = m.student;
       const due = m.dueAmount;
-      const stdTuition = getStandardFeeAmount(st.Class, 'Monthly Tuition Fee', st as any) || 450;
+      const stdTuition = isStudentFeeExempt(st)
+        ? 0
+        : (getStandardFeeAmount(st.Class, 'Monthly Tuition Fee', st as any) || 450);
       const defaultTotal = due > 0 ? due : stdTuition;
       nextRows[st.Student_ID] = {
         selected: due > 0 || activeFamily.totalDue === 0,

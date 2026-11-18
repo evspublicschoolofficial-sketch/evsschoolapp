@@ -230,7 +230,7 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
     );
 
     const monthlyDiscount = Number((selectedStudent as any).Monthly_Discount || (selectedStudent as any).Discount_Per_Month || 0) || 0;
-    const baseMonthlyRate = getStandardFeeAmount(selectedStudent.Class, 'Monthly Tuition Fee', selectedStudent as any) || 600;
+    const baseMonthlyRate = freeStudentInfo.isFree ? 0 : (getStandardFeeAmount(selectedStudent.Class, 'Monthly Tuition Fee', selectedStudent as any) || 600);
     const effectiveMonthlyRate = Math.max(0, baseMonthlyRate - monthlyDiscount);
 
     // Map payments and discounts per month (STRICTLY for Tuition records)
@@ -796,7 +796,7 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
                       </span>
                     </div>
                     <p className="text-[11px] text-emerald-900 mt-0.5">
-                      {freeStudentInfo.reason} • <strong>केवल मासिक ट्यूशन फीस ₹0 है।</strong> एडमिशन, बुक्स और एग्जाम फीस सामान्य दर पर ली जाएगी।
+                      {freeStudentInfo.reason} • <strong>ऑटो-कैलकुलेटेड ट्यूशन व डिफ़ॉल्ट फीस ₹0 है।</strong> केवल एडमिशन, ऑटो/वाहन, बुक्स या अन्य जोड़ी गई फीस ही देय होगी।
                     </p>
                   </div>
                 </div>

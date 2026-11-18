@@ -1254,6 +1254,12 @@ async function startServer() {
     return null;
   }
 
+  let localGitHeadSha = '';
+  try {
+    const { execSync } = await import('child_process');
+    localGitHeadSha = String(execSync('git rev-parse HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }) || '').trim();
+  } catch {}
+
   app.get('/api/app-version', async (_req, res) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
@@ -1262,7 +1268,7 @@ async function startServer() {
     let version = SERVER_BOOT_VERSION;
     let builtAt = SERVER_BOOT_AT;
     let mode = process.env.NODE_ENV === 'production' ? 'production' : 'dev';
-    let builtSha = String(process.env.GITHUB_SHA || process.env.COMMIT_SHA || '').trim();
+    let builtSha = String(process.env.GITHUB_SHA || process.env.COMMIT_SHA || localGitHeadSha || '').trim();
 
     try {
       const distVersionFile = path.join(process.cwd(), 'dist', 'version.json');

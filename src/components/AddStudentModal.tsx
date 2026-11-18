@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
 import { Student } from '../App';
 import { formatStudentPhotoUrl } from './StudentAvatar';
+import { isFreeStudent, tagStudentWaiver } from '../utils/feeMaster';
 
 export interface NewStudentData {
   Student_ID: string;
@@ -66,6 +67,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
   const [villageRoute, setVillageRoute] = useState<string>('');
   const [openingBalance, setOpeningBalance] = useState<string>('0');
   const [feeDiscount, setFeeDiscount] = useState<string>('0');
+  const [isFeeWaived, setIsFeeWaived] = useState<boolean>(false);
   const [sessionStartMonth, setSessionStartMonth] = useState<string>('April');
   const [studentPhotoUrl, setStudentPhotoUrl] = useState<string>('');
   const [photoCompressing, setPhotoCompressing] = useState<boolean>(false);
@@ -187,6 +189,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
         setVillageRoute(studentToEdit['Village/rRoute'] || studentToEdit.Village || '');
         setOpeningBalance(studentToEdit.Balance_Amount !== undefined ? String(studentToEdit.Balance_Amount) : '0');
         setFeeDiscount(studentToEdit.Discount !== undefined && studentToEdit.Discount !== null ? String(studentToEdit.Discount) : (studentToEdit.Monthly_Discount !== undefined && studentToEdit.Monthly_Discount !== null ? String(studentToEdit.Monthly_Discount) : '0'));
+        setIsFeeWaived(isFreeStudent(studentToEdit as any).isFree);
         setSessionStartMonth(studentToEdit.Session_Start_Month || 'April');
         setStudentPhotoUrl(studentToEdit.Student_Photo || '');
         setSendWelcomeWhatsApp(false);
@@ -232,6 +235,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
         setVillageRoute('');
         setOpeningBalance('0');
         setFeeDiscount('0');
+        setIsFeeWaived(false);
         setSessionStartMonth('April');
         setStudentPhotoUrl('');
         setSendWelcomeWhatsApp(true);
@@ -340,11 +344,19 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
         Monthly_Discount: feeDiscount ? parseFloat(feeDiscount) || 0 : 0,
         Fee_Discount: feeDiscount ? parseFloat(feeDiscount) || 0 : 0,
         Session_Start_Month: sessionStartMonth || 'April',
+        Fee_Waiver: isFeeWaived ? 'TRUE' : 'FALSE',
+        Is_Free_Student: isFeeWaived,
         Student_Photo: studentPhotoUrl.trim(),
         'QR code': generatedQrUrl,
         'QR_code': generatedQrUrl,
         QRCode: generatedQrUrl,
       };
+
+      tagStudentWaiver(
+        sId,
+        isFeeWaived,
+        isFeeWaived ? '100% Fee Waived (प्रबंधक द्वारा फीस माफ)' : ''
+      );
 
       const result: any = await onStudentAdded(newStudent, sendWelcomeWhatsApp);
       setIsSubmitting(false);
@@ -804,6 +816,38 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
               />
             </div>
           </div>
+
+          {/* 100% Fee Waiver (Free Student) Toggle */}
+          <label className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 cursor-pointer transition-colors ${
+            isFeeWaived ? 'bg-emerald-50 border-emerald-400' : 'bg-slate-50 border-slate-200 hover:bg-slate-100/70'
+          }`}>
+            <div className="flex items-start gap-2.5">
+              <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${
+                isFeeWaived ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-600'
+              }`}>
+                <i className="fa-solid fa-graduation-cap text-sm"></i>
+              </div>
+              <div>
+                <div className="text-xs font-black text-slate-900 flex items-center gap-2">
+                  <span>100% फीस माफी / Fee Waiver (Free Student)</span>
+                  {isFeeWaived && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-200 text-emerald-900 font-bold">
+                      WAIVED ✓
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] text-slate-600 mt-0.5 leading-snug">
+                  सक्रिय करने पर ऑटो-कैलकुलेटेड ट्यूशन व डिफ़ॉल्ट फीस <strong>₹0</strong> रहेगी। केवल एडमिशन, ऑटो/वाहन या बुक्स जैसी जोड़ी गई फीस ही ली जाएगी।
+                </p>
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              checked={isFeeWaived}
+              onChange={(e) => setIsFeeWaived(e.target.checked)}
+              className="w-5 h-5 accent-emerald-600 rounded cursor-pointer shrink-0"
+            />
+          </label>
 
           {/* WhatsApp Notification Toggle */}
           <div className="p-3.5 bg-emerald-50/70 border border-emerald-200 rounded-2xl flex items-center justify-between gap-3">

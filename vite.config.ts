@@ -123,10 +123,18 @@ function pwaBuildVersionPlugin(buildVersion: string, isBuild: boolean): Plugin {
       if (!fs.existsSync(distDir)) return;
 
       // 1. Write fresh dist/version.json matching __APP_BUILD_ID__
+      let githubSha = String(process.env.GITHUB_SHA || process.env.COMMIT_SHA || '').trim();
+      if (!githubSha) {
+        try {
+          const { execSync } = require('child_process');
+          githubSha = String(execSync('git rev-parse HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }) || '').trim();
+        } catch {}
+      }
       const versionPayload = {
         version: buildVersion,
         mode: 'production',
         builtAt: new Date().toISOString(),
+        githubSha: githubSha || undefined,
       };
       fs.writeFileSync(
         path.join(distDir, 'version.json'),

@@ -1,6 +1,13 @@
 // PWA Live Update Manager for E.V.S. Public School
 // Detects GitHub/Server builds both via Service Worker waiting state AND live version.json / /api/app-version checks.
 
+import {
+  dispatchGitHubFullReload,
+  getSyncedGitHubSha,
+  setPendingFullReloadAfterUpdate,
+  setSyncedGitHubSha,
+} from './phoneMemoryCache';
+
 export interface PWAUpdateState {
   updateAvailable: boolean;
   isChecking: boolean;
@@ -222,6 +229,20 @@ export async function checkForAppUpdate(isManual = false): Promise<boolean> {
     // 2. Check live server build version & GitHub commit updates
     const serverInfo = await fetchLiveServerVersion();
     if (serverInfo?.version) {
+      if (serverInfo.githubLatestSha) {
+        const prevSyncedSha = getSyncedGitHubSha();
+        if (!prevSyncedSha) {
+          setSyncedGitHubSha(serverInfo.githubLatestSha);
+        } else if (prevSyncedSha !== serverInfo.githubLatestSha) {
+          setSyncedGitHubSha(serverInfo.githubLatestSha);
+          dispatchGitHubFullReload({
+            reason: 'github-sha-changed',
+            githubSha: serverInfo.githubLatestSha,
+            version: serverInfo.version,
+          });
+        }
+      }
+
       if (serverInfo.hasGitHubUpdate) {
         foundUpdate = true;
         setState({ latestVersion: serverInfo.githubLatestSha || serverInfo.version });
@@ -271,9 +292,10 @@ export async function applyPWAUpdate(): Promise<void> {
   setState({ isUpdating: true, checkFeedback: null });
 
   try {
-    // Remember to display friendly "Updated!" banner after reload (NEVER touch localStorage!)
+    // Remember to display friendly "Updated!" banner AND trigger full school data reload after reload
     try {
       sessionStorage.setItem(JUST_UPDATED_KEY, '1');
+      setPendingFullReloadAfterUpdate();
     } catch {}
 
     // 1. Activate any waiting Service Worker
