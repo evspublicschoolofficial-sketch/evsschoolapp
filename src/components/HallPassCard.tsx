@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { HallPassConfig, Student } from '../types';
+import { HallPassConfig } from '../types';
 import { getExamDisplayTitle, StudentHallPassEligibility } from '../utils/hallPassHelper';
 
 interface HallPassCardProps {
@@ -10,6 +10,7 @@ interface HallPassCardProps {
   qrDataUrl?: string;
   variant?: 'a4_grid_9' | 'parent_standalone';
   showCutBorder?: boolean;
+  showClassOnCard?: boolean;
 }
 
 const getInitials = (name?: string): string => {
@@ -27,6 +28,7 @@ export const HallPassCard: React.FC<HallPassCardProps> = ({
   qrDataUrl,
   variant = 'a4_grid_9',
   showCutBorder = true,
+  showClassOnCard = false,
 }) => {
   const { student } = item;
   const [imgErr, setImgErr] = useState(false);
@@ -42,48 +44,50 @@ export const HallPassCard: React.FC<HallPassCardProps> = ({
     item.status === 'WAIVED'
       ? 'FEE WAIVED · CLEARED'
       : item.status === 'OVERRIDE_ALLOWED'
-      ? 'PROVISIONAL PASS'
+      ? 'ALLOWED · PROVISIONAL'
       : item.status === 'CLEARED'
       ? 'FEE CLEARED · ELIGIBLE'
-      : `FEE DUE ₹${item.dueAmount.toLocaleString('en-IN')}`;
+      : `FEE DUE: ₹${item.dueAmount.toLocaleString('en-IN')}`;
 
   return (
     <div
-      className={`hall-pass-slot relative flex flex-col justify-between bg-white text-slate-900 overflow-hidden select-none ${
+      className={`hall-pass-slot relative flex flex-col justify-between bg-white text-black overflow-hidden select-none ${
         isStandalone
-          ? 'w-full max-w-[360px] mx-auto rounded-xl border-2 border-[#0c2340] shadow-md'
-          : `h-full w-full rounded-[3px] ${
-              showCutBorder ? 'border border-dashed border-slate-400 p-[1.5mm]' : 'p-[0.5mm]'
-            }`
+          ? 'w-full max-w-[380px] mx-auto rounded-xl border-2 border-[#0c2340] shadow-md'
+          : `h-full w-full ${showCutBorder ? 'border border-dashed border-slate-500 p-[0.7mm]' : ''}`
       }`}
     >
       <div
         className={`flex flex-col justify-between h-full w-full bg-white overflow-hidden ${
-          isStandalone ? '' : 'border-[1.2pt] border-[#0c2340] rounded-[2px]'
+          isStandalone ? '' : 'border-[1.4pt] border-[#0c2340] rounded-[2px]'
         }`}
       >
-        {/* TOP SCHOOL & EXAM BAND */}
-        <div className="bg-[#0c2340] text-white px-2 py-1.5 border-b-[2px] border-amber-400">
-          <div className="flex items-center justify-between gap-1">
+        {/* TOP OFFICIAL SCHOOL & EXAM HEADER */}
+        <div
+          className={`bg-[#0c2340] text-white border-b-[2.5px] border-amber-400 ${
+            isStandalone ? 'px-3.5 py-2.5' : 'px-2.5 py-1.5'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-1.5">
             <div className="min-w-0">
               <div
-                className={`font-black tracking-wide uppercase leading-tight truncate ${
-                  isStandalone ? 'text-sm' : 'text-[9.5px]'
+                className={`font-black tracking-wide uppercase leading-none truncate ${
+                  isStandalone ? 'text-base' : 'text-[11.5px]'
                 }`}
               >
                 E.V.S. PUBLIC SCHOOL
               </div>
               <div
-                className={`text-blue-200 font-semibold leading-tight truncate ${
-                  isStandalone ? 'text-[10px]' : 'text-[7px]'
+                className={`text-blue-100 font-semibold leading-tight truncate mt-0.5 ${
+                  isStandalone ? 'text-[11px]' : 'text-[8px]'
                 }`}
               >
                 Chilkana Sultanpur, Saharanpur (U.P.)
               </div>
             </div>
             <div
-              className={`shrink-0 bg-amber-400 text-slate-950 font-black uppercase rounded-[2px] px-1.5 py-0.5 leading-none ${
-                isStandalone ? 'text-[10px]' : 'text-[7px]'
+              className={`shrink-0 bg-amber-400 text-slate-950 font-black uppercase rounded-[2px] px-1.5 py-0.5 leading-none border border-amber-200 ${
+                isStandalone ? 'text-[11px]' : 'text-[8.5px]'
               }`}
             >
               HALL PASS
@@ -91,26 +95,27 @@ export const HallPassCard: React.FC<HallPassCardProps> = ({
           </div>
 
           <div
-            className={`mt-1 pt-0.5 border-t border-white/15 flex items-center justify-between gap-1 font-bold text-amber-300 leading-tight ${
-              isStandalone ? 'text-[11px]' : 'text-[7.5px]'
+            className={`mt-1 pt-1 border-t border-white/20 flex items-center justify-between gap-1 font-extrabold text-amber-300 leading-none ${
+              isStandalone ? 'text-xs' : 'text-[9px]'
             }`}
           >
-            <span className="truncate uppercase">{examTitle}</span>
-            <span className="shrink-0 tabular-nums text-white/90">{config.session}</span>
+            <span className="truncate uppercase tracking-wide">{examTitle}</span>
+            <span className="shrink-0 tabular-nums text-white font-bold">{config.session}</span>
           </div>
         </div>
 
-        {/* STUDENT IDENTITY BODY */}
+        {/* MAIN IDENTITY & FEE STATUS BODY (Tightly proportioned with high-contrast large print typography) */}
         <div
           className={`flex-1 flex flex-col justify-between bg-white ${
-            isStandalone ? 'p-3.5 gap-3' : 'px-2 py-1.5 gap-1'
+            isStandalone ? 'p-4 gap-3.5' : 'px-2.5 py-2 gap-1.5'
           }`}
         >
-          <div className={`flex items-start ${isStandalone ? 'gap-3' : 'gap-1.5'}`}>
-            {/* Photo Box */}
+          {/* Student Photo + Large Name / ID / Roll Row */}
+          <div className={`flex items-stretch ${isStandalone ? 'gap-3.5' : 'gap-2'}`}>
+            {/* Student Photo */}
             <div
-              className={`shrink-0 rounded-[2px] border border-slate-300 bg-slate-100 overflow-hidden flex items-center justify-center ${
-                isStandalone ? 'w-16 h-20' : 'w-[14mm] h-[17mm]'
+              className={`shrink-0 rounded-[3px] border-[1.2pt] border-[#0c2340] bg-slate-100 overflow-hidden flex items-center justify-center ${
+                isStandalone ? 'w-20 h-24' : 'w-[17mm] h-[21mm]'
               }`}
             >
               {photoUrl && !imgErr ? (
@@ -122,85 +127,99 @@ export const HallPassCard: React.FC<HallPassCardProps> = ({
                   className="w-full h-full object-cover"
                 />
               ) : (
-                <div className="w-full h-full bg-slate-100 text-[#0c2340] flex items-center justify-center font-black text-xs">
+                <div className="w-full h-full bg-slate-100 text-[#0c2340] flex items-center justify-center font-black text-sm">
                   {getInitials(student.Student_Name)}
                 </div>
               )}
             </div>
 
-            {/* Identity Details */}
-            <div className="flex-1 min-w-0 space-y-0.5">
-              <div
-                className={`font-black text-[#0c2340] leading-tight truncate uppercase ${
-                  isStandalone ? 'text-sm' : 'text-[9.5px]'
-                }`}
-                title={student.Student_Name}
-              >
-                {student.Student_Name}
-              </div>
-
-              <div
-                className={`text-slate-600 font-semibold leading-tight truncate ${
-                  isStandalone ? 'text-xs' : 'text-[7.5px]'
-                }`}
-              >
-                S/o · D/o {student.Father_Name || '—'}
-              </div>
-
-              <div
-                className={`grid grid-cols-2 gap-x-1.5 gap-y-0.5 pt-0.5 border-t border-slate-200 ${
-                  isStandalone ? 'text-xs mt-1.5 pt-1.5' : 'text-[7.5px]'
-                }`}
-              >
-                <div className="truncate">
-                  <span className="text-slate-500">Class: </span>
-                  <strong className="text-slate-900">{classNameLabel}</strong>
+            {/* Student Name, Father, Prominent School ID & Roll No */}
+            <div className="flex-1 min-w-0 flex flex-col justify-between">
+              <div>
+                <div
+                  className={`font-black text-black leading-tight uppercase line-clamp-2 ${
+                    isStandalone ? 'text-base' : 'text-[13px]'
+                  }`}
+                  title={student.Student_Name}
+                >
+                  {student.Student_Name}
                 </div>
-                <div className="truncate tabular-nums">
-                  <span className="text-slate-500">Roll: </span>
-                  <strong className="text-[#0c2340] font-black">
+                <div
+                  className={`text-slate-800 font-bold leading-tight truncate mt-0.5 ${
+                    isStandalone ? 'text-xs' : 'text-[9.5px]'
+                  }`}
+                >
+                  S/o · D/o {student.Father_Name || '—'}
+                </div>
+              </div>
+
+              {/* Prominent ID & Roll Boxes (Unmistakable at a glance) */}
+              <div className={`grid grid-cols-2 gap-1.5 mt-1 ${isStandalone ? 'mt-2' : ''}`}>
+                <div className="border-[1.1pt] border-[#0c2340] bg-slate-50 rounded-[3px] px-1.5 py-0.5 leading-tight">
+                  <div className={`text-slate-600 font-bold uppercase leading-none ${isStandalone ? 'text-[9px]' : 'text-[7px]'}`}>
+                    SCHOOL ID
+                  </div>
+                  <div className={`font-black text-[#0c2340] tabular-nums tracking-tight truncate ${isStandalone ? 'text-sm mt-0.5' : 'text-[12px] mt-[1px]'}`}>
+                    {student.Student_ID}
+                  </div>
+                </div>
+
+                <div className="border-[1.1pt] border-[#0c2340] bg-slate-50 rounded-[3px] px-1.5 py-0.5 leading-tight">
+                  <div className={`text-slate-600 font-bold uppercase leading-none ${isStandalone ? 'text-[9px]' : 'text-[7px]'}`}>
+                    ROLL NO.
+                  </div>
+                  <div className={`font-black text-black tabular-nums truncate ${isStandalone ? 'text-sm mt-0.5' : 'text-[12px] mt-[1px]'}`}>
                     {student.Roll_Number || '—'}
-                  </strong>
-                </div>
-                <div className="truncate tabular-nums col-span-2">
-                  <span className="text-slate-500">ID / Adm: </span>
-                  <strong className="text-slate-800">{student.Student_ID}</strong>
-                  {student.Admission_Number ? (
-                    <span className="text-slate-500"> ({student.Admission_Number})</span>
-                  ) : null}
+                  </div>
                 </div>
               </div>
+
+              {showClassOnCard && (
+                <div className={`text-slate-800 font-bold leading-none mt-1 truncate ${isStandalone ? 'text-xs' : 'text-[8.5px]'}`}>
+                  Class: <span className="font-black text-black">{classNameLabel}</span>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Schedule + Eligibility Row */}
-          <div
-            className={`border-t border-b border-slate-200 flex items-center justify-between gap-1 ${
-              isStandalone ? 'py-2 text-[11px]' : 'py-[2px] text-[7px]'
-            }`}
-          >
-            <span className="text-slate-700 font-semibold truncate">
-              {config.examScheduleLine || 'Timing: 09:00 AM - 12:00 PM'}
-            </span>
-            <span
-              className={`shrink-0 font-black uppercase tabular-nums ${
+          {/* Highlighted Fee Status & Timing Strip */}
+          <div className="space-y-1">
+            <div
+              className={`border-[1.2pt] rounded-[3px] px-2 py-1 flex items-center justify-between gap-1 ${
                 item.status === 'FEE_HOLD'
-                  ? 'text-rose-700'
+                  ? 'border-rose-700 bg-rose-50 text-rose-900'
                   : item.status === 'OVERRIDE_ALLOWED'
-                  ? 'text-amber-700'
-                  : 'text-emerald-700'
+                  ? 'border-amber-700 bg-amber-50 text-amber-950'
+                  : 'border-emerald-700 bg-emerald-50 text-emerald-950'
               }`}
             >
-              {statusText}
-            </span>
+              <span className={`font-bold uppercase tracking-wide ${isStandalone ? 'text-[11px]' : 'text-[8px]'}`}>
+                FEE STATUS
+              </span>
+              <span
+                className={`font-black uppercase tabular-nums tracking-tight ${
+                  isStandalone ? 'text-sm' : 'text-[11.5px]'
+                }`}
+              >
+                {statusText}
+              </span>
+            </div>
+
+            <div
+              className={`text-slate-900 font-bold border-b border-slate-300 pb-1 truncate ${
+                isStandalone ? 'text-xs' : 'text-[8.5px]'
+              }`}
+            >
+              {config.examScheduleLine || 'Timing: 09:00 AM - 12:00 PM'}
+            </div>
           </div>
 
-          {/* Footer: QR + Instruction + Principal Sign */}
-          <div className="flex items-end justify-between gap-1.5 pt-0.5">
-            <div className="flex items-center gap-1.5 min-w-0">
+          {/* Bottom Row: Large QR Code + Instructions + Principal Sign */}
+          <div className="flex items-end justify-between gap-2 pt-0.5">
+            <div className="flex items-end gap-2 min-w-0">
               <div
-                className={`shrink-0 border border-slate-300 bg-white rounded-[2px] p-[1px] flex items-center justify-center ${
-                  isStandalone ? 'w-14 h-14' : 'w-[12.5mm] h-[12.5mm]'
+                className={`shrink-0 border-[1.2pt] border-[#0c2340] bg-white rounded-[3px] p-[1.5px] flex items-center justify-center ${
+                  isStandalone ? 'w-20 h-20' : 'w-[21mm] h-[21mm]'
                 }`}
               >
                 {qrDataUrl ? (
@@ -210,22 +229,26 @@ export const HallPassCard: React.FC<HallPassCardProps> = ({
                     className="w-full h-full object-contain"
                   />
                 ) : (
-                  <span className="text-[7px] font-mono text-slate-400">QR</span>
+                  <span className="text-[8px] font-mono text-slate-500">QR</span>
                 )}
               </div>
-              <div
-                className={`text-slate-600 leading-tight line-clamp-3 ${
-                  isStandalone ? 'text-[10px]' : 'text-[6.5px]'
-                }`}
-              >
-                {config.instructionLine || 'Bring Hall Pass & School ID daily.'}
+
+              <div className="min-w-0 pb-0.5">
+                <div
+                  className={`text-slate-800 font-semibold leading-snug line-clamp-3 ${
+                    isStandalone ? 'text-[11px]' : 'text-[7.5px]'
+                  }`}
+                >
+                  {config.instructionLine || 'Bring Hall Pass & School ID daily. Report 15 min prior.'}
+                </div>
               </div>
             </div>
 
-            <div className="shrink-0 text-right">
+            <div className="shrink-0 text-right pb-0.5">
+              <div className="h-5" />
               <div
-                className={`border-t border-slate-800 font-bold text-slate-800 whitespace-nowrap ${
-                  isStandalone ? 'text-[10px] pt-0.5 px-2' : 'text-[6.5px] pt-[1px] px-1'
+                className={`border-t-[1.2pt] border-black font-black text-black whitespace-nowrap ${
+                  isStandalone ? 'text-[11px] pt-0.5 px-2' : 'text-[8px] pt-[2px] px-1'
                 }`}
               >
                 Principal Sign.

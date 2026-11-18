@@ -241,34 +241,63 @@
 
   @page hallpass {
     size: A4 portrait;
-    margin: 5mm;
+    margin: 2.5mm;
   }
 
-  body.printing-hall-passes * {
-    visibility: hidden !important;
+  body.printing-hall-passes header,
+  body.printing-hall-passes footer,
+  body.printing-hall-passes .no-print,
+  body.printing-hall-passes *:not(#printable-hall-passes-root):not(:has(#printable-hall-passes-root)):not(#printable-hall-passes-root *) {
+    display: none !important;
   }
 
-  body.printing-hall-passes #printable-hall-passes-root,
-  body.printing-hall-passes #printable-hall-passes-root * {
-    visibility: visible !important;
+  body.printing-hall-passes,
+  body.printing-hall-passes #root,
+  body.printing-hall-passes #root *,
+  body.printing-hall-passes main,
+  body.printing-hall-passes main * {
+    animation: none !important;
+    transform: none !important;
+  }
+
+  body.printing-hall-passes,
+  body.printing-hall-passes #root,
+  body.printing-hall-passes #root > *,
+  body.printing-hall-passes main,
+  body.printing-hall-passes main > *,
+  body.printing-hall-passes div:has(> #printable-hall-passes-root),
+  body.printing-hall-passes div:has(> div > #printable-hall-passes-root) {
+    margin: 0 !important;
+    padding: 0 !important;
+    max-width: none !important;
+    width: 100% !important;
+    min-height: 0 !important;
+    background: #ffffff !important;
+    border: none !important;
+    box-shadow: none !important;
+    overflow: visible !important;
   }
 
   body.printing-hall-passes #printable-hall-passes-root {
     page: hallpass;
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 200mm;
+    position: static !important;
+    width: 100% !important;
     margin: 0 !important;
     padding: 0 !important;
+    overflow: visible !important;
     background: #ffffff !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
 
+  body.printing-hall-passes #printable-hall-passes-root > div {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
   body.printing-hall-passes .hall-pass-a4-page {
-    width: 200mm !important;
-    height: 286mm !important;
+    width: 100% !important;
+    height: 289mm !important;
     padding: 0 !important;
     margin: 0 !important;
     border: none !important;
@@ -276,10 +305,11 @@
     display: grid !important;
     grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
     grid-template-rows: repeat(3, minmax(0, 1fr)) !important;
-    gap: 2.5mm !important;
+    gap: 1.2mm !important;
     page-break-after: always;
     break-after: page;
     background: #ffffff !important;
+    box-sizing: border-box !important;
   }
 
   body.printing-hall-passes .hall-pass-a4-page:last-child {

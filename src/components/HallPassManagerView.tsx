@@ -41,6 +41,7 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'eligible' | 'hold'>('all');
   const [showCutBorder, setShowCutBorder] = useState<boolean>(true);
+  const [showClassOnCard, setShowClassOnCard] = useState<boolean>(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [hasInitializedSelection, setHasInitializedSelection] = useState<boolean>(false);
   const [savingConfig, setSavingConfig] = useState<boolean>(false);
@@ -209,9 +210,9 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
           if (!sid) continue;
           try {
             generated[sid] = await QRCodeLib.toDataURL(sid, {
-              width: 140,
+              width: 240,
               margin: 1,
-              color: { dark: '#0c2340', light: '#ffffff' },
+              color: { dark: '#000000', light: '#ffffff' },
             });
           } catch {}
         }
@@ -228,15 +229,26 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
 
   const handlePrint9PerA4 = () => {
     if (printableItems.length === 0) return;
+
+    // Force @page margin to minimal 2.5mm so 9 cards fill A4 edge-to-edge without wasted white borders
+    let pageStyleEl = document.getElementById('evs-hallpass-print-page-style') as HTMLStyleElement | null;
+    if (!pageStyleEl) {
+      pageStyleEl = document.createElement('style');
+      pageStyleEl.id = 'evs-hallpass-print-page-style';
+      document.head.appendChild(pageStyleEl);
+    }
+    pageStyleEl.textContent = `@media print { @page { size: A4 portrait; margin: 2.5mm !important; } }`;
+
     document.body.classList.add('printing-hall-passes');
     const cleanup = () => {
       document.body.classList.remove('printing-hall-passes');
+      document.getElementById('evs-hallpass-print-page-style')?.remove();
       window.removeEventListener('afterprint', cleanup);
     };
     window.addEventListener('afterprint', cleanup);
     setTimeout(() => {
       window.print();
-      setTimeout(cleanup, 1500);
+      setTimeout(cleanup, 2000);
     }, 80);
   };
 
@@ -389,6 +401,16 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
                 className="w-4 h-4 accent-[#0c2340] rounded"
               />
               <span>कैंची से काटने की डॉटेड लाइन दिखाएं</span>
+            </label>
+
+            <label className="inline-flex items-center gap-2 cursor-pointer font-semibold text-slate-700">
+              <input
+                type="checkbox"
+                checked={showClassOnCard}
+                onChange={(e) => setShowClassOnCard(e.target.checked)}
+                className="w-4 h-4 accent-[#0c2340] rounded"
+              />
+              <span>कार्ड पर क्लास दिखाएं</span>
             </label>
           </div>
 
@@ -611,7 +633,7 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
             </button>
           </div>
         ) : (
-          <div id="printable-hall-passes-root" className="space-y-6 overflow-x-auto pb-2">
+          <div id="printable-hall-passes-root" className="space-y-6 overflow-x-auto pb-2 print:space-y-0 print:overflow-visible print:pb-0">
             {a4Pages.map((pageItems, pageIdx) => {
               // Pad partial last page cleanly to 9 grid slots so rows stay uniform height on A4
               const slots: Array<(typeof allEligibility)[number] | null> = [...pageItems];
@@ -619,20 +641,20 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
                 slots.push(null);
               }
               return (
-                <div key={`a4-page-${pageIdx}`} className="space-y-1.5">
+                <div key={`a4-page-${pageIdx}`} className="space-y-1.5 print:space-y-0">
                   <div className="no-print text-[11px] font-bold text-slate-500 tabular-nums px-1">
                     A4 शीट {pageIdx + 1} / {a4Pages.length} · {pageItems.length} हॉल पास
                   </div>
                   <div
                     className="hall-pass-a4-page bg-white border border-slate-300 shadow-sm mx-auto"
                     style={{
-                      width: '200mm',
-                      height: '286mm',
-                      padding: '2mm',
+                      width: '205mm',
+                      height: '291mm',
+                      padding: '0',
                       display: 'grid',
                       gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
                       gridTemplateRows: 'repeat(3, minmax(0, 1fr))',
-                      gap: '2.5mm',
+                      gap: '1.2mm',
                       boxSizing: 'border-box',
                     }}
                   >
@@ -647,11 +669,12 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
                           qrDataUrl={qrMap[String(slotItem.student.Student_ID || '').trim()]}
                           variant="a4_grid_9"
                           showCutBorder={showCutBorder}
+                          showClassOnCard={showClassOnCard}
                         />
                       ) : (
                         <div
                           key={`empty-slot-${pageIdx}-${slotIdx}`}
-                          className={`hall-pass-slot rounded-[3px] ${
+                          className={`hall-pass-slot rounded-[2px] ${
                             showCutBorder ? 'border border-dashed border-slate-200/70' : ''
                           }`}
                         />
