@@ -1663,6 +1663,59 @@ export default function App() {
 
   // Driver Authentication State (from Users sheet / Bus tracking)
   const [driverUser, setDriverUser] = useState<SchoolUser | null>(initialSession.driverUser);
+  const [driverMagicBusId, setDriverMagicBusId] = useState<string | undefined>(() => {
+    try {
+      const p = new URLSearchParams(window.location.search).get('bus');
+      return p ? p.trim() : undefined;
+    } catch {
+      return undefined;
+    }
+  });
+  const [driverAutoTrackFromLink, setDriverAutoTrackFromLink] = useState<boolean>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('autoTrack') === '1' || params.get('autoTrack') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const magicDriverAttemptedRef = useRef<boolean>(false);
+
+  // 1-Click Magic Link Auto-Login ONLY for registered authorized drivers in Users sheet
+  useEffect(() => {
+    if (magicDriverAttemptedRef.current || usersList.length === 0) return;
+    try {
+      if (typeof window === 'undefined' || !window.location?.search) return;
+      const params = new URLSearchParams(window.location.search);
+      const qPortal = (params.get('portal') || params.get('role') || params.get('tab') || '').toLowerCase();
+      const qPhone = (params.get('driverPhone') || params.get('driver') || '').replace(/\D/g, '').slice(-10);
+      const qBus = (params.get('bus') || '').trim();
+      const qAuto = params.get('autoTrack') === '1' || params.get('autoTrack') === 'true';
+
+      if (qPortal === 'driver' && qPhone) {
+        const matched = usersList.find((u) => {
+          const uMobile = String(u.Mobile_number || '').replace(/\D/g, '').slice(-10);
+          const isDriverRole =
+            String(u.Designation || '').trim().toLowerCase() === 'driver' ||
+            String(u.Name || '').trim().toLowerCase().includes('amjad');
+          return isDriverRole && uMobile === qPhone;
+        });
+
+        if (matched) {
+          magicDriverAttemptedRef.current = true;
+          if (qBus) setDriverMagicBusId(qBus);
+          if (qAuto) setDriverAutoTrackFromLink(true);
+          purgeAllSessionsExcept('driver');
+          setDriverUser(matched);
+          setActiveTab('driver');
+          try {
+            localStorage.setItem('evs_logged_driver', JSON.stringify(matched));
+            localStorage.setItem('evs_active_tab', 'driver');
+          } catch {}
+        }
+      }
+    } catch {}
+  }, [usersList]);
 
   // Modal prompt when a user tries to access a different role while an active session exists
   const [roleSwitchModal, setRoleSwitchModal] = useState<{ targetRole: TabType; targetLabel: string } | null>(null);
@@ -14247,6 +14300,11 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         {activeTab === 'driver' && (
           <DriverPortal
             users={usersList}
+            initialBusId={driverMagicBusId}
+            autoStartFromLink={driverAutoTrackFromLink}
+            loggedDriverUser={driverUser}
+            onDriverLogin={handleDriverLogin}
+            onDriverLogout={handleDriverLogout}
             onBackToHome={() => setActiveTab('home')}
             onOpenManagerTracker={() => {
               setActiveTab('manager');

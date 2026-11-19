@@ -412,9 +412,13 @@ const DEFAULT_HALL_PASS_CONFIG = {
   examType: 'Half-Yearly',
   session: '2026-27',
   customExamTitle: '',
-  examScheduleLine: 'Timing: 09:00 AM - 12:00 PM',
-  instructionLine: 'Bring Hall Pass & School ID daily. Report 15 min prior.',
+  examScheduleLine: 'Exam: 09:30 AM - 12:00 PM (2.5 Hrs)',
+  instructionLine: 'Bring Hall Pass, School ID & stationery daily. Report by 08:45 AM.',
   publishedToParent: true,
+  backsideFlipMode: 'book_flip',
+  datesheetArrivalLine: 'Arrival: 08:45 AM · Exam: 09:30 AM – 12:00 PM',
+  datesheetHolidayNote: '24/11 Tue: Guru Nanak Jayanti Holiday · 29/11 Sun: Sunday Off',
+  datesheetRows: [] as any[],
   allowedOverrides: {} as Record<string, any>,
   updatedAt: '',
 };
@@ -622,6 +626,17 @@ async function forwardToGoogleAppsScript(payload: any) {
           if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
         }
       } catch {}
+    } else if (formattedPayload.action === 'saveHallPassConfig') {
+      try {
+        const cfgStr = typeof formattedPayload.config === 'string' ? formattedPayload.config : JSON.stringify(formattedPayload.config || formattedPayload);
+        const getUrl = `${targetUrl}?action=saveHallPassConfig&config=${encodeURIComponent(cfgStr)}`;
+        if (getUrl.length < 7500) {
+          const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(15000) });
+          const gText = await gRes.text();
+          const gCheck = parseAppsScriptResponse(gText);
+          if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
+        }
+      } catch {}
     }
 
     return { ok: false, error: postCheck.error || `HTTP ${lastPostStatus || 500}`, response: lastPostText };
@@ -631,12 +646,55 @@ async function forwardToGoogleAppsScript(payload: any) {
 }
 
 // =========================================================================
-// 2-WAY GOOGLE SHEET READ SYNC FOR TEACHER PERFORMANCE, SYLLABUS & HOLIDAYS
+// 2-WAY GOOGLE SHEET READ SYNC FOR TEACHER PERFORMANCE, SYLLABUS, HOLIDAYS & HALL PASS
 // =========================================================================
 let lastTpSheetSync = 0;
 let lastSyllabusSheetSync = 0;
 let lastHolidaySheetSync = 0;
 let lastWeeklyTestSheetSync = 0;
+let lastHallPassSheetSync = 0;
+
+async function syncHallPassConfigFromGoogleSheet(force = false, overrideUrl?: string): Promise<boolean> {
+  const now = Date.now();
+  if (!force && now - lastHallPassSheetSync < 25000) return false;
+  lastHallPassSheetSync = now;
+  try {
+    const baseUrl = overrideUrl || currentAppsScriptUrl;
+    const url = `${baseUrl}?action=getHallPassConfig&_t=${now}`;
+    const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(9000) });
+    if (!res.ok) return false;
+    const text = await res.text();
+    if (!text || text.trim().startsWith('<')) return false;
+    const json: any = JSON.parse(text);
+    if (!json || json.status === 'error' || !json.config || typeof json.config !== 'object') {
+      return false;
+    }
+    const sc = json.config;
+    hallPassConfigStore = {
+      ...DEFAULT_HALL_PASS_CONFIG,
+      ...hallPassConfigStore,
+      examType: sc.examType || hallPassConfigStore.examType,
+      session: sc.session || hallPassConfigStore.session,
+      customExamTitle: sc.customExamTitle !== undefined ? String(sc.customExamTitle) : hallPassConfigStore.customExamTitle,
+      examScheduleLine: sc.examScheduleLine || hallPassConfigStore.examScheduleLine,
+      instructionLine: sc.instructionLine || hallPassConfigStore.instructionLine,
+      publishedToParent: sc.publishedToParent !== undefined ? Boolean(sc.publishedToParent) : hallPassConfigStore.publishedToParent,
+      backsideFlipMode: sc.backsideFlipMode === 'row_flip' ? 'row_flip' : (sc.backsideFlipMode === 'book_flip' ? 'book_flip' : hallPassConfigStore.backsideFlipMode),
+      datesheetArrivalLine: sc.datesheetArrivalLine || hallPassConfigStore.datesheetArrivalLine,
+      datesheetHolidayNote: sc.datesheetHolidayNote || hallPassConfigStore.datesheetHolidayNote,
+      datesheetRows: Array.isArray(sc.datesheetRows) && sc.datesheetRows.length > 0 ? sc.datesheetRows : hallPassConfigStore.datesheetRows,
+      allowedOverrides:
+        sc.allowedOverrides && typeof sc.allowedOverrides === 'object' && !Array.isArray(sc.allowedOverrides)
+          ? sc.allowedOverrides
+          : hallPassConfigStore.allowedOverrides || {},
+      updatedAt: sc.updatedAt || hallPassConfigStore.updatedAt || '',
+    };
+    saveHallPassConfigCache();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function normalizeSheetMonth(val: any): string {
   if (!val) return '';
@@ -4322,15 +4380,20 @@ async function startServer() {
     }
   });
 
-  app.get('/api/hall-pass-config', (_req, res) => {
+  app.get('/api/hall-pass-config', async (req, res) => {
+    const force = req.query.fresh === '1' || req.query.refresh === '1';
+    const targetUrl = resolveTargetAppsScriptUrl(req);
+    const sheetSynced = await syncHallPassConfigFromGoogleSheet(force, targetUrl);
     return res.json({
       success: true,
+      sheetSynced,
       config: hallPassConfigStore,
     });
   });
 
-  app.post('/api/hall-pass-config', (req, res) => {
+  app.post('/api/hall-pass-config', async (req, res) => {
     try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
       const incoming = req.body?.config || req.body || {};
       hallPassConfigStore = {
         ...DEFAULT_HALL_PASS_CONFIG,
@@ -4340,9 +4403,19 @@ async function startServer() {
           incoming.allowedOverrides && typeof incoming.allowedOverrides === 'object'
             ? incoming.allowedOverrides
             : hallPassConfigStore.allowedOverrides || {},
+        datesheetRows:
+          Array.isArray(incoming.datesheetRows) && incoming.datesheetRows.length > 0
+            ? incoming.datesheetRows
+            : hallPassConfigStore.datesheetRows || [],
         updatedAt: getLocalTimestampIST(),
       };
       saveHallPassConfigCache();
+
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'saveHallPassConfig',
+        config: hallPassConfigStore,
+        appsScriptUrl: targetUrl,
+      });
 
       const broadcastMsg = JSON.stringify({
         type: 'APP_DATA_UPDATED',
@@ -4356,10 +4429,209 @@ async function startServer() {
 
       return res.json({
         success: true,
+        sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : gasResult.error,
         config: hallPassConfigStore,
       });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err?.message || 'Could not save hall pass config' });
+    }
+  });
+
+  // =========================================================================
+  // REAL ROAD-SNAPPED ROUTING PROXY (OSRM Germany + Project OSRM Fallback)
+  // Prevents browser CORS / 429 bursts and NEVER caches failed straight lines
+  // =========================================================================
+  const roadRouteServerCache = new Map<
+    string,
+    {
+      roadCoordinates: [number, number][];
+      distanceKm: number;
+      durationMinutes: number;
+      isSnappedToRoad: boolean;
+      provider: string;
+      cachedAt: number;
+    }
+  >();
+
+  const OSRM_PROVIDERS = [
+    { name: 'osm-de', baseUrl: 'https://routing.openstreetmap.de/routed-car/route/v1/driving' },
+    { name: 'project-osrm', baseUrl: 'https://router.project-osrm.org/route/v1/driving' },
+  ];
+
+  async function queryOsrmProvider(
+    coordsPath: string,
+    provider: { name: string; baseUrl: string }
+  ): Promise<{
+    roadCoordinates: [number, number][];
+    distanceKm: number;
+    durationMinutes: number;
+    provider: string;
+  } | null> {
+    const url = `${provider.baseUrl}/${coordsPath}?overview=full&geometries=geojson&continue_straight=false`;
+    try {
+      const response = await fetch(url, {
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': 'EVS-School-Van-Tracker/1.0',
+        },
+        signal: AbortSignal.timeout(9000),
+      });
+      if (!response.ok) return null;
+      const data: any = await response.json();
+      if (data?.code === 'Ok' && Array.isArray(data?.routes) && data.routes[0]?.geometry?.coordinates?.length > 0) {
+        const route = data.routes[0];
+        const leafletCoords: [number, number][] = route.geometry.coordinates.map(
+          (c: [number, number]) => [Number(c[1]), Number(c[0])]
+        );
+        return {
+          roadCoordinates: leafletCoords,
+          distanceKm: Math.round(((Number(route.distance) || 0) / 1000) * 100) / 100,
+          durationMinutes: Math.round(((Number(route.duration) || 0) / 60) * 10) / 10,
+          provider: provider.name,
+        };
+      }
+    } catch {}
+    return null;
+  }
+
+  async function computeRoadSnappedRoute(rawWaypoints: Array<{ lat: number; lng: number }>) {
+    const cleanWaypoints: Array<{ lat: number; lng: number }> = [];
+    for (const pt of rawWaypoints) {
+      const lat = Number(pt?.lat);
+      const lng = Number(pt?.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      if (cleanWaypoints.length > 0) {
+        const prev = cleanWaypoints[cleanWaypoints.length - 1];
+        if (getHaversineDistanceMeters(prev.lat, prev.lng, lat, lng) < 12) continue;
+      }
+      cleanWaypoints.push({ lat, lng });
+    }
+
+    if (cleanWaypoints.length < 2) {
+      return {
+        roadCoordinates: cleanWaypoints.map((w) => [w.lat, w.lng] as [number, number]),
+        distanceKm: 0,
+        durationMinutes: 0,
+        isSnappedToRoad: false,
+        provider: 'none',
+      };
+    }
+
+    const cacheKey = cleanWaypoints.map((p) => `${p.lat.toFixed(5)},${p.lng.toFixed(5)}`).join(';');
+    const cached = roadRouteServerCache.get(cacheKey);
+    if (cached && cached.isSnappedToRoad && Date.now() - cached.cachedAt < 1000 * 60 * 60 * 12) {
+      return {
+        roadCoordinates: cached.roadCoordinates,
+        distanceKm: cached.distanceKm,
+        durationMinutes: cached.durationMinutes,
+        isSnappedToRoad: true,
+        provider: `${cached.provider}-cached`,
+      };
+    }
+
+    // 1. Single multi-waypoint query for the entire route (follows true connected roads in 1 API call)
+    const fullCoordsPath = cleanWaypoints.map((p) => `${p.lng.toFixed(6)},${p.lat.toFixed(6)}`).join(';');
+    for (const provider of OSRM_PROVIDERS) {
+      const res = await queryOsrmProvider(fullCoordsPath, provider);
+      if (res && res.roadCoordinates.length >= 2) {
+        const payload = {
+          ...res,
+          isSnappedToRoad: true,
+        };
+        roadRouteServerCache.set(cacheKey, { ...payload, cachedAt: Date.now() });
+        return payload;
+      }
+    }
+
+    // 2. Leg-by-leg sequential fallback (if multi-waypoint fails for a specific stop)
+    const mergedCoords: [number, number][] = [];
+    let totalDist = 0;
+    let totalDur = 0;
+    let snappedLegs = 0;
+    let totalLegs = 0;
+
+    for (let i = 0; i < cleanWaypoints.length - 1; i++) {
+      const start = cleanWaypoints[i];
+      const end = cleanWaypoints[i + 1];
+      const distMeters = getHaversineDistanceMeters(start.lat, start.lng, end.lat, end.lng);
+      totalLegs++;
+
+      if (distMeters < 40) {
+        snappedLegs++;
+        const seg: [number, number][] = [[start.lat, start.lng], [end.lat, end.lng]];
+        if (i === 0) mergedCoords.push(...seg);
+        else mergedCoords.push(...seg.slice(1));
+        totalDist += distMeters / 1000;
+        totalDur += 0.1;
+        continue;
+      }
+
+      const legPath = `${start.lng.toFixed(6)},${start.lat.toFixed(6)};${end.lng.toFixed(6)},${end.lat.toFixed(6)}`;
+      let legRes = null;
+      for (const provider of OSRM_PROVIDERS) {
+        legRes = await queryOsrmProvider(legPath, provider);
+        if (legRes) break;
+      }
+
+      if (legRes) {
+        snappedLegs++;
+        totalDist += legRes.distanceKm;
+        totalDur += legRes.durationMinutes;
+        if (i === 0) mergedCoords.push(...legRes.roadCoordinates);
+        else mergedCoords.push(...legRes.roadCoordinates.slice(1));
+      } else {
+        const straightDistKm = distMeters / 1000;
+        totalDist += straightDistKm;
+        totalDur += (straightDistKm / 25) * 60;
+        const seg: [number, number][] = [[start.lat, start.lng], [end.lat, end.lng]];
+        if (i === 0) mergedCoords.push(...seg);
+        else mergedCoords.push(...seg.slice(1));
+      }
+    }
+
+    const fullySnapped = snappedLegs === totalLegs && totalLegs > 0;
+    const anySnapped = snappedLegs > 0;
+    const result = {
+      roadCoordinates: mergedCoords,
+      distanceKm: Math.round(totalDist * 100) / 100,
+      durationMinutes: Math.round(totalDur * 10) / 10,
+      isSnappedToRoad: anySnapped,
+      provider: fullySnapped ? 'leg-osrm' : anySnapped ? 'partial-osrm' : 'fallback',
+    };
+
+    // Only cache if EVERY leg snapped cleanly to real roads
+    if (fullySnapped) {
+      roadRouteServerCache.set(cacheKey, { ...result, cachedAt: Date.now() });
+    }
+
+    return result;
+  }
+
+  app.post('/api/road-route', async (req, res) => {
+    try {
+      const waypoints = Array.isArray(req.body?.waypoints) ? req.body.waypoints : [];
+      const result = await computeRoadSnappedRoute(waypoints);
+      return res.json({ success: true, ...result });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Road routing failed' });
+    }
+  });
+
+  app.get('/api/road-route', async (req, res) => {
+    try {
+      const raw = String(req.query.waypoints || '').trim();
+      const waypoints = raw
+        .split(';')
+        .map((pair) => {
+          const [latStr, lngStr] = pair.split(',');
+          return { lat: parseFloat(latStr), lng: parseFloat(lngStr) };
+        })
+        .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng));
+      const result = await computeRoadSnappedRoute(waypoints);
+      return res.json({ success: true, ...result });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Road routing failed' });
     }
   });
 

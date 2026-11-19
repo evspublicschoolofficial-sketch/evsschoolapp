@@ -5,6 +5,8 @@ import {
   getExamDisplayTitle,
 } from '../utils/hallPassHelper';
 import { HallPassCard } from './HallPassCard';
+import { HallPassDatesheetCard } from './HallPassDatesheetCard';
+import { generateParentSingleStudentPdf } from '../utils/hallPassPdfGenerator';
 
 interface ParentHallPassViewProps {
   student: Student;
@@ -24,6 +26,7 @@ export const ParentHallPassView: React.FC<ParentHallPassViewProps> = ({
   onGoToFees,
 }) => {
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
+  const [downloadingPdf, setDownloadingPdf] = useState<boolean>(false);
   const eligibility = computeStudentHallPassEligibility(student, feeRecords, config);
   const examTitle = getExamDisplayTitle(config.examType, config.customExamTitle);
 
@@ -47,6 +50,22 @@ export const ParentHallPassView: React.FC<ParentHallPassViewProps> = ({
       cancelled = true;
     };
   }, [student.Student_ID]);
+
+  const handleParentDownloadPdf = async () => {
+    if (downloadingPdf) return;
+    setDownloadingPdf(true);
+    try {
+      await generateParentSingleStudentPdf({
+        item: eligibility,
+        config,
+        classNameLabel: getClassName(student.Class),
+        photoUrl,
+        qrDataUrl,
+      });
+    } finally {
+      setDownloadingPdf(false);
+    }
+  };
 
   if (!config.publishedToParent) {
     return (
@@ -91,26 +110,57 @@ export const ParentHallPassView: React.FC<ParentHallPassViewProps> = ({
   return (
     <div className="space-y-4">
       <div className="bg-emerald-50 border border-emerald-200 rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-2 text-xs">
-        <div className="font-bold text-emerald-900">
-          {eligibility.status === 'WAIVED'
-            ? 'फ़ीस माफी के अंतर्गत हॉल पास जारी (Fee Waived ✓)'
-            : eligibility.status === 'OVERRIDE_ALLOWED'
-            ? 'विद्यालय प्रबंधक की विशेष अनुमति से जारी (Provisional Pass ✓)'
-            : 'सभी देय फ़ीस जमा · हॉल पास जारी (Cleared ✓)'}
+        <div>
+          <div className="font-bold text-emerald-900">
+            {eligibility.status === 'WAIVED'
+              ? 'फ़ीस माफी के अंतर्गत हॉल पास जारी (Fee Waived ✓)'
+              : eligibility.status === 'OVERRIDE_ALLOWED'
+              ? 'विद्यालय प्रबंधक की विशेष अनुमति से जारी (Provisional Pass ✓)'
+              : 'सभी देय फ़ीस जमा · हॉल पास जारी (Cleared ✓)'}
+          </div>
+          <div className="text-[11px] font-semibold text-emerald-700 tabular-nums mt-0.5">
+            {examTitle} · {config.session}
+          </div>
         </div>
-        <div className="text-[11px] font-semibold text-emerald-700 tabular-nums">
-          {examTitle} · {config.session}
-        </div>
+
+        <button
+          type="button"
+          onClick={handleParentDownloadPdf}
+          disabled={downloadingPdf}
+          className="px-3.5 py-2 rounded-xl bg-[#0c2340] hover:bg-blue-950 disabled:opacity-50 text-amber-300 text-xs font-black flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs"
+        >
+          <i className="fa-solid fa-file-arrow-down"></i>
+          <span>{downloadingPdf ? 'PDF बन रही है...' : 'PDF डाउनलोड करें (Hall Pass + Datesheet)'}</span>
+        </button>
       </div>
 
-      <HallPassCard
-        item={eligibility}
-        config={config}
-        classNameLabel={getClassName(student.Class)}
-        photoUrl={photoUrl}
-        qrDataUrl={qrDataUrl}
-        variant="parent_standalone"
-      />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+        <div className="space-y-1.5">
+          <div className="text-center text-[11px] font-extrabold text-slate-600 uppercase tracking-wide">
+            आगे (Front · Hall Pass)
+          </div>
+          <HallPassCard
+            item={eligibility}
+            config={config}
+            classNameLabel={getClassName(student.Class)}
+            photoUrl={photoUrl}
+            qrDataUrl={qrDataUrl}
+            variant="parent_standalone"
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <div className="text-center text-[11px] font-extrabold text-slate-600 uppercase tracking-wide">
+            पीछे (Back · Exam Datesheet)
+          </div>
+          <HallPassDatesheetCard
+            item={eligibility}
+            config={config}
+            classNameLabel={getClassName(student.Class)}
+            variant="parent_standalone"
+          />
+        </div>
+      </div>
     </div>
   );
 };

@@ -261,6 +261,12 @@ export interface HallPassOverride {
   updatedAt?: string;
 }
 
+export interface HallPassDatesheetRow {
+  date: string;
+  day: string;
+  subjects: Record<string, string>;
+}
+
 export interface HallPassConfig {
   examType: ExamTermType;
   session: string;
@@ -269,5 +275,9 @@ export interface HallPassConfig {
   instructionLine: string;
   publishedToParent: boolean;
   allowedOverrides: Record<string, HallPassOverride>;
+  datesheetArrivalLine?: string;
+  datesheetHolidayNote?: string;
+  backsideFlipMode?: 'book_flip' | 'row_flip';
+  datesheetRows?: HallPassDatesheetRow[];
   updatedAt?: string;
 }

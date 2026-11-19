@@ -1,0 +1,751 @@
+import { jsPDF } from 'jspdf';
+import { HallPassConfig } from '../types';
+import {
+  chunkIntoPages,
+  getExamDisplayTitle,
+  getStudentDatesheetSchedule,
+  mapPageSlotsForBackside,
+  resolveDatesheetClassKey,
+  StudentHallPassEligibility,
+} from './hallPassHelper';
+
+export type HallPassPdfMode = 'front' | 'back' | 'duplex';
+
+interface GenerateHallPassPdfOptions {
+  items: StudentHallPassEligibility[];
+  config: HallPassConfig;
+  mode: HallPassPdfMode;
+  getClassName: (cls?: string | null) => string;
+  getStudentPhoto: (student: StudentHallPassEligibility['student']) => string;
+  qrMap: Record<string, string>;
+  showCutBorder: boolean;
+  showClassOnCard: boolean;
+}
+
+const NAVY: [number, number, number] = [12, 35, 64];
+const AMBER: [number, number, number] = [251, 191, 36];
+const AMBER_TEXT: [number, number, number] = [253, 224, 71];
+const LIGHT_BLUE_TEXT: [number, number, number] = [219, 234, 254];
+const SLATE_50: [number, number, number] = [248, 250, 252];
+const SLATE_100: [number, number, number] = [241, 245, 249];
+const SLATE_300: [number, number, number] = [203, 213, 225];
+const SLATE_500: [number, number, number] = [100, 116, 139];
+const SLATE_700: [number, number, number] = [51, 65, 85];
+const BLACK: [number, number, number] = [0, 0, 0];
+const WHITE: [number, number, number] = [255, 255, 255];
+
+const getInitials = (name?: string): string => {
+  const parts = String(name || 'EVS').trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return 'S';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+};
+
+const formatShortDate = (d: string): string => {
+  const clean = String(d || '').trim();
+  const m = clean.match(/^(\d{2}\/\d{2})\/\d{4}$/);
+  return m ? m[1] : clean;
+};
+
+const toWinAnsiSafe = (text: string): string =>
+  String(text || '')
+    .replace(/₹/g, 'Rs.')
+    .replace(/[✓✔]/g, 'OK')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+/**
+ * Truncates text cleanly with ellipsis so it never overflows card width inside jsPDF.
+ */
+const fitText = (doc: jsPDF, text: string, maxWidthMm: number): string => {
+  const clean = toWinAnsiSafe(text);
+  if (!clean) return '';
+  if (doc.getTextWidth(clean) <= maxWidthMm) return clean;
+  let lo = 0;
+  let hi = clean.length;
+  const ell = '...';
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (doc.getTextWidth(clean.slice(0, mid) + ell) <= maxWidthMm) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return lo > 0 ? clean.slice(0, lo) + ell : clean.slice(0, 1);
+};
+
+/**
+ * Convert a photo URL / dataURL to a cropped 17:21 JPEG dataURL for fast crisp PDF embedding.
+ * Fails gracefully to null if external host blocks CORS so PDF export never aborts.
+ */
+const loadPhotoAsJpegDataUrl = (url?: string): Promise<string | null> => {
+  const clean = String(url || '').trim();
+  if (!clean) return Promise.resolve(null);
+
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), 2500);
+    const img = new Image();
+    if (!clean.startsWith('data:') && !clean.startsWith('blob:')) {
+      img.crossOrigin = 'anonymous';
+    }
+    img.referrerPolicy = 'no-referrer';
+    img.onload = () => {
+      clearTimeout(timer);
+      try {
+        const targetW = 170;
+        const targetH = 210;
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(null);
+          return;
+        }
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, targetW, targetH);
+
+        // Object-cover center crop
+        const srcRatio = img.naturalWidth / Math.max(1, img.naturalHeight);
+        const dstRatio = targetW / targetH;
+        let sx = 0;
+        let sy = 0;
+        let sw = img.naturalWidth;
+        let sh = img.naturalHeight;
+        if (srcRatio > dstRatio) {
+          sw = img.naturalHeight * dstRatio;
+          sx = (img.naturalWidth - sw) / 2;
+        } else {
+          sh = img.naturalWidth / dstRatio;
+          sy = (img.naturalHeight - sh) / 2;
+        }
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, targetW, targetH);
+        resolve(canvas.toDataURL('image/jpeg', 0.85));
+      } catch {
+        resolve(null);
+      }
+    };
+    img.onerror = () => {
+      clearTimeout(timer);
+      resolve(null);
+    };
+    img.src = clean;
+  });
+};
+
+const drawFrontSlot = (
+  doc: jsPDF,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  item: StudentHallPassEligibility,
+  config: HallPassConfig,
+  classNameLabel: string,
+  photoDataUrl: string | null,
+  qrDataUrl: string | undefined,
+  showCutBorder: boolean,
+  showClassOnCard: boolean
+) => {
+  const { student } = item;
+  const examTitle = getExamDisplayTitle(config.examType, config.customExamTitle);
+
+  if (showCutBorder) {
+    doc.setDrawColor(...SLATE_500);
+    doc.setLineWidth(0.2);
+    doc.setLineDashPattern([1.2, 1.2], 0);
+    doc.rect(x, y, w, h, 'S');
+    doc.setLineDashPattern([], 0);
+  }
+
+  const inset = showCutBorder ? 0.8 : 0.2;
+  const cx = x + inset;
+  const cy = y + inset;
+  const cw = w - inset * 2;
+  const ch = h - inset * 2;
+
+  // White background + main navy card border
+  doc.setFillColor(...WHITE);
+  doc.setDrawColor(...NAVY);
+  doc.setLineWidth(0.5);
+  doc.rect(cx, cy, cw, ch, 'FD');
+
+  // TOP HEADER BLOCK
+  const headerH = 14.2;
+  doc.setFillColor(...NAVY);
+  doc.rect(cx, cy, cw, headerH, 'F');
+
+  // Amber bottom accent strip under header
+  doc.setFillColor(...AMBER);
+  doc.rect(cx, cy + headerH - 0.8, cw, 0.8, 'F');
+
+  // School Name
+  doc.setTextColor(...WHITE);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text('E.V.S. PUBLIC SCHOOL', cx + 2.2, cy + 4.2);
+
+  // Address
+  doc.setTextColor(...LIGHT_BLUE_TEXT);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.2);
+  doc.text('Chilkana Sultanpur, Saharanpur (U.P.)', cx + 2.2, cy + 7.2);
+
+  // HALL PASS yellow badge
+  const badgeW = 16.5;
+  const badgeH = 4.4;
+  const badgeX = cx + cw - badgeW - 2;
+  const badgeY = cy + 2.1;
+  doc.setFillColor(...AMBER);
+  doc.rect(badgeX, badgeY, badgeW, badgeH, 'F');
+  doc.setTextColor(15, 23, 42);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.8);
+  doc.text('HALL PASS', badgeX + badgeW / 2, badgeY + 3.1, { align: 'center' });
+
+  // Thin white divider inside header
+  doc.setDrawColor(90, 115, 145);
+  doc.setLineWidth(0.18);
+  doc.line(cx + 2.2, cy + 8.6, cx + cw - 2.2, cy + 8.6);
+
+  // Exam title + session
+  doc.setTextColor(...AMBER_TEXT);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.2);
+  doc.text(fitText(doc, examTitle, cw - 17), cx + 2.2, cy + 12.1);
+
+  doc.setTextColor(...WHITE);
+  doc.setFontSize(7.2);
+  doc.text(String(config.session || '2026-27'), cx + cw - 2.2, cy + 12.1, { align: 'right' });
+
+  // BODY TOP: PHOTO + STUDENT DETAILS
+  const padX = 2.3;
+  const bodyX = cx + padX;
+  const bodyW = cw - padX * 2;
+  const photoY = cy + headerH + 2.2;
+  const photoW = 17.5;
+  const photoH = 22.0;
+
+  doc.setFillColor(...SLATE_100);
+  doc.setDrawColor(...NAVY);
+  doc.setLineWidth(0.45);
+  doc.rect(bodyX, photoY, photoW, photoH, 'FD');
+
+  if (photoDataUrl) {
+    try {
+      doc.addImage(photoDataUrl, 'JPEG', bodyX + 0.3, photoY + 0.3, photoW - 0.6, photoH - 0.6);
+    } catch {
+      doc.setTextColor(...NAVY);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(12);
+      doc.text(getInitials(student.Student_Name), bodyX + photoW / 2, photoY + photoH / 2 + 1.5, {
+        align: 'center',
+      });
+    }
+  } else {
+    doc.setTextColor(...NAVY);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.text(getInitials(student.Student_Name), bodyX + photoW / 2, photoY + photoH / 2 + 1.5, {
+      align: 'center',
+    });
+  }
+
+  // Right Identity Column
+  const infoX = bodyX + photoW + 2.2;
+  const infoW = bodyW - photoW - 2.2;
+
+  doc.setTextColor(...BLACK);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10.5);
+  const nameLines = doc.splitTextToSize(String(student.Student_Name || '').toUpperCase(), infoW).slice(0, 2);
+  doc.text(nameLines, infoX, photoY + 3.6);
+
+  const fatherY = photoY + (nameLines.length > 1 ? 10.2 : 7.0);
+  doc.setTextColor(...SLATE_700);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.4);
+  doc.text(fitText(doc, `S/o · D/o ${student.Father_Name || '—'}`, infoW), infoX, fatherY);
+
+  // Prominent ID & Roll Boxes
+  const boxY = photoY + photoH - 9.2;
+  const boxGap = 1.6;
+  const singleBoxW = (infoW - boxGap) / 2;
+  const boxH = 8.6;
+
+  // SCHOOL ID Box
+  doc.setFillColor(...SLATE_50);
+  doc.setDrawColor(...NAVY);
+  doc.setLineWidth(0.38);
+  doc.rect(infoX, boxY, singleBoxW, boxH, 'FD');
+  doc.setTextColor(...SLATE_500);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(5.5);
+  doc.text('SCHOOL ID', infoX + 1.2, boxY + 2.6);
+  doc.setTextColor(...NAVY);
+  doc.setFontSize(9.5);
+  doc.text(fitText(doc, String(student.Student_ID || '—'), singleBoxW - 2), infoX + 1.2, boxY + 7.1);
+
+  // ROLL NO Box
+  const rollBoxX = infoX + singleBoxW + boxGap;
+  doc.setFillColor(...SLATE_50);
+  doc.rect(rollBoxX, boxY, singleBoxW, boxH, 'FD');
+  doc.setTextColor(...SLATE_500);
+  doc.setFontSize(5.5);
+  doc.text('ROLL NO.', rollBoxX + 1.2, boxY + 2.6);
+  doc.setTextColor(...BLACK);
+  doc.setFontSize(9.5);
+  doc.text(fitText(doc, String(student.Roll_Number || '—'), singleBoxW - 2), rollBoxX + 1.2, boxY + 7.1);
+
+  let nextY = photoY + photoH + 2.4;
+  if (showClassOnCard) {
+    doc.setTextColor(...BLACK);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.6);
+    doc.text(fitText(doc, `Class: ${classNameLabel}`, bodyW), bodyX, nextY + 1.4);
+    nextY += 3.8;
+  }
+
+  // FEE STATUS HIGHLIGHT STRIP
+  const feeBoxH = 7.4;
+  let fillClr: [number, number, number] = [236, 253, 245];
+  let borderClr: [number, number, number] = [4, 120, 87];
+  let txtClr: [number, number, number] = [6, 78, 59];
+  const statusText =
+    item.status === 'WAIVED'
+      ? 'FEE WAIVED · CLEARED'
+      : item.status === 'OVERRIDE_ALLOWED'
+      ? 'ALLOWED · PROVISIONAL'
+      : item.status === 'CLEARED'
+      ? 'FEE CLEARED · ELIGIBLE'
+      : `FEE DUE: Rs.${item.dueAmount.toLocaleString('en-IN')}`;
+
+  if (item.status === 'FEE_HOLD') {
+    fillClr = [255, 241, 242];
+    borderClr = [190, 18, 60];
+    txtClr = [136, 19, 55];
+  } else if (item.status === 'OVERRIDE_ALLOWED') {
+    fillClr = [255, 251, 235];
+    borderClr = [180, 83, 9];
+    txtClr = [120, 53, 15];
+  }
+
+  doc.setFillColor(...fillClr);
+  doc.setDrawColor(...borderClr);
+  doc.setLineWidth(0.45);
+  doc.rect(bodyX, nextY, bodyW, feeBoxH, 'FD');
+
+  doc.setTextColor(...txtClr);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.8);
+  doc.text('FEE STATUS', bodyX + 1.8, nextY + 4.8);
+
+  doc.setFontSize(8.8);
+  doc.text(fitText(doc, statusText, bodyW - 22), bodyX + bodyW - 1.8, nextY + 4.9, { align: 'right' });
+
+  // Exam Timing Schedule line
+  const schedY = nextY + feeBoxH + 4.2;
+  doc.setTextColor(...BLACK);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.4);
+  doc.text(
+    fitText(doc, config.examScheduleLine || 'Exam: 09:30 AM - 12:00 PM (2.5 Hrs)', bodyW),
+    bodyX,
+    schedY
+  );
+  doc.setDrawColor(...SLATE_300);
+  doc.setLineWidth(0.25);
+  doc.line(bodyX, schedY + 1.6, bodyX + bodyW, schedY + 1.6);
+
+  // BOTTOM ROW: LARGE QR CODE + INSTRUCTIONS + PRINCIPAL SIGN
+  const qrSize = 21.5;
+  const qrY = cy + ch - qrSize - 2.3;
+  doc.setFillColor(...WHITE);
+  doc.setDrawColor(...NAVY);
+  doc.setLineWidth(0.45);
+  doc.rect(bodyX, qrY, qrSize, qrSize, 'FD');
+
+  if (qrDataUrl) {
+    try {
+      doc.addImage(qrDataUrl, 'PNG', bodyX + 0.6, qrY + 0.6, qrSize - 1.2, qrSize - 1.2);
+    } catch {}
+  }
+
+  // Instructions next to QR
+  const instX = bodyX + qrSize + 2.0;
+  const signW = 19.5;
+  const instW = bodyW - qrSize - signW - 3.5;
+  doc.setTextColor(...SLATE_700);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.5);
+  const instLines = doc.splitTextToSize(
+    config.instructionLine || 'Bring Hall Pass, School ID & stationery daily.',
+    Math.max(12, instW)
+  );
+  doc.text(instLines.slice(0, 4), instX, qrY + 4.5);
+
+  // Principal Signature bottom-right
+  const signX1 = cx + cw - padX - signW;
+  const signX2 = cx + cw - padX;
+  const signLineY = cy + ch - 5.2;
+  doc.setDrawColor(...BLACK);
+  doc.setLineWidth(0.4);
+  doc.line(signX1, signLineY, signX2, signLineY);
+  doc.setTextColor(...BLACK);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.8);
+  doc.text('Principal Sign.', (signX1 + signX2) / 2, signLineY + 2.8, { align: 'center' });
+};
+
+const drawBackDatesheetSlot = (
+  doc: jsPDF,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  item: StudentHallPassEligibility,
+  config: HallPassConfig,
+  classNameLabel: string,
+  showCutBorder: boolean
+) => {
+  const { student } = item;
+  const examTitle = getExamDisplayTitle(config.examType, config.customExamTitle);
+  const classKey = resolveDatesheetClassKey(student.Class, classNameLabel);
+  const rows = getStudentDatesheetSchedule(config, student.Class, classNameLabel);
+
+  if (showCutBorder) {
+    doc.setDrawColor(...SLATE_500);
+    doc.setLineWidth(0.2);
+    doc.setLineDashPattern([1.2, 1.2], 0);
+    doc.rect(x, y, w, h, 'S');
+    doc.setLineDashPattern([], 0);
+  }
+
+  const inset = showCutBorder ? 0.8 : 0.2;
+  const cx = x + inset;
+  const cy = y + inset;
+  const cw = w - inset * 2;
+  const ch = h - inset * 2;
+
+  doc.setFillColor(...WHITE);
+  doc.setDrawColor(...NAVY);
+  doc.setLineWidth(0.5);
+  doc.rect(cx, cy, cw, ch, 'FD');
+
+  // TOP HEADER
+  const headerH = 11.2;
+  doc.setFillColor(...NAVY);
+  doc.rect(cx, cy, cw, headerH, 'F');
+  doc.setFillColor(...AMBER);
+  doc.rect(cx, cy + headerH - 0.7, cw, 0.7, 'F');
+
+  doc.setTextColor(...WHITE);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.8);
+  doc.text(fitText(doc, `DATESHEET · ${classKey}`, cw - 20), cx + 2.0, cy + 4.3);
+
+  // ID Badge
+  const idText = `ID: ${student.Student_ID}`;
+  doc.setFontSize(6.8);
+  const idW = Math.min(22, doc.getTextWidth(idText) + 3.2);
+  const idX = cx + cw - idW - 1.8;
+  doc.setFillColor(...AMBER);
+  doc.rect(idX, cy + 1.5, idW, 3.8, 'F');
+  doc.setTextColor(15, 23, 42);
+  doc.text(idText, idX + idW / 2, cy + 4.1, { align: 'center' });
+
+  // Student Name + Exam/Session row
+  doc.setTextColor(...WHITE);
+  doc.setFontSize(7.2);
+  doc.text(
+    fitText(doc, String(student.Student_Name || '').toUpperCase(), cw * 0.52),
+    cx + 2.0,
+    cy + 8.7
+  );
+
+  doc.setTextColor(...AMBER_TEXT);
+  doc.setFontSize(6.6);
+  const shortExam = `${examTitle.replace(' EXAMINATION', '')} (${config.session})`;
+  doc.text(fitText(doc, shortExam, cw * 0.44), cx + cw - 2.0, cy + 8.7, { align: 'right' });
+
+  // DATESHEET TABLE
+  const padX = 2.0;
+  const tblX = cx + padX;
+  const tblW = cw - padX * 2;
+  const tblStartY = cy + headerH + 1.6;
+  const footerH = 14.5;
+  const maxTblH = ch - headerH - footerH - 3.0;
+
+  // Table Header
+  const thH = 4.8;
+  doc.setFillColor(...SLATE_100);
+  doc.setDrawColor(...NAVY);
+  doc.setLineWidth(0.35);
+  doc.rect(tblX, tblStartY, tblW, thH, 'F');
+  doc.line(tblX, tblStartY + thH, tblX + tblW, tblStartY + thH);
+
+  doc.setTextColor(...NAVY);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.8);
+  doc.text('DATE & DAY', tblX + 1.2, tblStartY + 3.4);
+  doc.text('SUBJECT', tblX + 22.5, tblStartY + 3.4);
+
+  const count = Math.max(rows.length, 1);
+  const rowH = Math.min(6.4, Math.max(4.4, (maxTblH - thH) / count));
+  let curY = tblStartY + thH;
+
+  rows.forEach((r, idx) => {
+    if (curY + rowH > cy + ch - footerH - 0.8) return;
+    if (idx % 2 === 1) {
+      doc.setFillColor(...SLATE_50);
+      doc.rect(tblX, curY, tblW, rowH, 'F');
+    }
+    doc.setDrawColor(...SLATE_300);
+    doc.setLineWidth(0.18);
+    doc.line(tblX, curY + rowH, tblX + tblW, curY + rowH);
+
+    const baseTextY = curY + rowH * 0.68;
+    doc.setTextColor(...BLACK);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.4);
+    const dateDay = `${formatShortDate(r.date)} ${r.day}`.trim();
+    doc.text(fitText(doc, dateDay, 20), tblX + 1.2, baseTextY);
+
+    doc.setFontSize(8.0);
+    doc.text(fitText(doc, r.subject, tblW - 23.5), tblX + 22.5, baseTextY);
+    curY += rowH;
+  });
+
+  // FOOTER NOTES
+  const footY = cy + ch - footerH;
+  doc.setDrawColor(...NAVY);
+  doc.setLineWidth(0.4);
+  doc.line(tblX, footY, tblX + tblW, footY);
+
+  let noteY = footY + 1.2;
+  if (config.datesheetHolidayNote) {
+    doc.setFillColor(...SLATE_100);
+    doc.rect(tblX, noteY, tblW, 4.0, 'F');
+    doc.setTextColor(...BLACK);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.0);
+    doc.text(fitText(doc, `Off: ${config.datesheetHolidayNote}`, tblW - 1.5), tblX + 0.8, noteY + 2.9);
+    noteY += 4.6;
+  }
+
+  doc.setTextColor(...BLACK);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.6);
+  doc.text(
+    fitText(doc, config.datesheetArrivalLine || 'Arrival: 08:45 AM · Exam: 09:30 AM – 12:00 PM', tblW),
+    tblX + 0.5,
+    noteY + 2.6
+  );
+
+  doc.setTextColor(...SLATE_700);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(5.9);
+  doc.text(
+    fitText(doc, 'Winter uniform & own stationery compulsory. No re-exam.', tblW),
+    tblX + 0.5,
+    noteY + 6.0
+  );
+};
+
+export async function generateAndDownloadHallPassPdf(
+  opts: GenerateHallPassPdfOptions
+): Promise<{ filename: string; pageCount: number }> {
+  const { items, config, mode, getClassName, getStudentPhoto, qrMap, showCutBorder, showClassOnCard } = opts;
+
+  // Ensure QR data URLs exist for all printable students (even if preview hasn't finished yet)
+  const resolvedQr: Record<string, string> = { ...qrMap };
+  const missingQr = items.filter((i) => {
+    const sid = String(i.student.Student_ID || '').trim();
+    return sid && !resolvedQr[sid];
+  });
+  if (missingQr.length > 0) {
+    try {
+      const mod = await import('qrcode');
+      const QRCodeLib = mod.default || mod;
+      for (const item of missingQr) {
+        const sid = String(item.student.Student_ID || '').trim();
+        if (!sid) continue;
+        resolvedQr[sid] = await QRCodeLib.toDataURL(sid, {
+          width: 220,
+          margin: 1,
+          color: { dark: '#000000', light: '#ffffff' },
+        });
+      }
+    } catch {}
+  }
+
+  // Preload photos when generating front or duplex
+  const photoCache: Record<string, string | null> = {};
+  if (mode === 'front' || mode === 'duplex') {
+    await Promise.all(
+      items.map(async (item) => {
+        const sid = String(item.student.Student_ID || '').trim();
+        if (!sid || sid in photoCache) return;
+        const url = getStudentPhoto(item.student);
+        photoCache[sid] = await loadPhotoAsJpegDataUrl(url);
+      })
+    );
+  }
+
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+    compress: true,
+  });
+
+  const a4Pages = chunkIntoPages(items, 9);
+  const flipMode = config.backsideFlipMode === 'row_flip' ? 'row_flip' : 'book_flip';
+  const margin = 2.5;
+  const gap = 1.2;
+  const cellW = (210 - margin * 2 - gap * 2) / 3; // ~67.53mm
+  const cellH = (297 - margin * 2 - gap * 2) / 3; // ~96.53mm
+
+  let totalPdfPages = 0;
+
+  a4Pages.forEach((pageItems) => {
+    const paddedSlots: Array<StudentHallPassEligibility | null> = [...pageItems];
+    while (paddedSlots.length < 9) paddedSlots.push(null);
+
+    if (mode === 'front' || mode === 'duplex') {
+      if (totalPdfPages > 0) doc.addPage('a4', 'portrait');
+      totalPdfPages++;
+      paddedSlots.forEach((slotItem, slotIdx) => {
+        const col = slotIdx % 3;
+        const row = Math.floor(slotIdx / 3);
+        const x = margin + col * (cellW + gap);
+        const y = margin + row * (cellH + gap);
+        if (slotItem) {
+          const sid = String(slotItem.student.Student_ID || '').trim();
+          drawFrontSlot(
+            doc,
+            x,
+            y,
+            cellW,
+            cellH,
+            slotItem,
+            config,
+            getClassName(slotItem.student.Class),
+            photoCache[sid] || null,
+            resolvedQr[sid],
+            showCutBorder,
+            showClassOnCard
+          );
+        } else if (showCutBorder) {
+          doc.setDrawColor(...SLATE_300);
+          doc.setLineWidth(0.18);
+          doc.setLineDashPattern([1.2, 1.2], 0);
+          doc.rect(x, y, cellW, cellH, 'S');
+          doc.setLineDashPattern([], 0);
+        }
+      });
+    }
+
+    if (mode === 'back' || mode === 'duplex') {
+      if (totalPdfPages > 0) doc.addPage('a4', 'portrait');
+      totalPdfPages++;
+      const backSlots = mapPageSlotsForBackside(paddedSlots, flipMode);
+      backSlots.forEach((slotItem, slotIdx) => {
+        const col = slotIdx % 3;
+        const row = Math.floor(slotIdx / 3);
+        const x = margin + col * (cellW + gap);
+        const y = margin + row * (cellH + gap);
+        if (slotItem) {
+          drawBackDatesheetSlot(
+            doc,
+            x,
+            y,
+            cellW,
+            cellH,
+            slotItem,
+            config,
+            getClassName(slotItem.student.Class),
+            showCutBorder
+          );
+        } else if (showCutBorder) {
+          doc.setDrawColor(...SLATE_300);
+          doc.setLineWidth(0.18);
+          doc.setLineDashPattern([1.2, 1.2], 0);
+          doc.rect(x, y, cellW, cellH, 'S');
+          doc.setLineDashPattern([], 0);
+        }
+      });
+    }
+  });
+
+  const examSlug = String(config.examType || 'Exam').replace(/\s+/g, '_');
+  const sideLabel = mode === 'front' ? 'Step1_Front_HallPass' : mode === 'back' ? 'Step2_Back_Datesheet' : 'Front_and_Back';
+  const filename = `EVS_${examSlug}_${sideLabel}_${items.length}_Students.pdf`;
+  doc.save(filename);
+
+  return { filename, pageCount: totalPdfPages };
+}
+
+/**
+ * Generates a single-student 2-page PDF (Page 1: Hall Pass, Page 2: Class Datesheet)
+ * for Parent Portal download.
+ */
+export async function generateParentSingleStudentPdf(opts: {
+  item: StudentHallPassEligibility;
+  config: HallPassConfig;
+  classNameLabel: string;
+  photoUrl?: string;
+  qrDataUrl?: string;
+}): Promise<string> {
+  const { item, config, classNameLabel, photoUrl, qrDataUrl } = opts;
+
+  let finalQr = qrDataUrl;
+  if (!finalQr) {
+    try {
+      const mod = await import('qrcode');
+      const QRCodeLib = mod.default || mod;
+      finalQr = await QRCodeLib.toDataURL(String(item.student.Student_ID || '').trim(), {
+        width: 240,
+        margin: 1,
+        color: { dark: '#0c2340', light: '#ffffff' },
+      });
+    } catch {}
+  }
+
+  const photoDataUrl = await loadPhotoAsJpegDataUrl(photoUrl);
+
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+    compress: true,
+  });
+
+  // Render exact pocket-size Front Hall Pass (left) and Class Datesheet (right) side-by-side on 1 A4 page
+  const cardW = 67.5;
+  const cardH = 96.5;
+  const gap = 8;
+  const startX = (210 - (cardW * 2 + gap)) / 2;
+  const startY = 36;
+
+  doc.setTextColor(...NAVY);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.text('E.V.S. PUBLIC SCHOOL — EXAM HALL PASS & DATESHEET', 105, 20, { align: 'center' });
+
+  doc.setTextColor(...SLATE_500);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.text('Front: Hall Pass (Left)  |  Back: Class Datesheet (Right) — Cut & fold/paste together', 105, 26, {
+    align: 'center',
+  });
+
+  drawFrontSlot(doc, startX, startY, cardW, cardH, item, config, classNameLabel, photoDataUrl, finalQr, true, true);
+  drawBackDatesheetSlot(doc, startX + cardW + gap, startY, cardW, cardH, item, config, classNameLabel, true);
+
+  const safeName = String(item.student.Student_Name || 'Student').replace(/[^a-zA-Z0-9]+/g, '_');
+  const filename = `EVS_HallPass_${safeName}_${item.student.Student_ID}.pdf`;
+  doc.save(filename);
+  return filename;
+}

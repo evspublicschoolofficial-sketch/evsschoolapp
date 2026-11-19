@@ -141,6 +141,15 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
   const [roadOneWayKm, setRoadOneWayKm] = useState<number>(0);
   const [roadDurationMin, setRoadDurationMin] = useState<number>(0);
   const [isRoutingLoading, setIsRoutingLoading] = useState<boolean>(false);
+  const [routeRetryNonce, setRouteRetryNonce] = useState<number>(0);
+  const isFallbackDashedRef = useRef<boolean>(false);
+  const latestGpsForEmptyRouteRef = useRef<{ lat: number; lng: number }>({
+    lat: currentGps.lat,
+    lng: currentGps.lng,
+  });
+  useEffect(() => {
+    latestGpsForEmptyRouteRef.current = { lat: currentGps.lat, lng: currentGps.lng };
+  }, [currentGps.lat, currentGps.lng]);
 
   // Initialize Leaflet Map with robust container cleanup
   useEffect(() => {
@@ -440,19 +449,52 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
     }
   }, [currentGps, isStaleSignal, staleSeconds, driverName, driverPhone, followVan, mapInitialized]);
 
+  // Stable signature so 5-second GPS ticks & mapStyle switches NEVER re-trigger OSRM queries unnecessarily
+  const sortedStoppagesSignature = stoppages
+    .slice()
+    .sort((a, b) => a.sequence - b.sequence)
+    .map((s) => `${s.id}:${s.sequence}:${s.lat.toFixed(5)},${s.lng.toFixed(5)}`)
+    .join('|');
+
+  // Quantize GPS to ~160m cells ONLY when route has 0 saved stoppages
+  const emptyRouteGpsCell =
+    stoppages.length === 0
+      ? `${Math.round(currentGps.lat / 0.0015)},${Math.round(currentGps.lng / 0.0015)}`
+      : 'fixed-stops';
+
   // =========================================================================
   // UPDATE REAL ROAD-SNAPPED ROUTE POLYLINE (Follows Actual Streets & Highways)
   // =========================================================================
   useEffect(() => {
     const map = mapInstanceRef.current;
-    if (!map) return;
+    if (!map || !mapInitialized) return;
 
     let isSubscribed = true;
+    const isManualRetry = routeRetryNonce > 0;
 
     const buildRoadPolyline = async () => {
       setIsRoutingLoading(true);
 
-      // Remove existing polylines
+      const sortedStops = [...stoppages].sort((a, b) => a.sequence - b.sequence);
+      const isEmptyRoute = sortedStops.length === 0;
+      const gpsFallback = latestGpsForEmptyRouteRef.current;
+
+      const forwardWaypoints: Array<{ lat: number; lng: number }> = isEmptyRoute
+        ? [
+            { lat: routeConfig.schoolOrigin.lat, lng: routeConfig.schoolOrigin.lng },
+            { lat: gpsFallback.lat, lng: gpsFallback.lng },
+          ]
+        : [
+            { lat: routeConfig.schoolOrigin.lat, lng: routeConfig.schoolOrigin.lng },
+            ...sortedStops.map((s) => ({ lat: s.lat, lng: s.lng })),
+          ];
+
+      const roadResult = await fetchRoadSnappingRoute(forwardWaypoints, {
+        bypassCache: isManualRetry,
+      });
+      if (!isSubscribed) return;
+
+      // Remove existing polylines only AFTER the new geometry arrives (zero flicker!)
       if (routeHaloPolylineRef.current) {
         routeHaloPolylineRef.current.remove();
         routeHaloPolylineRef.current = null;
@@ -462,59 +504,26 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
         routePolylineRef.current = null;
       }
 
-      const sortedStops = [...stoppages].sort((a, b) => a.sequence - b.sequence);
+      const displayCoords: [number, number][] = isEmptyRoute
+        ? roadResult.roadCoordinates
+        : [...roadResult.roadCoordinates, ...[...roadResult.roadCoordinates].reverse()];
 
-      // CASE 1: When no stoppages are saved yet, draw road from School to Vehicle!
-      if (sortedStops.length === 0) {
-        const liveWaypoints = [
-          { lat: routeConfig.schoolOrigin.lat, lng: routeConfig.schoolOrigin.lng },
-          { lat: currentGps.lat, lng: currentGps.lng },
-        ];
-        const roadResult = await fetchRoadSnappingRoute(liveWaypoints);
-        if (!isSubscribed) return;
+      const snapped = Boolean(roadResult.isSnappedToRoad);
+      isFallbackDashedRef.current = !snapped;
 
-        setIsRoadSnapped(roadResult.isSnappedToRoad);
-        setRoadDistanceKm(roadResult.distanceKm);
-        setRoadDurationMin(roadResult.durationMinutes);
-        setIsRoutingLoading(false);
-
-        const liveLine = L.polyline(roadResult.roadCoordinates, {
-          color: '#10b981', // Emerald-500
-          weight: 4,
-          opacity: 0.9,
-          dashArray: '6, 8',
-          lineCap: 'round',
-        }).addTo(map);
-        routePolylineRef.current = liveLine;
-        return;
-      }
-
-      // CASE 2: Build sequential road path: School -> Stop 1 -> Stop 2 -> ... -> Stop N
-      // The route goes from School to the stops along the real road, and immediately returns along the same corridor back to School
-      const forwardWaypoints: Array<{ lat: number; lng: number }> = [
-        { lat: routeConfig.schoolOrigin.lat, lng: routeConfig.schoolOrigin.lng },
-        ...sortedStops.map((s) => ({ lat: s.lat, lng: s.lng })),
-      ];
-
-      const roadResult = await fetchRoadSnappingRoute(forwardWaypoints);
-      if (!isSubscribed) return;
-
-      // Clean direct return: Retraces the exact same road back to school without OSRM 10km detour loops
-      const returnCoords = [...roadResult.roadCoordinates].reverse();
-      const roundTripCoords = [...roadResult.roadCoordinates, ...returnCoords];
-
-      setIsRoadSnapped(roadResult.isSnappedToRoad);
+      setIsRoadSnapped(snapped);
       setRoadOneWayKm(roadResult.distanceKm);
-      setRoadDistanceKm(Math.round(roadResult.distanceKm * 2 * 10) / 10);
-      setRoadDurationMin(Math.round(roadResult.durationMinutes * 2));
+      setRoadDistanceKm(isEmptyRoute ? roadResult.distanceKm : Math.round(roadResult.distanceKm * 2 * 10) / 10);
+      setRoadDurationMin(isEmptyRoute ? roadResult.durationMinutes : Math.round(roadResult.durationMinutes * 2));
       setIsRoutingLoading(false);
 
-      // Contrast halo: deep solid black outline on satellite mode so the road line pops over fields and trees
+      if (displayCoords.length < 2) return;
+
       const haloColor = mapStyle === 'satellite' ? '#000000' : '#0c2340';
       const haloWeight = mapStyle === 'satellite' ? 10 : 8;
       const haloOpacity = mapStyle === 'satellite' ? 0.85 : 0.35;
 
-      const halo = L.polyline(roundTripCoords, {
+      const halo = L.polyline(displayCoords, {
         color: haloColor,
         weight: haloWeight,
         opacity: haloOpacity,
@@ -523,14 +532,21 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
       }).addTo(map);
       routeHaloPolylineRef.current = halo;
 
-      // Core navigation line: Electric Cyan (#00e5ff) on satellite for commercial telemetry visibility, vibrant blue on streets
-      const lineColor = mapStyle === 'satellite' ? '#00e5ff' : mapStyle === 'dark' ? '#38bdf8' : '#2563eb';
-      const lineWeight = 5;
+      const lineColor = !snapped
+        ? '#f59e0b'
+        : isEmptyRoute
+        ? '#10b981'
+        : mapStyle === 'satellite'
+        ? '#00e5ff'
+        : mapStyle === 'dark'
+        ? '#38bdf8'
+        : '#2563eb';
 
-      const line = L.polyline(roundTripCoords, {
+      const line = L.polyline(displayCoords, {
         color: lineColor,
-        weight: lineWeight,
+        weight: 5,
         opacity: 1,
+        dashArray: snapped ? undefined : '8, 8',
         lineCap: 'round',
         lineJoin: 'round',
       }).addTo(map);
@@ -542,7 +558,43 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
     return () => {
       isSubscribed = false;
     };
-  }, [stoppages, routeConfig.schoolOrigin, routeConfig.routeId, routeConfig.shift, currentGps.lat, currentGps.lng, mapInitialized, mapStyle]);
+  }, [
+    sortedStoppagesSignature,
+    emptyRouteGpsCell,
+    routeConfig.schoolOrigin.lat,
+    routeConfig.schoolOrigin.lng,
+    routeConfig.routeId,
+    routeConfig.shift,
+    mapInitialized,
+    routeRetryNonce,
+  ]);
+
+  // Smoothly update polyline colors on mapStyle switch without re-fetching OSRM
+  useEffect(() => {
+    if (routeHaloPolylineRef.current) {
+      routeHaloPolylineRef.current.setStyle({
+        color: mapStyle === 'satellite' ? '#000000' : '#0c2340',
+        weight: mapStyle === 'satellite' ? 10 : 8,
+        opacity: mapStyle === 'satellite' ? 0.85 : 0.35,
+      });
+    }
+    if (routePolylineRef.current) {
+      const snapped = !isFallbackDashedRef.current;
+      const isEmptyRoute = stoppages.length === 0;
+      const lineColor = !snapped
+        ? '#f59e0b'
+        : isEmptyRoute
+        ? '#10b981'
+        : mapStyle === 'satellite'
+        ? '#00e5ff'
+        : mapStyle === 'dark'
+        ? '#38bdf8'
+        : '#2563eb';
+      routePolylineRef.current.setStyle({
+        color: lineColor,
+      });
+    }
+  }, [mapStyle, stoppages.length]);
 
   // Update Ordered Stoppage Markers with Dynamic States (Passed, Approaching, At Stop, Upcoming)
   useEffect(() => {
@@ -1009,6 +1061,32 @@ export const InteractiveRouteMap: React.FC<InteractiveRouteMapProps> = ({
               <span className="font-mono text-emerald-300">{roadDurationMin}</span>
               <span className="text-[10px] text-slate-400">min</span>
             </div>
+          )}
+
+          {/* ROAD-SNAPPED ROUTE STATUS / MANUAL RETRY */}
+          {isRoutingLoading ? (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-cyan-500/20 text-cyan-200 border border-cyan-400/30 font-bold text-[10px]">
+              <i className="fa-solid fa-spinner animate-spin"></i>
+              <span>सड़क रूट बन रहा है...</span>
+            </div>
+          ) : isRoadSnapped ? (
+            <div
+              className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-xl bg-cyan-500/20 text-cyan-200 border border-cyan-400/30 font-bold text-[10px]"
+              title="रूट असली पक्की सड़कों पर सेट है"
+            >
+              <i className="fa-solid fa-route text-cyan-300"></i>
+              <span>पक्की सड़क रूट</span>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setRouteRetryNonce((n) => n + 1)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[10px] cursor-pointer transition-colors"
+              title="सड़क नेटवर्क से दोबारा रूट जोड़ें"
+            >
+              <i className="fa-solid fa-rotate-right"></i>
+              <span>सड़क रूट पुनः जोड़ें</span>
+            </button>
           )}
 
           {/* TOTAL STOPS COUNT */}

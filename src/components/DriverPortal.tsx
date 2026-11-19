@@ -20,6 +20,8 @@ interface DriverPortalProps {
   onBackToHome?: () => void;
   onOpenManagerTracker?: () => void;
   initialDriverName?: string;
+  initialBusId?: string;
+  autoStartFromLink?: boolean;
   loggedDriverUser?: SchoolUser | null;
   onDriverLogin?: (user: SchoolUser) => void;
   onDriverLogout?: () => void;
@@ -32,6 +34,8 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
   onBackToApp,
   onBackToHome,
   onOpenManagerTracker,
+  initialBusId,
+  autoStartFromLink = false,
   loggedDriverUser,
   onDriverLogin,
   onDriverLogout,
@@ -71,10 +75,26 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
 
   // Sheet Bus_Tracking records
   const [sheetBuses, setSheetBuses] = useState<BusTrackingRecord[]>([]);
-  const [selectedBusId, setSelectedBusId] = useState<string>('121212');
+  const [selectedBusId, setSelectedBusId] = useState<string>(() => {
+    if (initialBusId) return initialBusId;
+    try {
+      const p = new URLSearchParams(window.location.search).get('bus');
+      if (p) return p.trim();
+    } catch {}
+    return '121212';
+  });
   const [loadingSheet, setLoadingSheet] = useState<boolean>(true);
   const [showScriptModal, setShowScriptModal] = useState<boolean>(false);
   const [sheetSyncState, setSheetSyncState] = useState<'idle' | 'success' | 'needs_setup'>('idle');
+  const [gpsStatus, setGpsStatus] = useState<'idle' | 'acquiring' | 'locked' | 'permission_denied' | 'signal_error'>('idle');
+  const hasRealGpsFixRef = useRef<boolean>(false);
+  const autoStartedLinkRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    if (initialBusId && initialBusId.trim()) {
+      setSelectedBusId(initialBusId.trim());
+    }
+  }, [initialBusId]);
 
   // Load Bus_Tracking records from Google Sheets
   const loadSheetBuses = async () => {
@@ -82,13 +102,23 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
     const records = await fetchBusTrackingFromSheet();
     if (records.length > 0) {
       setSheetBuses(records);
-      const amjadBus = records.find(
-        (b) => String(b.Driver_Name || '').toLowerCase().includes('amjad')
-      );
-      if (amjadBus && (!selectedBusId || !records.some(r => r.Bus_ID === selectedBusId))) {
-        setSelectedBusId(amjadBus.Bus_ID);
-      } else if (!records.some(r => r.Bus_ID === selectedBusId) && records[0]) {
-        setSelectedBusId(records[0].Bus_ID);
+      if (initialBusId && records.some((r) => r.Bus_ID === initialBusId)) {
+        setSelectedBusId(initialBusId);
+      } else {
+        const driverNameLower = String(loggedDriver?.Name || '').trim().toLowerCase();
+        const driverMatchedBus = driverNameLower
+          ? records.find((b) => String(b.Driver_Name || '').trim().toLowerCase().includes(driverNameLower))
+          : null;
+        if (driverMatchedBus) {
+          setSelectedBusId(driverMatchedBus.Bus_ID);
+        } else {
+          const amjadBus = records.find((b) => String(b.Driver_Name || '').toLowerCase().includes('amjad'));
+          if (amjadBus && (!selectedBusId || !records.some((r) => r.Bus_ID === selectedBusId))) {
+            setSelectedBusId(amjadBus.Bus_ID);
+          } else if (!records.some((r) => r.Bus_ID === selectedBusId) && records[0]) {
+            setSelectedBusId(records[0].Bus_ID);
+          }
+        }
       }
     } else {
       setSheetBuses([
@@ -491,18 +521,51 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
     setTimeout(() => setSyncStatus('idle'), 2000);
   };
 
+  const handleGeolocationError = (err: GeolocationPositionError, allowStopOnDeny = true) => {
+    if (err.code === 1) {
+      setGpsStatus('permission_denied');
+      setGpsError(
+        'फ़ोन ने Location (GPS) की अनुमति नहीं दी है। ऊपर 🔒 ताले (Site Settings) में Location को "Allow" करें और नीचे "🔄 दोबारा GPS चालू करें" दबाएं।'
+      );
+      if (allowStopOnDeny && isTrackingRef.current) {
+        isTrackingRef.current = false;
+        stopTrackingServices();
+        setIsTracking(false);
+        setVanStatus('stopped');
+      }
+    } else if (err.code === 2) {
+      setGpsStatus('signal_error');
+      setGpsError(
+        'फ़ोन का GPS (Location) बंद है! कृपया मोबाइल की ऊपर से पट्टी (Notification Bar) खींचकर 📍 Location ON करें और पुनः प्रयास करें।'
+      );
+    } else if (err.code === 3) {
+      setGpsStatus('signal_error');
+      setGpsError(
+        'GPS सिग्नल पकड़ने में समय लग रहा है (कमज़ोर नेटवर्क/छत के नीचे)। कृपया फ़ोन को खिड़की/डैशबोर्ड के पास रखें और दोबारा दबाएं।'
+      );
+    } else {
+      setGpsStatus('signal_error');
+      setGpsError(err.message || 'GPS सिग्नल नहीं मिला। कृपया Location चालू रखें।');
+    }
+  };
+
   // Immediate High Accuracy GPS Capture from device
   const captureCurrentGps = (onSuccess?: (lat: number, lng: number) => void, forceSend = false) => {
     if (!('geolocation' in navigator)) {
+      setGpsStatus('permission_denied');
       setGpsError('इस ब्राउज़र में Geolocation (GPS) उपलब्ध नहीं है।');
       return;
     }
     setFetchingGps(true);
+    setGpsStatus('acquiring');
     setGpsError(null);
 
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         setFetchingGps(false);
+        hasRealGpsFixRef.current = true;
+        setGpsStatus('locked');
+        setGpsError(null);
         const lat = pos.coords.latitude;
         const lng = pos.coords.longitude;
         const acc = pos.coords.accuracy || 8;
@@ -516,25 +579,17 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
         setHeading(hd);
         latestCoordsRef.current = { lat, lng, speed: spd, accuracy: acc, heading: hd };
 
-        broadcastLocation(lat, lng, spd, acc, hd, { force: forceSend });
+        broadcastLocation(lat, lng, spd, acc, hd, { force: forceSend || isTrackingRef.current });
         if (onSuccess) onSuccess(lat, lng);
       },
       (err) => {
         setFetchingGps(false);
         console.warn('GPS single capture note:', err.message);
-        // Only show error if no valid coordinates are available at all
-        const cur = latestCoordsRef.current;
-        if (!cur.lat || !cur.lng) {
-          setGpsError(`GPS सिग्नल खोजा जा रहा है... कृपया फोन में Location ऑन रखें।`);
-        } else {
-          setGpsError(null);
-        }
-        // Broadcast latest known coordinates smoothly
-        broadcastLocation(cur.lat, cur.lng, cur.speed, cur.accuracy, cur.heading, { force: forceSend });
+        handleGeolocationError(err, true);
       },
       {
         enableHighAccuracy: true,
-        timeout: 10000,
+        timeout: 12000,
         maximumAge: 0,
       }
     );
@@ -543,6 +598,10 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
   // Perform 5-second cycle GPS capture and sheet update
   const execute5sUpdate = () => {
     if (!isTrackingRef.current) return;
+    if (!hasRealGpsFixRef.current) {
+      // Try capturing a real GPS coordinate if we haven't locked one yet
+      return;
+    }
     const cur = latestCoordsRef.current;
     broadcastLocation(cur.lat, cur.lng, cur.speed, cur.accuracy, cur.heading);
     setCountdown(5);
@@ -578,15 +637,19 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
     // Keep screen on & keep audio session alive so OS does not sleep JS/GPS
     requestWakeLock();
     startKeepAliveAudio();
-
-    // 1. Send immediate location right now
-    const cur = latestCoordsRef.current;
-    broadcastLocation(cur.lat, cur.lng, cur.speed, cur.accuracy, cur.heading, { force: true });
+    setGpsStatus(hasRealGpsFixRef.current ? 'locked' : 'acquiring');
+    setGpsError(null);
     setCountdown(5);
+
+    // 1. Trigger immediate high-accuracy single GPS lock right on tap (much faster than waiting for watchPosition)
+    captureCurrentGps(undefined, true);
 
     // 2. Watch device movement for continuous precision (transmits whenever device moves!)
     if ('geolocation' in navigator) {
       try {
+        if (watchIdRef.current !== null) {
+          navigator.geolocation.clearWatch(watchIdRef.current);
+        }
         const id = navigator.geolocation.watchPosition(
           (pos) => {
             const lat = pos.coords.latitude;
@@ -595,6 +658,8 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
             const acc = Math.round(pos.coords.accuracy || 8);
             const hd = pos.coords.heading || 0;
 
+            hasRealGpsFixRef.current = true;
+            setGpsStatus('locked');
             setLatitude(lat);
             setLongitude(lng);
             setAccuracy(acc);
@@ -612,6 +677,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
           },
           (err) => {
             console.warn('Geolocation watch error:', err.message);
+            handleGeolocationError(err, true);
           },
           {
             enableHighAccuracy: true,
@@ -622,6 +688,8 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
         watchIdRef.current = id;
       } catch (e: any) {
         console.warn('GPS start failed:', e);
+        setGpsStatus('signal_error');
+        setGpsError('GPS शुरू करने में समस्या आई। कृपया पुनः प्रयास करें।');
       }
     }
 
@@ -666,16 +734,19 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
     }, 5000);
   };
 
-  // Auto-resume tracking on initial mount / reload if it was previously started
+  // Auto-resume tracking on initial mount / reload OR 1-click autoTrack magic link
   useEffect(() => {
-    if (isTracking && loggedDriver) {
+    if (loggedDriver && (isTracking || (autoStartFromLink && !autoStartedLinkRef.current))) {
+      autoStartedLinkRef.current = true;
       isTrackingRef.current = true;
+      setIsTracking(true);
+      setVanStatus('running');
       startTrackingServices();
     }
     return () => {
       stopTrackingServices();
     };
-  }, []);
+  }, [loggedDriver, autoStartFromLink]);
 
   // Start / Stop Live GPS Tracking (with 5s interval & continuous movement broadcast)
   const toggleTracking = () => {
@@ -685,6 +756,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
       stopTrackingServices();
       setIsTracking(false);
       setVanStatus('stopped');
+      setGpsStatus('idle');
       setCountdown(5);
       // Inform backend and manager view that tracking has explicitly stopped
       broadcastLocation(latitude, longitude, 0, accuracy, heading, { force: true, customStatus: 'stopped' });
@@ -892,6 +964,29 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
               </div>
             )}
 
+            {driversFromUsers.length > 0 && (
+              <div className="space-y-1.5">
+                <span className="block text-[11px] font-bold text-slate-600">
+                  पंजीकृत ड्राइवर (नंबर भरने के लिए क्लिक करें):
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {driversFromUsers.map((drv) => (
+                    <button
+                      key={drv.User_ID || drv.Mobile_number}
+                      type="button"
+                      onClick={() => {
+                        setLoginInput(String(drv.Mobile_number || drv.Username || '').trim());
+                        if (loginError) setLoginError(null);
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-900 text-xs font-extrabold cursor-pointer transition-colors"
+                    >
+                      🚐 {drv.Name} ({drv.Mobile_number})
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <form onSubmit={handleDriverLogin} className="space-y-4">
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1.5">
@@ -949,7 +1044,7 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
             <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-[11px] text-slate-600 flex items-start gap-2">
               <i className="fa-solid fa-shield-halved text-emerald-600 mt-0.5 shrink-0"></i>
               <div>
-                <span className="font-bold">सुरक्षा नियम:</span> केवल स्कूल में पंजीकृत अधिकृत ड्राइवर ही इस पोर्टल में लॉगिन कर सकते हैं। बिना लॉगिन कोई डेटा नहीं खुलेगा।
+                <span className="font-bold">सुरक्षा नियम:</span> केवल स्कूल में पंजीकृत अधिकृत ड्राइवर ही इस पोर्टल में लॉगिन कर सकते हैं। बिना लॉगिन के लोकेशन शेयर नहीं होती — या मैनेजर द्वारा भेजा गया <strong>1-क्लिक ड्राइवर WhatsApp लिंक</strong> सीधे खोलें।
               </div>
             </div>
           </div>
@@ -960,6 +1055,99 @@ export const DriverPortal: React.FC<DriverPortalProps> = ({
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto pb-12">
+      {/* GIANT 1-TAP GPS ACTIVATION CARD (ZERO SCROLLING FOR DRIVER!) */}
+      <div
+        className={`rounded-3xl p-4 sm:p-6 shadow-xl border-2 transition-all ${
+          isTracking
+            ? gpsStatus === 'acquiring'
+              ? 'bg-amber-50 border-amber-400'
+              : 'bg-emerald-50 border-emerald-500'
+            : gpsError
+            ? 'bg-rose-50 border-rose-400'
+            : 'bg-white border-emerald-500/40'
+        }`}
+      >
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2.5">
+              <span
+                className={`w-3.5 h-3.5 rounded-full shrink-0 ${
+                  isTracking
+                    ? gpsStatus === 'locked'
+                      ? 'bg-emerald-500 animate-ping'
+                      : 'bg-amber-500 animate-pulse'
+                    : 'bg-slate-400'
+                }`}
+              />
+              <div>
+                <div className="text-sm sm:text-base font-black text-slate-900">
+                  {isTracking
+                    ? gpsStatus === 'acquiring'
+                      ? '📡 फ़ोन का GPS सिग्नल पकड़ा जा रहा है...'
+                      : '🟢 लाइव लोकेशन चालू है — स्कूल व पेरेंट्स को दिख रही है!'
+                    : '📍 वैन की लाइव लोकेशन अभी बंद है'}
+                </div>
+                <div className="text-[11px] text-slate-600 font-semibold">
+                  गाड़ी ID: <span className="font-mono font-black text-slate-900">{selectedBusId}</span>
+                  {' · '}ड्राइवर: <strong>{loggedDriver?.Name || 'Driver'}</strong>
+                  {isTracking && (
+                    <span> · अगला ऑटो-अपडेट: <strong className="font-mono">{countdown}s</strong></span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* GIANT FULL-WIDTH 1-TAP BUTTON */}
+          <button
+            type="button"
+            onClick={toggleTracking}
+            className={`w-full py-5 px-6 rounded-2xl font-black text-base sm:text-xl flex items-center justify-center gap-3 shadow-xl transition-all cursor-pointer active:scale-[0.99] ${
+              isTracking
+                ? 'bg-rose-600 hover:bg-rose-700 text-white ring-4 ring-rose-300/40'
+                : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white ring-4 ring-emerald-400/35'
+            }`}
+          >
+            <i className={`fa-solid ${isTracking ? 'fa-stop-circle text-2xl' : 'fa-location-crosshairs text-2xl'}`}></i>
+            <span>
+              {isTracking
+                ? '⏹️ लाइव लोकेशन बंद करें (STOP GPS)'
+                : '📍 1-क्लिक: लाइव लोकेशन चालू करें (START GPS)'}
+            </span>
+          </button>
+
+          {/* CLEAR HINDI GPS PERMISSION / LOCATION-OFF RECOVERY BOX */}
+          {gpsError && (
+            <div className="p-4 rounded-2xl bg-rose-100/90 border-2 border-rose-400 text-rose-950 space-y-2.5 text-xs">
+              <div className="font-black text-sm flex items-center gap-2 text-rose-800">
+                <i className="fa-solid fa-triangle-exclamation text-base"></i>
+                <span>GPS चालू करने में अड़चन:</span>
+              </div>
+              <p className="font-bold leading-relaxed">{gpsError}</p>
+              <div className="bg-white/80 rounded-xl p-2.5 text-[11px] text-slate-800 space-y-1 font-semibold">
+                <div>1. मोबाइल की ऊपर की स्क्रीन नीचे खींचें और <strong>📍 Location (GPS)</strong> ON करें।</div>
+                <div>2. Chrome में ऊपर लिंक के पास <strong>🔒 ताले / सेटिंग आइकन</strong> दबाकर <strong>Permissions → Location → Allow</strong> चुनें।</div>
+                <div>3. अब नीचे हरा बटन दबाएं:</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setGpsError(null);
+                  isTrackingRef.current = true;
+                  setIsTracking(true);
+                  setVanStatus('running');
+                  startTrackingServices();
+                }}
+                className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-sm flex items-center justify-center gap-2 cursor-pointer shadow-md"
+              >
+                <i className="fa-solid fa-rotate-right"></i>
+                <span>🔄 दोबारा GPS चालू करें (Retry Now)</span>
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* HEADER BANNER */}
       <div className="bg-gradient-to-r from-emerald-800 via-teal-900 to-[#0c2340] rounded-3xl p-6 sm:p-7 text-white shadow-xl relative overflow-hidden">
         <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">

@@ -86,6 +86,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
   const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
   const [lastSyncTime, setLastSyncTime] = useState<string>(new Date().toLocaleTimeString('hi-IN'));
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
+  const [copiedDriverLink, setCopiedDriverLink] = useState<boolean>(false);
 
   // 6-second fast sheet sync countdown
   const [countdown, setCountdown] = useState<number>(6);
@@ -911,6 +912,30 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
     setTimeout(() => setCopiedLink(false), 2500);
   };
 
+  // Build 1-Click Driver Magic Link (?portal=driver&driverPhone=...&bus=...&autoTrack=1)
+  const driverMagicLinkUrl = useMemo(() => {
+    if (typeof window === 'undefined') return '';
+    const phoneDigits = String(activeTelemetry.driverPhone || '').replace(/\D/g, '').slice(-10);
+    const params = new URLSearchParams({
+      portal: 'driver',
+      bus: String(selectedBusId || '121212'),
+      autoTrack: '1',
+    });
+    if (phoneDigits) params.set('driverPhone', phoneDigits);
+    return `${window.location.origin}/?${params.toString()}`;
+  }, [activeTelemetry.driverPhone, selectedBusId]);
+
+  const handleCopyDriverMagicLink = () => {
+    if (!driverMagicLinkUrl) return;
+    navigator.clipboard?.writeText(driverMagicLinkUrl);
+    setCopiedDriverLink(true);
+    setActionToast({
+      text: `🚐 ड्राइवर 1-क्लिक लिंक कॉपी हो गया (${activeTelemetry.driverName})! WhatsApp पर भेजें — 1 टच में GPS शुरू होगा।`,
+      type: 'success',
+    });
+    setTimeout(() => setCopiedDriverLink(false), 3000);
+  };
+
   // =========================================================================
   // STOPPAGE MODIFICATION HANDLERS (Pin-drop, Drag, Delete, Reset)
   // =========================================================================
@@ -1203,16 +1228,27 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
             </a>
 
             <a
-              href={`https://wa.me/91${activeTelemetry.driverPhone}?text=${encodeURIComponent(
-                `नमस्ते अमजद जी, EVS स्कूल वैन (${selectedBusId}) की लोकेशन चाहिए।`
+              href={`https://wa.me/91${String(activeTelemetry.driverPhone || '').replace(/\D/g, '').slice(-10)}?text=${encodeURIComponent(
+                `नमस्ते ${activeTelemetry.driverName} जी,\nवैन (${selectedBusId}) की लाइव लोकेशन चालू करने के लिए बस नीचे दिया लिंक 1 बार दबाएं (ऑटो लॉगिन + GPS शुरू हो जाएगा):\n\n${driverMagicLinkUrl}`
               )}`}
               target="_blank"
               rel="noopener noreferrer"
               className="px-3 py-1.5 rounded-xl bg-emerald-600/90 hover:bg-emerald-600 text-white text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs"
+              title="ड्राइवर को WhatsApp पर 1-क्लिक GPS लिंक भेजें"
             >
               <i className="fa-brands fa-whatsapp"></i>
-              <span>WhatsApp</span>
+              <span>ड्राइवर लिंक WhatsApp</span>
             </a>
+
+            <button
+              type="button"
+              onClick={handleCopyDriverMagicLink}
+              className="px-3 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-black transition-all flex items-center gap-1.5 border border-teal-400 cursor-pointer shadow-xs"
+              title="ड्राइवर का सीधा 1-क्लिक लॉगिन + ऑटो GPS लिंक कॉपी करें"
+            >
+              <i className={`fa-solid ${copiedDriverLink ? 'fa-check' : 'fa-wand-magic-sparkles'}`}></i>
+              <span>{copiedDriverLink ? 'लिंक कॉपी हुआ!' : '1-क्लिक ड्राइवर लिंक'}</span>
+            </button>
 
             <button
               type="button"
@@ -1221,7 +1257,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
               title="अभिभावकों के साथ लाइव लिंक शेयर करें"
             >
               <i className={`fa-solid ${copiedLink ? 'fa-check' : 'fa-share-nodes'}`}></i>
-              <span>{copiedLink ? 'कॉपी हुआ!' : 'शेयर लिंक'}</span>
+              <span>{copiedLink ? 'कॉपी हुआ!' : 'मैप शेयर'}</span>
             </button>
 
             {onOpenDriverPortal && (

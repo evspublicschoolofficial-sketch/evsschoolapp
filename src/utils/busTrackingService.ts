@@ -453,6 +453,7 @@ function ensureFeatureBackupTabs(ss) {
   ensureTabSafe_(ss, "Teacher_Performance", ["Teacher Performance"], ["Record_ID", "Teacher_ID", "Teacher_Name", "Assigned_Class", "Month", "Academic_Year", "Syllabus_Score_30", "Test_Score_25", "Attendance_Score_15", "Homework_Score_15", "Punctuality_Score_15", "Total_Score_100", "Grade", "Evaluated_By", "Remarks", "Timestamp"], added);
   ensureTabSafe_(ss, "Syllabus_Tracker", ["Syllabus Tracker"], ["ID", "Teacher_ID", "Teacher_Name", "Class", "Subject", "Month", "Week_Number", "Week_Label", "Chapter_Title", "Topic_Description", "Planned_Date", "Target_Completion_Date", "Completed_Date", "Status", "Timestamp"], added);
   ensureTabSafe_(ss, "School_Holidays", ["School Holidays", "Holidays"], ["ID", "Date", "End_Date", "Title", "Category", "Description", "Timestamp"], added);
+  ensureTabSafe_(ss, "Hall_Pass_Config", ["Hall Pass Config", "HallPassConfig", "Exam_Hall_Pass"], ["Config_Key", "Exam_Type", "Session", "Custom_Title", "Exam_Schedule_Line", "Instruction_Line", "Published_To_Parent", "Backside_Flip_Mode", "Datesheet_Arrival_Line", "Datesheet_Holiday_Note", "Datesheet_Rows_JSON", "Allowed_Overrides_JSON", "Updated_At"], added);
   return added;
 }
 
@@ -723,9 +724,12 @@ function doGet(e) {
   if (action === "getSchoolHolidays") {
     return handleGetSchoolHolidays(ss);
   }
+  if (action === "getHallPassConfig") {
+    return handleGetHallPassConfig(ss);
+  }
 
   // 10. GET FALLBACK: Delegate write actions when called via GET query parameters
-  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday") {
+  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig") {
     return doPost(e);
   }
 
@@ -1412,6 +1416,11 @@ function doPost(e) {
     }
     if (action === "deleteSchoolHoliday") {
       return handleDeleteRowById_(ss, "School_Holidays", data.id);
+    }
+
+    // 16. EXAM HALL PASS, DATESHEET & FEE OVERRIDES (Hall_Pass_Config - 2-Way Sync)
+    if (action === "saveHallPassConfig") {
+      return handleSaveHallPassConfig(ss, data);
     }
 
     return ContentService.createTextOutput(JSON.stringify({
@@ -3607,6 +3616,82 @@ function handleSaveSchoolHoliday(ss, data) {
   if (rowIndex > 0) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
   else sheet.appendRow(rowData);
   return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "Holiday saved!" })).setMimeType(ContentService.MimeType.JSON);
+}
+
+// =========================================================================
+// FEATURE 16: EXAM HALL PASS, DATESHEET & OVERRIDE SETTINGS (Hall_Pass_Config)
+// =========================================================================
+function handleGetHallPassConfig(ss) {
+  var sheet = findExistingSheet_(ss, ["Hall_Pass_Config", "Hall Pass Config", "HallPassConfig", "Exam_Hall_Pass"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", config: null })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  if (rows.length < 2) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", config: null })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var r = rows[1];
+  var parsedDatesheet = [];
+  var parsedOverrides = {};
+  try {
+    if (r[10]) parsedDatesheet = JSON.parse(String(r[10]));
+  } catch (e1) {}
+  try {
+    if (r[11]) parsedOverrides = JSON.parse(String(r[11]));
+  } catch (e2) {}
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    config: {
+      examType: String(r[1] || "Half-Yearly"),
+      session: String(r[2] || "2026-27"),
+      customExamTitle: String(r[3] || ""),
+      examScheduleLine: String(r[4] || ""),
+      instructionLine: String(r[5] || ""),
+      publishedToParent: String(r[6] || "TRUE").toUpperCase() !== "FALSE",
+      backsideFlipMode: String(r[7] || "book_flip") === "row_flip" ? "row_flip" : "book_flip",
+      datesheetArrivalLine: String(r[8] || ""),
+      datesheetHolidayNote: String(r[9] || ""),
+      datesheetRows: Array.isArray(parsedDatesheet) ? parsedDatesheet : [],
+      allowedOverrides: (parsedOverrides && typeof parsedOverrides === "object") ? parsedOverrides : {},
+      updatedAt: String(r[12] || "")
+    }
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveHallPassConfig(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Hall_Pass_Config", "Hall Pass Config", "HallPassConfig", "Exam_Hall_Pass"]);
+  var c = data.config ? (typeof data.config === "string" ? JSON.parse(data.config) : data.config) : data;
+  if (typeof c === "string") {
+    try { c = JSON.parse(c); } catch (e) { c = data; }
+  }
+  var nowIst = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var rowArr = [
+    "HALL_PASS_SETTINGS",
+    String(c.examType || "Half-Yearly"),
+    String(c.session || "2026-27"),
+    String(c.customExamTitle || ""),
+    String(c.examScheduleLine || ""),
+    String(c.instructionLine || ""),
+    c.publishedToParent === false ? "FALSE" : "TRUE",
+    String(c.backsideFlipMode || "book_flip"),
+    String(c.datesheetArrivalLine || ""),
+    String(c.datesheetHolidayNote || ""),
+    JSON.stringify(Array.isArray(c.datesheetRows) ? c.datesheetRows : []),
+    JSON.stringify((c.allowedOverrides && typeof c.allowedOverrides === "object") ? c.allowedOverrides : {}),
+    formatToLocalIST_(c.updatedAt, nowIst)
+  ];
+  if (sheet.getLastRow() >= 2) {
+    sheet.getRange(2, 1, 1, rowArr.length).setValues([rowArr]);
+  } else {
+    sheet.appendRow(rowArr);
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Hall_Pass_Config saved permanently to Google Sheet!"
+  })).setMimeType(ContentService.MimeType.JSON);
 }
 `;
 

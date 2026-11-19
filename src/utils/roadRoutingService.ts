@@ -12,15 +12,15 @@ export interface RoadRoutingResult {
   isSnappedToRoad: boolean;
 }
 
-// In-memory cache to prevent redundant API calls
+// In-memory cache to prevent redundant API calls (ONLY stores genuine road-snapped routes!)
 const ROUTE_CACHE = new Map<string, RoadRoutingResult>();
-const CACHE_STORAGE_PREFIX = 'evs_road_cache_v5_';
+const CACHE_STORAGE_PREFIX = 'evs_road_cache_v6_';
 
-// Purge any old legacy road caches that stored the 10km detour
+// Purge ALL legacy road caches that stored straight-line fallbacks or 10km detours
 try {
   if (typeof window !== 'undefined' && window.localStorage) {
     Object.keys(localStorage).forEach((key) => {
-      if (key.startsWith('evs_road_cache_') && !key.startsWith('evs_road_cache_v5_')) {
+      if (key.startsWith('evs_road_cache_') && !key.startsWith(CACHE_STORAGE_PREFIX)) {
         localStorage.removeItem(key);
       }
     });
@@ -45,7 +45,6 @@ export const calculateHaversineKm = (
   return R * c;
 };
 
-// Generate smooth series of intermediate corridor coordinates
 const generateSmoothCorridor = (
   p1: { lat: number; lng: number },
   p2: { lat: number; lng: number },
@@ -61,7 +60,6 @@ const generateSmoothCorridor = (
   return points;
 };
 
-// Simple deterministic hash for long waypoint sequences
 const hashString = (str: string): string => {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
@@ -71,7 +69,6 @@ const hashString = (str: string): string => {
   return Math.abs(hash).toString(36);
 };
 
-// Build a unique cache key from waypoints
 const getRouteCacheKey = (waypoints: Array<{ lat: number; lng: number }>): string => {
   const raw = waypoints
     .map((p) => `${p.lat.toFixed(5)},${p.lng.toFixed(5)}`)
@@ -79,26 +76,43 @@ const getRouteCacheKey = (waypoints: Array<{ lat: number; lng: number }>): strin
   return `pts${waypoints.length}_${hashString(raw)}`;
 };
 
-interface LegResult {
-  roadCoordinates: [number, number][];
-  distanceKm: number;
-  durationMinutes: number;
-  isSnappedToRoad: boolean;
-}
+const DIRECT_OSRM_MIRRORS = [
+  'https://routing.openstreetmap.de/routed-car/route/v1/driving',
+  'https://router.project-osrm.org/route/v1/driving',
+];
 
-/**
- * Route a single leg between two consecutive waypoints:
- * - Queries OSRM for true road geometry.
- * - Detects if OSRM took an artificial 10km detour due to missing rural road tags in OSM.
- * - Rejects any detour (detourRatio > 2.0 && excessKm > 2.0) and replaces it with the shortest direct corridor.
- */
-const fetchSingleLegRoad = async (
+const tryDirectOsrmPath = async (coordsPath: string): Promise<RoadRoutingResult | null> => {
+  for (const baseUrl of DIRECT_OSRM_MIRRORS) {
+    try {
+      const url = `${baseUrl}/${coordsPath}?overview=full&geometries=geojson&continue_straight=false`;
+      const response = await fetch(url, {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(7500),
+      });
+      if (!response.ok) continue;
+      const data = await response.json();
+      if (data?.code === 'Ok' && Array.isArray(data?.routes) && data.routes[0]?.geometry?.coordinates?.length > 0) {
+        const route = data.routes[0];
+        const coords: [number, number][] = route.geometry.coordinates.map(
+          (c: [number, number]) => [Number(c[1]), Number(c[0])]
+        );
+        return {
+          roadCoordinates: coords,
+          distanceKm: Math.round(((Number(route.distance) || 0) / 1000) * 100) / 100,
+          durationMinutes: Math.round(((Number(route.duration) || 0) / 60) * 10) / 10,
+          isSnappedToRoad: true,
+        };
+      }
+    } catch {}
+  }
+  return null;
+};
+
+const fetchSingleLegRoadDirect = async (
   start: { lat: number; lng: number },
   end: { lat: number; lng: number }
-): Promise<LegResult> => {
+): Promise<RoadRoutingResult> => {
   const directDist = calculateHaversineKm(start, end);
-
-  // If very close (under 40 meters), direct connection
   if (directDist < 0.04) {
     return {
       roadCoordinates: [[start.lat, start.lng], [end.lat, end.lng]],
@@ -108,49 +122,12 @@ const fetchSingleLegRoad = async (
     };
   }
 
-  // Realistic fallback metrics based on shortest village road corridor
-  const fallbackRoadDist = Math.round(directDist * 1.15 * 100) / 100; // 1.15x winding factor
-  const fallbackDuration = Math.round((fallbackRoadDist / 25) * 60 * 10) / 10; // at 25 km/h avg speed
+  const legPath = `${start.lng.toFixed(6)},${start.lat.toFixed(6)};${end.lng.toFixed(6)},${end.lat.toFixed(6)}`;
+  const direct = await tryDirectOsrmPath(legPath);
+  if (direct) return direct;
 
-  const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${start.lng.toFixed(6)},${start.lat.toFixed(6)};${end.lng.toFixed(6)},${end.lat.toFixed(6)}?overview=full&geometries=geojson`;
-
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6500);
-
-    const response = await fetch(osrmUrl, {
-      signal: controller.signal,
-      headers: { Accept: 'application/json' },
-    });
-    clearTimeout(timeoutId);
-
-    if (response.ok) {
-      const data = await response.json();
-      if (data.code === 'Ok' && data.routes && data.routes[0]) {
-        const route = data.routes[0];
-        const osrmDist = (route.distance || 0) / 1000;
-
-        // ALWAYS USE REAL ROAD GEOMETRY:
-        // Village roads naturally curve and connect through actual junctions.
-        // Never replace real paved road geometry with straight diagonal lines through agricultural fields!
-        if (Array.isArray(route.geometry?.coordinates) && route.geometry.coordinates.length > 0) {
-          const leafLetCoords: [number, number][] = route.geometry.coordinates.map(
-            (c: [number, number]) => [c[1], c[0]]
-          );
-          return {
-            roadCoordinates: leafLetCoords,
-            distanceKm: Math.round(osrmDist * 100) / 100,
-            durationMinutes: Math.round(((route.duration || 0) / 60) * 10) / 10,
-            isSnappedToRoad: true,
-          };
-        }
-      }
-    }
-  } catch (err) {
-    // Network or timeout, fallback to smooth corridor
-  }
-
-  // Fallback only if OSRM is totally unreachable
+  const fallbackRoadDist = Math.round(directDist * 1.15 * 100) / 100;
+  const fallbackDuration = Math.round((fallbackRoadDist / 25) * 60 * 10) / 10;
   return {
     roadCoordinates: generateSmoothCorridor(start, end, 8),
     distanceKm: fallbackRoadDist,
@@ -160,79 +137,131 @@ const fetchSingleLegRoad = async (
 };
 
 /**
- * Fetch true road geometry connecting waypoints sequentially.
- * Runs leg-by-leg with automatic detour rejection, guaranteeing the shortest route.
+ * Fetch true road-snapped geometry connecting waypoints sequentially along real streets/roads.
+ * Uses server proxy (/api/road-route) first, then direct OSRM mirrors, and NEVER caches straight-line fallbacks.
  */
 export const fetchRoadSnappingRoute = async (
-  waypoints: Array<{ lat: number; lng: number }>
+  waypoints: Array<{ lat: number; lng: number }>,
+  options?: { bypassCache?: boolean }
 ): Promise<RoadRoutingResult> => {
-  if (!waypoints || waypoints.length < 2) {
-    const coords: [number, number][] = (waypoints || []).map((w) => [w.lat, w.lng]);
+  const cleanWaypoints: Array<{ lat: number; lng: number }> = [];
+  for (const pt of waypoints || []) {
+    const lat = Number(pt?.lat);
+    const lng = Number(pt?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+    if (cleanWaypoints.length > 0) {
+      const prev = cleanWaypoints[cleanWaypoints.length - 1];
+      if (calculateHaversineKm(prev, { lat, lng }) < 0.012) continue;
+    }
+    cleanWaypoints.push({ lat, lng });
+  }
+
+  if (cleanWaypoints.length < 2) {
     return {
-      roadCoordinates: coords,
+      roadCoordinates: cleanWaypoints.map((w) => [w.lat, w.lng]),
       distanceKm: 0,
       durationMinutes: 0,
       isSnappedToRoad: false,
     };
   }
 
-  const cacheKey = getRouteCacheKey(waypoints);
+  const cacheKey = getRouteCacheKey(cleanWaypoints);
   const storageKey = CACHE_STORAGE_PREFIX + cacheKey;
 
-  // 1. Check in-memory cache
-  if (ROUTE_CACHE.has(cacheKey)) {
-    return ROUTE_CACHE.get(cacheKey)!;
+  if (!options?.bypassCache) {
+    // 1. Check in-memory cache (ONLY road-snapped entries live here)
+    const memCached = ROUTE_CACHE.get(cacheKey);
+    if (memCached && memCached.isSnappedToRoad) {
+      return memCached;
+    }
+
+    // 2. Check localStorage cache (ignore if straight-line fallback somehow got stored)
+    try {
+      const saved = localStorage.getItem(storageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (
+          parsed &&
+          parsed.isSnappedToRoad === true &&
+          Array.isArray(parsed.roadCoordinates) &&
+          parsed.roadCoordinates.length > 2
+        ) {
+          ROUTE_CACHE.set(cacheKey, parsed);
+          return parsed;
+        }
+      }
+    } catch {}
   }
 
-  // 2. Check localStorage cache
+  const persistIfSnapped = (res: RoadRoutingResult) => {
+    if (res.isSnappedToRoad && res.roadCoordinates.length >= 2) {
+      ROUTE_CACHE.set(cacheKey, res);
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(res));
+      } catch {}
+    }
+  };
+
+  // 3. Primary: Backend Road Routing Proxy (multi-provider, handles CORS & caches only real road paths)
   try {
-    const saved = localStorage.getItem(storageKey);
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (parsed && Array.isArray(parsed.roadCoordinates) && parsed.roadCoordinates.length > 0) {
-        ROUTE_CACHE.set(cacheKey, parsed);
-        return parsed;
+    const serverRes = await fetch('/api/road-route', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ waypoints: cleanWaypoints }),
+      signal: AbortSignal.timeout(12000),
+    });
+    if (serverRes.ok) {
+      const data = await serverRes.json();
+      if (data?.success && Array.isArray(data.roadCoordinates) && data.roadCoordinates.length >= 2) {
+        const result: RoadRoutingResult = {
+          roadCoordinates: data.roadCoordinates,
+          distanceKm: Number(data.distanceKm || 0),
+          durationMinutes: Number(data.durationMinutes || 0),
+          isSnappedToRoad: Boolean(data.isSnappedToRoad),
+        };
+        persistIfSnapped(result);
+        if (result.isSnappedToRoad) {
+          return result;
+        }
       }
     }
   } catch {}
 
-  // 3. Process every consecutive leg individually and concurrently
-  const legPromises: Promise<LegResult>[] = [];
-  for (let i = 0; i < waypoints.length - 1; i++) {
-    legPromises.push(fetchSingleLegRoad(waypoints[i], waypoints[i + 1]));
+  // 4. Client fallback: single multi-waypoint request against OSRM mirrors
+  const fullCoordsPath = cleanWaypoints.map((p) => `${p.lng.toFixed(6)},${p.lat.toFixed(6)}`).join(';');
+  const fullDirect = await tryDirectOsrmPath(fullCoordsPath);
+  if (fullDirect) {
+    persistIfSnapped(fullDirect);
+    return fullDirect;
   }
 
-  const legResults = await Promise.all(legPromises);
-
+  // 5. Last resort: sequential leg-by-leg direct queries (avoids burst 429 rate-limits)
   const mergedCoords: [number, number][] = [];
   let totalDistanceKm = 0;
   let totalDurationMinutes = 0;
-  let hasAnySnapped = false;
+  let snappedLegs = 0;
+  const totalLegs = cleanWaypoints.length - 1;
 
-  legResults.forEach((leg, index) => {
+  for (let i = 0; i < totalLegs; i++) {
+    const leg = await fetchSingleLegRoadDirect(cleanWaypoints[i], cleanWaypoints[i + 1]);
     totalDistanceKm += leg.distanceKm;
     totalDurationMinutes += leg.durationMinutes;
-    if (leg.isSnappedToRoad) hasAnySnapped = true;
+    if (leg.isSnappedToRoad) snappedLegs++;
+    if (i === 0) mergedCoords.push(...leg.roadCoordinates);
+    else mergedCoords.push(...leg.roadCoordinates.slice(1));
+  }
 
-    if (index === 0) {
-      mergedCoords.push(...leg.roadCoordinates);
-    } else {
-      // Avoid duplicate point at joint
-      mergedCoords.push(...leg.roadCoordinates.slice(1));
-    }
-  });
-
+  const allSnapped = snappedLegs === totalLegs && totalLegs > 0;
   const result: RoadRoutingResult = {
     roadCoordinates: mergedCoords,
     distanceKm: Math.round(totalDistanceKm * 100) / 100,
     durationMinutes: Math.round(totalDurationMinutes * 10) / 10,
-    isSnappedToRoad: hasAnySnapped,
+    isSnappedToRoad: snappedLegs > 0,
   };
 
-  ROUTE_CACHE.set(cacheKey, result);
-  try {
-    localStorage.setItem(storageKey, JSON.stringify(result));
-  } catch {}
+  if (allSnapped) {
+    persistIfSnapped(result);
+  }
 
   return result;
 };
