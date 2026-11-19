@@ -6361,6 +6361,32 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     });
   }, [students, homeworkList, classMap]);
 
+  const classStudentCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    classOptions.forEach((c) => {
+      const target = String(c).toLowerCase();
+      counts[c] = students.filter(
+        (s) =>
+          String(s.Class || '').toLowerCase() === target ||
+          getClassName(s.Class).toLowerCase() === target
+      ).length;
+    });
+    return counts;
+  }, [students, classOptions, classMap]);
+
+  const selectedClassStudentCount = useMemo(() => {
+    if (studentClassFilter === 'all') return students.length;
+    if (classStudentCounts[studentClassFilter] !== undefined) {
+      return classStudentCounts[studentClassFilter];
+    }
+    const target = studentClassFilter.toLowerCase();
+    return students.filter(
+      (s) =>
+        String(s.Class || '').toLowerCase() === target ||
+        getClassName(s.Class).toLowerCase() === target
+    ).length;
+  }, [students, studentClassFilter, classStudentCounts, classMap]);
+
   // Format Date cleanly
   const formatDate = (dateStr: string) => {
     if (!dateStr) return 'N/A';
@@ -12929,20 +12955,40 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     </button>
                   </div>
 
-                  <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
                     <span className="text-xs text-slate-500 whitespace-nowrap">Filter Class:</span>
                     <select
                       value={studentClassFilter}
                       onChange={(e) => setStudentClassFilter(e.target.value)}
-                      className="px-3 py-2 rounded-lg border border-slate-300 text-xs bg-white outline-none w-full sm:w-auto"
+                      className="px-3 py-2 rounded-lg border border-slate-300 text-xs bg-white outline-none w-full sm:w-auto font-semibold text-slate-800"
                     >
-                      <option value="all">All Classes</option>
+                      <option value="all">All Classes ({students.length})</option>
                       {classOptions.map((c) => (
                         <option key={c} value={c}>
-                          Class {getClassName(c)}
+                          Class {getClassName(c)} ({classStudentCounts[c] ?? 0})
                         </option>
                       ))}
                     </select>
+
+                    {/* Selected Class Total Student Count Badge */}
+                    <div
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#0c2340] text-amber-300 border border-[#0c2340] text-xs font-extrabold whitespace-nowrap shrink-0 shadow-xs"
+                      title={
+                        studentClassFilter === 'all'
+                          ? `सभी कक्षाओं में कुल ${selectedClassStudentCount} छात्र`
+                          : `Class ${getClassName(studentClassFilter)} में कुल ${selectedClassStudentCount} छात्र`
+                      }
+                    >
+                      <i className="fa-solid fa-users text-[11px] text-amber-400"></i>
+                      <span>
+                        कुल छात्र: <span className="text-white tabular-nums">{selectedClassStudentCount}</span>
+                      </span>
+                      {studentSearchTerm.trim() !== '' && filteredStudents.length !== selectedClassStudentCount && (
+                        <span className="text-[10px] font-bold text-blue-200 border-l border-white/20 pl-1.5 tabular-nums">
+                          दिख रहे: {filteredStudents.length}
+                        </span>
+                      )}
+                    </div>
 
                     {/* Add Student Button for Manager */}
                     <button
