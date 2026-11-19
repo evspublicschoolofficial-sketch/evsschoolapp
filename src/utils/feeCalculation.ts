@@ -29,6 +29,34 @@ export interface SchoolFeeTotals {
   totalDiscounts: number;
   totalAdvance: number;
   totalBilled: number;
+  totalWaivedStudents: number;
+  totalWaivedAmountTillDate: number;
+  totalAnnualWaivedAmount: number;
+}
+
+export interface WaivedStudentDetail {
+  student: Student;
+  reason: string;
+  startMonth: string;
+  currentMonth: string;
+  elapsedMonths: number;
+  monthlyTuitionRate: number;
+  tuitionWaivedTillDate: number;
+  admissionWaived: number;
+  totalWaivedTillDate: number;
+  annualWaivedTotal: number;
+  otherChargedFees: number;
+  totalPaidByStudent: number;
+  remainingDueOnOtherFees: number;
+}
+
+export interface WaivedStudentsSummary {
+  totalWaivedStudents: number;
+  totalWaivedAmountTillDate: number;
+  totalAnnualWaivedAmount: number;
+  totalTuitionWaivedTillDate: number;
+  totalAdmissionWaived: number;
+  waivedStudents: WaivedStudentDetail[];
 }
 
 /**
@@ -308,12 +336,10 @@ export const calculateStudentSummary = (
   const reconciled = reconcileFeeRecords(rawStudentReceipts);
 
   // 3. Monthly tuition fee (from profile, existing receipts, or class master)
-  // Per School Rule: For Fee-Waived students, ALL auto-calculated tuition/default fees MUST be 0.
+  // Per School Rule: For Fee-Waived students, ONLY Monthly Tuition Fee is ₹0 (and never added to pending dues).
   const monthlyTuition = isExempt ? 0 : getStudentMonthlyTuition(studentProfile, reconciled);
 
-  // 4. Admission Fee (if applicable)
-  // For regular students: defaults to Fee Master admissionFee (e.g., ₹1000).
-  // For Fee-Waived students: ₹0 by default! Only charged if Admission Fee was explicitly added/billed!
+  // 4. Admission Fee (Always applicable for ALL students, including Tuition-Waived students!)
   let defaultAdmissionFee = 1000;
   try {
     const feeConfig = getActiveFeeMasterConfig();
@@ -341,13 +367,9 @@ export const calculateStudentSummary = (
     String(studentProfile.Admission_Fee).trim() !== '';
   const explicitProfileAdmVal = hasExplicitProfileAdm ? (Number(studentProfile.Admission_Fee) || 0) : 0;
 
-  const admissionFee = isExempt
-    ? hasExplicitProfileAdm
-      ? explicitProfileAdmVal
-      : admissionRecordsBilled
-    : hasExplicitProfileAdm
-      ? explicitProfileAdmVal
-      : Math.max(defaultAdmissionFee, admissionRecordsBilled);
+  const admissionFee = hasExplicitProfileAdm
+    ? explicitProfileAdmVal
+    : Math.max(defaultAdmissionFee, admissionRecordsBilled);
 
   // 4b. Other Billed Fees (Books & Stationery, Exam Fee, Uniform, Annual Fee, etc.)
   // Charged from ALL students including tuition-waived students
@@ -607,6 +629,9 @@ export const computeSchoolFeeTotals = (
   // Take the comprehensive advance fee total (student excess advance or advance deposit receipts)
   const totalAdvance = Math.max(studentExcessAdvance, advanceFeeDepositSum);
 
+  // Compute complete Fee Waiver summary across all active students
+  const waivedSummary = computeWaivedStudentsSummary(Array.from(studentMap.values()), allFeeRecords);
+
   return {
     totalReceipts,
     totalCollected,
@@ -614,6 +639,98 @@ export const computeSchoolFeeTotals = (
     totalDiscounts,
     totalAdvance,
     totalBilled,
+    totalWaivedStudents: waivedSummary.totalWaivedStudents,
+    totalWaivedAmountTillDate: waivedSummary.totalWaivedAmountTillDate,
+    totalAnnualWaivedAmount: waivedSummary.totalAnnualWaivedAmount,
+  };
+};
+
+/**
+ * Computes how many students have 100% Fee Waiver and the exact rupee value
+ * of tuition & admission fees waived (both till the current running month and for the full 12-month session).
+ */
+export const computeWaivedStudentsSummary = (
+  students: Student[],
+  allFeeRecords: FeeCollectionRecord[]
+): WaivedStudentsSummary => {
+  const feeConfig = (() => {
+    try {
+      return getActiveFeeMasterConfig();
+    } catch {
+      return {};
+    }
+  })();
+
+  const waivedStudents: WaivedStudentDetail[] = [];
+  let totalWaivedAmountTillDate = 0;
+  let totalAnnualWaivedAmount = 0;
+  let totalTuitionWaivedTillDate = 0;
+  let totalAdmissionWaived = 0;
+
+  const seenIds = new Set<string>();
+  students.forEach((student) => {
+    if (!student) return;
+    const normId = normalizeStudentId(student.Student_ID);
+    if (normId) {
+      if (seenIds.has(normId)) return;
+      seenIds.add(normId);
+    }
+
+    const freeCheck = isFreeStudent(student);
+    if (!freeCheck.isFree) return;
+
+    const classKey = normalizeClassKey(student.Class);
+    const masterClassCfg = (feeConfig as any)?.[classKey];
+    const customMonthly = Number((student as any).Monthly_Fee || (student as any).monthly_fee);
+    const monthlyTuitionRate =
+      !isNaN(customMonthly) && customMonthly > 0
+        ? customMonthly
+        : masterClassCfg?.monthlyTuition > 0
+          ? Number(masterClassCfg.monthlyTuition)
+          : getStudentMonthlyTuition(student);
+
+    const { elapsedMonths, currentMonthName, startMonthName } = getElapsedMonthsCount(
+      student.Session_Start_Month || (student as any).Start_Month
+    );
+
+    const summary = calculateStudentSummary(student.Student_ID, allFeeRecords, student);
+    const tuitionWaivedTillDate = monthlyTuitionRate * elapsedMonths;
+    const annualTuitionWaived = monthlyTuitionRate * 12;
+    // Per school rule: ONLY Monthly Tuition Fee is waived; Admission, Exam, Books, Auto etc. are NOT waived.
+    const admissionWaived = 0;
+    const totalWaivedTill = tuitionWaivedTillDate;
+    const annualWaived = annualTuitionWaived;
+
+    totalTuitionWaivedTillDate += tuitionWaivedTillDate;
+    totalWaivedAmountTillDate += totalWaivedTill;
+    totalAnnualWaivedAmount += annualWaived;
+
+    waivedStudents.push({
+      student,
+      reason: freeCheck.reason || 'Tuition Fee Waived (केवल ट्यूशन फीस माफ)',
+      startMonth: startMonthName,
+      currentMonth: currentMonthName,
+      elapsedMonths,
+      monthlyTuitionRate,
+      tuitionWaivedTillDate,
+      admissionWaived,
+      totalWaivedTillDate: totalWaivedTill,
+      annualWaivedTotal: annualWaived,
+      otherChargedFees: (summary.admissionFee || 0) + (summary.otherBilledFees || 0),
+      totalPaidByStudent: summary.totalPaid || 0,
+      remainingDueOnOtherFees: summary.currentDues || 0,
+    });
+  });
+
+  waivedStudents.sort((a, b) => b.totalWaivedTillDate - a.totalWaivedTillDate);
+
+  return {
+    totalWaivedStudents: waivedStudents.length,
+    totalWaivedAmountTillDate,
+    totalAnnualWaivedAmount,
+    totalTuitionWaivedTillDate,
+    totalAdmissionWaived,
+    waivedStudents,
   };
 };
 

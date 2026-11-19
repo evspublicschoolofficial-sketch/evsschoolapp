@@ -494,7 +494,7 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
         {/* Modal Footer */}
         <div className="p-3.5 sm:p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-2">
           <span className="text-[11px] text-slate-500">
-            सभी 22 टैब (2-Way सिंक): Hall_Pass_Config, Exam_Marks, Report_Cards_Backup, Weekly_Tests, Teacher_Performance, Syllabus_Tracker, School_Holidays, WhatsApp_Alert_Logs, Staff_Salary_Config, Staff_Salary_Payroll, UPI_Settings, UPI_Payments, Bus_Tracking, Route_Stops
+            सभी 23 टैब (2-Way सिंक): Fee_Waivers, Hall_Pass_Config, Exam_Marks, Report_Cards_Backup, Weekly_Tests, Teacher_Performance, Syllabus_Tracker, School_Holidays, WhatsApp_Alert_Logs, Staff_Salary_Config, Staff_Salary_Payroll, UPI_Settings, UPI_Payments, Bus_Tracking, Route_Stops
           </span>
           <button
             type="button"

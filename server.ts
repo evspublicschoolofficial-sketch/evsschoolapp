@@ -659,6 +659,27 @@ async function forwardToGoogleAppsScript(payload: any) {
           if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
         }
       } catch {}
+    } else if (formattedPayload.action === 'saveFeeWaiver') {
+      try {
+        const getUrl = `${targetUrl}?action=saveFeeWaiver&studentId=${encodeURIComponent(formattedPayload.studentId || '')}&isFree=${encodeURIComponent(String(Boolean(formattedPayload.isFree)))}&reason=${encodeURIComponent(formattedPayload.reason || '')}&updatedAt=${encodeURIComponent(String(formattedPayload.updatedAt || Date.now()))}`;
+        if (getUrl.length < 7500) {
+          const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(15000) });
+          const gText = await gRes.text();
+          const gCheck = parseAppsScriptResponse(gText);
+          if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
+        }
+      } catch {}
+    } else if (formattedPayload.action === 'saveFeeWaiversBatch') {
+      try {
+        const entStr = typeof formattedPayload.entries === 'string' ? formattedPayload.entries : JSON.stringify(formattedPayload.entries || {});
+        const getUrl = `${targetUrl}?action=saveFeeWaiversBatch&entries=${encodeURIComponent(entStr)}`;
+        if (getUrl.length < 7500) {
+          const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(15000) });
+          const gText = await gRes.text();
+          const gCheck = parseAppsScriptResponse(gText);
+          if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
+        }
+      } catch {}
     }
 
     return { ok: false, error: postCheck.error || `HTTP ${lastPostStatus || 500}`, response: lastPostText };
@@ -712,6 +733,56 @@ async function syncHallPassConfigFromGoogleSheet(force = false, overrideUrl?: st
       updatedAt: sc.updatedAt || hallPassConfigStore.updatedAt || '',
     };
     saveHallPassConfigCache();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+let lastFeeWaiversSheetSync = 0;
+
+async function syncFeeWaiversFromGoogleSheet(force = false, overrideUrl?: string): Promise<boolean> {
+  const now = Date.now();
+  if (!force && now - lastFeeWaiversSheetSync < 25000) return false;
+  lastFeeWaiversSheetSync = now;
+  try {
+    const baseUrl = overrideUrl || currentAppsScriptUrl;
+    const url = `${baseUrl}?action=getFeeWaivers&_t=${now}`;
+    const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(9000) });
+    if (!res.ok) return false;
+    const text = await res.text();
+    if (!text || text.trim().startsWith('<')) return false;
+    const json: any = JSON.parse(text);
+    if (!json || json.status === 'error' || !json.waivers || typeof json.waivers !== 'object') {
+      return false;
+    }
+
+    let changed = false;
+    for (const [rawId, val] of Object.entries(json.waivers as Record<string, any>)) {
+      const sId = String(rawId || '').trim().toLowerCase();
+      if (!sId || !val || typeof val !== 'object') continue;
+      const incomingTs = Number(val.updatedAt) || 0;
+      const existing = feeWaiversStore[sId];
+      if (!existing || (incomingTs > 0 && incomingTs >= (Number(existing.updatedAt) || 0))) {
+        const nextEntry = {
+          isFree: Boolean(val.isFree),
+          reason: String(val.reason || ''),
+          updatedAt: incomingTs || Date.now(),
+        };
+        if (
+          !existing ||
+          existing.isFree !== nextEntry.isFree ||
+          existing.reason !== nextEntry.reason ||
+          incomingTs > (Number(existing.updatedAt) || 0)
+        ) {
+          feeWaiversStore[sId] = nextEntry;
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      saveFeeWaiversCache();
+    }
     return true;
   } catch {
     return false;
@@ -4460,17 +4531,23 @@ async function startServer() {
     }
   });
 
-  app.get('/api/fee-waivers', (_req, res) => {
+  app.get('/api/fee-waivers', async (req, res) => {
+    const force = req.query.fresh === '1' || req.query.refresh === '1';
+    const targetUrl = resolveTargetAppsScriptUrl(req);
+    const sheetSynced = await syncFeeWaiversFromGoogleSheet(force, targetUrl);
     return res.json({
       success: true,
+      sheetSynced,
       waivers: feeWaiversStore,
     });
   });
 
-  app.post('/api/fee-waivers', (req, res) => {
+  app.post('/api/fee-waivers', async (req, res) => {
     try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
       const body = req.body || {};
       let changed = false;
+      const entriesToForward: Record<string, { isFree: boolean; reason: string; updatedAt: number }> = {};
 
       if (body.entries && typeof body.entries === 'object') {
         for (const [rawId, val] of Object.entries(body.entries)) {
@@ -4478,25 +4555,33 @@ async function startServer() {
           if (!sId || !val || typeof val !== 'object') continue;
           const v: any = val;
           const incomingTs = Number(v.updatedAt) || Date.now();
+          const entry = {
+            isFree: Boolean(v.isFree),
+            reason: String(v.reason || ''),
+            updatedAt: incomingTs,
+          };
+          entriesToForward[sId] = entry;
           const existing = feeWaiversStore[sId];
           if (!existing || incomingTs >= (Number(existing.updatedAt) || 0)) {
-            feeWaiversStore[sId] = {
-              isFree: Boolean(v.isFree),
-              reason: String(v.reason || ''),
-              updatedAt: incomingTs,
-            };
+            feeWaiversStore[sId] = entry;
             changed = true;
           }
         }
       } else if (body.studentId) {
         const sId = String(body.studentId).trim().toLowerCase();
         const incomingTs = Number(body.updatedAt) || Date.now();
-        feeWaiversStore[sId] = {
+        const entry = {
           isFree: Boolean(body.isFree),
           reason: String(body.reason || ''),
           updatedAt: incomingTs,
         };
+        feeWaiversStore[sId] = entry;
+        entriesToForward[sId] = entry;
         changed = true;
+      } else if (body.forceSyncAll) {
+        for (const [k, v] of Object.entries(feeWaiversStore)) {
+          entriesToForward[k] = v;
+        }
       }
 
       if (changed) {
@@ -4512,8 +4597,33 @@ async function startServer() {
         }
       }
 
+      let gasResult: { ok: boolean; error?: string } = { ok: false };
+      const forwardKeys = Object.keys(entriesToForward);
+      if (forwardKeys.length === 1) {
+        const onlyId = forwardKeys[0];
+        const e = entriesToForward[onlyId];
+        gasResult = await forwardToGoogleAppsScript({
+          action: 'saveFeeWaiver',
+          studentId: onlyId,
+          isFree: e.isFree,
+          reason: e.reason,
+          updatedAt: e.updatedAt,
+          appsScriptUrl: targetUrl,
+        });
+      } else if (forwardKeys.length > 1) {
+        gasResult = await forwardToGoogleAppsScript({
+          action: 'saveFeeWaiversBatch',
+          entries: entriesToForward,
+          appsScriptUrl: targetUrl,
+        });
+      } else if (body.forceSyncAll) {
+        gasResult = { ok: true };
+      }
+
       return res.json({
         success: true,
+        sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : gasResult.error,
         waivers: feeWaiversStore,
       });
     } catch (err: any) {

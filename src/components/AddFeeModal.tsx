@@ -220,10 +220,9 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
     return getStandardFeeAmount(selectedStudent.Class, feeType, selectedStudent as any);
   }, [selectedStudent, feeType, freeStudentInfo.isFree, isTuitionMode, isAdvanceMode]);
 
-  // Multi-Month Pending Queue (Admission -> April -> May -> June...)
+  // Multi-Month Pending Queue (Admission -> Other Fees -> April -> May -> June...)
   const pendingDuesQueue = useMemo(() => {
     if (!selectedStudent) return [];
-    if (freeStudentInfo.isFree) return [];
     const sId = String(selectedStudent.Student_ID || '').toLowerCase().trim();
     const stRecords = feeRecords.filter(
       (r) => String(r.Student_ID || '').toLowerCase().trim() === sId
@@ -482,7 +481,7 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
     tagStudentWaiver(
       selectedStudent.Student_ID,
       newStatus,
-      newStatus ? '100% Fee Waived (प्रबंधक द्वारा फीस माफ)' : ''
+      newStatus ? 'Tuition Fee Waived (केवल ट्यूशन फीस माफ)' : ''
     );
     setWaiverVersion((v) => v + 1);
   };
@@ -796,7 +795,7 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
                       </span>
                     </div>
                     <p className="text-[11px] text-emerald-900 mt-0.5">
-                      {freeStudentInfo.reason} • <strong>ऑटो-कैलकुलेटेड ट्यूशन व डिफ़ॉल्ट फीस ₹0 है।</strong> केवल एडमिशन, ऑटो/वाहन, बुक्स या अन्य जोड़ी गई फीस ही देय होगी।
+                      {freeStudentInfo.reason} • <strong>केवल मासिक ट्यूशन फीस ₹0 है</strong> (Pending Dues में नहीं जुड़ेगी)। एडमिशन, एग्जाम, बुक्स, ऑटो आदि अन्य सभी फीस पूरी ली जाएंगी।
                     </p>
                   </div>
                 </div>
@@ -821,7 +820,7 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
                   className="text-[10px] text-slate-500 hover:text-emerald-700 hover:underline inline-flex items-center gap-1 cursor-pointer"
                 >
                   <i className="fa-solid fa-tag text-[9px]"></i>
-                  <span>इस छात्र को 100% फीस माफी (Free Student) टैग करें</span>
+                  <span>इस छात्र की ट्यूशन फीस माफ करें (Tuition Fee Waiver)</span>
                 </button>
               </div>
             )}

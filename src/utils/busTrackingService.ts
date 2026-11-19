@@ -454,6 +454,7 @@ function ensureFeatureBackupTabs(ss) {
   ensureTabSafe_(ss, "Syllabus_Tracker", ["Syllabus Tracker"], ["ID", "Teacher_ID", "Teacher_Name", "Class", "Subject", "Month", "Week_Number", "Week_Label", "Chapter_Title", "Topic_Description", "Planned_Date", "Target_Completion_Date", "Completed_Date", "Status", "Timestamp"], added);
   ensureTabSafe_(ss, "School_Holidays", ["School Holidays", "Holidays"], ["ID", "Date", "End_Date", "Title", "Category", "Description", "Timestamp"], added);
   ensureTabSafe_(ss, "Hall_Pass_Config", ["Hall Pass Config", "HallPassConfig", "Exam_Hall_Pass"], ["Config_Key", "Exam_Type", "Session", "Custom_Title", "Exam_Schedule_Line", "Instruction_Line", "Published_To_Parent", "Backside_Flip_Mode", "Datesheet_Arrival_Line", "Datesheet_Holiday_Note", "Datesheet_Rows_JSON", "Allowed_Overrides_JSON", "Updated_At"], added);
+  ensureTabSafe_(ss, "Fee_Waivers", ["Fee Waivers", "FeeWaivers"], ["Student_ID", "Is_Free", "Reason", "Updated_At", "Updated_TS"], added);
   return added;
 }
 
@@ -727,9 +728,12 @@ function doGet(e) {
   if (action === "getHallPassConfig") {
     return handleGetHallPassConfig(ss);
   }
+  if (action === "getFeeWaivers") {
+    return handleGetFeeWaivers(ss);
+  }
 
   // 10. GET FALLBACK: Delegate write actions when called via GET query parameters
-  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig") {
+  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig" || action === "saveFeeWaiver" || action === "saveFeeWaiversBatch") {
     return doPost(e);
   }
 
@@ -1427,6 +1431,14 @@ function doPost(e) {
       return handleSaveHallPassConfig(ss, data);
     }
 
+    // 17. FEE WAIVERS DIRECTORY (Fee_Waivers - Tuition-Only Waiver 2-Way Sync)
+    if (action === "saveFeeWaiver") {
+      return handleSaveFeeWaiver(ss, data);
+    }
+    if (action === "saveFeeWaiversBatch") {
+      return handleSaveFeeWaiversBatch(ss, data);
+    }
+
     return ContentService.createTextOutput(JSON.stringify({
       status: "error",
       message: "Unknown action: " + action
@@ -1831,6 +1843,7 @@ function generatePastDues() {
     }
   }
 
+  var waiverTabMap = getFeeWaiverMapForBilling_(ss);
   var rowsToAppend = [];
   var totalBilledRows = 0;
   var skippedStudentsCount = 0;
@@ -1840,24 +1853,29 @@ function generatePastDues() {
     var sId = idIdx !== -1 ? String(row[idIdx] || "").trim() : "";
     if (!sId) continue;
 
-    // Check 100% Fee Waiver / Free Student
+    // Check Tuition Fee Waiver / Free Tuition Student (Fee_Waivers tab takes priority, then Students cols)
     var isFree = false;
-    if (waiverIdx !== -1) {
-      var wVal = String(row[waiverIdx] || "").toLowerCase();
-      if (wVal === "true" || wVal === "yes" || wVal.indexOf("100") !== -1 || wVal.indexOf("free") !== -1 || wVal.indexOf("माफ") !== -1) {
-        isFree = true;
+    var normSidKey = sId.toLowerCase();
+    if (waiverTabMap[normSidKey] !== undefined) {
+      isFree = waiverTabMap[normSidKey];
+    } else {
+      if (waiverIdx !== -1) {
+        var wVal = String(row[waiverIdx] || "").toLowerCase();
+        if (wVal === "true" || wVal === "yes" || wVal.indexOf("100") !== -1 || wVal.indexOf("free") !== -1 || wVal.indexOf("माफ") !== -1) {
+          isFree = true;
+        }
       }
-    }
-    if (categoryIdx !== -1) {
-      var catVal = String(row[categoryIdx] || "").toLowerCase();
-      if (catVal.indexOf("rte") !== -1 || catVal.indexOf("free") !== -1 || catVal.indexOf("माफ") !== -1) {
-        isFree = true;
+      if (categoryIdx !== -1) {
+        var catVal = String(row[categoryIdx] || "").toLowerCase();
+        if (catVal.indexOf("rte") !== -1 || catVal.indexOf("free") !== -1 || catVal.indexOf("माफ") !== -1) {
+          isFree = true;
+        }
       }
-    }
-    if (remarkIdx !== -1) {
-      var remVal = String(row[remarkIdx] || "").toLowerCase();
-      if (remVal.indexOf("फीस माफ") !== -1 || remVal.indexOf("100% waiver") !== -1) {
-        isFree = true;
+      if (remarkIdx !== -1) {
+        var remVal = String(row[remarkIdx] || "").toLowerCase();
+        if (remVal.indexOf("फीस माफ") !== -1 || remVal.indexOf("100% waiver") !== -1) {
+          isFree = true;
+        }
       }
     }
 
@@ -2090,6 +2108,7 @@ function generateMonthlyDues() {
     }
   }
 
+  var waiverTabMap = getFeeWaiverMapForBilling_(ss);
   var generatedCount = 0;
   var skippedFreeCount = 0;
   var skippedNotStartedCount = 0;
@@ -2101,24 +2120,29 @@ function generateMonthlyDues() {
     var sId = idIdx !== -1 ? String(row[idIdx] || "").trim() : "";
     if (!sId) continue;
 
-    // 1. Check if student has 100% Fee Waiver (Free Student)
+    // 1. Check if student has Tuition Fee Waiver (Fee_Waivers tab first, then Students cols)
     var isFree = false;
-    if (waiverIdx !== -1) {
-      var wVal = String(row[waiverIdx] || "").toLowerCase();
-      if (wVal === "true" || wVal === "yes" || wVal.indexOf("100") !== -1 || wVal.indexOf("free") !== -1 || wVal.indexOf("माफ") !== -1) {
-        isFree = true;
+    var normSidKey = sId.toLowerCase();
+    if (waiverTabMap[normSidKey] !== undefined) {
+      isFree = waiverTabMap[normSidKey];
+    } else {
+      if (waiverIdx !== -1) {
+        var wVal = String(row[waiverIdx] || "").toLowerCase();
+        if (wVal === "true" || wVal === "yes" || wVal.indexOf("100") !== -1 || wVal.indexOf("free") !== -1 || wVal.indexOf("माफ") !== -1) {
+          isFree = true;
+        }
       }
-    }
-    if (categoryIdx !== -1) {
-      var catVal = String(row[categoryIdx] || "").toLowerCase();
-      if (catVal.indexOf("rte") !== -1 || catVal.indexOf("free") !== -1 || catVal.indexOf("माफ") !== -1) {
-        isFree = true;
+      if (categoryIdx !== -1) {
+        var catVal = String(row[categoryIdx] || "").toLowerCase();
+        if (catVal.indexOf("rte") !== -1 || catVal.indexOf("free") !== -1 || catVal.indexOf("माफ") !== -1) {
+          isFree = true;
+        }
       }
-    }
-    if (remarkIdx !== -1) {
-      var remVal = String(row[remarkIdx] || "").toLowerCase();
-      if (remVal.indexOf("फीस माफ") !== -1 || remVal.indexOf("100% waiver") !== -1) {
-        isFree = true;
+      if (remarkIdx !== -1) {
+        var remVal = String(row[remarkIdx] || "").toLowerCase();
+        if (remVal.indexOf("फीस माफ") !== -1 || remVal.indexOf("100% waiver") !== -1) {
+          isFree = true;
+        }
       }
     }
 
@@ -3695,6 +3719,173 @@ function handleSaveHallPassConfig(ss, data) {
   return ContentService.createTextOutput(JSON.stringify({
     status: "success",
     message: "Hall_Pass_Config saved permanently to Google Sheet!"
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+// =========================================================================
+// FEATURE 17: FEE WAIVERS DIRECTORY (Fee_Waivers - Tuition-Only Waiver)
+// =========================================================================
+function parseFeeWaiverBool_(val) {
+  if (val === true) return true;
+  if (val === false || val === null || val === undefined) return false;
+  var s = String(val).trim().toLowerCase();
+  if (!s || s === "false" || s === "no" || s === "0" || s === "none") return false;
+  return s === "true" || s === "yes" || s === "1" || s.indexOf("free") !== -1 || s.indexOf("waiv") !== -1 || s.indexOf("माफ") !== -1;
+}
+
+function getFeeWaiverMapForBilling_(ss) {
+  var out = {};
+  var sheet = findExistingSheet_(ss, ["Fee_Waivers", "Fee Waivers", "FeeWaivers"]);
+  if (!sheet || sheet.getLastRow() < 2) return out;
+  var rows = sheet.getDataRange().getValues();
+  for (var i = 1; i < rows.length; i++) {
+    var sid = String(rows[i][0] || "").trim().toLowerCase();
+    if (!sid) continue;
+    out[sid] = parseFeeWaiverBool_(rows[i][1]);
+  }
+  return out;
+}
+
+function handleGetFeeWaivers(ss) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Fee_Waivers", "Fee Waivers", "FeeWaivers"]);
+  var waivers = {};
+  if (sheet && sheet.getLastRow() >= 2) {
+    var rows = sheet.getDataRange().getValues();
+    var hdr = rows[0].map(function(h) { return String(h || "").trim().toLowerCase(); });
+    var idIdx = hdr.indexOf("student_id");
+    if (idIdx === -1) idIdx = 0;
+    var freeIdx = hdr.indexOf("is_free");
+    if (freeIdx === -1) freeIdx = hdr.indexOf("fee_waiver");
+    if (freeIdx === -1) freeIdx = 1;
+    var reasonIdx = hdr.indexOf("reason");
+    if (reasonIdx === -1) reasonIdx = 2;
+    var updAtIdx = hdr.indexOf("updated_at");
+    if (updAtIdx === -1) updAtIdx = 3;
+    var updTsIdx = hdr.indexOf("updated_ts");
+    if (updTsIdx === -1) updTsIdx = 4;
+
+    for (var i = 1; i < rows.length; i++) {
+      var sid = String(rows[i][idIdx] || "").trim().toLowerCase();
+      if (!sid) continue;
+      var tsNum = Number(rows[i][updTsIdx]);
+      if (isNaN(tsNum) || tsNum <= 0) {
+        var dtVal = rows[i][updAtIdx];
+        if (dtVal instanceof Date) {
+          tsNum = dtVal.getTime();
+        } else if (dtVal) {
+          var parsedMs = Date.parse(String(dtVal));
+          tsNum = isNaN(parsedMs) ? 0 : parsedMs;
+        } else {
+          tsNum = 0;
+        }
+      }
+      waivers[sid] = {
+        isFree: parseFeeWaiverBool_(rows[i][freeIdx]),
+        reason: String(rows[i][reasonIdx] || ""),
+        updatedAt: tsNum || 0
+      };
+    }
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    waivers: waivers
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function upsertFeeWaiverEntries_(ss, entriesObj) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Fee_Waivers", "Fee Waivers", "FeeWaivers"]);
+  var existingRows = sheet.getDataRange().getValues();
+  var rowIndexById = {};
+  for (var i = 1; i < existingRows.length; i++) {
+    var existingSid = String(existingRows[i][0] || "").trim().toLowerCase();
+    if (existingSid) rowIndexById[existingSid] = i + 1;
+  }
+
+  var nowMs = Date.now();
+  var nowIst = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var updatedCount = 0;
+  var normalizedUpdates = {};
+
+  for (var rawId in entriesObj) {
+    if (!Object.prototype.hasOwnProperty.call(entriesObj, rawId)) continue;
+    var sid = String(rawId || "").trim().toLowerCase();
+    if (!sid) continue;
+    var item = entriesObj[rawId] || {};
+    var isFree = parseFeeWaiverBool_(item.isFree);
+    var reason = String(item.reason || (isFree ? "Tuition Fee Waived (केवल ट्यूशन फीस माफ)" : ""));
+    var tsVal = Number(item.updatedAt) || nowMs;
+    var istStr = Utilities.formatDate(new Date(tsVal), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss") || nowIst;
+    var rowArr = [sid, isFree ? "TRUE" : "FALSE", reason, istStr, tsVal];
+
+    if (rowIndexById[sid]) {
+      sheet.getRange(rowIndexById[sid], 1, 1, rowArr.length).setValues([rowArr]);
+    } else {
+      sheet.appendRow(rowArr);
+      rowIndexById[sid] = sheet.getLastRow();
+    }
+    normalizedUpdates[sid] = isFree ? "TRUE" : "FALSE";
+    updatedCount++;
+  }
+
+  // Also mirror into Students sheet if Fee_Waiver / Is_Free_Student column already exists
+  try {
+    var studentsSheet = ss.getSheetByName("Students");
+    if (studentsSheet && studentsSheet.getLastRow() >= 2) {
+      var sData = studentsSheet.getDataRange().getValues();
+      var sHdr = sData[0].map(function(h) { return String(h || "").trim().toLowerCase(); });
+      var sIdIdx = sHdr.indexOf("student_id");
+      if (sIdIdx === -1) sIdIdx = 0;
+      var sWaiverIdx = sHdr.indexOf("fee_waiver");
+      if (sWaiverIdx === -1) sWaiverIdx = sHdr.indexOf("is_free_student");
+      if (sWaiverIdx !== -1) {
+        for (var r = 1; r < sData.length; r++) {
+          var rowSid = String(sData[r][sIdIdx] || "").trim().toLowerCase();
+          if (rowSid && normalizedUpdates[rowSid] !== undefined) {
+            studentsSheet.getRange(r + 1, sWaiverIdx + 1).setValue(normalizedUpdates[rowSid]);
+          }
+        }
+      }
+    }
+  } catch (mirrorErr) {}
+
+  return updatedCount;
+}
+
+function handleSaveFeeWaiver(ss, data) {
+  var sid = String(data.studentId || data.student_id || "").trim().toLowerCase();
+  if (!sid) {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "error",
+      message: "studentId is required"
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var entries = {};
+  entries[sid] = {
+    isFree: parseFeeWaiverBool_(data.isFree !== undefined ? data.isFree : data.is_free),
+    reason: String(data.reason || ""),
+    updatedAt: Number(data.updatedAt) || Date.now()
+  };
+  var count = upsertFeeWaiverEntries_(ss, entries);
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    count: count,
+    message: "Fee_Waivers saved permanently to Google Sheet!"
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveFeeWaiversBatch(ss, data) {
+  var entries = data.entries;
+  if (typeof entries === "string") {
+    try { entries = JSON.parse(entries); } catch (e) { entries = {}; }
+  }
+  if (!entries || typeof entries !== "object") entries = {};
+  var count = upsertFeeWaiverEntries_(ss, entries);
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    count: count,
+    message: "Fee_Waivers batch saved permanently to Google Sheet!"
   })).setMimeType(ContentService.MimeType.JSON);
 }
 `;

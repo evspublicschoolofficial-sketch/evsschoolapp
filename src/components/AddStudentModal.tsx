@@ -355,7 +355,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
       tagStudentWaiver(
         sId,
         isFeeWaived,
-        isFeeWaived ? '100% Fee Waived (प्रबंधक द्वारा फीस माफ)' : ''
+        isFeeWaived ? 'Tuition Fee Waived (केवल ट्यूशन फीस माफ)' : ''
       );
 
       const result: any = await onStudentAdded(newStudent, sendWelcomeWhatsApp);
@@ -829,15 +829,15 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
               </div>
               <div>
                 <div className="text-xs font-black text-slate-900 flex items-center gap-2">
-                  <span>100% फीस माफी / Fee Waiver (Free Student)</span>
+                  <span>केवल ट्यूशन फीस माफी / Tuition Fee Waiver</span>
                   {isFeeWaived && (
                     <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-200 text-emerald-900 font-bold">
-                      WAIVED ✓
+                      TUITION FREE ✓
                     </span>
                   )}
                 </div>
                 <p className="text-[11px] text-slate-600 mt-0.5 leading-snug">
-                  सक्रिय करने पर ऑटो-कैलकुलेटेड ट्यूशन व डिफ़ॉल्ट फीस <strong>₹0</strong> रहेगी। केवल एडमिशन, ऑटो/वाहन या बुक्स जैसी जोड़ी गई फीस ही ली जाएगी।
+                  सक्रिय करने पर मासिक ट्यूशन फीस <strong>₹0</strong> रहेगी और Pending Dues में नहीं जुड़ेगी। <strong>एडमिशन, एग्जाम, बुक्स, ऑटो/वाहन</strong> आदि सभी अन्य फीस पूरी ली जाएंगी। (Google Sheet के &apos;Fee_Waivers&apos; टैब में सेव होगा)
                 </p>
               </div>
             </div>

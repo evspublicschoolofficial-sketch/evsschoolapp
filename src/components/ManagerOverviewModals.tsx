@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Student, FeeCollectionRecord, StudentBehaviorRecord } from '../types';
 import { StudentAvatar } from './StudentAvatar';
-import { computeStudentFeeMetrics, computeSchoolFeeTotals } from '../utils/feeCalculation';
+import { computeStudentFeeMetrics, computeSchoolFeeTotals, computeWaivedStudentsSummary } from '../utils/feeCalculation';
+import { FREE_STUDENTS_UPDATED_EVENT, FEE_MASTER_UPDATED_EVENT, tagStudentWaiver } from '../utils/feeMaster';
 import {
   openWhatsappAlert,
   buildAbsentAlertMessage,
@@ -71,12 +72,23 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
   const [activeModal, setActiveModal] = useState<ManagerModalType>(null);
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [classFilter, setClassFilter] = useState<string>('all');
-  const [feeTab, setFeeTab] = useState<'collected' | 'pending'>('collected');
+  const [feeTab, setFeeTab] = useState<'collected' | 'pending' | 'waived'>('collected');
   const [attendanceDateTab, setAttendanceDateTab] = useState<'today' | 'recent'>('today');
   const [syncingStudentId, setSyncingStudentId] = useState<string | null>(null);
   const [syncingAll, setSyncingAll] = useState<boolean>(false);
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
   const [sentAlertIds, setSentAlertIds] = useState<Record<string, boolean>>({});
+  const [waiverVersion, setWaiverVersion] = useState<number>(0);
+
+  useEffect(() => {
+    const refresh = () => setWaiverVersion((v) => v + 1);
+    window.addEventListener(FREE_STUDENTS_UPDATED_EVENT, refresh);
+    window.addEventListener(FEE_MASTER_UPDATED_EVENT, refresh);
+    return () => {
+      window.removeEventListener(FREE_STUDENTS_UPDATED_EVENT, refresh);
+      window.removeEventListener(FEE_MASTER_UPDATED_EVENT, refresh);
+    };
+  }, []);
 
   // Reset search and filters whenever modal opens/changes
   useEffect(() => {
@@ -180,7 +192,11 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
   // Overall School Fee Metrics (Calculated on individual student totals)
   const schoolFeeTotals = useMemo(() => {
     return computeSchoolFeeTotals(students, feeRecords);
-  }, [students, feeRecords]);
+  }, [students, feeRecords, waiverVersion]);
+
+  const waivedSummary = useMemo(() => {
+    return computeWaivedStudentsSummary(students, feeRecords);
+  }, [students, feeRecords, waiverVersion]);
 
   // Pending Fees List: Students with unpaid dues (calculated per individual student)
   const pendingFeesList = useMemo(() => {
@@ -192,7 +208,7 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
       }
     });
     return list.sort((a, b) => b.pendingAmount - a.pendingAmount);
-  }, [students, feeRecords]);
+  }, [students, feeRecords, waiverVersion]);
 
   const totalPendingAmount = useMemo(() => {
     return schoolFeeTotals.totalPendingDues;
@@ -483,6 +499,28 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
     });
   }, [pendingFeesList, searchTerm, classFilter]);
 
+  // Filtered Waived Students for Card 2 Modal ('waived' sub-tab)
+  const filteredWaivedStudents = useMemo(() => {
+    return waivedSummary.waivedStudents.filter(({ student }) => {
+      const term = searchTerm.toLowerCase().trim();
+      const matchSearch =
+        !term ||
+        String(student.Student_Name || '').toLowerCase().includes(term) ||
+        String(student.Roll_Number || '').toLowerCase().includes(term) ||
+        String(student.Student_ID || '').toLowerCase().includes(term) ||
+        String(student.Father_Name || '').toLowerCase().includes(term) ||
+        String(getStudentPhone(student)).toLowerCase().includes(term) ||
+        getClassName(student.Class).toLowerCase().includes(term);
+
+      const matchClass =
+        classFilter === 'all' ||
+        String(student.Class || '').toLowerCase() === classFilter.toLowerCase() ||
+        getClassName(student.Class).toLowerCase() === classFilter.toLowerCase();
+
+      return matchSearch && matchClass;
+    });
+  }, [waivedSummary.waivedStudents, searchTerm, classFilter]);
+
   // Filtered Absentees for Card 3 Modal
   const currentAbsentSource = attendanceDateTab === 'today' && todayAbsentRecords.length > 0 ? todayAbsentRecords : recentAbsentRecords;
 
@@ -600,6 +638,12 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                   · ₹{formatIndianCurrency(schoolFeeTotals.totalAdvance)} Advance
                 </span>
               )}
+            </div>
+            <div className="mt-1 text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200/80 rounded-lg px-2 py-0.5 inline-flex items-center gap-1.5 tabular-nums">
+              <i className="fa-solid fa-hand-holding-heart text-amber-600 text-[10px]"></i>
+              <span>
+                फीस माफी: <strong>{waivedSummary.totalWaivedStudents} छात्र</strong> (₹{formatIndianCurrency(waivedSummary.totalWaivedAmountTillDate)} माफ)
+              </span>
             </div>
           </div>
 
@@ -865,7 +909,7 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
 
                 {/* Sub-tabs for Fees Modal */}
                 {activeModal === 'feesOverview' && (
-                  <div className="flex bg-slate-200/80 p-0.5 rounded-xl text-xs font-bold shrink-0">
+                  <div className="flex flex-wrap bg-slate-200/80 p-0.5 rounded-xl text-xs font-bold shrink-0">
                     <button
                       type="button"
                       onClick={() => setFeeTab('collected')}
@@ -887,6 +931,17 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                       }`}
                     >
                       ⚠ बकाया शुल्क ({filteredPendingFees.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFeeTab('waived')}
+                      className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                        feeTab === 'waived'
+                          ? 'bg-amber-500 text-slate-950 shadow-xs'
+                          : 'text-slate-700 hover:text-slate-900'
+                      }`}
+                    >
+                      🎁 फीस माफी ({filteredWaivedStudents.length})
                     </button>
                   </div>
                 )}
@@ -1253,6 +1308,123 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                               </div>
                             );
                           })}
+                        </div>
+                      )}
+                    </div>
+                  ) : feeTab === 'waived' ? (
+                    <div className="space-y-3">
+                      <div className="px-3.5 py-2.5 rounded-xl bg-blue-50 border border-blue-200 text-[11px] text-blue-950 flex flex-wrap items-center justify-between gap-2">
+                        <span>
+                          <strong>💾 स्थायी स्टोरेज:</strong> Google Sheet (<strong>&apos;Fee_Waivers&apos;</strong> टैब) + सर्वर + फोन मेमोरी (2-Way सिंक) • <strong>नियम:</strong> केवल मासिक ट्यूशन फीस ₹0 (Pending Dues में नहीं जुड़ेगी) — एडमिशन, एग्जाम, बुक्स, ऑटो आदि अन्य सभी फीस ली जाएंगी।
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                        <div className="px-3.5 py-2.5 bg-amber-50 border border-amber-200 rounded-xl">
+                          <div className="text-[10px] font-bold text-amber-800 uppercase">कुल ट्यूशन माफी छात्र</div>
+                          <div className="text-lg font-black text-amber-950 tabular-nums">
+                            {waivedSummary.totalWaivedStudents} बच्चे
+                          </div>
+                        </div>
+                        <div className="px-3.5 py-2.5 bg-emerald-50 border border-emerald-200 rounded-xl">
+                          <div className="text-[10px] font-bold text-emerald-800 uppercase">अब तक माफ ट्यूशन फीस</div>
+                          <div className="text-lg font-black text-emerald-900 tabular-nums">
+                            ₹{formatIndianCurrency(waivedSummary.totalWaivedAmountTillDate)}
+                          </div>
+                          <div className="text-[10px] text-emerald-700">
+                            केवल मासिक ट्यूशन (एडमिशन/एग्जाम/बुक्स लागू)
+                          </div>
+                        </div>
+                        <div className="px-3.5 py-2.5 bg-blue-50 border border-blue-200 rounded-xl">
+                          <div className="text-[10px] font-bold text-blue-800 uppercase">पूरे सत्र (12 माह) ट्यूशन माफ</div>
+                          <div className="text-lg font-black text-blue-950 tabular-nums">
+                            ₹{formatIndianCurrency(waivedSummary.totalAnnualWaivedAmount)}
+                          </div>
+                          {schoolFeeTotals.totalDiscounts > 0 && (
+                            <div className="text-[10px] text-blue-700">
+                              + रसीद छूट/रियायत: ₹{formatIndianCurrency(schoolFeeTotals.totalDiscounts)}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {filteredWaivedStudents.length === 0 ? (
+                        <div className="text-center py-10 text-slate-500 bg-slate-50 rounded-2xl border border-dashed border-slate-300">
+                          <i className="fa-solid fa-hand-holding-heart text-3xl mb-2 text-amber-500"></i>
+                          <p className="font-bold text-sm text-slate-700">कोई फीस माफी छात्र नहीं मिला</p>
+                          <p className="text-xs mt-1 max-w-md mx-auto">
+                            किसी बच्चे को ट्यूशन फीस माफी में जोड़ने के लिए छात्र प्रोफाइल एडिट करें या &quot;Fee Collection &amp; Accounts → 🎁 फीस माफी&quot; टैब में जाकर टैग करें।
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="space-y-2.5">
+                          {filteredWaivedStudents.map((w) => (
+                            <div
+                              key={w.student.Student_ID}
+                              className="bg-white p-3.5 rounded-2xl border border-amber-200 hover:shadow-xs transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                            >
+                              <div className="flex items-center gap-3 min-w-0">
+                                <StudentAvatar
+                                  student={w.student}
+                                  photoUrl={getStudentPhoto(w.student)}
+                                  size="md"
+                                />
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <h4 className="font-extrabold text-sm text-slate-900">
+                                      {w.student.Student_Name}
+                                    </h4>
+                                    <span className="text-[10px] font-bold px-1.5 py-0.2 bg-blue-100 text-blue-900 rounded">
+                                      Class {getClassName(w.student.Class)}
+                                    </span>
+                                    <span className="text-[10px] font-bold px-1.5 py-0.2 bg-amber-100 text-amber-900 border border-amber-300 rounded">
+                                      केवल ट्यूशन माफ (₹0)
+                                    </span>
+                                  </div>
+                                  <div className="text-[11px] text-slate-500 flex items-center gap-2 mt-0.5 flex-wrap">
+                                    <span>पिता: {w.student.Father_Name || 'N/A'}</span>
+                                    <span>•</span>
+                                    <span className="font-mono">ID: {w.student.Student_ID}</span>
+                                    <span>•</span>
+                                    <span>सत्र: {w.startMonth} → {w.currentMonth} ({w.elapsedMonths} माह)</span>
+                                  </div>
+                                  <div className="text-[11px] text-emerald-700 font-semibold mt-1 flex flex-wrap items-center gap-2">
+                                    <span>
+                                      मासिक ट्यूशन ₹{formatIndianCurrency(w.monthlyTuitionRate)} × {w.elapsedMonths} माह = ₹{formatIndianCurrency(w.tuitionWaivedTillDate)} माफ
+                                    </span>
+                                    {w.otherChargedFees > 0 && (
+                                      <span className="text-slate-600">
+                                        • अन्य देय (एडमिशन/एग्जाम/बुक्स): ₹{formatIndianCurrency(w.otherChargedFees)}
+                                        {w.remainingDueOnOtherFees > 0
+                                          ? ` (शेष ₹${formatIndianCurrency(w.remainingDueOnOtherFees)})`
+                                          : ' (पूर्ण चुकता ✓)'}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100">
+                                <div className="text-right">
+                                  <div className="text-base font-black text-amber-700 tabular-nums">
+                                    ₹{formatIndianCurrency(w.totalWaivedTillDate)} माफ
+                                  </div>
+                                  <div className="text-[10px] text-slate-500">
+                                    पूरा सत्र: ₹{formatIndianCurrency(w.annualWaivedTotal)}
+                                  </div>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={() => tagStudentWaiver(w.student.Student_ID, false, '')}
+                                  className="px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white border border-rose-200 text-[11px] font-bold cursor-pointer transition-colors"
+                                  title="इस छात्र से फीस माफी टैग हटाएं"
+                                >
+                                  माफी हटाएं
+                                </button>
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       )}
                     </div>

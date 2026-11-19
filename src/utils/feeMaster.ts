@@ -446,7 +446,7 @@ export interface FeeWaiverEntry {
 export const tagStudentWaiver = (
   studentId: string,
   isFree: boolean,
-  reason: string = '100% Fee Waived (प्रबंधक द्वारा फीस माफ)'
+  reason: string = 'Tuition Fee Waived (केवल ट्यूशन फीस माफ)'
 ) => {
   try {
     const sId = studentId.toLowerCase().trim();
@@ -459,11 +459,16 @@ export const tagStudentWaiver = (
       window.dispatchEvent(
         new CustomEvent(FREE_STUDENTS_UPDATED_EVENT, { detail: { studentId: sId, isFree, reason } })
       );
-      // Persist to backend server so Mobile, Desktop & Parent Portal stay 100% synchronized
+      let appsScriptUrl: string | undefined;
+      try {
+        const storedUrl = localStorage.getItem('evs_apps_script_url');
+        if (storedUrl && storedUrl.trim().startsWith('http')) appsScriptUrl = storedUrl.trim();
+      } catch {}
+      // Persist to backend server + Google Sheet ('Fee_Waivers' tab) so Mobile, Desktop & Parent Portal stay 100% synchronized
       fetch('/api/fee-waivers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ studentId: sId, isFree, reason, updatedAt }),
+        body: JSON.stringify({ studentId: sId, isFree, reason, updatedAt, appsScriptUrl }),
       }).catch(() => {});
     }
   } catch (e) {
@@ -472,11 +477,90 @@ export const tagStudentWaiver = (
 };
 
 /**
- * Synchronize Fee Waivers between this browser's Phone Memory and the backend server
- * so pending dues & advance counts never drift across Mobile and Desktop devices.
+ * Fetch Fee_Waivers directly from Google Sheet via GViz (Read fallback even if Apps Script isn't updated yet)
  */
-export const syncFeeWaiversWithServer = async (): Promise<void> => {
-  if (typeof window === 'undefined') return;
+export const fetchFeeWaiversDirectGViz = async (
+  spreadsheetId: string = '1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU'
+): Promise<Record<string, FeeWaiverEntry> | null> => {
+  const tabCandidates = ['Fee_Waivers', 'Fee Waivers', 'FeeWaivers'];
+  for (const sheetName of tabCandidates) {
+    try {
+      const encoded = encodeURIComponent(sheetName);
+      const res = await fetch(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json&sheet=${encoded}&_t=${Date.now()}`);
+      if (!res.ok) continue;
+      const text = await res.text();
+      const start = text.indexOf('{');
+      const end = text.lastIndexOf('}');
+      if (start === -1 || end === -1) continue;
+      const data = JSON.parse(text.slice(start, end + 1));
+      const rawCols = (data.table?.cols || []).map((c: any) => String(c?.label || '').trim().toLowerCase());
+      const rawRows = data.table?.rows || [];
+      if (rawRows.length === 0) continue;
+
+      let headerList = rawCols;
+      let startRowIdx = 0;
+      const firstRowCells = (rawRows[0]?.c || []).map((cell: any) => String(cell?.v ?? '').trim().toLowerCase());
+      const colsHaveHeaders = headerList.some((c: string) => c.includes('student_id') || c === 'is_free' || c === 'fee_waiver');
+      const rowHasHeaders = firstRowCells.some((c: string) => c.includes('student_id') || c === 'is_free' || c === 'fee_waiver');
+
+      if (!colsHaveHeaders && rowHasHeaders) {
+        headerList = firstRowCells;
+        startRowIdx = 1;
+      } else if (colsHaveHeaders && rowHasHeaders && firstRowCells[0] === 'student_id') {
+        startRowIdx = 1;
+      }
+
+      // Guard: Reject unrelated tabs (GViz returns first tab like Students/Users if sheetName missing!)
+      if (headerList.some((c: string) => c.includes('password') || c.includes('user_id') || c.includes('father_name') || c.includes('receipt'))) {
+        continue;
+      }
+      const idIdx = headerList.findIndex((c: string) => c === 'student_id' || c === 'id');
+      const freeIdx = headerList.findIndex((c: string) => c === 'is_free' || c === 'fee_waiver' || c === 'is_free_student' || c.includes('waiv'));
+      if (idIdx === -1 || freeIdx === -1) continue;
+
+      const reasonIdx = headerList.findIndex((c: string) => c.includes('reason') || c.includes('remark'));
+      const updAtIdx = headerList.findIndex((c: string) => c === 'updated_at');
+      const updTsIdx = headerList.findIndex((c: string) => c === 'updated_ts');
+
+      const result: Record<string, FeeWaiverEntry> = {};
+      for (let r = startRowIdx; r < rawRows.length; r++) {
+        const cells = (rawRows[r].c || []).map((c: any) => c?.v);
+        const sid = String(cells[idIdx] || '').trim().toLowerCase();
+        if (!sid || sid === 'student_id') continue;
+        const rawFree = cells[freeIdx];
+        const freeStr = String(rawFree ?? '').trim().toLowerCase();
+        const isFree =
+          rawFree === true ||
+          freeStr === 'true' ||
+          freeStr === 'yes' ||
+          freeStr === '1' ||
+          /(free|waiv|माफ)/i.test(freeStr);
+        const reason = reasonIdx !== -1 ? String(cells[reasonIdx] || '') : '';
+        let tsNum = updTsIdx !== -1 ? Number(cells[updTsIdx]) : 0;
+        if ((!tsNum || isNaN(tsNum)) && updAtIdx !== -1 && cells[updAtIdx]) {
+          const parsed = Date.parse(String(cells[updAtIdx]));
+          if (!isNaN(parsed)) tsNum = parsed;
+        }
+        result[sid] = {
+          isFree,
+          reason,
+          updatedAt: tsNum && !isNaN(tsNum) ? tsNum : 0,
+        };
+      }
+      return result;
+    } catch {}
+  }
+  return null;
+};
+
+/**
+ * Synchronize Fee Waivers between Phone Memory, backend server, and Google Sheet ('Fee_Waivers' tab)
+ * so pending dues & waiver status never drift across Mobile, Desktop, or server restarts.
+ */
+export const syncFeeWaiversWithServer = async (
+  force = false
+): Promise<{ total: number; sheetSynced: boolean }> => {
+  if (typeof window === 'undefined') return { total: 0, sheetSynced: false };
   try {
     let localMap: Record<string, FeeWaiverEntry> = {};
     try {
@@ -484,10 +568,39 @@ export const syncFeeWaiversWithServer = async (): Promise<void> => {
       if (raw) localMap = JSON.parse(raw) || {};
     } catch {}
 
-    const res = await fetch(`/api/fee-waivers?_t=${Date.now()}`);
-    if (!res.ok) return;
-    const json = await res.json();
-    const serverMap: Record<string, FeeWaiverEntry> = (json && json.waivers) || {};
+    let appsScriptParam = '';
+    try {
+      const storedUrl = localStorage.getItem('evs_apps_script_url');
+      if (storedUrl && storedUrl.trim().startsWith('http')) {
+        appsScriptParam = `&appsScriptUrl=${encodeURIComponent(storedUrl.trim())}`;
+      }
+    } catch {}
+
+    const [serverResp, gvizMap] = await Promise.all([
+      fetch(`/api/fee-waivers?_t=${Date.now()}${force ? '&fresh=1' : ''}${appsScriptParam}`).catch(() => null),
+      fetchFeeWaiversDirectGViz().catch(() => null),
+    ]);
+
+    let serverMap: Record<string, FeeWaiverEntry> = {};
+    let sheetSynced = false;
+    if (serverResp && serverResp.ok) {
+      const json = await serverResp.json();
+      serverMap = (json && json.waivers) || {};
+      sheetSynced = Boolean(json && json.sheetSynced);
+    }
+
+    // Merge direct GViz 'Fee_Waivers' rows into serverMap if Apps Script didn't already supply newer rows
+    if (gvizMap) {
+      sheetSynced = true;
+      (Object.entries(gvizMap) as Array<[string, FeeWaiverEntry]>).forEach(([id, gv]) => {
+        const srv = serverMap[id];
+        const gvTs = Number(gv.updatedAt) || 0;
+        const srvTs = Number(srv?.updatedAt) || 0;
+        if (!srv || gvTs > srvTs) {
+          serverMap[id] = gv;
+        }
+      });
+    }
 
     const merged: Record<string, FeeWaiverEntry> = {};
     const allIds = new Set([...Object.keys(localMap), ...Object.keys(serverMap)]);
@@ -528,12 +641,24 @@ export const syncFeeWaiversWithServer = async (): Promise<void> => {
       }
     });
 
-    if (Object.keys(entriesToPush).length > 0) {
-      fetch('/api/fee-waivers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entries: entriesToPush }),
-      }).catch(() => {});
+    if (Object.keys(entriesToPush).length > 0 || (force && Object.keys(merged).length > 0)) {
+      let appsScriptUrl: string | undefined;
+      try {
+        const storedUrl = localStorage.getItem('evs_apps_script_url');
+        if (storedUrl && storedUrl.trim().startsWith('http')) appsScriptUrl = storedUrl.trim();
+      } catch {}
+      const payloadEntries = Object.keys(entriesToPush).length > 0 ? entriesToPush : merged;
+      try {
+        const pushRes = await fetch('/api/fee-waivers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ entries: payloadEntries, appsScriptUrl }),
+        });
+        if (pushRes.ok) {
+          const pushJson = await pushRes.json();
+          if (pushJson && pushJson.sheetSynced) sheetSynced = true;
+        }
+      } catch {}
     }
 
     if (localChanged || Object.keys(merged).length > 0) {
@@ -542,8 +667,10 @@ export const syncFeeWaiversWithServer = async (): Promise<void> => {
         window.dispatchEvent(new CustomEvent(FREE_STUDENTS_UPDATED_EVENT));
       }
     }
+    return { total: Object.keys(merged).length, sheetSynced };
   } catch (e) {
     console.warn('Could not sync fee waivers with server:', e);
+    return { total: 0, sheetSynced: false };
   }
 };
 
@@ -854,6 +981,19 @@ function generatePastDues() {
     }
   }
 
+  var waiverSheet = ss.getSheetByName("Fee_Waivers");
+  var waiverTabMap = {};
+  if (waiverSheet && waiverSheet.getLastRow() >= 2) {
+    var wData = waiverSheet.getDataRange().getValues();
+    for (var wi = 1; wi < wData.length; wi++) {
+      var wSid = String(wData[wi][0] || "").trim().toLowerCase();
+      var wFlag = String(wData[wi][1] || "").trim().toLowerCase();
+      if (wSid) {
+        waiverTabMap[wSid] = (wData[wi][1] === true || wFlag === "true" || wFlag === "yes" || wFlag === "1");
+      }
+    }
+  }
+
   var rowsToAppend = [];
   var totalBilledRows = 0;
   var skippedStudentsCount = 0;
@@ -864,22 +1004,27 @@ function generatePastDues() {
     if (!sId) continue;
 
     var isFree = false;
-    if (waiverIdx !== -1) {
-      var wVal = String(row[waiverIdx] || "").toLowerCase();
-      if (wVal === "true" || wVal === "yes" || wVal.indexOf("100") !== -1 || wVal.indexOf("free") !== -1 || wVal.indexOf("माफ") !== -1) {
-        isFree = true;
+    var normSid = sId.toLowerCase();
+    if (waiverTabMap[normSid] !== undefined) {
+      isFree = waiverTabMap[normSid];
+    } else {
+      if (waiverIdx !== -1) {
+        var wVal = String(row[waiverIdx] || "").toLowerCase();
+        if (wVal === "true" || wVal === "yes" || wVal.indexOf("100") !== -1 || wVal.indexOf("free") !== -1 || wVal.indexOf("माफ") !== -1) {
+          isFree = true;
+        }
       }
-    }
-    if (categoryIdx !== -1) {
-      var catVal = String(row[categoryIdx] || "").toLowerCase();
-      if (catVal.indexOf("rte") !== -1 || catVal.indexOf("free") !== -1 || catVal.indexOf("माफ") !== -1) {
-        isFree = true;
+      if (categoryIdx !== -1) {
+        var catVal = String(row[categoryIdx] || "").toLowerCase();
+        if (catVal.indexOf("rte") !== -1 || catVal.indexOf("free") !== -1 || catVal.indexOf("माफ") !== -1) {
+          isFree = true;
+        }
       }
-    }
-    if (remarkIdx !== -1) {
-      var remVal = String(row[remarkIdx] || "").toLowerCase();
-      if (remVal.indexOf("फीस माफ") !== -1 || remVal.indexOf("100% waiver") !== -1) {
-        isFree = true;
+      if (remarkIdx !== -1) {
+        var remVal = String(row[remarkIdx] || "").toLowerCase();
+        if (remVal.indexOf("फीस माफ") !== -1 || remVal.indexOf("100% waiver") !== -1) {
+          isFree = true;
+        }
       }
     }
 
@@ -1086,6 +1231,19 @@ function generateMonthlyDues() {
     }
   }
 
+  var waiverSheet = ss.getSheetByName("Fee_Waivers");
+  var waiverTabMap = {};
+  if (waiverSheet && waiverSheet.getLastRow() >= 2) {
+    var wData = waiverSheet.getDataRange().getValues();
+    for (var wi = 1; wi < wData.length; wi++) {
+      var wSid = String(wData[wi][0] || "").trim().toLowerCase();
+      var wFlag = String(wData[wi][1] || "").trim().toLowerCase();
+      if (wSid) {
+        waiverTabMap[wSid] = (wData[wi][1] === true || wFlag === "true" || wFlag === "yes" || wFlag === "1");
+      }
+    }
+  }
+
   var generatedCount = 0;
   var skippedFreeCount = 0;
   var skippedNotStartedCount = 0;
@@ -1098,22 +1256,27 @@ function generateMonthlyDues() {
     if (!sId) continue;
 
     var isFree = false;
-    if (waiverIdx !== -1) {
-      var wVal = String(row[waiverIdx] || "").toLowerCase();
-      if (wVal === "true" || wVal === "yes" || wVal.indexOf("100") !== -1 || wVal.indexOf("free") !== -1 || wVal.indexOf("माफ") !== -1) {
-        isFree = true;
+    var normSid = sId.toLowerCase();
+    if (waiverTabMap[normSid] !== undefined) {
+      isFree = waiverTabMap[normSid];
+    } else {
+      if (waiverIdx !== -1) {
+        var wVal = String(row[waiverIdx] || "").toLowerCase();
+        if (wVal === "true" || wVal === "yes" || wVal.indexOf("100") !== -1 || wVal.indexOf("free") !== -1 || wVal.indexOf("माफ") !== -1) {
+          isFree = true;
+        }
       }
-    }
-    if (categoryIdx !== -1) {
-      var catVal = String(row[categoryIdx] || "").toLowerCase();
-      if (catVal.indexOf("rte") !== -1 || catVal.indexOf("free") !== -1 || catVal.indexOf("माफ") !== -1) {
-        isFree = true;
+      if (categoryIdx !== -1) {
+        var catVal = String(row[categoryIdx] || "").toLowerCase();
+        if (catVal.indexOf("rte") !== -1 || catVal.indexOf("free") !== -1 || catVal.indexOf("माफ") !== -1) {
+          isFree = true;
+        }
       }
-    }
-    if (remarkIdx !== -1) {
-      var remVal = String(row[remarkIdx] || "").toLowerCase();
-      if (remVal.indexOf("फीस माफ") !== -1 || remVal.indexOf("100% waiver") !== -1) {
-        isFree = true;
+      if (remarkIdx !== -1) {
+        var remVal = String(row[remarkIdx] || "").toLowerCase();
+        if (remVal.indexOf("फीस माफ") !== -1 || remVal.indexOf("100% waiver") !== -1) {
+          isFree = true;
+        }
       }
     }
 

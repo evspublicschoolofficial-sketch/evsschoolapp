@@ -3509,7 +3509,7 @@ export default function App() {
         fetchStudents(true),
         fetchClasses(),
         fetchFeeCollection(),
-        syncFeeWaiversWithServer(),
+        syncFeeWaiversWithServer(manual || forceFullAll),
         fetchSchoolNotices(),
         fetchHomework(true),
         fetchHomeworkTracker(),
@@ -14594,7 +14594,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             <span className="text-blue-950 font-black">कुल सत्र शुल्क: ₹{metrics.totalSessionFee.toLocaleString('en-IN')}</span>
                           </div>
                           <div className="text-slate-600 leading-normal">
-                            प्रवेश शुल्क: <strong>₹{(metrics.admissionFee ?? 0).toLocaleString('en-IN')}</strong> + {Math.max(0, metrics.totalSessionFee - (metrics.admissionFee ?? 0) - (metrics.otherBilledFees || 0))} ({selectedStudentDetail.Session_Start_Month || 'April'} से {new Date().toLocaleString('en-US', { month: 'long' })}) • दर: ₹{(metrics.monthlyTuition ?? 0).toLocaleString('en-IN')}/माह{isStudentFeeExempt(selectedStudentDetail) ? <span className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 font-bold text-[10px]">फ़ीस माफ (₹0 Auto)</span> : null}{Number(metrics.otherBilledFees || 0) > 0 ? <span> • जोड़ी गई मदें: <strong>+₹{Number(metrics.otherBilledFees).toLocaleString('en-IN')}</strong></span> : null} • कुल जमा: <strong>₹{metrics.totalPaid.toLocaleString('en-IN')}</strong>{Number(metrics.totalDiscount || 0) > 0 ? <span> • छूट/रियायत: <strong className="text-amber-700 font-bold">-₹{Number(metrics.totalDiscount).toLocaleString('en-IN')}</strong></span> : null} • {isDue ? `शुद्ध बकाया: ₹${bal}` : bal < 0 ? `अग्रिम: ₹${Math.abs(bal)}` : 'पूर्ण चुकता'}
+                            प्रवेश शुल्क: <strong>₹{(metrics.admissionFee ?? 0).toLocaleString('en-IN')}</strong> + {Math.max(0, metrics.totalSessionFee - (metrics.admissionFee ?? 0) - (metrics.otherBilledFees || 0))} ({selectedStudentDetail.Session_Start_Month || 'April'} से {new Date().toLocaleString('en-US', { month: 'long' })}) • दर: ₹{(metrics.monthlyTuition ?? 0).toLocaleString('en-IN')}/माह{isStudentFeeExempt(selectedStudentDetail) ? <span className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 font-bold text-[10px]">ट्यूशन माफ (₹0 Auto)</span> : null}{Number(metrics.otherBilledFees || 0) > 0 ? <span> • जोड़ी गई मदें: <strong>+₹{Number(metrics.otherBilledFees).toLocaleString('en-IN')}</strong></span> : null} • कुल जमा: <strong>₹{metrics.totalPaid.toLocaleString('en-IN')}</strong>{Number(metrics.totalDiscount || 0) > 0 ? <span> • छूट/रियायत: <strong className="text-amber-700 font-bold">-₹{Number(metrics.totalDiscount).toLocaleString('en-IN')}</strong></span> : null} • {isDue ? `शुद्ध बकाया: ₹${bal}` : bal < 0 ? `अग्रिम: ₹${Math.abs(bal)}` : 'पूर्ण चुकता'}
                           </div>
                         </div>
                       );

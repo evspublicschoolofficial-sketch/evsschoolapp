@@ -23,13 +23,14 @@ import {
   computeReceiptBalance,
   calculateStudentSummary,
   isStudentFeeExempt,
+  computeWaivedStudentsSummary,
 } from '../utils/feeCalculation';
 import {
   buildFamilyGroups,
   buildFamilyWhatsappDueReminder,
   FamilyFeeSummary,
 } from '../utils/familyFeeHelper';
-import { APPS_SCRIPT_FEE_CODE, FREE_STUDENTS_UPDATED_EVENT, FEE_MASTER_UPDATED_EVENT } from '../utils/feeMaster';
+import { APPS_SCRIPT_FEE_CODE, FREE_STUDENTS_UPDATED_EVENT, FEE_MASTER_UPDATED_EVENT, tagStudentWaiver, isFreeStudent, syncFeeWaiversWithServer } from '../utils/feeMaster';
 import {
   DEFAULT_UPI_SETTINGS,
   loadLocalUpiSettings,
@@ -322,7 +323,10 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
       window.removeEventListener(FEE_MASTER_UPDATED_EVENT, handleWaiverChange);
     };
   }, []);
-  const [activeViewMode, setActiveViewMode] = useState<'trends' | 'student' | 'family' | 'allLedger' | 'upiQueue'>('trends');
+  const [activeViewMode, setActiveViewMode] = useState<'trends' | 'student' | 'family' | 'allLedger' | 'upiQueue' | 'feeWaivers'>('trends');
+  const [waiverSearchQuery, setWaiverSearchQuery] = useState<string>('');
+  const [syncingWaiversSheet, setSyncingWaiversSheet] = useState<boolean>(false);
+  const [waiverSyncMsg, setWaiverSyncMsg] = useState<string | null>(null);
   const [familySearchQuery, setFamilySearchQuery] = useState<string>('');
   const [familyFilterMode, setFamilyFilterMode] = useState<'all' | 'multi' | 'dues'>('multi');
   const [selectedFamilyKey, setSelectedFamilyKey] = useState<string>('');
@@ -839,8 +843,30 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
       balance: totals.totalPendingDues,
       totalAdvance: totals.totalAdvance,
       totalBilled: totals.totalBilled,
+      totalDiscounts: totals.totalDiscounts,
     };
   }, [students, feeRecords, waiverVersion]);
+
+  const waivedSummary = useMemo(() => {
+    return computeWaivedStudentsSummary(students, feeRecords);
+  }, [students, feeRecords, waiverVersion]);
+
+  const waiverAddSearchCandidates = useMemo(() => {
+    const q = waiverSearchQuery.toLowerCase().trim();
+    if (!q) return [];
+    return students
+      .filter((st) => {
+        if (isFreeStudent(st).isFree) return false;
+        return (
+          String(st.Student_Name || '').toLowerCase().includes(q) ||
+          String(st.Student_ID || '').toLowerCase().includes(q) ||
+          String(st.Roll_Number || '').toLowerCase().includes(q) ||
+          String(st.Father_Name || '').toLowerCase().includes(q) ||
+          getClassName(st.Class).toLowerCase().includes(q)
+        );
+      })
+      .slice(0, 8);
+  }, [students, waiverSearchQuery, waiverVersion, getClassName]);
 
   // Filtered All School Ledger (Default sorting order: Newest / Latest entries at the TOP)
   const filteredAllLedger = useMemo(() => {
@@ -1281,7 +1307,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
         </div>
 
         {/* Global Summary Stats */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-5 border-t border-white/10 text-slate-200">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mt-6 pt-5 border-t border-white/10 text-slate-200">
           {/* Card 1: Total Receipts (Clickable to jump to School Ledger) */}
           <div
             onClick={handleNavigateToLedger}
@@ -1332,7 +1358,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
             </div>
           </div>
 
-          {/* Card 4: Total Advance Fee (Replaced Manager Name) */}
+          {/* Card 4: Total Advance Fee */}
           <div className="bg-white/5 backdrop-blur-xs p-3 rounded-2xl border border-white/10 flex flex-col justify-between">
             <div className="flex items-center justify-between">
               <div className="text-[10px] text-slate-300 uppercase tracking-wider font-semibold">
@@ -1344,6 +1370,34 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
             </div>
             <div className="text-lg sm:text-xl font-black text-purple-300 mt-1">
               ₹{(schoolFeeTotals.totalAdvance || 0).toLocaleString('en-IN')}
+            </div>
+          </div>
+
+          {/* Card 5: Fee Waiver Summary (Clickable to jump to Fee Waivers Tab) */}
+          <div
+            onClick={() => setActiveViewMode('feeWaivers')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setActiveViewMode('feeWaivers');
+              }
+            }}
+            className="col-span-2 sm:col-span-1 bg-amber-400/15 hover:bg-amber-400/25 backdrop-blur-xs p-3 rounded-2xl border border-amber-300/35 hover:border-amber-300 cursor-pointer transition-all duration-200 flex flex-col justify-between shadow-sm"
+            title="क्लिक करें: फीस माफी वाले सभी छात्रों की पूरी सूची देखें"
+          >
+            <div className="flex items-center justify-between gap-1">
+              <div className="text-[10px] text-amber-200 uppercase tracking-wider font-semibold">
+                फीस माफी (Fee Waiver)
+              </div>
+              <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-amber-400 text-slate-950">
+                {waivedSummary.totalWaivedStudents} छात्र
+              </span>
+            </div>
+            <div className="text-lg sm:text-xl font-black text-amber-300 mt-1 flex items-baseline justify-between gap-1">
+              <span>₹{waivedSummary.totalWaivedAmountTillDate.toLocaleString('en-IN')}</span>
+              <span className="text-[10px] font-bold text-amber-200">सूची →</span>
             </div>
           </div>
         </div>
@@ -1452,6 +1506,18 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                   {pendingUpiCount}
                 </span>
               )}
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveViewMode('feeWaivers')}
+              className={`px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                activeViewMode === 'feeWaivers'
+                  ? 'bg-[#0c2340] text-amber-300 shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+              }`}
+            >
+              <i className="fa-solid fa-hand-holding-heart text-xs"></i>
+              <span>🎁 फीस माफी ({waivedSummary.totalWaivedStudents})</span>
             </button>
           </div>
         </div>
@@ -2433,7 +2499,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                         ? 'पूर्ण चुकता'
                         : (studentFeeSummary.admissionDue || 0) > 0
                         ? `बकाया ₹${(studentFeeSummary.admissionDue || 0).toLocaleString('en-IN')}`
-                        : 'माफ / ₹0'}
+                        : 'कोई देय नहीं / ₹0'}
                     </span>
                   </div>
 
@@ -2456,7 +2522,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                         : 'bg-rose-100 text-rose-800 border-rose-300'
                     }`}>
                       {isStudentFeeExempt(selectedStudent) && (studentFeeSummary.tuitionDue || 0) <= 0
-                        ? 'फ़ीस माफ (₹0 Auto)'
+                        ? 'ट्यूशन माफ (₹0 Auto)'
                         : (studentFeeSummary.tuitionDue || 0) <= 0
                         ? 'पूर्ण चुकता'
                         : `बकाया ₹${(studentFeeSummary.tuitionDue || 0).toLocaleString('en-IN')}`}
@@ -3272,6 +3338,271 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
         </div>
       )}
 
+      {/* 3.4 VIEW MODE: FEE WAIVER DIRECTORY & WAIVED AMOUNT REPORT */}
+      {activeViewMode === 'feeWaivers' && (
+        <div className="px-6 pb-6 space-y-5 animate-fadeIn">
+          {/* Summary Banner */}
+          <div className="rounded-3xl bg-gradient-to-br from-[#0c2340] via-[#10316b] to-slate-900 text-white p-5 sm:p-6 space-y-4 shadow-md">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="px-2.5 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30 text-[10px] font-black uppercase">
+                    Tuition Fee Waiver Only
+                  </span>
+                  <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold">
+                    Google Sheet (&apos;Fee_Waivers&apos; टैब) + Server 2-Way Synced
+                  </span>
+                </div>
+                <h3 className="text-lg sm:text-xl font-black mt-1">
+                  🎁 केवल ट्यूशन फीस माफी वाले छात्रों की सूची व कुल माफ शुल्क हिसाब
+                </h3>
+                <p className="text-xs text-blue-200 mt-0.5">
+                  माफी वाले छात्रों की <strong>केवल मासिक ट्यूशन फीस ₹0</strong> रहेगी (Pending Dues में नहीं जुड़ेगी)। एडमिशन, एग्जाम, बुक्स व ऑटो आदि अन्य सभी फीस पूरी ली जाएंगी।
+                </p>
+              </div>
+
+              <button
+                type="button"
+                disabled={syncingWaiversSheet}
+                onClick={async () => {
+                  setSyncingWaiversSheet(true);
+                  setWaiverSyncMsg(null);
+                  const res = await syncFeeWaiversWithServer(true);
+                  setSyncingWaiversSheet(false);
+                  setWaiverSyncMsg(
+                    res.sheetSynced
+                      ? `✅ Google Sheet ('Fee_Waivers' टैब) से ${res.total} रिकॉर्ड सफलतापूर्वक सिंक हो गए!`
+                      : `✅ सर्वर व फोन मेमोरी सिंक हो गई (${res.total} रिकॉर्ड)। Sheet 2-Way सिंक के लिए Apps Script अपडेट करें।`
+                  );
+                  setTimeout(() => setWaiverSyncMsg(null), 5000);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-sm shrink-0 cursor-pointer disabled:opacity-60"
+              >
+                <i className={`fa-solid fa-cloud-arrow-up ${syncingWaiversSheet ? 'fa-spin' : ''}`}></i>
+                <span>{syncingWaiversSheet ? 'सिंक हो रहा है...' : 'Google Sheet में सिंक करें'}</span>
+              </button>
+            </div>
+
+            {waiverSyncMsg && (
+              <div className="px-3.5 py-2 rounded-xl bg-emerald-500/20 border border-emerald-400/40 text-emerald-200 text-xs font-semibold">
+                {waiverSyncMsg}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              <div className="bg-white/10 border border-white/15 rounded-2xl p-3.5">
+                <div className="text-[10px] uppercase tracking-wider text-blue-200 font-bold">
+                  कुल ट्यूशन माफी छात्र
+                </div>
+                <div className="text-2xl font-black text-amber-300 mt-0.5 tabular-nums">
+                  {waivedSummary.totalWaivedStudents} बच्चे
+                </div>
+                <div className="text-[11px] text-blue-100 mt-0.5">
+                  कुल {students.length} छात्रों में से
+                </div>
+              </div>
+
+              <div className="bg-white/10 border border-white/15 rounded-2xl p-3.5">
+                <div className="text-[10px] uppercase tracking-wider text-blue-200 font-bold">
+                  अब तक माफ ट्यूशन फीस
+                </div>
+                <div className="text-2xl font-black text-emerald-300 mt-0.5 tabular-nums">
+                  ₹{waivedSummary.totalWaivedAmountTillDate.toLocaleString('en-IN')}
+                </div>
+                <div className="text-[11px] text-blue-100 mt-0.5">
+                  केवल मासिक ट्यूशन माफ (एडमिशन/एग्जाम लागू)
+                </div>
+              </div>
+
+              <div className="bg-white/10 border border-white/15 rounded-2xl p-3.5">
+                <div className="text-[10px] uppercase tracking-wider text-blue-200 font-bold">
+                  पूरे सत्र (12 माह) ट्यूशन माफ
+                </div>
+                <div className="text-2xl font-black text-white mt-0.5 tabular-nums">
+                  ₹{waivedSummary.totalAnnualWaivedAmount.toLocaleString('en-IN')}
+                </div>
+                <div className="text-[11px] text-blue-100 mt-0.5">
+                  वार्षिक अनुमानित ट्यूशन छूट
+                </div>
+              </div>
+
+              <div className="bg-white/10 border border-white/15 rounded-2xl p-3.5">
+                <div className="text-[10px] uppercase tracking-wider text-blue-200 font-bold">
+                  रसीद छूट / रियायत (Concession)
+                </div>
+                <div className="text-2xl font-black text-purple-300 mt-0.5 tabular-nums">
+                  ₹{(schoolFeeTotals.totalDiscounts || 0).toLocaleString('en-IN')}
+                </div>
+                <div className="text-[11px] text-blue-100 mt-0.5">
+                  फीस रसीदों में दी गई अतिरिक्त छूट
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Storage Location Info Banner */}
+          <div className="px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-xs text-slate-700 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <strong className="text-slate-900">💾 रिकॉर्ड कहाँ सेव होता है?</strong>{' '}
+              Google Sheet के <strong>&apos;Fee_Waivers&apos;</strong> टैब + सर्वर बैकअप + फोन मेमोरी में सुरक्षित होता है (साथ ही <em>Students</em> टैब में <code>Fee_Waiver</code> कॉलम भी पढ़ा जाता है)।
+            </div>
+          </div>
+
+          {/* Quick 1-Click Add Student to Fee Waiver */}
+          <div className="bg-amber-50/70 border border-amber-200 rounded-2xl p-4 space-y-2.5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="text-xs font-extrabold text-amber-950 flex items-center gap-1.5">
+                <i className="fa-solid fa-user-plus text-amber-700"></i>
+                <span>नया छात्र ट्यूशन फीस माफी में जोड़ें (1-Click Tag)</span>
+              </div>
+              <span className="text-[11px] text-amber-800">
+                टैग करते ही Google Sheet व सभी डिवाइस पर ट्यूशन फीस ₹0 ऑटो-अपडेट होगी
+              </span>
+            </div>
+
+            <div className="relative">
+              <i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+              <input
+                type="text"
+                value={waiverSearchQuery}
+                onChange={(e) => setWaiverSearchQuery(e.target.value)}
+                placeholder="छात्र का नाम, आईडी या क्लास लिखकर ट्यूशन फीस माफी में जोड़ें..."
+                className="w-full pl-9 pr-8 py-2.5 rounded-xl border border-amber-300 bg-white text-xs outline-none focus:border-blue-900"
+              />
+              {waiverSearchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setWaiverSearchQuery('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 text-xs cursor-pointer"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+
+            {waiverAddSearchCandidates.length > 0 && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                {waiverAddSearchCandidates.map((cand) => (
+                  <div
+                    key={cand.Student_ID}
+                    className="flex items-center justify-between gap-2 bg-white border border-amber-200 rounded-xl p-2.5 text-xs"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-bold text-slate-900 truncate">{cand.Student_Name}</div>
+                      <div className="text-[10px] text-slate-500 truncate">
+                        Class {getClassName(cand.Class)} • ID: {cand.Student_ID} • पिता: {cand.Father_Name || '—'}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        tagStudentWaiver(cand.Student_ID, true, 'Tuition Fee Waived (केवल ट्यूशन फीस माफ)');
+                        setWaiverSearchQuery('');
+                      }}
+                      className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] shrink-0 cursor-pointer"
+                    >
+                      + ट्यूशन माफ करें
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Waived Students Detailed Table */}
+          {waivedSummary.waivedStudents.length === 0 ? (
+            <div className="text-center py-12 bg-slate-50 rounded-2xl border border-dashed border-slate-300 text-slate-500">
+              <i className="fa-solid fa-hand-holding-heart text-4xl mb-3 text-amber-400"></i>
+              <p className="font-bold text-sm text-slate-700">अभी कोई भी छात्र ट्यूशन फीस माफी सूची में नहीं है</p>
+              <p className="text-xs mt-1">
+                ऊपर दिए गए सर्च बॉक्स से किसी भी छात्र को 1 क्लिक में &quot;ट्यूशन फीस माफ&quot; टैग कर सकते हैं।
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+              <table className="w-full text-left text-xs text-slate-700">
+                <thead className="bg-[#0c2340] text-amber-300 uppercase tracking-wider text-[10px]">
+                  <tr>
+                    <th className="px-4 py-3">छात्र (Student)</th>
+                    <th className="px-4 py-3">क्लास / सत्र</th>
+                    <th className="px-4 py-3">माफी स्थिति</th>
+                    <th className="px-4 py-3 text-right">मासिक ट्यूशन माफ</th>
+                    <th className="px-4 py-3 text-right">अन्य फीस (एडमिशन/एग्जाम/बुक्स)</th>
+                    <th className="px-4 py-3 text-right">अब तक कुल माफ</th>
+                    <th className="px-4 py-3 text-right">पूरा सत्र (12 माह)</th>
+                    <th className="px-4 py-3 text-center">कार्रवाई</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {waivedSummary.waivedStudents.map((w) => (
+                    <tr key={w.student.Student_ID} className="hover:bg-amber-50/40 transition-colors">
+                      <td className="px-4 py-3">
+                        <div className="font-bold text-slate-900">{w.student.Student_Name}</div>
+                        <div className="text-[10px] text-slate-500 font-mono">
+                          {w.student.Student_ID} • पिता: {w.student.Father_Name || '—'}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-900 font-bold border border-blue-200 text-[11px]">
+                          {getClassName(w.student.Class)}
+                        </span>
+                        <div className="text-[10px] text-slate-500 mt-1">
+                          {w.startMonth} → {w.currentMonth} ({w.elapsedMonths} माह)
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="inline-block px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold text-[10px]">
+                          {w.reason}
+                        </span>
+                        <div className="text-[10px] text-slate-500 mt-1">
+                          ट्यूशन Pending Dues में ₹0
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums">
+                        <div className="font-bold text-slate-900">
+                          ₹{w.tuitionWaivedTillDate.toLocaleString('en-IN')}
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          ₹{w.monthlyTuitionRate}/माह × {w.elapsedMonths}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums">
+                        <div className="font-bold text-slate-800">
+                          देय ₹{w.otherChargedFees.toLocaleString('en-IN')}
+                        </div>
+                        <div className={`text-[10px] font-semibold ${w.remainingDueOnOtherFees > 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                          {w.remainingDueOnOtherFees > 0
+                            ? `जमा ₹${w.totalPaidByStudent.toLocaleString('en-IN')} • शेष ₹${w.remainingDueOnOtherFees.toLocaleString('en-IN')}`
+                            : `जमा ₹${w.totalPaidByStudent.toLocaleString('en-IN')} (चुकता ✓)`}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums">
+                        <span className="px-2 py-1 rounded-lg bg-amber-100 text-amber-950 font-black border border-amber-300">
+                          ₹{w.totalWaivedTillDate.toLocaleString('en-IN')}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right font-bold text-blue-900 tabular-nums">
+                        ₹{w.annualWaivedTotal.toLocaleString('en-IN')}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <button
+                          type="button"
+                          onClick={() => tagStudentWaiver(w.student.Student_ID, false, '')}
+                          className="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white border border-rose-200 text-[11px] font-bold cursor-pointer transition-colors"
+                          title="फीस माफी हटाएं"
+                        >
+                          हटाएं
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* 3.5 VIEW MODE: FAMILY / MULTI-CHILD FEE BY MOBILE NUMBER */}
       {activeViewMode === 'family' && (
         <div className="px-6 pb-6 space-y-5 animate-fadeIn">
@@ -4041,10 +4372,10 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                 <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200">
                   <div className="font-bold text-emerald-950 flex items-center gap-1.5 mb-1">
                     <i className="fa-solid fa-graduation-cap text-emerald-600"></i>
-                    <span>100% फीस माफी छात्र सुरक्षा</span>
+                    <span>ट्यूशन फीस माफी छात्र सुरक्षा</span>
                   </div>
                   <p className="text-[11px] text-emerald-900 leading-relaxed">
-                    जिन छात्रों पर 'Fee_Waiver' या '100% Free Student' या 'RTE' टैग है, उनकी <strong>ऑटो-कैलकुलेटेड ट्यूशन व डिफ़ॉल्ट फीस ₹0</strong> रहती है। केवल वही फीस (जैसे एडमिशन, ऑटो/वाहन, बुक्स, एग्जाम आदि) देय होगी जो अलग से जोड़ी गई है।
+                    जिन छात्रों पर &apos;Fee_Waivers&apos; टैब या &apos;RTE&apos; टैग है, उनकी <strong>केवल मासिक ट्यूशन फीस ₹0</strong> रहती है और Pending Dues में नहीं जुड़ती। एडमिशन, एग्जाम, बुक्स, ऑटो आदि अन्य सभी फीस पूरी ली जाती हैं।
                   </p>
                 </div>
               </div>
