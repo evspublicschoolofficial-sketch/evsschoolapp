@@ -2,6 +2,7 @@ import { jsPDF } from 'jspdf';
 import { HallPassConfig } from '../types';
 import {
   chunkIntoPages,
+  getClassExamFee,
   getExamDisplayTitle,
   getStudentDatesheetSchedule,
   mapPageSlotsForBackside,
@@ -307,42 +308,27 @@ const drawFrontSlot = (
     nextY += 3.8;
   }
 
-  // FEE STATUS HIGHLIGHT STRIP
+  // EXAM FEE HIGHLIGHT STRIP (Strictly class-based Exam Fee from Fee Structure)
   const feeBoxH = 7.4;
-  let fillClr: [number, number, number] = [236, 253, 245];
-  let borderClr: [number, number, number] = [4, 120, 87];
-  let txtClr: [number, number, number] = [6, 78, 59];
-  const statusText =
-    item.status === 'WAIVED'
-      ? 'FEE WAIVED · CLEARED'
-      : item.status === 'OVERRIDE_ALLOWED'
-      ? 'ALLOWED · PROVISIONAL'
-      : item.status === 'CLEARED'
-      ? 'FEE CLEARED · ELIGIBLE'
-      : `FEE DUE: Rs.${item.dueAmount.toLocaleString('en-IN')}`;
+  const examFeeAmount =
+    typeof item.examFee === 'number' && !isNaN(item.examFee)
+      ? item.examFee
+      : getClassExamFee(student.Class);
+  const examFeeText = `Rs. ${examFeeAmount.toLocaleString('en-IN')}`;
 
-  if (item.status === 'FEE_HOLD') {
-    fillClr = [255, 241, 242];
-    borderClr = [190, 18, 60];
-    txtClr = [136, 19, 55];
-  } else if (item.status === 'OVERRIDE_ALLOWED') {
-    fillClr = [255, 251, 235];
-    borderClr = [180, 83, 9];
-    txtClr = [120, 53, 15];
-  }
-
-  doc.setFillColor(...fillClr);
-  doc.setDrawColor(...borderClr);
+  doc.setFillColor(255, 251, 235); // Soft amber-50 fill
+  doc.setDrawColor(...NAVY);
   doc.setLineWidth(0.45);
   doc.rect(bodyX, nextY, bodyW, feeBoxH, 'FD');
 
-  doc.setTextColor(...txtClr);
+  doc.setTextColor(...NAVY);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(6.8);
-  doc.text('FEE STATUS', bodyX + 1.8, nextY + 4.8);
+  doc.setFontSize(7.5);
+  doc.text('EXAM FEE', bodyX + 1.8, nextY + 4.9);
 
-  doc.setFontSize(8.8);
-  doc.text(fitText(doc, statusText, bodyW - 22), bodyX + bodyW - 1.8, nextY + 4.9, { align: 'right' });
+  doc.setTextColor(...BLACK);
+  doc.setFontSize(10.0);
+  doc.text(fitText(doc, examFeeText, bodyW - 22), bodyX + bodyW - 1.8, nextY + 5.1, { align: 'right' });
 
   // Exam Timing Schedule line
   const schedY = nextY + feeBoxH + 4.2;

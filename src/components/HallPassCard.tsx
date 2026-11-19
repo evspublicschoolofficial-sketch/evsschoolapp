@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { HallPassConfig } from '../types';
-import { getExamDisplayTitle, StudentHallPassEligibility } from '../utils/hallPassHelper';
+import { getClassExamFee, getExamDisplayTitle, StudentHallPassEligibility } from '../utils/hallPassHelper';
 
 interface HallPassCardProps {
   item: StudentHallPassEligibility;
@@ -39,15 +39,10 @@ export const HallPassCard: React.FC<HallPassCardProps> = ({
 
   const examTitle = getExamDisplayTitle(config.examType, config.customExamTitle);
   const isStandalone = variant === 'parent_standalone';
-
-  const statusText =
-    item.status === 'WAIVED'
-      ? 'FEE WAIVED · CLEARED'
-      : item.status === 'OVERRIDE_ALLOWED'
-      ? 'ALLOWED · PROVISIONAL'
-      : item.status === 'CLEARED'
-      ? 'FEE CLEARED · ELIGIBLE'
-      : `FEE DUE: ₹${item.dueAmount.toLocaleString('en-IN')}`;
+  const examFeeAmount =
+    typeof item.examFee === 'number' && !isNaN(item.examFee)
+      ? item.examFee
+      : getClassExamFee(student.Class);
 
   return (
     <div
@@ -182,26 +177,18 @@ export const HallPassCard: React.FC<HallPassCardProps> = ({
             </div>
           </div>
 
-          {/* Highlighted Fee Status & Timing Strip */}
+          {/* Highlighted Class Exam Fee & Timing Strip */}
           <div className="space-y-1">
-            <div
-              className={`border-[1.2pt] rounded-[3px] px-2 py-1 flex items-center justify-between gap-1 ${
-                item.status === 'FEE_HOLD'
-                  ? 'border-rose-700 bg-rose-50 text-rose-900'
-                  : item.status === 'OVERRIDE_ALLOWED'
-                  ? 'border-amber-700 bg-amber-50 text-amber-950'
-                  : 'border-emerald-700 bg-emerald-50 text-emerald-950'
-              }`}
-            >
-              <span className={`font-bold uppercase tracking-wide ${isStandalone ? 'text-[11px]' : 'text-[8px]'}`}>
-                FEE STATUS
+            <div className="border-[1.2pt] border-[#0c2340] bg-amber-50 text-[#0c2340] rounded-[3px] px-2 py-1 flex items-center justify-between gap-1">
+              <span className={`font-black uppercase tracking-wide ${isStandalone ? 'text-[11px]' : 'text-[8.5px]'}`}>
+                EXAM FEE
               </span>
               <span
-                className={`font-black uppercase tabular-nums tracking-tight ${
-                  isStandalone ? 'text-sm' : 'text-[11.5px]'
+                className={`font-black uppercase tabular-nums tracking-tight text-black ${
+                  isStandalone ? 'text-base' : 'text-[13px]'
                 }`}
               >
-                {statusText}
+                ₹{examFeeAmount.toLocaleString('en-IN')}
               </span>
             </div>
 

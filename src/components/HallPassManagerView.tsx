@@ -938,6 +938,7 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
                 <th className="py-2.5 px-3">रोल नं / ID</th>
                 <th className="py-2.5 px-3">छात्र व पिता का नाम</th>
                 <th className="py-2.5 px-3">कक्षा</th>
+                <th className="py-2.5 px-3">एग्जाम फ़ीस</th>
                 <th className="py-2.5 px-3">फ़ीस व पात्रता स्थिति</th>
                 <th className="py-2.5 px-3 text-right">कार्रवाई (Override / Alert)</th>
               </tr>
@@ -945,7 +946,7 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
             <tbody className="divide-y divide-slate-100">
               {filteredList.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-8 text-center text-slate-500 font-semibold">
+                  <td colSpan={7} className="py-8 text-center text-slate-500 font-semibold">
                     चुने गए फ़िल्टर में कोई छात्र नहीं मिला।
                   </td>
                 </tr>
@@ -972,6 +973,9 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
                       </td>
                       <td className="py-2 px-3 font-semibold text-slate-700 whitespace-nowrap">
                         {getClassName(item.student.Class)}
+                      </td>
+                      <td className="py-2 px-3 whitespace-nowrap font-black text-[#0c2340] tabular-nums">
+                        ₹{item.examFee.toLocaleString('en-IN')}
                       </td>
                       <td className="py-2 px-3 whitespace-nowrap font-bold tabular-nums">
                         {item.status === 'CLEARED' && (

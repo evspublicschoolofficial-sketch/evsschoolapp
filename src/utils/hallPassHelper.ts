@@ -1,6 +1,7 @@
 import { ExamTermType, FeeCollectionRecord, HallPassConfig, HallPassDatesheetRow, Student } from '../types';
 import { getAppsScriptUrl } from './busTrackingService';
 import { calculateStudentSummary, isStudentFeeExempt, normalizeStudentId } from './feeCalculation';
+import { DEFAULT_FEE_CONFIG, getActiveFeeMasterConfig, normalizeClassKey } from './feeMaster';
 import { saveToPhoneMemory } from './phoneMemoryCache';
 import { directGetFromSheet, dualSyncWriteToSheet } from './sheetDirectSync';
 
@@ -259,6 +260,16 @@ export function mapPageSlotsForBackside<T>(
   ];
 }
 
+export function getClassExamFee(classRaw?: string | null): number {
+  const classKey = normalizeClassKey(classRaw);
+  const activeMaster = getActiveFeeMasterConfig();
+  const fee = activeMaster?.[classKey]?.examFee;
+  if (fee !== undefined && !isNaN(Number(fee)) && Number(fee) >= 0) {
+    return Number(fee);
+  }
+  return DEFAULT_FEE_CONFIG.examFee;
+}
+
 export type HallPassEligibilityStatus = 'CLEARED' | 'WAIVED' | 'OVERRIDE_ALLOWED' | 'FEE_HOLD';
 
 export interface StudentHallPassEligibility {
@@ -269,6 +280,7 @@ export interface StudentHallPassEligibility {
   isManagerAllowed: boolean;
   dueAmount: number;
   advanceAmount: number;
+  examFee: number;
   statusLabel: string;
   overrideNote?: string;
 }
@@ -283,6 +295,7 @@ export function computeStudentHallPassEligibility(
   const isFeeWaived = isStudentFeeExempt(student);
   const dueAmount = Math.max(0, Number(summary.currentDues || 0));
   const advanceAmount = Math.max(0, Number(summary.advanceAmount || 0));
+  const examFee = getClassExamFee(student.Class);
   const overrideEntry = config?.allowedOverrides?.[normId];
   const isManagerAllowed = Boolean(overrideEntry?.allowed);
 
@@ -310,6 +323,7 @@ export function computeStudentHallPassEligibility(
     isManagerAllowed,
     dueAmount,
     advanceAmount,
+    examFee,
     statusLabel,
     overrideNote: overrideEntry?.note,
   };
