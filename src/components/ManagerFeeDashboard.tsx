@@ -29,7 +29,7 @@ import {
   buildFamilyWhatsappDueReminder,
   FamilyFeeSummary,
 } from '../utils/familyFeeHelper';
-import { APPS_SCRIPT_FEE_CODE, FREE_STUDENTS_UPDATED_EVENT } from '../utils/feeMaster';
+import { APPS_SCRIPT_FEE_CODE, FREE_STUDENTS_UPDATED_EVENT, FEE_MASTER_UPDATED_EVENT } from '../utils/feeMaster';
 import {
   DEFAULT_UPI_SETTINGS,
   loadLocalUpiSettings,
@@ -316,7 +316,11 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
   useEffect(() => {
     const handleWaiverChange = () => setWaiverVersion((v) => v + 1);
     window.addEventListener(FREE_STUDENTS_UPDATED_EVENT, handleWaiverChange);
-    return () => window.removeEventListener(FREE_STUDENTS_UPDATED_EVENT, handleWaiverChange);
+    window.addEventListener(FEE_MASTER_UPDATED_EVENT, handleWaiverChange);
+    return () => {
+      window.removeEventListener(FREE_STUDENTS_UPDATED_EVENT, handleWaiverChange);
+      window.removeEventListener(FEE_MASTER_UPDATED_EVENT, handleWaiverChange);
+    };
   }, []);
   const [activeViewMode, setActiveViewMode] = useState<'trends' | 'student' | 'family' | 'allLedger' | 'upiQueue'>('trends');
   const [familySearchQuery, setFamilySearchQuery] = useState<string>('');

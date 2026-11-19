@@ -1298,6 +1298,10 @@ function doPost(e) {
           row.push(data.balance_amount !== undefined ? Number(data.balance_amount) : (existingRowVals[i] !== undefined ? existingRowVals[i] : 0));
         } else if (h.indexOf("start_month") !== -1 || h.indexOf("session_start") !== -1 || h.indexOf("start month") !== -1 || h.indexOf("fee_start") !== -1) {
           row.push(data.session_start_month || data.Session_Start_Month || (existingRowVals[i] || "April"));
+        } else if (h === "fee_waiver" || h === "is_free_student") {
+          row.push(data.fee_waiver !== undefined && data.fee_waiver !== "" ? data.fee_waiver : (existingRowVals[i] !== undefined ? existingRowVals[i] : ""));
+        } else if (h === "discount" || h === "monthly_discount" || h === "fee_discount") {
+          row.push(data[h] !== undefined ? data[h] : (existingRowVals[i] !== undefined ? existingRowVals[i] : ""));
         } else if (h.indexOf("qr") !== -1) {
           row.push(existingRowVals[i] || qrFormula);
         } else {

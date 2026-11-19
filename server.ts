@@ -267,6 +267,28 @@ function saveStaffSalaryConfigCache() {
 }
 
 // =========================================================================
+// FEE WAIVERS PERSISTENCE (/api/fee-waivers) - Cross-Device Sync
+// =========================================================================
+const FEE_WAIVERS_FILE = '/tmp/evs_fee_waivers.json';
+let feeWaiversStore: Record<string, { isFree: boolean; reason: string; updatedAt: number }> = {};
+try {
+  if (fs.existsSync(FEE_WAIVERS_FILE)) {
+    const rawWaivers = fs.readFileSync(FEE_WAIVERS_FILE, 'utf-8');
+    feeWaiversStore = JSON.parse(rawWaivers) || {};
+  }
+} catch {
+  feeWaiversStore = {};
+}
+
+function saveFeeWaiversCache() {
+  try {
+    fs.writeFileSync(FEE_WAIVERS_FILE, JSON.stringify(feeWaiversStore, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Could not write fee waivers cache file:', e);
+  }
+}
+
+// =========================================================================
 // SCHOOL UPI SETTINGS & ONLINE FEE PAYMENTS QUEUE (/api/upi-settings, /api/upi-payments)
 // =========================================================================
 const UPI_SETTINGS_FILE = '/tmp/evs_upi_settings.json';
@@ -4435,6 +4457,67 @@ async function startServer() {
       });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err?.message || 'Could not save hall pass config' });
+    }
+  });
+
+  app.get('/api/fee-waivers', (_req, res) => {
+    return res.json({
+      success: true,
+      waivers: feeWaiversStore,
+    });
+  });
+
+  app.post('/api/fee-waivers', (req, res) => {
+    try {
+      const body = req.body || {};
+      let changed = false;
+
+      if (body.entries && typeof body.entries === 'object') {
+        for (const [rawId, val] of Object.entries(body.entries)) {
+          const sId = String(rawId || '').trim().toLowerCase();
+          if (!sId || !val || typeof val !== 'object') continue;
+          const v: any = val;
+          const incomingTs = Number(v.updatedAt) || Date.now();
+          const existing = feeWaiversStore[sId];
+          if (!existing || incomingTs >= (Number(existing.updatedAt) || 0)) {
+            feeWaiversStore[sId] = {
+              isFree: Boolean(v.isFree),
+              reason: String(v.reason || ''),
+              updatedAt: incomingTs,
+            };
+            changed = true;
+          }
+        }
+      } else if (body.studentId) {
+        const sId = String(body.studentId).trim().toLowerCase();
+        const incomingTs = Number(body.updatedAt) || Date.now();
+        feeWaiversStore[sId] = {
+          isFree: Boolean(body.isFree),
+          reason: String(body.reason || ''),
+          updatedAt: incomingTs,
+        };
+        changed = true;
+      }
+
+      if (changed) {
+        saveFeeWaiversCache();
+        const broadcastMsg = JSON.stringify({
+          type: 'APP_DATA_UPDATED',
+          entity: 'fee_waivers',
+          action: 'update',
+          timestamp: Date.now(),
+        });
+        for (const client of clients) {
+          if (client.readyState === WebSocket.OPEN) client.send(broadcastMsg);
+        }
+      }
+
+      return res.json({
+        success: true,
+        waivers: feeWaiversStore,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Failed to save fee waivers' });
     }
   });
 

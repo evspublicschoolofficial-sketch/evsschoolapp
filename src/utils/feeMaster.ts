@@ -2,6 +2,7 @@ import { Student, FeeCollectionRecord } from '../types';
 import { saveToPhoneMemory } from './phoneMemoryCache';
 
 export const FREE_STUDENTS_UPDATED_EVENT = 'evs-free-students-updated';
+export const FEE_MASTER_UPDATED_EVENT = 'evs-fee-master-updated';
 
 /**
  * Standard Fee Structure per Class (Strictly 4 Fees per School Brief:
@@ -153,6 +154,7 @@ export const saveActiveFeeMasterConfig = (newConfig: Record<string, ClassFeeConf
   try {
     if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
       localStorage.setItem('evs_fee_master_config', JSON.stringify(newConfig));
+      window.dispatchEvent(new CustomEvent(FEE_MASTER_UPDATED_EVENT, { detail: newConfig }));
     }
   } catch (e) {
     console.warn('Could not save fee master config:', e);
@@ -247,7 +249,7 @@ export const fetchFeeMasterDirectGViz = async (
   for (const sheetName of tabCandidates) {
     try {
       const encoded = encodeURIComponent(sheetName);
-      const res = await fetch(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json&sheet=${encoded}`);
+      const res = await fetch(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json&sheet=${encoded}&_t=${Date.now()}`);
       if (!res.ok) continue;
       const text = await res.text();
       const start = text.indexOf('{');
@@ -318,8 +320,9 @@ export const fetchFeeMasterDirectGViz = async (
       }
 
       if (Object.keys(result).length > 0) {
-        saveActiveFeeMasterConfig(result);
-        return result;
+        const merged = { ...FEE_MASTER_CONFIG, ...result };
+        saveActiveFeeMasterConfig(merged);
+        return merged;
       }
     } catch (e) {
       console.warn(`Error reading Fee Master sheet ${sheetName}:`, e);
@@ -434,6 +437,12 @@ export const isFreeStudent = (
 /**
  * Tag or untag a student with 100% Fee Waiver
  */
+export interface FeeWaiverEntry {
+  isFree: boolean;
+  reason: string;
+  updatedAt?: number;
+}
+
 export const tagStudentWaiver = (
   studentId: string,
   isFree: boolean,
@@ -441,17 +450,100 @@ export const tagStudentWaiver = (
 ) => {
   try {
     const sId = studentId.toLowerCase().trim();
+    const updatedAt = Date.now();
     const savedMap = localStorage.getItem('evs_free_students_map');
-    const map: Record<string, { isFree: boolean; reason: string }> = savedMap ? JSON.parse(savedMap) : {};
-    map[sId] = { isFree, reason };
+    const map: Record<string, FeeWaiverEntry> = savedMap ? JSON.parse(savedMap) : {};
+    map[sId] = { isFree, reason, updatedAt };
     saveToPhoneMemory('evs_free_students_map', map);
     if (typeof window !== 'undefined') {
       window.dispatchEvent(
         new CustomEvent(FREE_STUDENTS_UPDATED_EVENT, { detail: { studentId: sId, isFree, reason } })
       );
+      // Persist to backend server so Mobile, Desktop & Parent Portal stay 100% synchronized
+      fetch('/api/fee-waivers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: sId, isFree, reason, updatedAt }),
+      }).catch(() => {});
     }
   } catch (e) {
     console.warn('Could not save free student map:', e);
+  }
+};
+
+/**
+ * Synchronize Fee Waivers between this browser's Phone Memory and the backend server
+ * so pending dues & advance counts never drift across Mobile and Desktop devices.
+ */
+export const syncFeeWaiversWithServer = async (): Promise<void> => {
+  if (typeof window === 'undefined') return;
+  try {
+    let localMap: Record<string, FeeWaiverEntry> = {};
+    try {
+      const raw = localStorage.getItem('evs_free_students_map');
+      if (raw) localMap = JSON.parse(raw) || {};
+    } catch {}
+
+    const res = await fetch(`/api/fee-waivers?_t=${Date.now()}`);
+    if (!res.ok) return;
+    const json = await res.json();
+    const serverMap: Record<string, FeeWaiverEntry> = (json && json.waivers) || {};
+
+    const merged: Record<string, FeeWaiverEntry> = {};
+    const allIds = new Set([...Object.keys(localMap), ...Object.keys(serverMap)]);
+    let localChanged = false;
+    const entriesToPush: Record<string, FeeWaiverEntry> = {};
+
+    allIds.forEach((rawId) => {
+      const id = String(rawId || '').trim().toLowerCase();
+      if (!id) return;
+      const loc = localMap[rawId] || localMap[id];
+      const srv = serverMap[id];
+
+      if (loc && srv) {
+        const locTs = Number(loc.updatedAt) || 0;
+        const srvTs = Number(srv.updatedAt) || 0;
+        if (srvTs > locTs) {
+          merged[id] = srv;
+          if (loc.isFree !== srv.isFree || loc.reason !== srv.reason) {
+            localChanged = true;
+          }
+        } else {
+          merged[id] = loc;
+          if (locTs > srvTs || loc.isFree !== srv.isFree) {
+            entriesToPush[id] = {
+              isFree: Boolean(loc.isFree),
+              reason: String(loc.reason || ''),
+              updatedAt: locTs || Date.now(),
+            };
+          }
+        }
+      } else if (srv) {
+        merged[id] = srv;
+        localChanged = true;
+      } else if (loc) {
+        const ts = Number(loc.updatedAt) || Date.now();
+        merged[id] = { ...loc, updatedAt: ts };
+        entriesToPush[id] = merged[id];
+      }
+    });
+
+    if (Object.keys(entriesToPush).length > 0) {
+      fetch('/api/fee-waivers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entries: entriesToPush }),
+      }).catch(() => {});
+    }
+
+    if (localChanged || Object.keys(merged).length > 0) {
+      await saveToPhoneMemory('evs_free_students_map', merged);
+      if (localChanged) {
+        window.dispatchEvent(new CustomEvent(FREE_STUDENTS_UPDATED_EVENT));
+      }
+    }
+  } catch (e) {
+    console.warn('Could not sync fee waivers with server:', e);
   }
 };
 

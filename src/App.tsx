@@ -12,7 +12,7 @@ import {
   loadLocalHallPassConfig,
 } from './utils/hallPassHelper';
 import { FloatingSocialBar } from './components/FloatingSocialBar';
-import { fetchFeeMasterDirectGViz, FREE_STUDENTS_UPDATED_EVENT } from './utils/feeMaster';
+import { fetchFeeMasterDirectGViz, FREE_STUDENTS_UPDATED_EVENT, FEE_MASTER_UPDATED_EVENT, syncFeeWaiversWithServer } from './utils/feeMaster';
 import { initGeolocationPrewarmer, syncSchoolLocationFromServer } from './utils/schoolLocationService';
 import { computeStudentFeeMetrics, computeSchoolFeeTotals, normalizeStudentId, reconcileFeeRecords, calculateStudentSummary, isStudentFeeExempt } from './utils/feeCalculation';
 import { computeFamilyFeeSummary, FamilyFeeSummary } from './utils/familyFeeHelper';
@@ -1337,7 +1337,11 @@ export default function App() {
   useEffect(() => {
     const handleWaiverUpdated = () => setWaiverVersion((v) => v + 1);
     window.addEventListener(FREE_STUDENTS_UPDATED_EVENT, handleWaiverUpdated);
-    return () => window.removeEventListener(FREE_STUDENTS_UPDATED_EVENT, handleWaiverUpdated);
+    window.addEventListener(FEE_MASTER_UPDATED_EVENT, handleWaiverUpdated);
+    return () => {
+      window.removeEventListener(FREE_STUDENTS_UPDATED_EVENT, handleWaiverUpdated);
+      window.removeEventListener(FEE_MASTER_UPDATED_EVENT, handleWaiverUpdated);
+    };
   }, []);
 
   // Background Sync & Caching States
@@ -2041,18 +2045,20 @@ export default function App() {
     try {
       let parsed: Student[] = [];
       let success = false;
+      let usedAppsScript = false;
       const cacheBust = `_t=${Date.now()}`;
 
-      // 1. Try Google Apps Script endpoint first (fast 5s timeout so cold-starts fall back swiftly to GViz)
+      // 1. Try Google Apps Script endpoint first (10s timeout so mobile networks don't drop prematurely)
       try {
         const res = await fetch(`${getEffectiveApiUrl()}?action=getStudents&${cacheBust}`, {
-          signal: AbortSignal.timeout(5000),
+          signal: AbortSignal.timeout(10000),
         });
         if (res.ok) {
           const data = await res.json();
           parsed = parseSheetData(data) as Student[];
           if (parsed && parsed.length > 0) {
             success = true;
+            usedAppsScript = true;
           }
         } else {
           console.warn(`Apps Script getStudents returned HTTP ${res.status}, falling back to Google Sheets GViz...`);
@@ -2065,8 +2071,8 @@ export default function App() {
       if (!success) {
         try {
           const encoded = encodeURIComponent('Students');
-          const gvizRes = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}&${cacheBust}`, {
-            signal: AbortSignal.timeout(6000),
+          const gvizRes = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&headers=1&sheet=${encoded}&${cacheBust}`, {
+            signal: AbortSignal.timeout(7000),
           });
           if (gvizRes.ok) {
             const text = await gvizRes.text();
@@ -2081,6 +2087,11 @@ export default function App() {
       }
 
       if (success && parsed.length > 0) {
+        // Protect full cached roster if GViz fallback only returned a truncated preview slice
+        if (!usedAppsScript && parsed.length < 30 && students.length > parsed.length) {
+          console.warn(`Ignoring truncated GViz Students fallback (${parsed.length} rows vs ${students.length} cached)`);
+          return students;
+        }
         // Load persistent deleted students set from localStorage and server
         let deletedStudentsSet = new Set<string>();
         try {
@@ -2141,13 +2152,42 @@ export default function App() {
           (s) => !deletedStudentsSet.has(String(s.Student_ID || '').trim().toLowerCase())
         );
 
+        const customById = new Map<string, any>();
+        customStudents.forEach((s) => {
+          const idKey = String(s.Student_ID || '').toLowerCase().trim();
+          if (idKey) customById.set(idKey, s);
+        });
+
+        // Merge local fee/concession override fields when Sheet lacks explicit values,
+        // and preserve unsynced local edits (_sheetSynced === false)
+        const enrichedValid = valid.map((s) => {
+          const idKey = String(s.Student_ID || '').toLowerCase().trim();
+          const loc = customById.get(idKey);
+          if (!loc) return s;
+
+          if ((loc as any)._sheetSynced === false) {
+            return { ...s, ...loc };
+          }
+          return {
+            ...s,
+            Fee_Waiver: s.Fee_Waiver || loc.Fee_Waiver,
+            Is_Free_Student: s.Is_Free_Student !== undefined ? s.Is_Free_Student : loc.Is_Free_Student,
+            Fee_Waiver_Reason: (s as any).Fee_Waiver_Reason || loc.Fee_Waiver_Reason,
+            Discount: s.Discount !== undefined && s.Discount !== '' ? s.Discount : loc.Discount,
+            Monthly_Discount: (s as any).Monthly_Discount !== undefined && (s as any).Monthly_Discount !== '' ? (s as any).Monthly_Discount : loc.Monthly_Discount,
+            Fee_Discount: (s as any).Fee_Discount !== undefined && (s as any).Fee_Discount !== '' ? (s as any).Fee_Discount : loc.Fee_Discount,
+            Admission_Fee: (s as any).Admission_Fee !== undefined && (s as any).Admission_Fee !== '' ? (s as any).Admission_Fee : loc.Admission_Fee,
+            Monthly_Fee: (s as any).Monthly_Fee !== undefined && (s as any).Monthly_Fee !== '' ? (s as any).Monthly_Fee : loc.Monthly_Fee,
+          };
+        });
+
         const parsedIdSet = new Set(
-          valid.map((s) => String(s.Student_ID || '').toLowerCase().trim())
+          enrichedValid.map((s) => String(s.Student_ID || '').toLowerCase().trim())
         );
         const uniqueCustom = customStudents.filter(
           (s) => !parsedIdSet.has(String(s.Student_ID || '').toLowerCase().trim())
         );
-        const mergedStudents = [...uniqueCustom, ...valid];
+        const mergedStudents = [...uniqueCustom, ...enrichedValid];
 
         setStudents(mergedStudents);
         saveToPhoneMemory(CACHE_KEY_STUDENTS, mergedStudents);
@@ -2376,7 +2416,7 @@ export default function App() {
     }
     try {
       const encoded = encodeURIComponent('Fee_Collection');
-      const res = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}`);
+      const res = await fetch(`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encoded}&_t=${Date.now()}`);
       if (!res.ok) return;
       const text = await res.text();
       const start = text.indexOf('{');
@@ -3469,6 +3509,7 @@ export default function App() {
         fetchStudents(true),
         fetchClasses(),
         fetchFeeCollection(),
+        syncFeeWaiversWithServer(),
         fetchSchoolNotices(),
         fetchHomework(true),
         fetchHomeworkTracker(),
@@ -3906,11 +3947,17 @@ export default function App() {
         // First time opening on this phone: load full school data & save into Phone Memory
         await syncAllData(false, true);
       } else {
-        // Phone memory already populated & NO GitHub update -> instant open with ZERO startup sheet reload!
+        // Phone memory already populated & NO GitHub update -> instant open,
+        // and silently keep Fee Waivers synchronized across devices (plus background fee/student sync if cache > 2 mins old)
         setLoadingStudents(false);
         setLoadingHomework(false);
         if (!prevBuildSig && runningBuildId !== 'dev') {
           setSyncedBuildSignature(runningBuildId);
+        }
+        syncFeeWaiversWithServer();
+        const cachedTs = Number(hydrated[CACHE_KEY_TIMESTAMP] || lastSyncTimestamp || 0);
+        if (!cachedTs || Date.now() - cachedTs > 120000) {
+          syncAllData(false, false);
         }
       }
     };
@@ -3959,6 +4006,8 @@ export default function App() {
         fetchUsers();
       } else if (event.entity === 'hall_pass_config') {
         fetchHallPassConfigFromServer().then(setHallPassConfig);
+      } else if (event.entity === 'fee_waivers') {
+        syncFeeWaiversWithServer();
       } else {
         syncAllData(false, false);
       }
@@ -6345,7 +6394,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       totalAdvance: totals.totalAdvance,
       totalBilled: totals.totalBilled,
     };
-  }, [students, filteredManagerFees, feeRecords]);
+  }, [students, filteredManagerFees, feeRecords, waiverVersion]);
 
   // Unique classes from students and homework + standard classes
   const classOptions = useMemo(() => {
