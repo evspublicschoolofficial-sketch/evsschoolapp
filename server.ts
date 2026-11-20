@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer as createViteServer } from 'vite';
+import { GoogleGenAI } from '@google/genai';
 
 // Global resilience handlers to prevent unexpected process exit
 process.on('uncaughtException', (err) => {
@@ -285,6 +286,29 @@ function saveFeeWaiversCache() {
     fs.writeFileSync(FEE_WAIVERS_FILE, JSON.stringify(feeWaiversStore, null, 2), 'utf-8');
   } catch (e) {
     console.warn('Could not write fee waivers cache file:', e);
+  }
+}
+
+// =========================================================================
+// PARENT REVIEWS & MARKETING TESTIMONIALS PERSISTENCE (/api/parent-reviews)
+// =========================================================================
+const PARENT_REVIEWS_FILE = '/tmp/evs_parent_reviews.json';
+let parentReviewsStore: any[] = [];
+try {
+  if (fs.existsSync(PARENT_REVIEWS_FILE)) {
+    const rawRev = fs.readFileSync(PARENT_REVIEWS_FILE, 'utf-8');
+    const parsedRev = JSON.parse(rawRev);
+    parentReviewsStore = Array.isArray(parsedRev) ? parsedRev : [];
+  }
+} catch {
+  parentReviewsStore = [];
+}
+
+function saveParentReviewsCache() {
+  try {
+    fs.writeFileSync(PARENT_REVIEWS_FILE, JSON.stringify(parentReviewsStore, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Could not write parent reviews cache file:', e);
   }
 }
 
@@ -680,6 +704,44 @@ async function forwardToGoogleAppsScript(payload: any) {
           if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
         }
       } catch {}
+    } else if (formattedPayload.action === 'saveParentReview') {
+      try {
+        const revStr = typeof formattedPayload.review === 'string' ? formattedPayload.review : JSON.stringify(formattedPayload.review || formattedPayload);
+        const getUrl = `${targetUrl}?action=saveParentReview&review=${encodeURIComponent(revStr)}`;
+        if (getUrl.length < 7500) {
+          const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(15000) });
+          const gText = await gRes.text();
+          const gCheck = parseAppsScriptResponse(gText);
+          if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
+        }
+      } catch {}
+    } else if (formattedPayload.action === 'updateParentReviewStatus') {
+      try {
+        const params = new URLSearchParams({
+          action: 'updateParentReviewStatus',
+          reviewId: String(formattedPayload.reviewId || formattedPayload.id || ''),
+        });
+        if (formattedPayload.status !== undefined) params.set('status', String(formattedPayload.status));
+        if (formattedPayload.featured !== undefined) params.set('featured', String(formattedPayload.featured));
+        if (formattedPayload.marketingConsent !== undefined) params.set('marketingConsent', String(formattedPayload.marketingConsent));
+        const getUrl = `${targetUrl}?${params.toString()}`;
+        if (getUrl.length < 7500) {
+          const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(15000) });
+          const gText = await gRes.text();
+          const gCheck = parseAppsScriptResponse(gText);
+          if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
+        }
+      } catch {}
+    } else if (formattedPayload.action === 'deleteParentReview') {
+      try {
+        const getUrl = `${targetUrl}?action=deleteParentReview&id=${encodeURIComponent(String(formattedPayload.reviewId || formattedPayload.id || ''))}`;
+        if (getUrl.length < 7500) {
+          const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(15000) });
+          const gText = await gRes.text();
+          const gCheck = parseAppsScriptResponse(gText);
+          if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
+        }
+      } catch {}
     }
 
     return { ok: false, error: postCheck.error || `HTTP ${lastPostStatus || 500}`, response: lastPostText };
@@ -783,6 +845,85 @@ async function syncFeeWaiversFromGoogleSheet(force = false, overrideUrl?: string
     if (changed) {
       saveFeeWaiversCache();
     }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+let lastParentReviewsSheetSync = 0;
+
+async function syncParentReviewsFromGoogleSheet(force = false, overrideUrl?: string): Promise<boolean> {
+  const now = Date.now();
+  if (!force && now - lastParentReviewsSheetSync < 25000) return false;
+  lastParentReviewsSheetSync = now;
+  try {
+    const baseUrl = overrideUrl || currentAppsScriptUrl;
+    const url = `${baseUrl}?action=getParentReviews&_t=${now}`;
+    const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(9000) });
+    if (!res.ok) return false;
+    const text = await res.text();
+    if (!text || text.trim().startsWith('<')) return false;
+    const json: any = JSON.parse(text);
+    if (!json || json.status === 'error' || !Array.isArray(json.reviews)) {
+      return false;
+    }
+
+    const parsed: any[] = json.reviews.map((r: any) => ({
+      id: String(r.id || '').trim(),
+      studentId: String(r.studentId || '').trim(),
+      studentName: String(r.studentName || '').trim(),
+      className: String(r.className || '').trim(),
+      parentName: String(r.parentName || '').trim(),
+      fatherName: String(r.fatherName || '').trim(),
+      parentMobile: String(r.parentMobile || '').trim(),
+      rating: Math.min(5, Math.max(1, Number(r.rating || 5))),
+      category: String(r.category || 'संपूर्ण अनुभव').trim(),
+      reviewText: String(r.reviewText || '').trim(),
+      photoUrl: String(r.photoUrl || ''),
+      marketingConsent: Boolean(r.marketingConsent),
+      status: r.status === 'approved' || r.status === 'hidden' ? r.status : 'pending',
+      featured: Boolean(r.featured),
+      source: String(r.source || 'parent_portal'),
+      createdAt: String(r.createdAt || getLocalTimestampIST()),
+      updatedAt: String(r.updatedAt || r.createdAt || getLocalTimestampIST()),
+      surveyAnswers: Array.isArray(r.surveyAnswers) ? r.surveyAnswers : [],
+      yesCount: r.yesCount !== undefined ? Number(r.yesCount) : undefined,
+      totalQuestions: r.totalQuestions !== undefined ? Number(r.totalQuestions) : undefined,
+      satisfactionPct: r.satisfactionPct !== undefined ? Number(r.satisfactionPct) : undefined,
+      _sheetSynced: true,
+    })).filter((r: any) => r.id && r.reviewText);
+
+    const existingMap = new Map(parentReviewsStore.map((x) => [String(x.id).toLowerCase(), x]));
+    const sheetIds = new Set(parsed.map((p) => String(p.id).toLowerCase()));
+
+    const mergedFromSheet = parsed.map((sh) => {
+      const loc = existingMap.get(String(sh.id).toLowerCase());
+      if (loc && loc.updatedAt && sh.updatedAt) {
+        const locMs = Date.parse(String(loc.updatedAt)) || 0;
+        const shMs = Date.parse(String(sh.updatedAt)) || 0;
+        if (locMs > shMs + 1000) {
+          return loc;
+        }
+      }
+      return {
+        ...sh,
+        photoUrl: sh.photoUrl || loc?.photoUrl || '',
+      };
+    });
+
+    const localPending = parentReviewsStore.filter(
+      (loc) =>
+        !sheetIds.has(String(loc.id).toLowerCase()) &&
+        (loc._sheetSynced !== true || (loc.createdAt && Date.now() - (Date.parse(String(loc.createdAt)) || 0) < 45000))
+    );
+
+    parentReviewsStore = [...localPending, ...mergedFromSheet].sort((a, b) => {
+      const tA = Date.parse(String(a.createdAt || '')) || 0;
+      const tB = Date.parse(String(b.createdAt || '')) || 0;
+      return tB - tA;
+    });
+    saveParentReviewsCache();
     return true;
   } catch {
     return false;
@@ -4628,6 +4769,294 @@ async function startServer() {
       });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err?.message || 'Failed to save fee waivers' });
+    }
+  });
+
+  // =========================================================================
+  // AI SMART PARENT REVIEW WRITER (/api/ai-parent-review-draft) via Gemini 4
+  // =========================================================================
+  app.post('/api/ai-parent-review-draft', async (req, res) => {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.status(503).json({
+        success: false,
+        error: 'Gemini API key उपलब्ध नहीं है। कृपया Settings > Secrets में GEMINI_API_KEY सेट करें।',
+      });
+    }
+
+    try {
+      const {
+        studentName = '',
+        className = '',
+        parentName = '',
+        language = 'hi',
+        overallRating = 5,
+        satisfactionPct = 100,
+        surveyResponses = [],
+      } = req.body || {};
+
+      const cleanResponses = Array.isArray(surveyResponses) ? surveyResponses : [];
+      if (cleanResponses.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'AI रिव्यू बनाने के लिए कम से कम एक सवाल का जवाब चुनें।',
+        });
+      }
+
+      const summaryLines = cleanResponses
+        .map((q: any, idx: number) => {
+          const ansText = q.yesNo === 'yes' ? 'हाँ (Yes)' : q.yesNo === 'no' ? 'नहीं (No)' : 'चयनित नहीं';
+          return `${idx + 1}. ${q.question || q.topic}: जवाब=${ansText}, संतुष्टि=${Number(q.stars || 5)}/5 स्टार`;
+        })
+        .join('\n');
+
+      const langDirective =
+        language === 'en'
+          ? 'Write strictly in natural, warm, heartfelt Indian English (first-person parent voice). No Hindi words.'
+          : language === 'hinglish'
+          ? 'Write in natural modern Hinglish (spoken conversational Roman script mixing English & simple Hindi words smoothly, e.g., "Bacche ki padhai aur teachers ka behaviour bahut accha hai...").'
+          : 'शुद्ध, सहज व दिल से निकले देवनागरी हिंदी वाक्यों में लिखें (जैसे आम समझदार अभिभावक अपने बच्चे के स्कूल के बारे में गर्व व विश्वास से लिखते हैं)।';
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
+
+      const callGemini = () =>
+        ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: `Parent Survey Inputs:
+- Student Name: ${studentName || 'हमारा बच्चा'}
+- Class: ${className || 'विद्यालय'}
+- Parent Name: ${parentName || 'अभिभावक'}
+- Overall Star Rating: ${overallRating}/5 (${satisfactionPct}% satisfaction)
+- Question-by-Question Yes/No & Star Ratings:
+${summaryLines}
+
+Write an authentic 2 to 3 sentence parent review reflecting ONLY the exact strengths and any constructive feedback indicated above. Output ONLY the review paragraph text without quotes, headings, bullet points, or emojis.`,
+          config: {
+            systemInstruction: `You are an expert parent-voice review drafting assistant for E.V.S. Public School (Chilkana Sultanpur, Saharanpur). Write sincere, human, specific 2-3 sentence testimonials strictly reflecting the parent's Yes/No answers and star ratings. Respect the parent's honesty: highlight topics rated 4-5 stars / Yes, and if any topic got "No" or <=2 stars, mention it politely as an area of expectation without exaggerating praise. ${langDirective}`,
+          },
+        });
+
+      let response;
+      try {
+        response = await callGemini();
+      } catch (firstErr: any) {
+        const firstStatus = Number(firstErr?.status || firstErr?.code) || 0;
+        const firstMsg = String(firstErr?.message || '');
+        if (firstStatus === 503 || firstMsg.includes('"code":503') || firstMsg.includes('UNAVAILABLE')) {
+          await new Promise((r) => setTimeout(r, 1200));
+          response = await callGemini();
+        } else {
+          throw firstErr;
+        }
+      }
+
+      const draft = response.text?.trim();
+      if (!draft) {
+        return res.status(502).json({
+          success: false,
+          error: 'AI ने खाली उत्तर लौटाया। कृपया पुनः प्रयास करें।',
+        });
+      }
+
+      return res.json({ success: true, draft });
+    } catch (err: any) {
+      console.error('[AI Parent Review Draft Error]', err);
+      const rawMsg = String(err?.message || 'AI review generation failed');
+      const status =
+        Number(err?.status || err?.code) ||
+        (rawMsg.includes('"code":503') || rawMsg.includes('UNAVAILABLE')
+          ? 503
+          : rawMsg.includes('"code":429') || rawMsg.includes('RESOURCE_EXHAUSTED')
+          ? 429
+          : 500);
+      const friendly =
+        status === 403 || rawMsg.includes('PERMISSION_DENIED') || rawMsg.includes('API_KEY_INVALID')
+          ? 'Gemini API Key अमान्य या अनधिकृत है। कृपया Settings > Secrets में API Key जांचें।'
+          : status === 429 || rawMsg.includes('RESOURCE_EXHAUSTED')
+          ? 'AI कोटा अभी व्यस्त है। कृपया कुछ सेकंड बाद पुनः प्रयास करें।'
+          : status === 503 || rawMsg.includes('UNAVAILABLE') || rawMsg.includes('high demand')
+          ? 'AI सर्वर पर अभी अधिक ट्रैफ़िक है। कृपया 5–10 सेकंड बाद "AI से पुनः लिखवाएं" दबाएं या नीचे स्वयं लिखें।'
+          : rawMsg;
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        success: false,
+        error: friendly,
+      });
+    }
+  });
+
+  // =========================================================================
+  // PARENT REVIEWS & MARKETING TESTIMONIALS (/api/parent-reviews)
+  // =========================================================================
+  app.get('/api/parent-reviews', async (req, res) => {
+    const force = req.query.fresh === '1' || req.query.refresh === '1';
+    const targetUrl = resolveTargetAppsScriptUrl(req);
+    const sheetSynced = await syncParentReviewsFromGoogleSheet(force, targetUrl);
+    return res.json({
+      success: true,
+      sheetSynced,
+      reviews: parentReviewsStore,
+    });
+  });
+
+  app.post('/api/parent-reviews', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const body = req.body || {};
+      const incoming = body.review || body;
+      const nowIso = getLocalTimestampIST();
+      const reviewId = String(incoming.id || `REV-${Date.now()}`).trim();
+      const existingIdx = parentReviewsStore.findIndex(
+        (r) => String(r.id || '').trim().toLowerCase() === reviewId.toLowerCase()
+      );
+      const existing = existingIdx >= 0 ? parentReviewsStore[existingIdx] : null;
+
+      const savedReview = {
+        id: reviewId,
+        studentId: String(incoming.studentId ?? existing?.studentId ?? '').trim(),
+        studentName: String(incoming.studentName ?? existing?.studentName ?? '').trim(),
+        className: String(incoming.className ?? existing?.className ?? '').trim(),
+        parentName: String(incoming.parentName ?? existing?.parentName ?? '').trim(),
+        fatherName: String(incoming.fatherName ?? existing?.fatherName ?? '').trim(),
+        parentMobile: String(incoming.parentMobile ?? existing?.parentMobile ?? '').trim(),
+        rating: Math.min(5, Math.max(1, Number(incoming.rating ?? existing?.rating ?? 5))),
+        category: String(incoming.category ?? existing?.category ?? 'संपूर्ण अनुभव').trim(),
+        reviewText: String(incoming.reviewText ?? existing?.reviewText ?? '').trim(),
+        photoUrl: String(incoming.photoUrl !== undefined ? incoming.photoUrl : existing?.photoUrl || ''),
+        marketingConsent:
+          incoming.marketingConsent !== undefined
+            ? Boolean(incoming.marketingConsent)
+            : Boolean(existing?.marketingConsent),
+        status:
+          incoming.status === 'approved' || incoming.status === 'hidden' || incoming.status === 'pending'
+            ? incoming.status
+            : existing?.status || 'pending',
+        featured:
+          incoming.featured !== undefined ? Boolean(incoming.featured) : Boolean(existing?.featured),
+        source: String(incoming.source ?? existing?.source ?? 'parent_portal'),
+        createdAt: String(incoming.createdAt || existing?.createdAt || nowIso),
+        updatedAt: nowIso,
+        surveyAnswers: Array.isArray(incoming.surveyAnswers)
+          ? incoming.surveyAnswers
+          : Array.isArray(existing?.surveyAnswers)
+          ? existing.surveyAnswers
+          : [],
+        yesCount:
+          incoming.yesCount !== undefined ? Number(incoming.yesCount) : existing?.yesCount,
+        totalQuestions:
+          incoming.totalQuestions !== undefined
+            ? Number(incoming.totalQuestions)
+            : existing?.totalQuestions,
+        satisfactionPct:
+          incoming.satisfactionPct !== undefined
+            ? Number(incoming.satisfactionPct)
+            : existing?.satisfactionPct,
+        _sheetSynced: false,
+      };
+
+      if (!savedReview.reviewText) {
+        return res.status(400).json({ success: false, error: 'Review text is required' });
+      }
+
+      if (existingIdx >= 0) {
+        parentReviewsStore[existingIdx] = savedReview;
+      } else {
+        parentReviewsStore.unshift(savedReview);
+      }
+      saveParentReviewsCache();
+
+      const isStatusOnlyUpdate = Boolean(existing && body.statusOnly);
+      const gasResult = await forwardToGoogleAppsScript(
+        isStatusOnlyUpdate
+          ? {
+              action: 'updateParentReviewStatus',
+              reviewId: savedReview.id,
+              status: savedReview.status,
+              featured: savedReview.featured,
+              marketingConsent: savedReview.marketingConsent,
+              appsScriptUrl: targetUrl,
+            }
+          : {
+              action: 'saveParentReview',
+              review: savedReview,
+              appsScriptUrl: targetUrl,
+            }
+      );
+
+      if (gasResult.ok) {
+        const idx = parentReviewsStore.findIndex((r) => r.id === savedReview.id);
+        if (idx >= 0) {
+          parentReviewsStore[idx]._sheetSynced = true;
+          saveParentReviewsCache();
+        }
+      }
+
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'parent_reviews',
+        action: existing ? 'update' : 'create',
+        details: { reviewId: savedReview.id },
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) client.send(broadcastMsg);
+      }
+
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : gasResult.error,
+        review: savedReview,
+        reviews: parentReviewsStore,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Failed to save parent review' });
+    }
+  });
+
+  app.delete('/api/parent-reviews/:id', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const reviewId = String(req.params.id || '').trim();
+      if (!reviewId) {
+        return res.status(400).json({ success: false, error: 'Review ID required' });
+      }
+      parentReviewsStore = parentReviewsStore.filter(
+        (r) => String(r.id || '').trim().toLowerCase() !== reviewId.toLowerCase()
+      );
+      saveParentReviewsCache();
+
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'deleteParentReview',
+        reviewId,
+        id: reviewId,
+        appsScriptUrl: targetUrl,
+      });
+
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'parent_reviews',
+        action: 'delete',
+        details: { reviewId },
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) client.send(broadcastMsg);
+      }
+
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        reviews: parentReviewsStore,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Failed to delete parent review' });
     }
   });
 

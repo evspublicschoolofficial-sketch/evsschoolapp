@@ -7,6 +7,7 @@ import {
   getStudentDatesheetSchedule,
   mapPageSlotsForBackside,
   resolveDatesheetClassKey,
+  resolveHallPassLayout,
   StudentHallPassEligibility,
 } from './hallPassHelper';
 
@@ -539,10 +540,398 @@ const drawBackDatesheetSlot = (
   );
 };
 
+const drawFrontLandscapeSlot = (
+  doc: jsPDF,
+  slotX: number,
+  slotY: number,
+  slotW: number,
+  slotH: number,
+  cardW: number,
+  cardH: number,
+  item: StudentHallPassEligibility,
+  config: HallPassConfig,
+  classNameLabel: string,
+  photoDataUrl: string | null,
+  qrDataUrl: string | undefined,
+  showCutBorder: boolean,
+  showClassOnCard: boolean
+) => {
+  const { student } = item;
+  const examTitle = getExamDisplayTitle(config.examType, config.customExamTitle);
+  const x = slotX + (slotW - cardW) / 2;
+  const y = slotY + (slotH - cardH) / 2;
+
+  if (showCutBorder) {
+    doc.setDrawColor(...SLATE_500);
+    doc.setLineWidth(0.2);
+    doc.setLineDashPattern([1.2, 1.2], 0);
+    doc.rect(x, y, cardW, cardH, 'S');
+    doc.setLineDashPattern([], 0);
+  }
+
+  const inset = showCutBorder ? 0.65 : 0.2;
+  const cx = x + inset;
+  const cy = y + inset;
+  const cw = cardW - inset * 2;
+  const ch = cardH - inset * 2;
+
+  doc.setFillColor(...WHITE);
+  doc.setDrawColor(...NAVY);
+  doc.setLineWidth(0.45);
+  doc.rect(cx, cy, cw, ch, 'FD');
+
+  // TOP HEADER STRIP
+  const headerH = 9.4;
+  doc.setFillColor(...NAVY);
+  doc.rect(cx, cy, cw, headerH, 'F');
+  doc.setFillColor(...AMBER);
+  doc.rect(cx, cy + headerH - 0.65, cw, 0.65, 'F');
+
+  doc.setTextColor(...WHITE);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.4);
+  doc.text('E.V.S. PUBLIC SCHOOL', cx + 2.0, cy + 3.7);
+
+  doc.setTextColor(...LIGHT_BLUE_TEXT);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(5.5);
+  doc.text('Chilkana Sultanpur, Saharanpur (U.P.)', cx + 2.0, cy + 6.7);
+
+  const badgeW = 14.5;
+  const badgeH = 3.6;
+  const badgeX = cx + cw - badgeW - 1.8;
+  const badgeY = cy + 1.1;
+  doc.setFillColor(...AMBER);
+  doc.rect(badgeX, badgeY, badgeW, badgeH, 'F');
+  doc.setTextColor(15, 23, 42);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.0);
+  doc.text('HALL PASS', badgeX + badgeW / 2, badgeY + 2.6, { align: 'center' });
+
+  doc.setTextColor(...WHITE);
+  doc.setFontSize(6.2);
+  doc.text(String(config.session || '2026-27'), badgeX - 1.5, badgeY + 2.6, { align: 'right' });
+
+  doc.setTextColor(...AMBER_TEXT);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.0);
+  doc.text(fitText(doc, examTitle, 38), cx + cw - 1.8, cy + 7.6, { align: 'right' });
+
+  // BOTTOM INSTRUCTION STRIP
+  const footerH = 4.2;
+  const footerY = cy + ch - footerH;
+  doc.setFillColor(...SLATE_50);
+  doc.rect(cx + 0.2, footerY, cw - 0.4, footerH - 0.2, 'F');
+  doc.setDrawColor(...SLATE_300);
+  doc.setLineWidth(0.2);
+  doc.line(cx, footerY, cx + cw, footerY);
+  doc.setTextColor(...SLATE_700);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(5.7);
+  doc.text(
+    fitText(doc, config.instructionLine || 'Bring Hall Pass, School ID & stationery daily.', cw - 3.6),
+    cx + 1.8,
+    footerY + 2.8
+  );
+
+  // 3-COLUMN HORIZONTAL BODY
+  const padX = 2.0;
+  const bodyX = cx + padX;
+  const bodyW = cw - padX * 2;
+  const bodyTop = cy + headerH + 1.8;
+  const isCompactH = cardH < 60;
+
+  // Left: Student Photo
+  const photoW = isCompactH ? 15.5 : 17.5;
+  const photoH = isCompactH ? 19.5 : 22.0;
+  doc.setFillColor(...SLATE_100);
+  doc.setDrawColor(...NAVY);
+  doc.setLineWidth(0.4);
+  doc.rect(bodyX, bodyTop, photoW, photoH, 'FD');
+
+  if (photoDataUrl) {
+    try {
+      doc.addImage(photoDataUrl, 'JPEG', bodyX + 0.3, bodyTop + 0.3, photoW - 0.6, photoH - 0.6);
+    } catch {
+      doc.setTextColor(...NAVY);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.text(getInitials(student.Student_Name), bodyX + photoW / 2, bodyTop + photoH / 2 + 1.2, {
+        align: 'center',
+      });
+    }
+  } else {
+    doc.setTextColor(...NAVY);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text(getInitials(student.Student_Name), bodyX + photoW / 2, bodyTop + photoH / 2 + 1.2, {
+      align: 'center',
+    });
+  }
+
+  if (showClassOnCard) {
+    doc.setTextColor(...NAVY);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.6);
+    doc.text(fitText(doc, classNameLabel, photoW + 1), bodyX + photoW / 2, bodyTop + photoH + 3.4, {
+      align: 'center',
+    });
+  }
+
+  // Right: QR Code + Principal Sign
+  const qrSize = isCompactH ? 17.5 : 19.5;
+  const qrX = cx + cw - padX - qrSize;
+  const qrY = bodyTop;
+  doc.setFillColor(...WHITE);
+  doc.setDrawColor(...NAVY);
+  doc.setLineWidth(0.4);
+  doc.rect(qrX, qrY, qrSize, qrSize, 'FD');
+  if (qrDataUrl) {
+    try {
+      doc.addImage(qrDataUrl, 'PNG', qrX + 0.5, qrY + 0.5, qrSize - 1.0, qrSize - 1.0);
+    } catch {}
+  }
+
+  const signLineY = footerY - 3.6;
+  doc.setDrawColor(...BLACK);
+  doc.setLineWidth(0.35);
+  doc.line(qrX, signLineY, qrX + qrSize, signLineY);
+  doc.setTextColor(...BLACK);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(5.8);
+  doc.text('Principal Sign.', qrX + qrSize / 2, signLineY + 2.3, { align: 'center' });
+
+  // Center: Student Identity + ID/Roll + Exam Fee + Timing
+  const infoX = bodyX + photoW + 2.2;
+  const infoW = qrX - infoX - 2.2;
+
+  doc.setTextColor(...BLACK);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text(fitText(doc, String(student.Student_Name || '').toUpperCase(), infoW), infoX, bodyTop + 3.4);
+
+  doc.setTextColor(...SLATE_700);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.7);
+  doc.text(fitText(doc, `S/o · D/o ${student.Father_Name || '—'}`, infoW), infoX, bodyTop + 6.9);
+
+  // SCHOOL ID + ROLL NO boxes
+  const boxY = bodyTop + 8.6;
+  const boxGap = 1.5;
+  const singleBoxW = (infoW - boxGap) / 2;
+  const boxH = 7.2;
+
+  doc.setFillColor(...SLATE_50);
+  doc.setDrawColor(...NAVY);
+  doc.setLineWidth(0.35);
+  doc.rect(infoX, boxY, singleBoxW, boxH, 'FD');
+  doc.setTextColor(...SLATE_500);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(5.0);
+  doc.text('SCHOOL ID', infoX + 1.0, boxY + 2.3);
+  doc.setTextColor(...NAVY);
+  doc.setFontSize(8.4);
+  doc.text(fitText(doc, String(student.Student_ID || '—'), singleBoxW - 1.8), infoX + 1.0, boxY + 6.0);
+
+  const rollBoxX = infoX + singleBoxW + boxGap;
+  doc.setFillColor(...SLATE_50);
+  doc.rect(rollBoxX, boxY, singleBoxW, boxH, 'FD');
+  doc.setTextColor(...SLATE_500);
+  doc.setFontSize(5.0);
+  doc.text('ROLL NO.', rollBoxX + 1.0, boxY + 2.3);
+  doc.setTextColor(...BLACK);
+  doc.setFontSize(8.4);
+  doc.text(fitText(doc, String(student.Roll_Number || '—'), singleBoxW - 1.8), rollBoxX + 1.0, boxY + 6.0);
+
+  // EXAM FEE Strip
+  const feeY = boxY + boxH + 1.5;
+  const feeH = 6.0;
+  const examFeeAmount =
+    typeof item.examFee === 'number' && !isNaN(item.examFee)
+      ? item.examFee
+      : getClassExamFee(student.Class);
+  const examFeeText = `Rs. ${examFeeAmount.toLocaleString('en-IN')}`;
+
+  doc.setFillColor(255, 251, 235);
+  doc.setDrawColor(...NAVY);
+  doc.setLineWidth(0.38);
+  doc.rect(infoX, feeY, infoW, feeH, 'FD');
+  doc.setTextColor(...NAVY);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.6);
+  doc.text('EXAM FEE', infoX + 1.5, feeY + 4.1);
+  doc.setTextColor(...BLACK);
+  doc.setFontSize(8.8);
+  doc.text(fitText(doc, examFeeText, infoW - 18), infoX + infoW - 1.5, feeY + 4.3, { align: 'right' });
+
+  // Timing Line
+  doc.setTextColor(...BLACK);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.5);
+  doc.text(
+    fitText(doc, config.examScheduleLine || 'Exam: 09:30 AM - 12:00 PM', infoW),
+    infoX,
+    feeY + feeH + 3.4
+  );
+};
+
+const drawBackLandscapeDatesheetSlot = (
+  doc: jsPDF,
+  slotX: number,
+  slotY: number,
+  slotW: number,
+  slotH: number,
+  cardW: number,
+  cardH: number,
+  item: StudentHallPassEligibility,
+  config: HallPassConfig,
+  classNameLabel: string,
+  showCutBorder: boolean
+) => {
+  const { student } = item;
+  const examTitle = getExamDisplayTitle(config.examType, config.customExamTitle);
+  const classKey = resolveDatesheetClassKey(student.Class, classNameLabel);
+  const rows = getStudentDatesheetSchedule(config, student.Class, classNameLabel);
+
+  const x = slotX + (slotW - cardW) / 2;
+  const y = slotY + (slotH - cardH) / 2;
+
+  if (showCutBorder) {
+    doc.setDrawColor(...SLATE_500);
+    doc.setLineWidth(0.2);
+    doc.setLineDashPattern([1.2, 1.2], 0);
+    doc.rect(x, y, cardW, cardH, 'S');
+    doc.setLineDashPattern([], 0);
+  }
+
+  const inset = showCutBorder ? 0.65 : 0.2;
+  const cx = x + inset;
+  const cy = y + inset;
+  const cw = cardW - inset * 2;
+  const ch = cardH - inset * 2;
+
+  doc.setFillColor(...WHITE);
+  doc.setDrawColor(...NAVY);
+  doc.setLineWidth(0.45);
+  doc.rect(cx, cy, cw, ch, 'FD');
+
+  // HEADER
+  const headerH = 7.4;
+  doc.setFillColor(...NAVY);
+  doc.rect(cx, cy, cw, headerH, 'F');
+  doc.setFillColor(...AMBER);
+  doc.rect(cx, cy + headerH - 0.55, cw, 0.55, 'F');
+
+  doc.setTextColor(...WHITE);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.4);
+  doc.text(fitText(doc, `DATESHEET · ${classKey}`, 36), cx + 1.8, cy + 4.7);
+
+  doc.setTextColor(...LIGHT_BLUE_TEXT);
+  doc.setFontSize(6.5);
+  doc.text(fitText(doc, String(student.Student_Name || '').toUpperCase(), 26), cx + 38, cy + 4.7);
+
+  const idText = `ID: ${student.Student_ID}`;
+  doc.setFontSize(6.2);
+  const idW = Math.min(18, doc.getTextWidth(idText) + 2.8);
+  const idX = cx + cw - idW - 1.6;
+  doc.setFillColor(...AMBER);
+  doc.rect(idX, cy + 1.5, idW, 3.8, 'F');
+  doc.setTextColor(15, 23, 42);
+  doc.text(idText, idX + idW / 2, cy + 4.1, { align: 'center' });
+
+  // FOOTER NOTES
+  const footerH = 8.4;
+  const footY = cy + ch - footerH;
+  doc.setDrawColor(...NAVY);
+  doc.setLineWidth(0.35);
+  doc.line(cx + 1.8, footY, cx + cw - 1.8, footY);
+
+  doc.setTextColor(...BLACK);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(5.9);
+  doc.text(
+    fitText(doc, config.datesheetArrivalLine || 'Arrival: 08:45 AM · Exam: 09:30 AM – 12:00 PM', cw - 3.6),
+    cx + 1.8,
+    footY + 3.2
+  );
+
+  doc.setTextColor(...SLATE_700);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(5.4);
+  doc.text(
+    fitText(
+      doc,
+      config.datesheetHolidayNote
+        ? `Off: ${config.datesheetHolidayNote}`
+        : `${examTitle} (${config.session}) · Bring own stationery.`,
+      cw - 3.6
+    ),
+    cx + 1.8,
+    footY + 6.5
+  );
+
+  // 2-COLUMN SPLIT DATESHEET TABLE
+  const padX = 1.8;
+  const tblX = cx + padX;
+  const tblW = cw - padX * 2;
+  const colGap = 1.8;
+  const colW = (tblW - colGap) / 2;
+  const tblStartY = cy + headerH + 1.3;
+  const maxTblH = footY - tblStartY - 1.0;
+
+  const splitAt = Math.ceil(rows.length / 2);
+  const columns = [rows.slice(0, splitAt), rows.slice(splitAt)];
+  const thH = 3.8;
+  const maxRowsPerCol = Math.max(splitAt, 1);
+  const rowH = Math.min(5.8, Math.max(3.8, (maxTblH - thH) / maxRowsPerCol));
+
+  columns.forEach((colRows, colIdx) => {
+    const colX = tblX + colIdx * (colW + colGap);
+
+    doc.setFillColor(...SLATE_100);
+    doc.setDrawColor(...NAVY);
+    doc.setLineWidth(0.28);
+    doc.rect(colX, tblStartY, colW, thH, 'F');
+    doc.line(colX, tblStartY + thH, colX + colW, tblStartY + thH);
+
+    doc.setTextColor(...NAVY);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(5.8);
+    doc.text('DATE', colX + 1.0, tblStartY + 2.7);
+    doc.text('SUBJECT', colX + 17.5, tblStartY + 2.7);
+
+    let curY = tblStartY + thH;
+    colRows.forEach((r, idx) => {
+      if (curY + rowH > footY - 0.5) return;
+      if (idx % 2 === 1) {
+        doc.setFillColor(...SLATE_50);
+        doc.rect(colX, curY, colW, rowH, 'F');
+      }
+      doc.setDrawColor(...SLATE_300);
+      doc.setLineWidth(0.16);
+      doc.line(colX, curY + rowH, colX + colW, curY + rowH);
+
+      const baseY = curY + rowH * 0.68;
+      doc.setTextColor(...BLACK);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(6.2);
+      const dateDay = `${formatShortDate(r.date)} ${r.day}`.trim();
+      doc.text(fitText(doc, dateDay, 15.5), colX + 0.8, baseY);
+
+      doc.setFontSize(6.5);
+      doc.text(fitText(doc, r.subject, colW - 18.5), colX + 17.5, baseY);
+      curY += rowH;
+    });
+  });
+};
+
 export async function generateAndDownloadHallPassPdf(
   opts: GenerateHallPassPdfOptions
 ): Promise<{ filename: string; pageCount: number }> {
   const { items, config, mode, getClassName, getStudentPhoto, qrMap, showCutBorder, showClassOnCard } = opts;
+  const layoutSpec = resolveHallPassLayout(config.cardLayout);
+  const isLandscape = layoutSpec.isLandscape;
 
   // Ensure QR data URLs exist for all printable students (even if preview hasn't finished yet)
   const resolvedQr: Record<string, string> = { ...qrMap };
@@ -579,8 +968,9 @@ export async function generateAndDownloadHallPassPdf(
     );
   }
 
+  const pdfOrientation = isLandscape ? 'landscape' : 'portrait';
   const doc = new jsPDF({
-    orientation: 'portrait',
+    orientation: pdfOrientation,
     unit: 'mm',
     format: 'a4',
     compress: true,
@@ -590,8 +980,12 @@ export async function generateAndDownloadHallPassPdf(
   const flipMode = config.backsideFlipMode === 'row_flip' ? 'row_flip' : 'book_flip';
   const margin = 2.5;
   const gap = 1.2;
-  const cellW = (210 - margin * 2 - gap * 2) / 3; // ~67.53mm
-  const cellH = (297 - margin * 2 - gap * 2) / 3; // ~96.53mm
+  const pageW = isLandscape ? 297 : 210;
+  const pageH = isLandscape ? 210 : 297;
+  const cellW = (pageW - margin * 2 - gap * 2) / 3; // Portrait: ~67.53mm | Landscape: ~96.53mm
+  const cellH = (pageH - margin * 2 - gap * 2) / 3; // Portrait: ~96.53mm | Landscape: ~67.53mm
+  const cardW = layoutSpec.id === 'landscape_polypack_90x55' ? 90 : cellW;
+  const cardH = layoutSpec.id === 'landscape_polypack_90x55' ? 55 : cellH;
 
   let totalPdfPages = 0;
 
@@ -600,7 +994,7 @@ export async function generateAndDownloadHallPassPdf(
     while (paddedSlots.length < 9) paddedSlots.push(null);
 
     if (mode === 'front' || mode === 'duplex') {
-      if (totalPdfPages > 0) doc.addPage('a4', 'portrait');
+      if (totalPdfPages > 0) doc.addPage('a4', pdfOrientation);
       totalPdfPages++;
       paddedSlots.forEach((slotItem, slotIdx) => {
         const col = slotIdx % 3;
@@ -609,32 +1003,51 @@ export async function generateAndDownloadHallPassPdf(
         const y = margin + row * (cellH + gap);
         if (slotItem) {
           const sid = String(slotItem.student.Student_ID || '').trim();
-          drawFrontSlot(
-            doc,
-            x,
-            y,
-            cellW,
-            cellH,
-            slotItem,
-            config,
-            getClassName(slotItem.student.Class),
-            photoCache[sid] || null,
-            resolvedQr[sid],
-            showCutBorder,
-            showClassOnCard
-          );
+          if (isLandscape) {
+            drawFrontLandscapeSlot(
+              doc,
+              x,
+              y,
+              cellW,
+              cellH,
+              cardW,
+              cardH,
+              slotItem,
+              config,
+              getClassName(slotItem.student.Class),
+              photoCache[sid] || null,
+              resolvedQr[sid],
+              showCutBorder,
+              showClassOnCard
+            );
+          } else {
+            drawFrontSlot(
+              doc,
+              x,
+              y,
+              cellW,
+              cellH,
+              slotItem,
+              config,
+              getClassName(slotItem.student.Class),
+              photoCache[sid] || null,
+              resolvedQr[sid],
+              showCutBorder,
+              showClassOnCard
+            );
+          }
         } else if (showCutBorder) {
           doc.setDrawColor(...SLATE_300);
           doc.setLineWidth(0.18);
           doc.setLineDashPattern([1.2, 1.2], 0);
-          doc.rect(x, y, cellW, cellH, 'S');
+          doc.rect(x + (cellW - cardW) / 2, y + (cellH - cardH) / 2, cardW, cardH, 'S');
           doc.setLineDashPattern([], 0);
         }
       });
     }
 
     if (mode === 'back' || mode === 'duplex') {
-      if (totalPdfPages > 0) doc.addPage('a4', 'portrait');
+      if (totalPdfPages > 0) doc.addPage('a4', pdfOrientation);
       totalPdfPages++;
       const backSlots = mapPageSlotsForBackside(paddedSlots, flipMode);
       backSlots.forEach((slotItem, slotIdx) => {
@@ -643,22 +1056,38 @@ export async function generateAndDownloadHallPassPdf(
         const x = margin + col * (cellW + gap);
         const y = margin + row * (cellH + gap);
         if (slotItem) {
-          drawBackDatesheetSlot(
-            doc,
-            x,
-            y,
-            cellW,
-            cellH,
-            slotItem,
-            config,
-            getClassName(slotItem.student.Class),
-            showCutBorder
-          );
+          if (isLandscape) {
+            drawBackLandscapeDatesheetSlot(
+              doc,
+              x,
+              y,
+              cellW,
+              cellH,
+              cardW,
+              cardH,
+              slotItem,
+              config,
+              getClassName(slotItem.student.Class),
+              showCutBorder
+            );
+          } else {
+            drawBackDatesheetSlot(
+              doc,
+              x,
+              y,
+              cellW,
+              cellH,
+              slotItem,
+              config,
+              getClassName(slotItem.student.Class),
+              showCutBorder
+            );
+          }
         } else if (showCutBorder) {
           doc.setDrawColor(...SLATE_300);
           doc.setLineWidth(0.18);
           doc.setLineDashPattern([1.2, 1.2], 0);
-          doc.rect(x, y, cellW, cellH, 'S');
+          doc.rect(x + (cellW - cardW) / 2, y + (cellH - cardH) / 2, cardW, cardH, 'S');
           doc.setLineDashPattern([], 0);
         }
       });
@@ -667,15 +1096,16 @@ export async function generateAndDownloadHallPassPdf(
 
   const examSlug = String(config.examType || 'Exam').replace(/\s+/g, '_');
   const sideLabel = mode === 'front' ? 'Step1_Front_HallPass' : mode === 'back' ? 'Step2_Back_Datesheet' : 'Front_and_Back';
-  const filename = `EVS_${examSlug}_${sideLabel}_${items.length}_Students.pdf`;
+  const orientSlug = isLandscape ? (layoutSpec.id === 'landscape_polypack_90x55' ? '70x100_Polypack_' : 'Landscape_') : '';
+  const filename = `EVS_${examSlug}_${orientSlug}${sideLabel}_${items.length}_Students.pdf`;
   doc.save(filename);
 
   return { filename, pageCount: totalPdfPages };
 }
 
 /**
- * Generates a single-student 2-page PDF (Page 1: Hall Pass, Page 2: Class Datesheet)
- * for Parent Portal download.
+ * Generates a single-student A4 PDF (Front Hall Pass + Back Class Datesheet)
+ * for Parent Portal download matching the configured school card orientation.
  */
 export async function generateParentSingleStudentPdf(opts: {
   item: StudentHallPassEligibility;
@@ -685,6 +1115,7 @@ export async function generateParentSingleStudentPdf(opts: {
   qrDataUrl?: string;
 }): Promise<string> {
   const { item, config, classNameLabel, photoUrl, qrDataUrl } = opts;
+  const layoutSpec = resolveHallPassLayout(config.cardLayout);
 
   let finalQr = qrDataUrl;
   if (!finalQr) {
@@ -708,13 +1139,6 @@ export async function generateParentSingleStudentPdf(opts: {
     compress: true,
   });
 
-  // Render exact pocket-size Front Hall Pass (left) and Class Datesheet (right) side-by-side on 1 A4 page
-  const cardW = 67.5;
-  const cardH = 96.5;
-  const gap = 8;
-  const startX = (210 - (cardW * 2 + gap)) / 2;
-  const startY = 36;
-
   doc.setTextColor(...NAVY);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
@@ -723,12 +1147,25 @@ export async function generateParentSingleStudentPdf(opts: {
   doc.setTextColor(...SLATE_500);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8.5);
-  doc.text('Front: Hall Pass (Left)  |  Back: Class Datesheet (Right) — Cut & fold/paste together', 105, 26, {
+  doc.text('Cut along dotted lines & insert into lanyard pouch (Front + Back Datesheet)', 105, 26, {
     align: 'center',
   });
 
-  drawFrontSlot(doc, startX, startY, cardW, cardH, item, config, classNameLabel, photoDataUrl, finalQr, true, true);
-  drawBackDatesheetSlot(doc, startX + cardW + gap, startY, cardW, cardH, item, config, classNameLabel, true);
+  if (layoutSpec.isLandscape) {
+    const cardW = layoutSpec.widthMm;
+    const cardH = layoutSpec.heightMm;
+    const startX = (210 - cardW) / 2;
+    drawFrontLandscapeSlot(doc, startX, 36, cardW, cardH, cardW, cardH, item, config, classNameLabel, photoDataUrl, finalQr, true, true);
+    drawBackLandscapeDatesheetSlot(doc, startX, 36 + cardH + 10, cardW, cardH, cardW, cardH, item, config, classNameLabel, true);
+  } else {
+    const cardW = 67.5;
+    const cardH = 96.5;
+    const gap = 8;
+    const startX = (210 - (cardW * 2 + gap)) / 2;
+    const startY = 36;
+    drawFrontSlot(doc, startX, startY, cardW, cardH, item, config, classNameLabel, photoDataUrl, finalQr, true, true);
+    drawBackDatesheetSlot(doc, startX + cardW + gap, startY, cardW, cardH, item, config, classNameLabel, true);
+  }
 
   const safeName = String(item.student.Student_Name || 'Student').replace(/[^a-zA-Z0-9]+/g, '_');
   const filename = `EVS_HallPass_${safeName}_${item.student.Student_ID}.pdf`;

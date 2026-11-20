@@ -1,4 +1,4 @@
-import { ExamTermType, FeeCollectionRecord, HallPassConfig, HallPassDatesheetRow, Student } from '../types';
+import { ExamTermType, FeeCollectionRecord, HallPassCardLayout, HallPassConfig, HallPassDatesheetRow, Student } from '../types';
 import { getAppsScriptUrl } from './busTrackingService';
 import { calculateStudentSummary, isStudentFeeExempt, normalizeStudentId } from './feeCalculation';
 import { DEFAULT_FEE_CONFIG, getActiveFeeMasterConfig, normalizeClassKey } from './feeMaster';
@@ -178,9 +178,53 @@ export const DEFAULT_HALL_PASS_CONFIG: HallPassConfig = {
   datesheetArrivalLine: 'Arrival: 08:45 AM · Exam: 09:30 AM – 12:00 PM',
   datesheetHolidayNote: '24/11 Tue: Guru Nanak Jayanti Holiday · 29/11 Sun: Sunday Off',
   backsideFlipMode: 'book_flip',
+  cardLayout: 'portrait_67x96',
   datesheetRows: DEFAULT_HALF_YEARLY_DATESHEET_ROWS,
   updatedAt: '',
 };
+
+export interface HallPassLayoutSpec {
+  id: HallPassCardLayout;
+  isLandscape: boolean;
+  widthMm: number;
+  heightMm: number;
+  labelHi: string;
+  shortNoteHi: string;
+}
+
+export const HALL_PASS_LAYOUT_SPECS: Record<HallPassCardLayout, HallPassLayoutSpec> = {
+  portrait_67x96: {
+    id: 'portrait_67x96',
+    isLandscape: false,
+    widthMm: 67.5,
+    heightMm: 96.5,
+    labelHi: 'खड़ा कार्ड (67.5 × 96.5 mm · ऊपर छोटा सिरा)',
+    shortNoteHi: 'A4 Portrait पर 9 कार्ड · स्टैंडर्ड वर्टिकल पॉलीपैक के लिए',
+  },
+  landscape_polypack_90x55: {
+    id: 'landscape_polypack_90x55',
+    isLandscape: true,
+    widthMm: 90,
+    heightMm: 55,
+    labelHi: 'लेटा कार्ड · 70×100 पॉलीपैक फिट (90 × 55 mm)',
+    shortNoteHi: 'A4 Landscape पर 9 कार्ड · 70×100mm लैनयार्ड पॉलीपैक के अंदर बिना मुड़े एकदम फिट',
+  },
+  landscape_full_96x67: {
+    id: 'landscape_full_96x67',
+    isLandscape: true,
+    widthMm: 96.5,
+    heightMm: 67.5,
+    labelHi: 'लेटा कार्ड · फुल ग्रिड (96.5 × 67.5 mm)',
+    shortNoteHi: 'A4 Landscape पर 9 कार्ड · बड़े हॉरिजॉन्टल पाउच के लिए',
+  },
+};
+
+export function resolveHallPassLayout(layout?: HallPassCardLayout): HallPassLayoutSpec {
+  if (layout && layout in HALL_PASS_LAYOUT_SPECS) {
+    return HALL_PASS_LAYOUT_SPECS[layout];
+  }
+  return HALL_PASS_LAYOUT_SPECS.portrait_67x96;
+}
 
 export const EXAM_TYPE_TITLES: Record<ExamTermType, { en: string; hi: string }> = {
   Quarterly: { en: 'QUARTERLY EXAMINATION', hi: 'तिमाही परीक्षा' },
@@ -351,6 +395,11 @@ function mergeWithDefaults(parsed: any): HallPassConfig {
         ? parsed.datesheetRows
         : DEFAULT_HALF_YEARLY_DATESHEET_ROWS,
     backsideFlipMode: parsed?.backsideFlipMode === 'row_flip' ? 'row_flip' : 'book_flip',
+    cardLayout:
+      parsed?.cardLayout === 'landscape_polypack_90x55' ||
+      parsed?.cardLayout === 'landscape_full_96x67'
+        ? parsed.cardLayout
+        : 'portrait_67x96',
   };
 }
 

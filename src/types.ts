@@ -267,6 +267,8 @@ export interface HallPassDatesheetRow {
   subjects: Record<string, string>;
 }
 
+export type HallPassCardLayout = 'portrait_67x96' | 'landscape_polypack_90x55' | 'landscape_full_96x67';
+
 export interface HallPassConfig {
   examType: ExamTermType;
   session: string;
@@ -278,6 +280,7 @@ export interface HallPassConfig {
   datesheetArrivalLine?: string;
   datesheetHolidayNote?: string;
   backsideFlipMode?: 'book_flip' | 'row_flip';
+  cardLayout?: HallPassCardLayout;
   datesheetRows?: HallPassDatesheetRow[];
   updatedAt?: string;
 }

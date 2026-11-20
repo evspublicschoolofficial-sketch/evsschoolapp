@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { flushSync } from 'react-dom';
-import { ExamTermType, FeeCollectionRecord, HallPassConfig, HallPassDatesheetRow, Student } from '../types';
+import { ExamTermType, FeeCollectionRecord, HallPassCardLayout, HallPassConfig, HallPassDatesheetRow, Student } from '../types';
 import {
   chunkIntoPages,
   computeStudentHallPassEligibility,
@@ -8,7 +8,9 @@ import {
   DEFAULT_HALF_YEARLY_DATESHEET_ROWS,
   DEFAULT_HALL_PASS_CONFIG,
   getExamDisplayTitle,
+  HALL_PASS_LAYOUT_SPECS,
   mapPageSlotsForBackside,
+  resolveHallPassLayout,
   saveHallPassConfigWithStatus,
 } from '../utils/hallPassHelper';
 import { normalizeStudentId } from '../utils/feeCalculation';
@@ -664,6 +666,38 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
           </div>
         </div>
 
+        {/* POLYPACK / CARD ORIENTATION & SIZE SELECTOR */}
+        <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-extrabold text-[#0c2340]">
+              पॉलीपैक / कार्ड दिशा व साइज (Polypack Fit)
+            </span>
+            <span className="text-[11px] text-slate-600 font-semibold">
+              {resolveHallPassLayout(config.cardLayout).shortNoteHi}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {(Object.keys(HALL_PASS_LAYOUT_SPECS) as HallPassCardLayout[]).map((layoutKey) => {
+              const spec = HALL_PASS_LAYOUT_SPECS[layoutKey];
+              const isSelected = (config.cardLayout || 'portrait_67x96') === layoutKey;
+              return (
+                <button
+                  key={layoutKey}
+                  type="button"
+                  onClick={() => handleSaveSettings({ cardLayout: layoutKey })}
+                  className={`px-3 py-2 rounded-xl text-xs font-bold border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                    isSelected
+                      ? 'bg-[#0c2340] text-amber-300 border-[#0c2340]'
+                      : 'bg-white text-slate-800 border-slate-300 hover:bg-slate-100'
+                  }`}
+                >
+                  {spec.labelHi}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         {/* TOGGLES ROW + DATESHEET EDITOR EXPANDER */}
         <div className="flex flex-wrap items-center justify-between gap-3 pt-1 text-xs">
           <div className="flex flex-wrap items-center gap-4">
@@ -1090,14 +1124,17 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
         ) : (
           <div
             id="printable-hall-passes-root"
+            data-orientation={resolveHallPassLayout(config.cardLayout).isLandscape ? 'landscape' : 'portrait'}
             className="space-y-6 overflow-x-auto pb-2 print:space-y-0 print:overflow-visible print:pb-0"
           >
-            {renderSheets.map((sheet) => (
+            {renderSheets.map((sheet) => {
+              const activeLayout = resolveHallPassLayout(config.cardLayout);
+              return (
               <div key={sheet.key} className="hall-pass-page-wrap space-y-1.5 print:space-y-0">
                 <div className="no-print flex items-center justify-between text-[11px] font-bold px-1">
                   <span className={sheet.side === 'back' ? 'text-amber-800' : 'text-slate-600'}>
                     {sheet.side === 'front'
-                      ? `आगे (FRONT: HALL PASS) · A4 शीट ${sheet.pageNumber} / ${a4Pages.length} · ${sheet.studentCount} कार्ड`
+                      ? `आगे (FRONT: HALL PASS) · A4 ${activeLayout.isLandscape ? 'Landscape' : 'Portrait'} शीट ${sheet.pageNumber} / ${a4Pages.length} · ${sheet.studentCount} कार्ड (${activeLayout.widthMm}×${activeLayout.heightMm} mm)`
                       : `पीछे (BACK: DATESHEET · MIRRORED ${
                           flipMode === 'book_flip' ? 'बायाँ↔दायाँ' : 'ऊपर↕नीचे'
                         }) · A4 शीट ${sheet.pageNumber} / ${a4Pages.length}`}
@@ -1106,8 +1143,8 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
                 <div
                   className="hall-pass-a4-page bg-white border border-slate-300 shadow-sm mx-auto"
                   style={{
-                    width: '205mm',
-                    height: '291mm',
+                    width: activeLayout.isLandscape ? '292mm' : '205mm',
+                    height: activeLayout.isLandscape ? '205mm' : '291mm',
                     padding: '0',
                     display: 'grid',
                     gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
@@ -1151,7 +1188,8 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
                   )}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

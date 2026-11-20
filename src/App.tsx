@@ -11,6 +11,11 @@ import {
   HALL_PASS_CONFIG_STORAGE_KEY,
   loadLocalHallPassConfig,
 } from './utils/hallPassHelper';
+import {
+  fetchParentReviewsFromServer,
+  loadLocalParentReviews,
+  ParentReviewRecord,
+} from './utils/parentReviewHelper';
 import { FloatingSocialBar } from './components/FloatingSocialBar';
 import { fetchFeeMasterDirectGViz, FREE_STUDENTS_UPDATED_EVENT, FEE_MASTER_UPDATED_EVENT, syncFeeWaiversWithServer } from './utils/feeMaster';
 import { initGeolocationPrewarmer, syncSchoolLocationFromServer } from './utils/schoolLocationService';
@@ -71,6 +76,8 @@ const ReportCardManagerView = React.lazy(() => import('./components/ReportCardMa
 const PrintableReportCard = React.lazy(() => import('./components/PrintableReportCard').then((m) => ({ default: m.PrintableReportCard })));
 const HallPassManagerView = React.lazy(() => import('./components/HallPassManagerView').then((m) => ({ default: m.HallPassManagerView })));
 const ParentHallPassView = React.lazy(() => import('./components/ParentHallPassView').then((m) => ({ default: m.ParentHallPassView })));
+const ParentReviewSection = React.lazy(() => import('./components/ParentReviewSection').then((m) => ({ default: m.ParentReviewSection })));
+const ManagerParentReviewsView = React.lazy(() => import('./components/ManagerParentReviewsView').then((m) => ({ default: m.ManagerParentReviewsView })));
 
 // Non-inlined static asset paths (prevents 1.4 MB image bloat inside main JS bundle)
 const studentFarahPhoto = '/assets/student_farah_1789483069291.jpg';
@@ -1410,7 +1417,7 @@ export default function App() {
   const [manualLinkSuccess, setManualLinkSuccess] = useState<string | null>(null);
   const [hwFilterType, setHwFilterType] = useState<'all' | 'class' | 'student'>('all');
   const [hwDaysFilter, setHwDaysFilter] = useState<'latest' | 'all'>('latest');
-  const [parentActiveSection, setParentActiveSection] = useState<'overview' | 'homework' | 'tracker' | 'behavior' | 'fees' | 'calendar' | 'notices' | 'profile' | 'reportCard' | 'hallPass'>('overview');
+  const [parentActiveSection, setParentActiveSection] = useState<'overview' | 'homework' | 'tracker' | 'behavior' | 'fees' | 'calendar' | 'notices' | 'profile' | 'reportCard' | 'hallPass' | 'reviews'>('overview');
   const [trackerStatusFilter, setTrackerStatusFilter] = useState<'all' | 'completed' | 'incompleted'>('all');
 
   // AI Daily Greeting & Activity Summary for Parent Portal
@@ -1527,6 +1534,14 @@ export default function App() {
   const [examMarksList, setExamMarksList] = useState<ExamMarkRecord[]>(() => loadLocalExamMarks());
   const [reportCardMetaMap, setReportCardMetaMap] = useState<Record<string, ReportCardRemarkRecord>>(() => loadLocalReportCardMeta());
   const [hallPassConfig, setHallPassConfig] = useState<HallPassConfig>(() => loadLocalHallPassConfig());
+  const [parentReviewsList, setParentReviewsList] = useState<ParentReviewRecord[]>(() => loadLocalParentReviews());
+
+  const refreshParentReviews = async (forceRefresh = false) => {
+    try {
+      const list = await fetchParentReviewsFromServer(forceRefresh);
+      setParentReviewsList(list);
+    } catch {}
+  };
 
   const fetchReportCardAllData = async (forceRefresh = false) => {
     try {
@@ -1911,10 +1926,10 @@ export default function App() {
   const [managerSelectedFeeStudent, setManagerSelectedFeeStudent] = useState<Student | null>(null);
 
   // Manager Dashboard State
-  const [managerTab, setManagerTab] = useState<'students' | 'homework' | 'behavior' | 'fees' | 'users' | 'vanTracking' | 'attendance' | 'notices' | 'autoTransport' | 'staffAttendance' | 'teacherPerformance' | 'reportCards' | 'hallPass'>(() => {
+  const [managerTab, setManagerTab] = useState<'students' | 'homework' | 'behavior' | 'fees' | 'users' | 'vanTracking' | 'attendance' | 'notices' | 'autoTransport' | 'staffAttendance' | 'teacherPerformance' | 'reportCards' | 'hallPass' | 'parentReviews'>(() => {
     try {
       const saved = localStorage.getItem('evs_manager_tab');
-      if (saved && ['students', 'homework', 'behavior', 'fees', 'users', 'vanTracking', 'attendance', 'notices', 'autoTransport', 'staffAttendance', 'teacherPerformance', 'reportCards', 'hallPass'].includes(saved)) {
+      if (saved && ['students', 'homework', 'behavior', 'fees', 'users', 'vanTracking', 'attendance', 'notices', 'autoTransport', 'staffAttendance', 'teacherPerformance', 'reportCards', 'hallPass', 'parentReviews'].includes(saved)) {
         return saved as any;
       }
     } catch {}
@@ -3514,6 +3529,7 @@ export default function App() {
         fetchHomework(true),
         fetchHomeworkTracker(),
         fetchStudentBehavior(),
+        refreshParentReviews(manual || forceFullAll),
       ];
 
       // On first seed, GitHub update, manual sync, or staff portal load: reload ALL modules into Phone Memory
@@ -4008,6 +4024,8 @@ export default function App() {
         fetchHallPassConfigFromServer().then(setHallPassConfig);
       } else if (event.entity === 'fee_waivers') {
         syncFeeWaiversWithServer();
+      } else if (event.entity === 'parent_reviews') {
+        refreshParentReviews(false);
       } else {
         syncAllData(false, false);
       }
@@ -8403,10 +8421,22 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           setParentActiveSection('hallPass');
                           window.scrollTo({ top: 0, behavior: 'smooth' });
                         }}
-                        className="px-3.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-extrabold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 shadow-xs"
+                        className="px-3.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-extrabold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 shadow-xs whitespace-nowrap shrink-0"
                       >
                         <i className="fa-solid fa-ticket"></i>
                         <span>9. परीक्षा हॉल पास</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          refreshParentReviews(false);
+                          setParentActiveSection('reviews');
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 shadow-xs whitespace-nowrap shrink-0"
+                      >
+                        <i className="fa-solid fa-star text-amber-300"></i>
+                        <span>10. स्कूल रिव्यू दें</span>
                       </button>
                     </div>
                   </div>
@@ -8498,11 +8528,22 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           fetchHallPassConfigFromServer().then(setHallPassConfig);
                           setParentActiveSection('hallPass');
                         }}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                           parentActiveSection === 'hallPass' ? 'bg-amber-400 text-slate-950 shadow-xs' : 'bg-white/15 hover:bg-white/25 text-white'
                         }`}
                       >
                         🎫 9. हॉल पास
+                      </button>
+                      <button
+                        onClick={() => {
+                          refreshParentReviews(false);
+                          setParentActiveSection('reviews');
+                        }}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                          parentActiveSection === 'reviews' ? 'bg-emerald-400 text-slate-950 shadow-xs' : 'bg-white/15 hover:bg-white/25 text-white'
+                        }`}
+                      >
+                        ⭐ 10. रिव्यू दें
                       </button>
                       <button
                         type="button"
@@ -10462,6 +10503,43 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     </div>
                   </div>
                 )}
+
+                {/* VIEW 8: PARENT REVIEWS & FEEDBACK */}
+                {parentActiveSection === 'reviews' && selectedStudent && (
+                  <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-6 space-y-4 animate-fadeIn">
+                    <Suspense
+                      fallback={
+                        <div className="p-10 text-center text-slate-500 font-bold">
+                          <i className="fa-solid fa-circle-notch fa-spin text-blue-900 mr-2"></i>
+                          अभिभावक रिव्यू फ़ॉर्म लोड हो रहा है...
+                        </div>
+                      }
+                    >
+                      <ParentReviewSection
+                        student={selectedStudent}
+                        reviews={parentReviewsList}
+                        onReviewsChange={setParentReviewsList}
+                        getClassName={getClassName}
+                        studentPhoto={getStudentPhoto(selectedStudent)}
+                        currentLang={currentLang}
+                      />
+                    </Suspense>
+
+                    <div className="pt-4 border-t border-slate-200 flex justify-center">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setParentActiveSection('overview');
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        className="px-5 py-2.5 bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-bold rounded-xl text-xs sm:text-sm flex items-center gap-2 shadow-sm cursor-pointer transition-all active:scale-95"
+                      >
+                        <i className="fa-solid fa-arrow-left"></i>
+                        <span>← वापस मुख्य कार्ड्स पर जाएं (Back to Cards)</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -12395,6 +12473,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       {managerTab === 'teacherPerformance' && <><i className="fa-solid fa-trophy text-amber-600"></i> 🏆 शिक्षक लीडरबोर्ड (100 Pts)</>}
                       {managerTab === 'reportCards' && <><i className="fa-solid fa-graduation-cap text-indigo-800"></i> 🎓 मार्कशीट व रिपोर्ट कार्ड (PDF)</>}
                       {managerTab === 'hallPass' && <><i className="fa-solid fa-ticket text-blue-900"></i> परीक्षा हॉल पास (9/A4 पेज)</>}
+                      {managerTab === 'parentReviews' && <><i className="fa-solid fa-star text-amber-500"></i> पैरेंट रिव्यू व मार्केटिंग पोस्टर</>}
                     </span>
                     <span className="px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-900 text-[10px] font-black shrink-0 border border-blue-200">
                       {managerTab === 'students' && `${filteredStudents.length}`}
@@ -12410,6 +12489,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       {managerTab === 'teacherPerformance' && '100 Pts'}
                       {managerTab === 'reportCards' && 'PDF'}
                       {managerTab === 'hallPass' && '9/A4'}
+                      {managerTab === 'parentReviews' && `${parentReviewsList.length}`}
                     </span>
                   </div>
                 </div>
@@ -12909,6 +12989,36 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           </div>
                           <span className="px-2 py-0.5 rounded-lg text-xs font-black bg-slate-100 text-slate-700 shrink-0">
                             {schoolNotices.length}
+                          </span>
+                        </button>
+
+                        {/* Parent Reviews & Marketing Poster Studio */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            refreshParentReviews(false);
+                            setManagerTab('parentReviews');
+                            setIsManagerMenuOpen(false);
+                          }}
+                          className={`p-3 rounded-2xl border text-left transition-all flex items-center justify-between gap-3 cursor-pointer sm:col-span-2 ${
+                            managerTab === 'parentReviews'
+                              ? 'bg-emerald-50 border-emerald-900 ring-2 ring-emerald-900/20 shadow-sm'
+                              : 'bg-white hover:bg-slate-50 border-slate-200'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <span className="w-10 h-10 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center text-lg shrink-0">
+                              <i className="fa-solid fa-star"></i>
+                            </span>
+                            <div className="min-w-0">
+                              <h4 className="font-black text-xs sm:text-sm text-slate-900 truncate">
+                                ⭐ पैरेंट रिव्यू व मार्केटिंग पोस्टर स्टूडियो
+                              </h4>
+                              <p className="text-[11px] text-slate-500 truncate">अभिभावक समीक्षा संग्रह, WhatsApp आमंत्रण व 1-क्लिक एडमिशन पोस्टर</p>
+                            </div>
+                          </div>
+                          <span className="px-2 py-0.5 rounded-lg text-xs font-black bg-emerald-100 text-emerald-800 shrink-0">
+                            {parentReviewsList.length} रिव्यू
                           </span>
                         </button>
 
@@ -14383,6 +14493,27 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   getClassName={getClassName}
                   getStudentPhoto={getStudentPhoto}
                   managerName={managerUser?.Name || 'प्रबंधक / प्रधानाचार्य'}
+                />
+              </Suspense>
+            )}
+
+            {/* VIEW 13: PARENT REVIEWS & MARKETING POSTER STUDIO */}
+            {managerTab === 'parentReviews' && (
+              <Suspense
+                fallback={
+                  <div className="bg-white rounded-3xl p-12 text-center text-slate-500 font-bold border border-slate-200">
+                    <i className="fa-solid fa-circle-notch fa-spin text-amber-500 mr-2 text-2xl"></i>
+                    <span>पैरेंट रिव्यू व मार्केटिंग स्टूडियो लोड हो रहा है...</span>
+                  </div>
+                }
+              >
+                <ManagerParentReviewsView
+                  reviews={parentReviewsList}
+                  onReviewsChange={setParentReviewsList}
+                  onRefreshReviews={() => refreshParentReviews(true)}
+                  students={students}
+                  getClassName={getClassName}
+                  getStudentPhoto={getStudentPhoto}
                 />
               </Suspense>
             )}

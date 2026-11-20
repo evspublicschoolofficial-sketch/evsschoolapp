@@ -244,6 +244,11 @@
     margin: 2.5mm;
   }
 
+  @page hallpass-landscape {
+    size: A4 landscape;
+    margin: 2.5mm;
+  }
+
   body.printing-hall-passes header,
   body.printing-hall-passes footer,
   body.printing-hall-passes .no-print,
@@ -290,6 +295,10 @@
     print-color-adjust: exact;
   }
 
+  body.printing-hall-passes #printable-hall-passes-root[data-orientation="landscape"] {
+    page: hallpass-landscape;
+  }
+
   body.printing-hall-passes #printable-hall-passes-root > div {
     margin: 0 !important;
     padding: 0 !important;
@@ -315,6 +324,10 @@
     gap: 1.2mm !important;
     background: #ffffff !important;
     box-sizing: border-box !important;
+  }
+
+  body.printing-hall-passes #printable-hall-passes-root[data-orientation="landscape"] .hall-pass-a4-page {
+    height: 202mm !important;
   }
 
   body.printing-hall-passes .hall-pass-slot {

@@ -455,6 +455,7 @@ function ensureFeatureBackupTabs(ss) {
   ensureTabSafe_(ss, "School_Holidays", ["School Holidays", "Holidays"], ["ID", "Date", "End_Date", "Title", "Category", "Description", "Timestamp"], added);
   ensureTabSafe_(ss, "Hall_Pass_Config", ["Hall Pass Config", "HallPassConfig", "Exam_Hall_Pass"], ["Config_Key", "Exam_Type", "Session", "Custom_Title", "Exam_Schedule_Line", "Instruction_Line", "Published_To_Parent", "Backside_Flip_Mode", "Datesheet_Arrival_Line", "Datesheet_Holiday_Note", "Datesheet_Rows_JSON", "Allowed_Overrides_JSON", "Updated_At"], added);
   ensureTabSafe_(ss, "Fee_Waivers", ["Fee Waivers", "FeeWaivers"], ["Student_ID", "Is_Free", "Reason", "Updated_At", "Updated_TS"], added);
+  ensureTabSafe_(ss, "Parent_Reviews", ["Parent Reviews", "ParentReviews"], ["Review_ID", "Student_ID", "Student_Name", "Class_Name", "Parent_Name", "Father_Name", "Parent_Mobile", "Rating", "Highlight_Category", "Review_Text", "Parent_Photo", "Marketing_Consent", "Status", "Featured", "Source", "Created_At", "Updated_At", "Survey_Answers_JSON"], added);
   return added;
 }
 
@@ -550,7 +551,7 @@ function setupAllRequiredSheets() {
 
   var msg = created.length > 0
     ? "✅ पहले से मौजूद टैब सुरक्षित रखते हुए " + created.length + " नए टैब बनाए गए: " + created.join(", ")
-    : "✅ सभी 21 आवश्यक टैब पहले से मौजूद हैं (कोई पुराना डेटा या टैब बदला नहीं गया)!";
+    : "✅ सभी 24 आवश्यक टैब पहले से मौजूद हैं (कोई पुराना डेटा या टैब बदला नहीं गया)!";
 
   try {
     SpreadsheetApp.getUi().alert("🏫 EVS स्कूल ऑटोमेशन", msg, SpreadsheetApp.getUi().ButtonSet.OK);
@@ -560,7 +561,7 @@ function setupAllRequiredSheets() {
     status: "success",
     message: msg,
     created: created,
-    totalRequiredChecked: 21
+    totalRequiredChecked: 24
   };
 }
 
@@ -731,9 +732,12 @@ function doGet(e) {
   if (action === "getFeeWaivers") {
     return handleGetFeeWaivers(ss);
   }
+  if (action === "getParentReviews") {
+    return handleGetParentReviews(ss);
+  }
 
   // 10. GET FALLBACK: Delegate write actions when called via GET query parameters
-  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig" || action === "saveFeeWaiver" || action === "saveFeeWaiversBatch") {
+  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig" || action === "saveFeeWaiver" || action === "saveFeeWaiversBatch" || action === "saveParentReview" || action === "updateParentReviewStatus" || action === "deleteParentReview") {
     return doPost(e);
   }
 
@@ -1437,6 +1441,17 @@ function doPost(e) {
     }
     if (action === "saveFeeWaiversBatch") {
       return handleSaveFeeWaiversBatch(ss, data);
+    }
+
+    // 18. PARENT REVIEWS & MARKETING TESTIMONIALS (Parent_Reviews - 2-Way Sync)
+    if (action === "saveParentReview") {
+      return handleSaveParentReview(ss, data);
+    }
+    if (action === "updateParentReviewStatus") {
+      return handleUpdateParentReviewStatus(ss, data);
+    }
+    if (action === "deleteParentReview") {
+      return handleDeleteRowById_(ss, "Parent_Reviews", data.reviewId || data.id);
     }
 
     return ContentService.createTextOutput(JSON.stringify({
@@ -3886,6 +3901,161 @@ function handleSaveFeeWaiversBatch(ss, data) {
     status: "success",
     count: count,
     message: "Fee_Waivers batch saved permanently to Google Sheet!"
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+// =========================================================================
+// FEATURE 18: PARENT REVIEWS & MARKETING TESTIMONIALS (Parent_Reviews)
+// =========================================================================
+function handleGetParentReviews(ss) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Parent_Reviews", "Parent Reviews", "ParentReviews"]);
+  var reviews = [];
+  if (sheet && sheet.getLastRow() >= 2) {
+    var rows = sheet.getDataRange().getValues();
+    for (var i = 1; i < rows.length; i++) {
+      var r = rows[i];
+      if (!r[0] && !r[9]) continue;
+      var rawConsent = String(r[11] || "FALSE").trim().toUpperCase();
+      var rawFeat = String(r[13] || "FALSE").trim().toUpperCase();
+      var rawStatus = String(r[12] || "pending").trim().toLowerCase();
+      var statusVal = (rawStatus === "approved" || rawStatus === "hidden") ? rawStatus : "pending";
+      var parsedSurvey = null;
+      if (r[17]) {
+        try { parsedSurvey = JSON.parse(String(r[17])); } catch (eS) { parsedSurvey = null; }
+      }
+      var surveyArr = (parsedSurvey && Array.isArray(parsedSurvey.answers)) ? parsedSurvey.answers : (Array.isArray(parsedSurvey) ? parsedSurvey : []);
+      reviews.push({
+        id: String(r[0] || ("REV-" + i)),
+        studentId: String(r[1] || ""),
+        studentName: String(r[2] || ""),
+        className: String(r[3] || ""),
+        parentName: String(r[4] || ""),
+        fatherName: String(r[5] || ""),
+        parentMobile: String(r[6] || ""),
+        rating: Math.min(5, Math.max(1, Number(r[7] || 5))),
+        category: String(r[8] || "संपूर्ण अनुभव"),
+        reviewText: String(r[9] || ""),
+        photoUrl: String(r[10] || ""),
+        marketingConsent: rawConsent === "TRUE" || rawConsent === "YES" || rawConsent === "1",
+        status: statusVal,
+        featured: rawFeat === "TRUE" || rawFeat === "YES" || rawFeat === "1",
+        source: String(r[14] || "parent_portal"),
+        createdAt: String(r[15] || ""),
+        updatedAt: String(r[16] || ""),
+        surveyAnswers: surveyArr,
+        yesCount: parsedSurvey && parsedSurvey.yesCount !== undefined ? Number(parsedSurvey.yesCount) : undefined,
+        totalQuestions: parsedSurvey && parsedSurvey.totalQuestions !== undefined ? Number(parsedSurvey.totalQuestions) : undefined,
+        satisfactionPct: parsedSurvey && parsedSurvey.satisfactionPct !== undefined ? Number(parsedSurvey.satisfactionPct) : undefined
+      });
+    }
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    reviews: reviews
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveParentReview(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Parent_Reviews", "Parent Reviews", "ParentReviews"]);
+  var rev = data.review ? (typeof data.review === "string" ? JSON.parse(data.review) : data.review) : data;
+  if (typeof rev === "string") {
+    try { rev = JSON.parse(rev); } catch (e) { rev = data; }
+  }
+  var revId = String(rev.id || ("REV-" + Date.now())).trim();
+  var nowIst = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var consentStr = (rev.marketingConsent === true || String(rev.marketingConsent).toUpperCase() === "TRUE") ? "TRUE" : "FALSE";
+  var featuredStr = (rev.featured === true || String(rev.featured).toUpperCase() === "TRUE") ? "TRUE" : "FALSE";
+  var statusStr = String(rev.status || "pending").trim().toLowerCase();
+  if (statusStr !== "approved" && statusStr !== "hidden") statusStr = "pending";
+  var surveyPayloadStr = "";
+  if (Array.isArray(rev.surveyAnswers) && rev.surveyAnswers.length > 0) {
+    surveyPayloadStr = JSON.stringify({
+      answers: rev.surveyAnswers,
+      yesCount: Number(rev.yesCount || 0),
+      totalQuestions: Number(rev.totalQuestions || rev.surveyAnswers.length),
+      satisfactionPct: Number(rev.satisfactionPct || 0)
+    });
+  }
+
+  var rowArr = [
+    revId,
+    String(rev.studentId || ""),
+    String(rev.studentName || ""),
+    String(rev.className || ""),
+    String(rev.parentName || ""),
+    String(rev.fatherName || ""),
+    String(rev.parentMobile || ""),
+    Math.min(5, Math.max(1, Number(rev.rating || 5))),
+    String(rev.category || "संपूर्ण अनुभव"),
+    String(rev.reviewText || ""),
+    String(rev.photoUrl || "").slice(0, 45000),
+    consentStr,
+    statusStr,
+    featuredStr,
+    String(rev.source || "parent_portal"),
+    formatToLocalIST_(rev.createdAt, nowIst),
+    formatToLocalIST_(rev.updatedAt, nowIst),
+    surveyPayloadStr
+  ];
+
+  var rows = sheet.getDataRange().getValues();
+  var targetRow = -1;
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0] || "").trim().toLowerCase() === revId.toLowerCase()) {
+      targetRow = i + 1;
+      break;
+    }
+  }
+  if (targetRow > 0) {
+    sheet.getRange(targetRow, 1, 1, rowArr.length).setValues([rowArr]);
+  } else {
+    sheet.appendRow(rowArr);
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    reviewId: revId,
+    message: "Parent_Reviews saved permanently to Google Sheet!"
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleUpdateParentReviewStatus(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Parent_Reviews", "Parent Reviews", "ParentReviews"]);
+  var revId = String(data.reviewId || data.id || "").trim().toLowerCase();
+  if (!revId) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "reviewId required" })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var nowIst = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0] || "").trim().toLowerCase() === revId) {
+      var rNum = i + 1;
+      if (data.status !== undefined) {
+        var st = String(data.status).trim().toLowerCase();
+        if (st === "approved" || st === "hidden" || st === "pending") {
+          sheet.getRange(rNum, 13).setValue(st);
+        }
+      }
+      if (data.featured !== undefined) {
+        var fVal = (data.featured === true || String(data.featured).toUpperCase() === "TRUE") ? "TRUE" : "FALSE";
+        sheet.getRange(rNum, 14).setValue(fVal);
+      }
+      if (data.marketingConsent !== undefined) {
+        var cVal = (data.marketingConsent === true || String(data.marketingConsent).toUpperCase() === "TRUE") ? "TRUE" : "FALSE";
+        sheet.getRange(rNum, 12).setValue(cVal);
+      }
+      sheet.getRange(rNum, 17).setValue(nowIst);
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        message: "Parent review status updated in Sheet!"
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "not_found",
+    message: "Review ID not found in sheet"
   })).setMimeType(ContentService.MimeType.JSON);
 }
 `;

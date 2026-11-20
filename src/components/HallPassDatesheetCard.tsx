@@ -4,6 +4,7 @@ import {
   getExamDisplayTitle,
   getStudentDatesheetSchedule,
   resolveDatesheetClassKey,
+  resolveHallPassLayout,
   StudentHallPassEligibility,
 } from '../utils/hallPassHelper';
 
@@ -33,7 +34,152 @@ export const HallPassDatesheetCard: React.FC<HallPassDatesheetCardProps> = ({
   const examTitle = getExamDisplayTitle(config.examType, config.customExamTitle);
   const classKey = resolveDatesheetClassKey(student.Class, classNameLabel);
   const rows = getStudentDatesheetSchedule(config, student.Class, classNameLabel);
+  const layoutSpec = resolveHallPassLayout(config.cardLayout);
+  const isLandscape = layoutSpec.isLandscape;
+  const isPolypackInset = layoutSpec.id === 'landscape_polypack_90x55';
 
+  // HORIZONTAL / LANDSCAPE BACKSIDE DATESHEET (2-column split so 8–10 subjects fit cleanly in 55mm height)
+  if (isLandscape) {
+    const splitAt = Math.ceil(rows.length / 2);
+    const leftRows = rows.slice(0, splitAt);
+    const rightRows = rows.slice(splitAt);
+
+    return (
+      <div
+        className={`hall-pass-slot relative flex items-center justify-center bg-white text-black overflow-hidden select-none ${
+          isStandalone ? 'w-full max-w-[440px] mx-auto' : 'h-full w-full'
+        }`}
+      >
+        <div
+          className={`flex flex-col justify-between bg-white overflow-hidden ${
+            isStandalone
+              ? 'w-full rounded-xl border-2 border-[#0c2340] shadow-md'
+              : isPolypackInset
+              ? `w-[90mm] h-[55mm] ${showCutBorder ? 'border border-dashed border-slate-500 p-[0.6mm]' : ''}`
+              : `w-full h-full ${showCutBorder ? 'border border-dashed border-slate-500 p-[0.7mm]' : ''}`
+          }`}
+        >
+          <div
+            className={`flex flex-col justify-between h-full w-full bg-white overflow-hidden ${
+              isStandalone ? '' : 'border-[1.3pt] border-[#0c2340] rounded-[2px]'
+            }`}
+          >
+            {/* COMPACT HORIZONTAL HEADER */}
+            <div
+              className={`bg-[#0c2340] text-white border-b-[2px] border-amber-400 flex items-center justify-between gap-1.5 ${
+                isStandalone ? 'px-3.5 py-1.5' : 'px-2 py-[3px]'
+              }`}
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <span
+                  className={`font-black uppercase tracking-wide shrink-0 ${
+                    isStandalone ? 'text-xs' : 'text-[8.5px]'
+                  }`}
+                >
+                  DATESHEET · {classKey}
+                </span>
+                <span
+                  className={`truncate uppercase text-blue-100 font-bold ${
+                    isStandalone ? 'text-[11px]' : 'text-[7.5px]'
+                  }`}
+                >
+                  {student.Student_Name}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                <span
+                  className={`tabular-nums text-amber-300 font-bold ${
+                    isStandalone ? 'text-[10px]' : 'text-[7px]'
+                  }`}
+                >
+                  {examTitle.replace(' EXAMINATION', '')} ({config.session})
+                </span>
+                <span
+                  className={`font-black tabular-nums bg-amber-400 text-slate-950 rounded-[2px] px-1.5 py-[1px] leading-none ${
+                    isStandalone ? 'text-[10px]' : 'text-[7.5px]'
+                  }`}
+                >
+                  ID: {student.Student_ID}
+                </span>
+              </div>
+            </div>
+
+            {/* 2-COLUMN DATESHEET GRID */}
+            <div className={`flex-1 flex flex-col justify-between ${isStandalone ? 'p-2.5 gap-2' : 'px-1.5 py-1 gap-0.5'}`}>
+              <div className="grid grid-cols-2 gap-1.5 flex-1">
+                {[leftRows, rightRows].map((colRows, colIdx) => (
+                  <table key={colIdx} className="w-full border-collapse border border-slate-200 self-start">
+                    <thead>
+                      <tr className="border-b-[1pt] border-[#0c2340] bg-slate-100 text-[#0c2340]">
+                        <th
+                          className={`text-left font-black uppercase py-[1.5px] px-1 ${
+                            isStandalone ? 'text-[10px]' : 'text-[6.8px]'
+                          }`}
+                        >
+                          DATE
+                        </th>
+                        <th
+                          className={`text-left font-black uppercase py-[1.5px] px-1 ${
+                            isStandalone ? 'text-[10px]' : 'text-[6.8px]'
+                          }`}
+                        >
+                          SUBJECT
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200">
+                      {colRows.map((r, idx) => (
+                        <tr key={`${r.date}-${idx}`} className={idx % 2 === 1 ? 'bg-slate-50/70' : 'bg-white'}>
+                          <td
+                            className={`py-[1.5px] px-1 font-extrabold text-slate-900 tabular-nums whitespace-nowrap ${
+                              isStandalone ? 'text-[11px]' : 'text-[7px]'
+                            }`}
+                          >
+                            {formatShortDate(r.date)}{' '}
+                            <span className="font-bold text-slate-600">{r.day}</span>
+                          </td>
+                          <td
+                            className={`py-[1.5px] px-1 font-black text-black truncate max-w-[26mm] ${
+                              isStandalone ? 'text-[11px]' : 'text-[7.2px]'
+                            }`}
+                          >
+                            {r.subject}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ))}
+              </div>
+
+              {/* FOOTER NOTES */}
+              <div className="border-t-[1pt] border-[#0c2340] pt-[2px] flex flex-wrap items-center justify-between gap-x-2 gap-y-[1px]">
+                <span
+                  className={`font-bold text-slate-900 leading-tight truncate ${
+                    isStandalone ? 'text-[10px]' : 'text-[6.8px]'
+                  }`}
+                >
+                  {config.datesheetArrivalLine || 'Arrival: 08:45 AM · Exam: 09:30 AM – 12:00 PM'}
+                </span>
+                {config.datesheetHolidayNote && (
+                  <span
+                    className={`font-extrabold text-slate-800 leading-tight truncate ${
+                      isStandalone ? 'text-[9.5px]' : 'text-[6.2px]'
+                    }`}
+                  >
+                    Off: {config.datesheetHolidayNote}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // PORTRAIT / VERTICAL BACKSIDE DATESHEET (Standard 67.5 × 96.5 mm)
   return (
     <div
       className={`hall-pass-slot relative flex flex-col justify-between bg-white text-black overflow-hidden select-none ${
