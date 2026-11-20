@@ -1,15 +1,25 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { getLocalDateYMD } from '../utils/localTime';
 import { StudentRecordForScan } from './StudentQRScannerModal';
-import { computeStudentFeeMetrics, isTuitionFeeRecord } from '../utils/feeCalculation';
+import {
+  computeStudentFeeMetrics,
+  getStudentHeadPaymentStatus,
+  isAdmissionFeeRecord,
+  isBooksFeeRecord,
+  isExamFeeRecord,
+  isTuitionFeeRecord,
+} from '../utils/feeCalculation';
 import {
   computeFamilyFeeSummary,
   FamilyFeeSummary,
   findSiblingsForStudent,
 } from '../utils/familyFeeHelper';
 import {
+  FREE_STUDENTS_UPDATED_EVENT,
   getStandardFeeAmount,
+  getStudentMonthlyDiscount,
   isFreeStudent,
+  tagStudentMonthlyDiscount,
   tagStudentWaiver,
   simulateMultiMonthPaymentDistribution,
   ACADEMIC_SESSION_MONTHS,
@@ -85,16 +95,15 @@ export const getPeriodsForFeeType = (selectedFeeType: string): { defaultPeriod: 
   }
   if (norm.includes('exam') || norm.includes('परीक्षा')) {
     return {
-      defaultPeriod: 'Half-Yearly Exam (छमाही परीक्षा)',
+      defaultPeriod: '1st Term Exam (प्रथम टर्म / तिमाही - 1×)',
       options: [
+        '1st Term Exam (प्रथम टर्म / तिमाही - 1×)',
+        '2nd Term Exam (द्वितीय टर्म / छमाही - 1×)',
+        '3rd / Annual Exam (वार्षिक परीक्षा - 1×)',
+        'Full Year Exam (तीनों टर्म एक साथ / 3× All 3 Terms)',
+        'Remaining Terms Exam (बचे हुए टर्म एक साथ)',
         'Half-Yearly Exam (छमाही परीक्षा)',
         'Annual Exam (वार्षिक परीक्षा)',
-        'Quarter 1 Exam (प्रथम त्रैमासिक)',
-        'Quarter 2 Exam (द्वितीय त्रैमासिक)',
-        'Unit Test 1',
-        'Unit Test 2',
-        'Full Session Exam (वार्षिक)',
-        'September (परीक्षा)', 'February (परीक्षा)', 'March (वार्षिक परीक्षा)'
       ],
     };
   }
@@ -173,6 +182,15 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
   const [sendWhatsAppImmediate, setSendWhatsAppImmediate] = useState<boolean>(true);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [showMonthlyDiscountEditor, setShowMonthlyDiscountEditor] = useState<boolean>(false);
+  const [customMonthlyDiscInput, setCustomMonthlyDiscInput] = useState<string>('50');
+  const [overridePaidLock, setOverridePaidLock] = useState<boolean>(false);
+
+  useEffect(() => {
+    const handler = () => setWaiverVersion((v) => v + 1);
+    window.addEventListener(FREE_STUDENTS_UPDATED_EVENT, handler);
+    return () => window.removeEventListener(FREE_STUDENTS_UPDATED_EVENT, handler);
+  }, []);
 
   // 100% Free Student / Fee Waiver Check
   const freeStudentInfo = useMemo(() => {
@@ -180,11 +198,25 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedStudent, waiverVersion]);
 
+  // Permanent Per-Student Monthly Tuition Discount (₹50 / ₹100 / Custom)
+  const monthlyDiscountInfo = useMemo(() => {
+    return getStudentMonthlyDiscount(selectedStudent as any);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedStudent, waiverVersion]);
+
+  // Head-wise Paid/Locked Status (Admission, Books, Exam 1x / 3x)
+  const headStatus = useMemo(() => {
+    if (!selectedStudent) return null;
+    return getStudentHeadPaymentStatus(selectedStudent as any, feeRecords);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedStudent, feeRecords, waiverVersion]);
+
   // Compute selected student's fee metrics
   const studentMetrics = useMemo(() => {
     if (!selectedStudent) return null;
     return computeStudentFeeMetrics(selectedStudent as any, feeRecords);
-  }, [selectedStudent, feeRecords]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedStudent, feeRecords, waiverVersion]);
 
   // Siblings & Family Total Due (same Parent_Mobile)
   const selectedFamilySummary = useMemo(() => {
@@ -192,7 +224,8 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
     const sibs = findSiblingsForStudent(students as any, selectedStudent as any);
     if (sibs.length <= 1) return null;
     return computeFamilyFeeSummary(sibs, feeRecords);
-  }, [selectedStudent, students, feeRecords]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedStudent, students, feeRecords, waiverVersion]);
 
   // Current balance of selected student from computed metrics, feeBalances, or student record
   const currentPendingBalance = useMemo(() => {
@@ -209,16 +242,117 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
     return 0;
   }, [selectedStudent, studentMetrics, feeBalances]);
 
-  // Tuition Mode check (One-time fees like Admission, Books, Exam are NOT tuition)
+  // Fee Head Checks
   const isTuitionMode = useMemo(() => isTuitionFeeRecord(feeType), [feeType]);
+  const isAdmissionMode = useMemo(() => isAdmissionFeeRecord(feeType), [feeType]);
+  const isBooksMode = useMemo(() => isBooksFeeRecord(feeType), [feeType]);
+  const isExamMode = useMemo(() => isExamFeeRecord(feeType), [feeType]);
+
+  // Exam Term Detection for Option A (1x Term vs 3x Full Year)
+  const examSelectionMeta = useMemo(() => {
+    if (!isExamMode) return null;
+    const mLow = String(month || '').toLowerCase();
+    const isFullYear = /(3x|3×|all\s*3|three\s*term|तीनों\s*टर्म|full\s*year|full\s*session|पूरे\s*साल|remaining\s*terms|बचे\s*हुए)/i.test(mLow);
+    const isTerm1 = !isFullYear && /(1st|term\s*1|quarter\s*1|प्रथम|तिमाही)/i.test(mLow);
+    const isTerm2 = !isFullYear && /(2nd|term\s*2|half[\s-]*yearly|quarter\s*2|द्वितीय|अर्धवार्षिक|छमाही)/i.test(mLow);
+    const isTerm3 = !isFullYear && /(3rd|term\s*3|annual|तृतीय|वार्षिक)/i.test(mLow);
+    return { isFullYear, isTerm1, isTerm2, isTerm3 };
+  }, [isExamMode, month]);
+
+  // Duplicate Payment Lock check (Admission, Books, Exam Term / 3x Full Year)
+  const duplicateLockInfo = useMemo(() => {
+    if (!selectedStudent || !headStatus || isAdvanceMode || isMultiMonthMode) return null;
+
+    if (isAdmissionMode && headStatus.admission.isPaid) {
+      return {
+        headLabel: 'प्रवेश शुल्क (Admission Fee)',
+        message: `इस छात्र की प्रवेश शुल्क (₹${headStatus.admission.settled.toLocaleString('en-IN')}) पहले से जमा हो चुकी है। दोबारा प्रवेश शुल्क जमा करना लॉक है।`,
+      };
+    }
+    if (isBooksMode && headStatus.books.isPaid) {
+      return {
+        headLabel: 'पुस्तकें व स्टेशनरी (Books Fee)',
+        message: `इस छात्र की पुस्तकों की फीस (₹${headStatus.books.settled.toLocaleString('en-IN')}) पहले से जमा हो चुकी है। दोबारा जमा करना लॉक है।`,
+      };
+    }
+    if (isExamMode) {
+      if (headStatus.exam.isFullYearPaid) {
+        return {
+          headLabel: 'परीक्षा शुल्क (तीनों टर्म / 3×)',
+          message: `इस छात्र की पूरे साल (सभी 3 टर्म) की परीक्षा शुल्क (₹${headStatus.exam.settled.toLocaleString('en-IN')}) पहले से जमा है — इस सत्र के लिए लॉक।`,
+        };
+      }
+      if (examSelectionMeta?.isTerm1 && headStatus.exam.term1Paid) {
+        return {
+          headLabel: '1st Term परीक्षा शुल्क',
+          message: 'इस छात्र की 1st Term की परीक्षा शुल्क पहले से जमा है। कृपया 2nd / 3rd Term चुनें।',
+        };
+      }
+      if (examSelectionMeta?.isTerm2 && headStatus.exam.term2Paid) {
+        return {
+          headLabel: '2nd Term परीक्षा शुल्क',
+          message: 'इस छात्र की 2nd Term की परीक्षा शुल्क पहले से जमा है। कृपया कोई शेष टर्म चुनें।',
+        };
+      }
+      if (examSelectionMeta?.isTerm3 && headStatus.exam.term3Paid) {
+        return {
+          headLabel: '3rd / Annual Term परीक्षा शुल्क',
+          message: 'इस छात्र की 3rd / Annual Term की परीक्षा शुल्क पहले से जमा है।',
+        };
+      }
+    }
+    return null;
+  }, [selectedStudent, headStatus, isAdvanceMode, isMultiMonthMode, isAdmissionMode, isBooksMode, isExamMode, examSelectionMeta]);
+
+  // Partial payment notice for Admission or Books
+  const partialHeadNotice = useMemo(() => {
+    if (!selectedStudent || !headStatus || isAdvanceMode || isMultiMonthMode) return null;
+    if (isAdmissionMode && headStatus.admission.isPartial) {
+      return `प्रवेश शुल्क ₹${headStatus.admission.standardFee.toLocaleString('en-IN')} में से ₹${headStatus.admission.settled.toLocaleString('en-IN')} पहले जमा है — केवल शेष ₹${headStatus.admission.remaining.toLocaleString('en-IN')} लिया जा रहा है।`;
+    }
+    if (isBooksMode && headStatus.books.isPartial) {
+      return `पुस्तक शुल्क ₹${headStatus.books.standardFee.toLocaleString('en-IN')} में से ₹${headStatus.books.settled.toLocaleString('en-IN')} पहले जमा है — केवल शेष ₹${headStatus.books.remaining.toLocaleString('en-IN')} लिया जा रहा है।`;
+    }
+    return null;
+  }, [selectedStudent, headStatus, isAdvanceMode, isMultiMonthMode, isAdmissionMode, isBooksMode]);
+
+  // Reset override lock whenever context switches
+  useEffect(() => {
+    setOverridePaidLock(false);
+  }, [selectedStudent?.Student_ID, feeType, month, isOpen]);
 
   // Standard fee lookup for current student and fee type
   const detectedStandardFee = useMemo(() => {
     if (!selectedStudent) return 600;
     if (freeStudentInfo.isFree && isTuitionMode) return 0;
     if (isAdvanceMode) return 0;
+    if (isAdmissionMode && headStatus?.admission.isPartial) {
+      return headStatus.admission.remaining;
+    }
+    if (isBooksMode && headStatus?.books.isPartial) {
+      return headStatus.books.remaining;
+    }
+    if (isExamMode && headStatus) {
+      if (examSelectionMeta?.isFullYear) {
+        return headStatus.exam.remainingFullYearAmount > 0
+          ? headStatus.exam.remainingFullYearAmount
+          : headStatus.exam.fullYearFee;
+      }
+      return headStatus.exam.perTermFee;
+    }
     return getStandardFeeAmount(selectedStudent.Class, feeType, selectedStudent as any);
-  }, [selectedStudent, feeType, freeStudentInfo.isFree, isTuitionMode, isAdvanceMode]);
+  }, [
+    selectedStudent,
+    feeType,
+    freeStudentInfo.isFree,
+    isTuitionMode,
+    isAdvanceMode,
+    isAdmissionMode,
+    isBooksMode,
+    isExamMode,
+    headStatus,
+    examSelectionMeta,
+  ]);
 
   // Multi-Month Pending Queue (Admission -> Other Fees -> April -> May -> June...)
   const pendingDuesQueue = useMemo(() => {
@@ -228,7 +362,7 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
       (r) => String(r.Student_ID || '').toLowerCase().trim() === sId
     );
 
-    const monthlyDiscount = Number((selectedStudent as any).Monthly_Discount || (selectedStudent as any).Discount_Per_Month || 0) || 0;
+    const monthlyDiscount = monthlyDiscountInfo.monthlyDiscount;
     const baseMonthlyRate = freeStudentInfo.isFree ? 0 : (getStandardFeeAmount(selectedStudent.Class, 'Monthly Tuition Fee', selectedStudent as any) || 600);
     const effectiveMonthlyRate = Math.max(0, baseMonthlyRate - monthlyDiscount);
 
@@ -334,7 +468,7 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
     });
 
     return queue;
-  }, [selectedStudent, feeRecords, freeStudentInfo.isFree]);
+  }, [selectedStudent, feeRecords, freeStudentInfo.isFree, monthlyDiscountInfo.monthlyDiscount]);
 
   // Total pending across all chronological dues
   const totalPendingQueueAmount = useMemo(() => {
@@ -365,6 +499,28 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
     if (!isMultiMonthMode || pendingDuesQueue.length === 0) return null;
     return simulateMultiMonthPaymentDistribution(pendingDuesQueue, numPaidAmount, numDiscountAmount);
   }, [isMultiMonthMode, pendingDuesQueue, numPaidAmount, numDiscountAmount]);
+
+  // Auto-apply permanent monthly tuition discount in Regular Tuition mode (and reset to 0 on other heads)
+  useEffect(() => {
+    if (!isOpen || !selectedStudent) return;
+    if (freeStudentInfo.isFree && isTuitionMode) {
+      setDiscountAmount('0');
+    } else if (isAdvanceMode || isMultiMonthMode || !isTuitionMode) {
+      setDiscountAmount('0');
+    } else {
+      const clampedDisc = Math.min(detectedStandardFee, Math.max(0, monthlyDiscountInfo.monthlyDiscount));
+      setDiscountAmount(String(clampedDisc));
+    }
+  }, [
+    isOpen,
+    selectedStudent?.Student_ID,
+    isTuitionMode,
+    isAdvanceMode,
+    isMultiMonthMode,
+    freeStudentInfo.isFree,
+    monthlyDiscountInfo.monthlyDiscount,
+    detectedStandardFee,
+  ]);
 
   // Auto-fill standard fee when student or feeType changes
   useEffect(() => {
@@ -458,6 +614,8 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
       setDiscountAmount('0');
       setIsMultiMonthMode(false);
       setIsAdvanceMode(false);
+      setShowMonthlyDiscountEditor(false);
+      setOverridePaidLock(false);
 
       if (initialSelectedStudentId) {
         const found = students.find(
@@ -486,12 +644,30 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
     setWaiverVersion((v) => v + 1);
   };
 
+  // Save permanent monthly discount for selected student (₹50 / ₹100 / Custom)
+  const handleSavePermanentMonthlyDiscount = (amt: number) => {
+    if (!selectedStudent) return;
+    const cleanAmt = Math.max(0, Math.round(Number(amt) || 0));
+    tagStudentMonthlyDiscount(
+      selectedStudent.Student_ID,
+      cleanAmt,
+      cleanAmt > 0 ? `स्थायी मासिक छूट ₹${cleanAmt}/माह` : ''
+    );
+    setWaiverVersion((v) => v + 1);
+    setShowMonthlyDiscountEditor(false);
+    setUserManuallyEditedPaid(false);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
 
     if (!selectedStudent) {
       setErrorMsg('कृपया पहले छात्र का चयन करें (Please select a student).');
+      return;
+    }
+    if (duplicateLockInfo && !overridePaidLock) {
+      setErrorMsg(duplicateLockInfo.message);
       return;
     }
     if (!receiptNumber.trim()) {
@@ -811,17 +987,123 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
               </div>
             )}
 
-            {/* Waiver Toggle Option for non-free students */}
+            {/* Permanent Monthly Tuition Discount Badge & Quick Setter (₹50 / ₹100 / Custom) */}
             {selectedStudent && !freeStudentInfo.isFree && (
-              <div className="mt-1.5 text-right">
-                <button
-                  type="button"
-                  onClick={handleToggleWaiver}
-                  className="text-[10px] text-slate-500 hover:text-emerald-700 hover:underline inline-flex items-center gap-1 cursor-pointer"
-                >
-                  <i className="fa-solid fa-tag text-[9px]"></i>
-                  <span>इस छात्र की ट्यूशन फीस माफ करें (Tuition Fee Waiver)</span>
-                </button>
+              <div className="mt-2 space-y-2">
+                {monthlyDiscountInfo.monthlyDiscount > 0 ? (
+                  <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-300 flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-[11px] text-amber-950 flex items-center gap-2">
+                      <span className="w-7 h-7 rounded-lg bg-amber-500 text-slate-950 flex items-center justify-center font-black shrink-0">
+                        🎁
+                      </span>
+                      <div>
+                        <div className="font-black">
+                          स्थायी मासिक छूट: ₹{monthlyDiscountInfo.monthlyDiscount}/माह
+                          {studentMetrics && (
+                            <span className="ml-1.5 px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-900 text-[10px] font-bold">
+                              नेट ट्यूशन ₹{(studentMetrics.netMonthlyTuition ?? Math.max(0, (studentMetrics.monthlyTuition || 0) - monthlyDiscountInfo.monthlyDiscount)).toLocaleString('en-IN')}/माह
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-amber-800">
+                          हर महीने ट्यूशन फीस जमा करते समय ₹{monthlyDiscountInfo.monthlyDiscount} अपने-आप घटेगा
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCustomMonthlyDiscInput(String(monthlyDiscountInfo.monthlyDiscount || 50));
+                          setShowMonthlyDiscountEditor((v) => !v);
+                        }}
+                        className="px-2 py-1 rounded-lg bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-bold cursor-pointer"
+                      >
+                        बदलें
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSavePermanentMonthlyDiscount(0)}
+                        className="px-2 py-1 rounded-lg bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-bold cursor-pointer"
+                      >
+                        हटाएँ
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[10px]">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCustomMonthlyDiscInput('50');
+                        setShowMonthlyDiscountEditor((v) => !v);
+                      }}
+                      className="text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2.5 py-1 rounded-lg font-bold inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <span>🎁 स्थायी मासिक छूट सेट करें (₹50 / ₹100 / कस्टम)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleToggleWaiver}
+                      className="text-slate-500 hover:text-emerald-700 hover:underline inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <i className="fa-solid fa-tag text-[9px]"></i>
+                      <span>100% ट्यूशन फीस माफ करें (Fee Waiver)</span>
+                    </button>
+                  </div>
+                )}
+
+                {showMonthlyDiscountEditor && (
+                  <div className="p-2.5 rounded-xl bg-slate-50 border border-amber-300 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-[11px] font-bold text-slate-700">मासिक छूट:</span>
+                      {[50, 100, 150, 200].map((preset) => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => handleSavePermanentMonthlyDiscount(preset)}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-black border cursor-pointer ${
+                            monthlyDiscountInfo.monthlyDiscount === preset
+                              ? 'bg-[#0c2340] text-amber-300 border-[#0c2340]'
+                              : 'bg-white text-slate-800 border-slate-300 hover:bg-amber-100'
+                          }`}
+                        >
+                          ₹{preset}/माह
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="number"
+                        min="0"
+                        value={customMonthlyDiscInput}
+                        onChange={(e) => setCustomMonthlyDiscInput(e.target.value)}
+                        placeholder="₹"
+                        className="w-20 px-2 py-1 rounded-lg border border-slate-300 text-xs font-bold bg-white outline-none focus:border-blue-900"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleSavePermanentMonthlyDiscount(Number(customMonthlyDiscInput) || 0)}
+                        className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold cursor-pointer"
+                      >
+                        सेव करें
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {monthlyDiscountInfo.monthlyDiscount > 0 && (
+                  <div className="text-right">
+                    <button
+                      type="button"
+                      onClick={handleToggleWaiver}
+                      className="text-[10px] text-slate-500 hover:text-emerald-700 hover:underline inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <i className="fa-solid fa-tag text-[9px]"></i>
+                      <span>या 100% ट्यूशन फीस माफ करें (Fee Waiver)</span>
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -966,11 +1248,22 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
                 }}
                 className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs focus:border-blue-800 outline-none bg-white font-medium"
               >
-                {FEE_TYPES.map((ft) => (
-                  <option key={ft} value={ft}>
-                    {ft}
-                  </option>
-                ))}
+                {FEE_TYPES.map((ft) => {
+                  const isAdmOpt = isAdmissionFeeRecord(ft);
+                  const isBookOpt = isBooksFeeRecord(ft);
+                  const isExamOpt = isExamFeeRecord(ft);
+                  const paidTag =
+                    (isAdmOpt && headStatus?.admission.isPaid) ||
+                    (isBookOpt && headStatus?.books.isPaid) ||
+                    (isExamOpt && headStatus?.exam.isFullYearPaid)
+                      ? ' (✅ पहले से जमा ✓)'
+                      : '';
+                  return (
+                    <option key={ft} value={ft}>
+                      {ft}{paidTag}
+                    </option>
+                  );
+                })}
               </select>
             </div>
 
@@ -985,7 +1278,10 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
               </label>
               <select
                 value={month}
-                onChange={(e) => setMonth(e.target.value)}
+                onChange={(e) => {
+                  setMonth(e.target.value);
+                  setUserManuallyEditedPaid(false);
+                }}
                 className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs focus:border-blue-800 outline-none bg-white font-medium"
               >
                 {getPeriodsForFeeType(feeType).options.map((m) => (
@@ -997,8 +1293,121 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
             </div>
           </div>
 
+          {/* Option A: Examination Fee Term Selector (1x Term vs 3x Full Year Lock) */}
+          {selectedStudent && isExamMode && headStatus && !isAdvanceMode && !isMultiMonthMode && (
+            <div className="p-3 rounded-xl bg-indigo-50/80 border border-indigo-200 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-1.5 text-xs">
+                <span className="font-black text-indigo-950 flex items-center gap-1.5">
+                  <i className="fa-solid fa-file-signature text-indigo-600"></i>
+                  <span>परीक्षा शुल्क टर्म चयन (1× टर्म या 3× पूरे साल)</span>
+                </span>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-white border border-indigo-200 text-indigo-900">
+                  1 टर्म = ₹{headStatus.exam.perTermFee.toLocaleString('en-IN')} • 3 टर्म (3×) = ₹{headStatus.exam.fullYearFee.toLocaleString('en-IN')}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                {[
+                  {
+                    label: '1st Term (1×)',
+                    period: '1st Term Exam (प्रथम टर्म / तिमाही - 1×)',
+                    paid: headStatus.exam.term1Paid,
+                    amt: headStatus.exam.perTermFee,
+                  },
+                  {
+                    label: '2nd Term (1×)',
+                    period: '2nd Term Exam (द्वितीय टर्म / छमाही - 1×)',
+                    paid: headStatus.exam.term2Paid,
+                    amt: headStatus.exam.perTermFee,
+                  },
+                  {
+                    label: '3rd / Annual (1×)',
+                    period: '3rd / Annual Exam (वार्षिक परीक्षा - 1×)',
+                    paid: headStatus.exam.term3Paid,
+                    amt: headStatus.exam.perTermFee,
+                  },
+                  {
+                    label:
+                      headStatus.exam.paidTermsCount > 0 && headStatus.exam.remainingTermsCount > 0
+                        ? `बचे ${headStatus.exam.remainingTermsCount} टर्म (${headStatus.exam.remainingTermsCount}×)`
+                        : 'तीनों टर्म (3×)',
+                    period: 'Full Year Exam (तीनों टर्म एक साथ / 3× All 3 Terms)',
+                    paid: headStatus.exam.isFullYearPaid,
+                    amt:
+                      headStatus.exam.remainingFullYearAmount > 0
+                        ? headStatus.exam.remainingFullYearAmount
+                        : headStatus.exam.fullYearFee,
+                  },
+                ].map((opt) => {
+                  const isActive = month === opt.period;
+                  return (
+                    <button
+                      key={opt.label}
+                      type="button"
+                      onClick={() => {
+                        setMonth(opt.period);
+                        setUserManuallyEditedPaid(false);
+                      }}
+                      className={`p-2 rounded-lg border text-left transition-all cursor-pointer ${
+                        opt.paid
+                          ? isActive
+                            ? 'bg-emerald-100 border-emerald-500 text-emerald-950'
+                            : 'bg-emerald-50/70 border-emerald-300 text-emerald-900 opacity-85'
+                          : isActive
+                          ? 'bg-[#0c2340] border-[#0c2340] text-amber-300 shadow-xs'
+                          : 'bg-white border-slate-200 text-slate-800 hover:border-indigo-400'
+                      }`}
+                    >
+                      <div className="text-[11px] font-black flex items-center justify-between gap-1">
+                        <span>{opt.label}</span>
+                        {opt.paid && <span className="text-[9px] text-emerald-700 font-bold">✓ जमा</span>}
+                      </div>
+                      <div className={`text-[10px] font-bold mt-0.5 ${isActive && !opt.paid ? 'text-white' : 'text-slate-600'}`}>
+                        {opt.paid ? 'जमा हो चुका ✓' : `₹${opt.amt.toLocaleString('en-IN')}`}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Duplicate Payment Lock Banner (Admission / Books / Paid Exam Term or 3x Full Year) */}
+          {duplicateLockInfo && (
+            <div className="p-3 rounded-xl bg-rose-50 border-2 border-rose-300 text-rose-950 text-xs space-y-2">
+              <div className="flex items-start gap-2">
+                <i className="fa-solid fa-lock text-rose-600 text-sm mt-0.5 shrink-0"></i>
+                <div>
+                  <div className="font-black text-rose-900">
+                    🔒 {duplicateLockInfo.headLabel} — पहले से जमा (Paid ✓)
+                  </div>
+                  <div className="text-[11px] text-rose-800 mt-0.5">
+                    {duplicateLockInfo.message}
+                  </div>
+                </div>
+              </div>
+              <label className="inline-flex items-center gap-2 text-[11px] font-bold text-rose-900 bg-white px-2.5 py-1.5 rounded-lg border border-rose-200 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={overridePaidLock}
+                  onChange={(e) => setOverridePaidLock(e.target.checked)}
+                  className="w-3.5 h-3.5 accent-rose-600 rounded"
+                />
+                <span>फिर भी मैन्युअल रूप से दोबारा रसीद दर्ज करें (Override Lock)</span>
+              </label>
+            </div>
+          )}
+
+          {/* Partial Payment Notice for Admission / Books */}
+          {partialHeadNotice && !duplicateLockInfo && (
+            <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-950 text-[11px] font-semibold flex items-center gap-2">
+              <i className="fa-solid fa-circle-info text-amber-600 text-sm shrink-0"></i>
+              <span>{partialHeadNotice}</span>
+            </div>
+          )}
+
           {/* Fee Head Segregation Confirmation Banner */}
-          {(!feeType.toLowerCase().includes('tuition') && !feeType.includes('शिक्षण') && !isAdvanceMode) && (
+          {(!feeType.toLowerCase().includes('tuition') && !feeType.includes('शिक्षण') && !isAdvanceMode && !duplicateLockInfo) && (
             <div className="p-2.5 rounded-xl bg-blue-50/80 border border-blue-200 text-blue-900 text-[11px] flex items-center gap-2">
               <i className="fa-solid fa-circle-check text-blue-600 text-sm shrink-0"></i>
               <span>
@@ -1409,13 +1818,18 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={isSubmitting}
-            className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-2 shadow-xs cursor-pointer disabled:opacity-50"
+            disabled={isSubmitting || Boolean(duplicateLockInfo && !overridePaidLock)}
+            className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-2 shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isSubmitting ? (
               <>
                 <i className="fa-solid fa-spinner fa-spin"></i>
                 <span>सहेज रहे हैं...</span>
+              </>
+            ) : duplicateLockInfo && !overridePaidLock ? (
+              <>
+                <i className="fa-solid fa-lock"></i>
+                <span>पहले से जमा (लॉक ✓)</span>
               </>
             ) : (
               <>

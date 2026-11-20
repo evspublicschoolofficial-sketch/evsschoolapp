@@ -1,10 +1,18 @@
 import { Student, FeeCollectionRecord } from '../types';
-import { getActiveFeeMasterConfig, isFreeStudent, normalizeClassKey } from './feeMaster';
+import {
+  DEFAULT_FEE_CONFIG,
+  getActiveFeeMasterConfig,
+  getStudentMonthlyDiscount,
+  isFreeStudent,
+  normalizeClassKey,
+} from './feeMaster';
 
 export interface StudentFeeMetrics {
   totalSessionFee: number; // Unique billed total fee (till current month, including books/exam/uniform if billed)
   fullYearFee?: number;    // Full 12-month session fee
-  monthlyTuition?: number; // Detected monthly tuition
+  monthlyTuition?: number; // Detected monthly tuition (gross)
+  monthlyDiscount?: number; // Permanent per-month tuition discount (₹50 / ₹100 / custom)
+  netMonthlyTuition?: number; // Net monthly tuition after permanent discount
   admissionFee?: number;   // Standard or custom admission fee
   admissionPaid?: number;  // Paid toward admission fee
   admissionDue?: number;   // Balance due on admission fee
@@ -101,8 +109,13 @@ export const reconcileFeeRecords = (records: FeeCollectionRecord[]): FeeCollecti
     stRecords.forEach((r) => {
       const monthKey = String(r.Month || '').trim().toLowerCase();
       const typeKey = String(r.Fee_Type || '').trim().toLowerCase();
-      const isOneTime = /(admission|प्रवेश|exam|परीक्षा|book|पुस्तक)/i.test(typeKey);
-      const key = isOneTime ? `onetime::${typeKey}` : `${monthKey}::${typeKey || 'tuition'}`;
+      const isSessionOneTime = /(admission|प्रवेश|book|पुस्तक|stationary)/i.test(typeKey);
+      const isExam = /(exam|परीक्षा)/i.test(typeKey);
+      const key = isSessionOneTime
+        ? `onetime::${typeKey}`
+        : isExam
+        ? `exam::${typeKey}::${monthKey || 'general'}`
+        : `${monthKey}::${typeKey || 'tuition'}`;
 
       if (!periodMap.has(key)) periodMap.set(key, []);
       periodMap.get(key)!.push(r);
@@ -259,6 +272,8 @@ export interface StudentSummaryResult {
   currentMonth: string;
   elapsedMonths: number;
   monthlyTuition: number;
+  monthlyDiscount: number;
+  netMonthlyTuition: number;
   admissionFee: number;
   admissionPaid: number;         // Amount paid strictly toward admission fee
   admissionDue: number;          // Balance due strictly on admission fee
@@ -338,9 +353,14 @@ export const calculateStudentSummary = (
   );
   const reconciled = reconcileFeeRecords(rawStudentReceipts);
 
-  // 3. Monthly tuition fee (from profile, existing receipts, or class master)
+  // 3. Monthly tuition fee & permanent monthly discount
   // Per School Rule: For Fee-Waived students, ONLY Monthly Tuition Fee is ₹0 (and never added to pending dues).
   const monthlyTuition = isExempt ? 0 : getStudentMonthlyTuition(studentProfile, reconciled);
+  const { monthlyDiscount: rawMonthlyDisc } = isExempt
+    ? { monthlyDiscount: 0 }
+    : getStudentMonthlyDiscount(studentProfile);
+  const effectiveMonthlyDiscount = isExempt ? 0 : Math.min(monthlyTuition, Math.max(0, rawMonthlyDisc));
+  const netMonthlyTuition = isExempt ? 0 : Math.max(0, monthlyTuition - effectiveMonthlyDiscount);
 
   // 4. Admission Fee (Always applicable for ALL students, including Tuition-Waived students!)
   let defaultAdmissionFee = 1000;
@@ -353,14 +373,16 @@ export const calculateStudentSummary = (
   } catch {}
 
   const admissionRecordsAll = reconciled.filter((r) => isAdmissionFeeRecord(r.Fee_Type));
+  const admissionPaidTotal = admissionRecordsAll.reduce((sum, r) => sum + (Number(r.Amount_Paid) || 0), 0);
+  const admissionDiscountTotal = admissionRecordsAll.reduce(
+    (sum, r) => sum + (Number((r as any).Discount_Amount || (r as any).Discount || 0) || 0),
+    0
+  );
   const admissionRecordsBilled =
     admissionRecordsAll.length > 0
       ? Math.max(
           ...admissionRecordsAll.map((r) => Number(r.Total_Amount) || 0),
-          admissionRecordsAll.reduce(
-            (sum, r) => sum + (Number(r.Amount_Paid) || 0) + (Number(r.Balance_Amount) || 0),
-            0
-          )
+          admissionPaidTotal + admissionDiscountTotal
         )
       : 0;
 
@@ -375,7 +397,7 @@ export const calculateStudentSummary = (
     : Math.max(defaultAdmissionFee, admissionRecordsBilled);
 
   // 4b. Other Billed Fees (Books & Stationery, Exam Fee, Uniform, Annual Fee, etc.)
-  // Charged from ALL students including tuition-waived students
+  // Option A: Exam Fee / Books Fee are only added to session billing when explicitly recorded/billed.
   const nonTuitionRecords = reconciled.filter((r) => {
     const type = String(r.Fee_Type || '').trim();
     const isTuition = /(monthly|tuition|मासिक|ट्यूशन|multi-month)/i.test(type);
@@ -386,31 +408,41 @@ export const calculateStudentSummary = (
   const nonTuitionGroups = new Map<string, FeeCollectionRecord[]>();
   nonTuitionRecords.forEach((r) => {
     const typeKey = String(r.Fee_Type || '').trim().toLowerCase();
-    if (!nonTuitionGroups.has(typeKey)) nonTuitionGroups.set(typeKey, []);
-    nonTuitionGroups.get(typeKey)!.push(r);
+    const monthKey = String(r.Month || '').trim().toLowerCase();
+    const groupKey = isExamFeeRecord(typeKey)
+      ? `exam::${typeKey}::${monthKey || 'general'}`
+      : typeKey;
+    if (!nonTuitionGroups.has(groupKey)) nonTuitionGroups.set(groupKey, []);
+    nonTuitionGroups.get(groupKey)!.push(r);
   });
 
   let otherBilledFees = 0;
+  let otherNonTuitionDiscount = 0;
   const itemizedOtherFees: Array<{ type: string; amount: number; paid: number; balance: number }> = [];
 
   nonTuitionGroups.forEach((recs) => {
     const origType = recs[0].Fee_Type || 'Other Fee';
-    // The billed amount is max of Total_Amount or sum of paid + balance
-    const billed = Math.max(
-      ...recs.map((r) => Number(r.Total_Amount) || 0),
-      recs.reduce((sum, r) => sum + (Number(r.Amount_Paid) || 0) + (Number(r.Balance_Amount) || 0), 0)
-    );
     const paid = recs.reduce((sum, r) => sum + (Number(r.Amount_Paid) || 0), 0);
     const disc = recs.reduce(
       (sum, r) => sum + (Number((r as any).Discount_Amount || (r as any).Discount || 0) || 0),
       0
     );
+    const isBooks = isBooksFeeRecord(origType);
+    const hasExplicitTotals = recs.some((r) => (Number(r.Total_Amount) || 0) > 0);
+    const billed = isBooks && hasExplicitTotals
+      ? Math.max(...recs.map((r) => Number(r.Total_Amount) || 0), paid + disc)
+      : Math.max(
+          ...recs.map((r) => Number(r.Total_Amount) || 0),
+          recs.reduce((sum, r) => sum + (Number(r.Amount_Paid) || 0) + (Number(r.Balance_Amount) || 0), 0)
+        );
     const balance = Math.max(0, billed - paid - disc);
 
+    otherNonTuitionDiscount += disc;
     if (billed > 0) {
       otherBilledFees += billed;
+      const monthLabel = isExamFeeRecord(origType) && recs[0]?.Month ? ` (${recs[0].Month})` : '';
       itemizedOtherFees.push({
-        type: origType,
+        type: `${origType}${monthLabel}`,
         amount: billed,
         paid,
         balance,
@@ -418,8 +450,7 @@ export const calculateStudentSummary = (
     }
   });
 
-  // 5. Total Billed Session Fee = (Monthly Tuition Fee * Elapsed Months) + Admission Fee + Other Billed Fees (Books, Exam, etc.)
-  // Strictly capped at current running month (prevents over-billing for future unarrived months!)
+  // 5. Total Billed Session Fee = (Monthly Tuition Fee * Elapsed Months) + Admission Fee + Other Billed Fees
   const totalBilledSessionFee = (monthlyTuition * elapsedMonths) + admissionFee + otherBilledFees;
   // Full 12-month annual fee
   const fullYearFee = (monthlyTuition * 12) + admissionFee + otherBilledFees;
@@ -427,29 +458,9 @@ export const calculateStudentSummary = (
   // 6. Total Fees Paid = Sum of Amount_Paid across all valid payment receipts
   const totalPaid = reconciled.reduce((sum, r) => sum + (Number(r.Amount_Paid) || 0), 0);
 
-  // 7. Total Discounts Given (Receipt-level discounts + profile-level concessions)
-  const totalReceiptDiscount = reconciled.reduce(
-    (sum, r) => sum + (Number((r as any).Discount_Amount || (r as any).Discount || 0) || 0),
-    0
-  );
-
-  const profileMonthlyDiscount = Number(
-    studentProfile?.Monthly_Discount || studentProfile?.Discount_Per_Month || 0
-  ) || 0;
-  const profileFlatDiscount = Number(
-    studentProfile?.Discount || studentProfile?.Fee_Discount || studentProfile?.Concession || 0
-  ) || 0;
-  const totalProfileDiscount = (profileMonthlyDiscount * elapsedMonths) + profileFlatDiscount;
-
-  const totalDiscount = Math.max(totalReceiptDiscount, totalProfileDiscount);
-
   // Category-wise Breakdown (Strictly segregated by Fee Type)
-  const admissionRecords = reconciled.filter((r) => isAdmissionFeeRecord(r.Fee_Type));
-  const admissionPaid = admissionRecords.reduce((sum, r) => sum + (Number(r.Amount_Paid) || 0), 0);
-  const admissionDiscount = admissionRecords.reduce(
-    (sum, r) => sum + (Number((r as any).Discount_Amount || (r as any).Discount || 0) || 0),
-    0
-  );
+  const admissionPaid = admissionPaidTotal;
+  const admissionDiscount = admissionDiscountTotal;
   const admissionDue = Math.max(0, admissionFee - admissionPaid - admissionDiscount);
 
   const tuitionRecords = reconciled.filter((r) => isTuitionFeeRecord(r.Fee_Type));
@@ -459,11 +470,23 @@ export const calculateStudentSummary = (
     (sum, r) => sum + (Number((r as any).Discount_Amount || (r as any).Discount || 0) || 0),
     0
   );
-  const tuitionDiscount = Math.max(tuitionReceiptDiscount, profileMonthlyDiscount * elapsedMonths);
+  const tuitionDiscount = isExempt
+    ? 0
+    : Math.max(tuitionReceiptDiscount, effectiveMonthlyDiscount * elapsedMonths);
   const tuitionDue = isExempt ? 0 : Math.max(0, tuitionBilled - tuitionPaid - tuitionDiscount);
 
+  // 7. Total Discounts Given (Segregated so monthly tuition discount never hides Admission/Books receipt discounts)
+  const rawMonthlyField = Number(
+    studentProfile?.Monthly_Discount || studentProfile?.Discount_Per_Month || 0
+  ) || 0;
+  const profileFlatDiscount = Number(studentProfile?.Concession || 0) ||
+    (rawMonthlyField > 0 || effectiveMonthlyDiscount > 0
+      ? 0
+      : (Number(studentProfile?.Discount || studentProfile?.Fee_Discount || 0) || 0));
+
+  const totalDiscount = tuitionDiscount + admissionDiscount + otherNonTuitionDiscount + profileFlatDiscount;
+
   // 8. Current Dues (DUE) = Math.max(0, Total Billed Session Fee - Total Fees Paid - Total Discount)
-  // For tuition-waived students, dues reflect unpaid Admission, Books, or Exam fees!
   const netBalance = totalBilledSessionFee - totalPaid - totalDiscount;
   const currentDues = Math.max(0, netBalance);
   const isAdvance = netBalance < 0;
@@ -475,6 +498,8 @@ export const calculateStudentSummary = (
     currentMonth: currentMonthName,
     elapsedMonths,
     monthlyTuition,
+    monthlyDiscount: effectiveMonthlyDiscount,
+    netMonthlyTuition,
     admissionFee,
     admissionPaid,
     admissionDue,
@@ -525,6 +550,8 @@ export const computeStudentFeeMetrics = (
     totalSessionFee: summary.totalBilledSessionFee,
     fullYearFee: summary.fullYearFee,
     monthlyTuition: summary.monthlyTuition,
+    monthlyDiscount: summary.monthlyDiscount,
+    netMonthlyTuition: summary.netMonthlyTuition,
     admissionFee: summary.admissionFee,
     admissionPaid: summary.admissionPaid,
     admissionDue: summary.admissionDue,
@@ -737,6 +764,271 @@ export const computeWaivedStudentsSummary = (
     totalTuitionWaivedTillDate,
     totalAdmissionWaived,
     waivedStudents,
+  };
+};
+
+export interface StudentHeadPaymentStatus {
+  admission: {
+    standardFee: number;
+    paid: number;
+    discount: number;
+    settled: number;
+    remaining: number;
+    isPaid: boolean;
+    isPartial: boolean;
+  };
+  books: {
+    standardFee: number;
+    paid: number;
+    discount: number;
+    settled: number;
+    remaining: number;
+    isPaid: boolean;
+    isPartial: boolean;
+  };
+  exam: {
+    perTermFee: number;
+    fullYearFee: number;
+    paid: number;
+    discount: number;
+    settled: number;
+    term1Paid: boolean;
+    term2Paid: boolean;
+    term3Paid: boolean;
+    paidTermsCount: number;
+    remainingTermsCount: number;
+    remainingFullYearAmount: number;
+    isFullYearPaid: boolean;
+  };
+}
+
+/**
+ * Checks whether Admission, Books, and each Exam term (1st, 2nd, 3rd or 3× Full Year)
+ * have already been settled so duplicate fee collection can be locked accurately.
+ */
+export const getStudentHeadPaymentStatus = (
+  student: Student | null | undefined,
+  allReceipts: FeeCollectionRecord[]
+): StudentHeadPaymentStatus => {
+  const activeConfig = (() => {
+    try {
+      return getActiveFeeMasterConfig();
+    } catch {
+      return {};
+    }
+  })();
+  const classKey = normalizeClassKey(student?.Class);
+  const classCfg = (activeConfig as any)?.[classKey] || DEFAULT_FEE_CONFIG;
+
+  const hasExplicitAdm =
+    student?.Admission_Fee !== undefined &&
+    student?.Admission_Fee !== null &&
+    String(student.Admission_Fee).trim() !== '';
+  const admStandard = hasExplicitAdm
+    ? Math.max(0, Number(student?.Admission_Fee) || 0)
+    : Number(classCfg.admissionFee ?? DEFAULT_FEE_CONFIG.admissionFee);
+  const booksStandard = Number(classCfg.booksFee ?? DEFAULT_FEE_CONFIG.booksFee);
+  const perTermExamFee = Number(classCfg.examFee ?? DEFAULT_FEE_CONFIG.examFee);
+  const fullYearExamFee = perTermExamFee * 3;
+
+  const normId = normalizeStudentId(student?.Student_ID);
+  const rawStudentReceipts = normId
+    ? allReceipts.filter((r) => normalizeStudentId(r.Student_ID) === normId)
+    : [];
+  const reconciled = reconcileFeeRecords(rawStudentReceipts);
+
+  // 1. Admission
+  const admRecs = reconciled.filter((r) => isAdmissionFeeRecord(r.Fee_Type));
+  const admPaid = admRecs.reduce((s, r) => s + (Number(r.Amount_Paid) || 0), 0);
+  const admDisc = admRecs.reduce(
+    (s, r) => s + (Number((r as any).Discount_Amount || (r as any).Discount || 0) || 0),
+    0
+  );
+  const admSettled = admPaid + admDisc;
+  const admRemaining = Math.max(0, admStandard - admSettled);
+  const admIsPaid = admStandard > 0 ? admSettled >= admStandard : admSettled > 0;
+
+  // 2. Books & Stationery
+  const booksRecs = reconciled.filter((r) => isBooksFeeRecord(r.Fee_Type));
+  const booksPaid = booksRecs.reduce((s, r) => s + (Number(r.Amount_Paid) || 0), 0);
+  const booksDisc = booksRecs.reduce(
+    (s, r) => s + (Number((r as any).Discount_Amount || (r as any).Discount || 0) || 0),
+    0
+  );
+  const booksSettled = booksPaid + booksDisc;
+  const booksRemaining = Math.max(0, booksStandard - booksSettled);
+  const booksIsPaid = booksStandard > 0 ? booksSettled >= booksStandard : booksSettled > 0;
+
+  // 3. Examination Fee (Option A: 1x Term-wise & 3x Full Year)
+  const examRecs = reconciled.filter((r) => isExamFeeRecord(r.Fee_Type));
+  const examPaid = examRecs.reduce((s, r) => s + (Number(r.Amount_Paid) || 0), 0);
+  const examDisc = examRecs.reduce(
+    (s, r) => s + (Number((r as any).Discount_Amount || (r as any).Discount || 0) || 0),
+    0
+  );
+  const examSettled = examPaid + examDisc;
+
+  let term1Paid = false;
+  let term2Paid = false;
+  let term3Paid = false;
+  let fullYearMarked = false;
+
+  examRecs.forEach((r) => {
+    const recSettled =
+      (Number(r.Amount_Paid) || 0) +
+      (Number((r as any).Discount_Amount || (r as any).Discount || 0) || 0);
+    if (recSettled <= 0) return; // Unpaid due bill does not lock payment
+
+    const text = `${r.Month || ''} ${r.Notes || ''} ${r.Fee_Type || ''}`.toLowerCase();
+    if (
+      /(3x|3×|all\s*3|three\s*term|तीनों\s*टर्म|full\s*year|full\s*session\s*exam|पूरे\s*साल)/i.test(text) ||
+      (fullYearExamFee > 0 && recSettled >= fullYearExamFee)
+    ) {
+      fullYearMarked = true;
+    }
+    if (/(1st\s*term|term\s*1|first\s*term|quarter\s*1|q1|unit\s*test\s*1|प्रथम\s*टर्म|प्रथम\s*परीक्षा|तिमाही)/i.test(text)) {
+      term1Paid = true;
+    }
+    if (/(2nd\s*term|term\s*2|second\s*term|half[\s-]*yearly|quarter\s*2|q2|unit\s*test\s*2|द्वितीय\s*टर्म|अर्धवार्षिक|छमाही)/i.test(text)) {
+      term2Paid = true;
+    }
+    if (/(3rd\s*term|term\s*3|third\s*term|annual\s*exam|final\s*exam|तृतीय\s*टर्म|वार्षिक)/i.test(text)) {
+      term3Paid = true;
+    }
+  });
+
+  if (fullYearMarked || (fullYearExamFee > 0 && examSettled >= fullYearExamFee)) {
+    term1Paid = true;
+    term2Paid = true;
+    term3Paid = true;
+  } else if (examSettled > 0 && perTermExamFee > 0) {
+    // Reconcile legacy/unlabeled exam receipts by settled amount against per-term rate
+    const impliedTerms = Math.min(3, Math.floor((examSettled + 0.01) / perTermExamFee));
+    let currentCount = (term1Paid ? 1 : 0) + (term2Paid ? 1 : 0) + (term3Paid ? 1 : 0);
+    if (currentCount < impliedTerms) {
+      if (!term1Paid && currentCount < impliedTerms) { term1Paid = true; currentCount++; }
+      if (!term2Paid && currentCount < impliedTerms) { term2Paid = true; currentCount++; }
+      if (!term3Paid && currentCount < impliedTerms) { term3Paid = true; currentCount++; }
+    }
+  }
+
+  const paidTermsCount = (term1Paid ? 1 : 0) + (term2Paid ? 1 : 0) + (term3Paid ? 1 : 0);
+  const remainingTermsCount = Math.max(0, 3 - paidTermsCount);
+  const isFullYearPaid = remainingTermsCount === 0 || (fullYearExamFee > 0 && examSettled >= fullYearExamFee);
+  const remainingFullYearAmount =
+    perTermExamFee > 0
+      ? Math.max(0, Math.min(fullYearExamFee - examSettled, remainingTermsCount * perTermExamFee))
+      : 0;
+
+  return {
+    admission: {
+      standardFee: admStandard,
+      paid: admPaid,
+      discount: admDisc,
+      settled: admSettled,
+      remaining: admRemaining,
+      isPaid: admIsPaid,
+      isPartial: !admIsPaid && admSettled > 0,
+    },
+    books: {
+      standardFee: booksStandard,
+      paid: booksPaid,
+      discount: booksDisc,
+      settled: booksSettled,
+      remaining: booksRemaining,
+      isPaid: booksIsPaid,
+      isPartial: !booksIsPaid && booksSettled > 0,
+    },
+    exam: {
+      perTermFee: perTermExamFee,
+      fullYearFee: fullYearExamFee,
+      paid: examPaid,
+      discount: examDisc,
+      settled: examSettled,
+      term1Paid,
+      term2Paid,
+      term3Paid,
+      paidTermsCount,
+      remainingTermsCount,
+      remainingFullYearAmount,
+      isFullYearPaid,
+    },
+  };
+};
+
+export interface DiscountedStudentDetail {
+  student: Student;
+  reason: string;
+  startMonth: string;
+  currentMonth: string;
+  elapsedMonths: number;
+  grossMonthlyTuition: number;
+  monthlyDiscount: number;
+  netMonthlyTuition: number;
+  discountTillDate: number;
+  annualDiscountTotal: number;
+}
+
+export const computeDiscountedStudentsSummary = (
+  students: Student[],
+  allFeeRecords: FeeCollectionRecord[]
+): {
+  totalDiscountedStudents: number;
+  totalMonthlySavings: number;
+  totalDiscountTillDate: number;
+  totalAnnualDiscount: number;
+  discountedStudents: DiscountedStudentDetail[];
+} => {
+  const discountedStudents: DiscountedStudentDetail[] = [];
+  let totalMonthlySavings = 0;
+  let totalDiscountTillDate = 0;
+  let totalAnnualDiscount = 0;
+
+  const seen = new Set<string>();
+  students.forEach((student) => {
+    if (!student) return;
+    const normId = normalizeStudentId(student.Student_ID);
+    if (normId) {
+      if (seen.has(normId)) return;
+      seen.add(normId);
+    }
+    if (isFreeStudent(student).isFree) return;
+    const discInfo = getStudentMonthlyDiscount(student);
+    if (discInfo.monthlyDiscount <= 0) return;
+
+    const summary = calculateStudentSummary(student.Student_ID, allFeeRecords, student);
+    const gross = summary.monthlyTuition;
+    const monthlyDiscount = Math.min(gross, discInfo.monthlyDiscount);
+    const netMonthlyTuition = Math.max(0, gross - monthlyDiscount);
+    const discountTillDate = monthlyDiscount * summary.elapsedMonths;
+    const annualDiscountTotal = monthlyDiscount * 12;
+
+    totalMonthlySavings += monthlyDiscount;
+    totalDiscountTillDate += discountTillDate;
+    totalAnnualDiscount += annualDiscountTotal;
+
+    discountedStudents.push({
+      student,
+      reason: discInfo.reason || `स्थायी मासिक छूट ₹${monthlyDiscount}/माह`,
+      startMonth: summary.startMonth,
+      currentMonth: summary.currentMonth,
+      elapsedMonths: summary.elapsedMonths,
+      grossMonthlyTuition: gross,
+      monthlyDiscount,
+      netMonthlyTuition,
+      discountTillDate,
+      annualDiscountTotal,
+    });
+  });
+
+  discountedStudents.sort((a, b) => b.discountTillDate - a.discountTillDate);
+
+  return {
+    totalDiscountedStudents: discountedStudents.length,
+    totalMonthlySavings,
+    totalDiscountTillDate,
+    totalAnnualDiscount,
+    discountedStudents,
   };
 };
 

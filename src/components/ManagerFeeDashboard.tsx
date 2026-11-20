@@ -24,13 +24,24 @@ import {
   calculateStudentSummary,
   isStudentFeeExempt,
   computeWaivedStudentsSummary,
+  computeDiscountedStudentsSummary,
+  getStudentHeadPaymentStatus,
 } from '../utils/feeCalculation';
 import {
   buildFamilyGroups,
   buildFamilyWhatsappDueReminder,
   FamilyFeeSummary,
 } from '../utils/familyFeeHelper';
-import { APPS_SCRIPT_FEE_CODE, FREE_STUDENTS_UPDATED_EVENT, FEE_MASTER_UPDATED_EVENT, tagStudentWaiver, isFreeStudent, syncFeeWaiversWithServer } from '../utils/feeMaster';
+import {
+  APPS_SCRIPT_FEE_CODE,
+  FREE_STUDENTS_UPDATED_EVENT,
+  FEE_MASTER_UPDATED_EVENT,
+  tagStudentWaiver,
+  tagStudentMonthlyDiscount,
+  getStudentMonthlyDiscount,
+  isFreeStudent,
+  syncFeeWaiversWithServer,
+} from '../utils/feeMaster';
 import {
   DEFAULT_UPI_SETTINGS,
   loadLocalUpiSettings,
@@ -325,6 +336,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
   }, []);
   const [activeViewMode, setActiveViewMode] = useState<'trends' | 'student' | 'family' | 'allLedger' | 'upiQueue' | 'feeWaivers'>('trends');
   const [waiverSearchQuery, setWaiverSearchQuery] = useState<string>('');
+  const [customWaiverDiscMap, setCustomWaiverDiscMap] = useState<Record<string, string>>({});
   const [syncingWaiversSheet, setSyncingWaiversSheet] = useState<boolean>(false);
   const [waiverSyncMsg, setWaiverSyncMsg] = useState<string | null>(null);
   const [familySearchQuery, setFamilySearchQuery] = useState<string>('');
@@ -805,13 +817,24 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
         elapsedMonths: 0,
         startMonth: 'April',
         currentMonth: 'October',
+        monthlyTuition: 0,
+        monthlyDiscount: 0,
+        netMonthlyTuition: 0,
+        admissionFee: 0,
+        otherBilledFees: 0,
+        itemizedOtherFees: [] as Array<{ type: string; amount: number; paid: number; balance: number }>,
+        totalDiscount: 0,
+        headStatus: null as ReturnType<typeof getStudentHeadPaymentStatus> | null,
       };
     }
     const summary = calculateStudentSummary(selectedStudent.Student_ID, feeRecords, selectedStudent);
+    const headStatus = getStudentHeadPaymentStatus(selectedStudent as Student, feeRecords);
     return {
       totalFee: summary.totalBilledSessionFee,
       fullYearFee: summary.fullYearFee,
       monthlyTuition: summary.monthlyTuition,
+      monthlyDiscount: summary.monthlyDiscount || 0,
+      netMonthlyTuition: summary.netMonthlyTuition ?? Math.max(0, summary.monthlyTuition - (summary.monthlyDiscount || 0)),
       admissionFee: summary.admissionFee,
       admissionPaid: summary.admissionPaid || 0,
       admissionDue: summary.admissionDue || 0,
@@ -831,6 +854,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
       elapsedMonths: summary.elapsedMonths,
       startMonth: summary.startMonth,
       currentMonth: summary.currentMonth,
+      headStatus,
     };
   }, [selectedStudent, feeRecords, waiverVersion]);
 
@@ -849,6 +873,10 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
 
   const waivedSummary = useMemo(() => {
     return computeWaivedStudentsSummary(students, feeRecords);
+  }, [students, feeRecords, waiverVersion]);
+
+  const discountedSummary = useMemo(() => {
+    return computeDiscountedStudentsSummary(students as Student[], feeRecords);
   }, [students, feeRecords, waiverVersion]);
 
   const waiverAddSearchCandidates = useMemo(() => {
@@ -1389,14 +1417,14 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
           >
             <div className="flex items-center justify-between gap-1">
               <div className="text-[10px] text-amber-200 uppercase tracking-wider font-semibold">
-                फीस माफी (Fee Waiver)
+                माफी / मासिक छूट
               </div>
               <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-amber-400 text-slate-950">
-                {waivedSummary.totalWaivedStudents} छात्र
+                {waivedSummary.totalWaivedStudents + discountedSummary.totalDiscountedStudents} छात्र
               </span>
             </div>
             <div className="text-lg sm:text-xl font-black text-amber-300 mt-1 flex items-baseline justify-between gap-1">
-              <span>₹{waivedSummary.totalWaivedAmountTillDate.toLocaleString('en-IN')}</span>
+              <span>₹{(waivedSummary.totalWaivedAmountTillDate + discountedSummary.totalDiscountTillDate).toLocaleString('en-IN')}</span>
               <span className="text-[10px] font-bold text-amber-200">सूची →</span>
             </div>
           </div>
@@ -1517,7 +1545,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
               }`}
             >
               <i className="fa-solid fa-hand-holding-heart text-xs"></i>
-              <span>🎁 फीस माफी ({waivedSummary.totalWaivedStudents})</span>
+              <span>🎁 माफी / छूट ({waivedSummary.totalWaivedStudents + discountedSummary.totalDiscountedStudents})</span>
             </button>
           </div>
         </div>
@@ -2334,13 +2362,15 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="p-4 rounded-2xl bg-white border border-slate-200/90 shadow-2xs flex flex-col justify-between">
                   <div>
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between gap-1">
                       <span className="text-[11px] text-slate-500 font-bold block">
                         सत्र देय ({studentFeeSummary.currentMonth} तक)
                       </span>
                       {studentFeeSummary.monthlyTuition > 0 && (
                         <span className="text-[10px] font-bold text-blue-900 bg-blue-50 px-1.5 py-0.2 rounded border border-blue-200">
-                          ₹{studentFeeSummary.monthlyTuition}/माह
+                          {studentFeeSummary.monthlyDiscount > 0
+                            ? `₹${studentFeeSummary.netMonthlyTuition}/माह (-₹${studentFeeSummary.monthlyDiscount} छूट)`
+                            : `₹${studentFeeSummary.monthlyTuition}/माह`}
                         </span>
                       )}
                     </div>
@@ -2350,6 +2380,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                     {studentFeeSummary.elapsedMonths > 0 && (
                       <span className="text-[10px] text-indigo-700 font-medium block mt-1">
                         {studentFeeSummary.elapsedMonths} माह × ₹{studentFeeSummary.monthlyTuition} (₹{(studentFeeSummary.monthlyTuition * studentFeeSummary.elapsedMonths).toLocaleString('en-IN')})
+                        {studentFeeSummary.monthlyDiscount > 0 ? ` - छूट ₹${(studentFeeSummary.monthlyDiscount * studentFeeSummary.elapsedMonths).toLocaleString('en-IN')}` : ''}
                         {studentFeeSummary.admissionFee > 0 ? ` + प्रवेश ₹${studentFeeSummary.admissionFee.toLocaleString('en-IN')}` : ''}
                         {studentFeeSummary.otherBilledFees > 0 ? ` + पुस्तकें/अन्य ₹${studentFeeSummary.otherBilledFees.toLocaleString('en-IN')}` : ''}
                       </span>
@@ -2504,7 +2535,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                   </div>
 
                   {/* Head 2: Monthly Tuition */}
-                  <div className="p-3 rounded-xl bg-blue-50/60 border border-blue-200/80 flex items-center justify-between">
+                  <div className="p-3 rounded-xl bg-blue-50/60 border border-blue-200/80 flex items-center justify-between gap-2">
                     <div>
                       <div className="text-[11px] font-bold text-blue-950 flex items-center gap-1.5">
                         <span className="w-2 h-2 rounded-full bg-blue-600"></span>
@@ -2513,8 +2544,13 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                       <div className="text-xs text-blue-900 mt-0.5">
                         देय: <strong>₹{(studentFeeSummary.tuitionBilled ?? (studentFeeSummary.monthlyTuition * studentFeeSummary.elapsedMonths)).toLocaleString('en-IN')}</strong> • जमा: <strong>₹{(studentFeeSummary.tuitionPaid || 0).toLocaleString('en-IN')}</strong>
                       </div>
+                      {studentFeeSummary.monthlyDiscount > 0 && (
+                        <div className="text-[10px] font-bold text-amber-800 mt-0.5">
+                          🎁 मासिक छूट: -₹{studentFeeSummary.monthlyDiscount}/माह (नेट ₹{studentFeeSummary.netMonthlyTuition}/माह)
+                        </div>
+                      )}
                     </div>
-                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${
+                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border shrink-0 ${
                       isStudentFeeExempt(selectedStudent) && (studentFeeSummary.tuitionDue || 0) <= 0
                         ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
                         : (studentFeeSummary.tuitionDue || 0) <= 0
@@ -2530,34 +2566,65 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                   </div>
 
                   {/* Head 3: Books, Exams & Other */}
-                  <div className="p-3 rounded-xl bg-purple-50/60 border border-purple-200/80 flex items-center justify-between">
-                    <div>
-                      <div className="text-[11px] font-bold text-purple-950 flex items-center gap-1.5">
-                        <span className="w-2 h-2 rounded-full bg-purple-600"></span>
-                        <span>पुस्तकें / परीक्षा / अन्य मदें</span>
+                  <div className="p-3 rounded-xl bg-purple-50/60 border border-purple-200/80 flex flex-col justify-between gap-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <div className="text-[11px] font-bold text-purple-950 flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-purple-600"></span>
+                          <span>पुस्तकें / परीक्षा (1×/3×) / अन्य</span>
+                        </div>
+                        <div className="text-xs text-purple-900 mt-0.5">
+                          बिल: <strong>₹{studentFeeSummary.otherBilledFees.toLocaleString('en-IN')}</strong>
+                          {studentFeeSummary.itemizedOtherFees?.length > 0 && (
+                            <span className="text-[10px] text-purple-700 block truncate max-w-[200px]" title={studentFeeSummary.itemizedOtherFees.map(f => `${f.type}: ₹${f.paid}/${f.amount}`).join(' • ')}>
+                              {studentFeeSummary.itemizedOtherFees.map(f => `${f.type}: ₹${f.paid}/${f.amount}`).join(' • ')}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                      <div className="text-xs text-purple-900 mt-0.5">
-                        देय: <strong>₹{studentFeeSummary.otherBilledFees.toLocaleString('en-IN')}</strong>
-                        {studentFeeSummary.itemizedOtherFees?.length > 0 && (
-                          <span className="text-[10px] text-purple-700 block truncate max-w-[200px]" title={studentFeeSummary.itemizedOtherFees.map(f => `${f.type}: ₹${f.paid}/${f.amount}`).join(' • ')}>
-                            {studentFeeSummary.itemizedOtherFees.map(f => `${f.type}: ₹${f.paid}/${f.amount}`).join(' • ')}
-                          </span>
-                        )}
-                      </div>
+                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border shrink-0 ${
+                        studentFeeSummary.otherBilledFees === 0
+                          ? 'bg-slate-100 text-slate-600 border-slate-300'
+                          : (studentFeeSummary.itemizedOtherFees.reduce((acc, f) => acc + f.balance, 0) <= 0)
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                          : 'bg-rose-100 text-rose-800 border-rose-300'
+                      }`}>
+                        {studentFeeSummary.otherBilledFees === 0
+                          ? 'कोई अतिरिक्त बकाया नहीं'
+                          : (studentFeeSummary.itemizedOtherFees.reduce((acc, f) => acc + f.balance, 0) <= 0)
+                          ? 'पूर्ण चुकता'
+                          : `बकाया ₹${studentFeeSummary.itemizedOtherFees.reduce((acc, f) => acc + f.balance, 0).toLocaleString('en-IN')}`}
+                      </span>
                     </div>
-                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${
-                      studentFeeSummary.otherBilledFees === 0
-                        ? 'bg-slate-100 text-slate-600 border-slate-300'
-                        : (studentFeeSummary.itemizedOtherFees.reduce((acc, f) => acc + f.balance, 0) <= 0)
-                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                        : 'bg-rose-100 text-rose-800 border-rose-300'
-                    }`}>
-                      {studentFeeSummary.otherBilledFees === 0
-                        ? 'कोई देय नहीं'
-                        : (studentFeeSummary.itemizedOtherFees.reduce((acc, f) => acc + f.balance, 0) <= 0)
-                        ? 'पूर्ण चुकता'
-                        : `बकाया ₹${studentFeeSummary.itemizedOtherFees.reduce((acc, f) => acc + f.balance, 0).toLocaleString('en-IN')}`}
-                    </span>
+                    {studentFeeSummary.headStatus && (
+                      <div className="flex flex-wrap items-center gap-1 text-[10px] pt-1 border-t border-purple-200/60">
+                        <span className={`px-1.5 py-0.5 rounded font-bold border ${
+                          studentFeeSummary.headStatus.books.isPaid
+                            ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                            : studentFeeSummary.headStatus.books.isPartial
+                            ? 'bg-amber-100 text-amber-800 border-amber-300'
+                            : 'bg-white text-slate-600 border-slate-200'
+                        }`}>
+                          📚 Books: {studentFeeSummary.headStatus.books.isPaid
+                            ? 'जमा ✓'
+                            : studentFeeSummary.headStatus.books.isPartial
+                            ? `शेष ₹${studentFeeSummary.headStatus.books.remaining}`
+                            : 'लंबित'}
+                        </span>
+                        <span className={`px-1.5 py-0.5 rounded font-bold border ${
+                          studentFeeSummary.headStatus.exam.isFullYearPaid
+                            ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                            : studentFeeSummary.headStatus.exam.paidTermsCount > 0
+                            ? 'bg-indigo-100 text-indigo-900 border-indigo-300'
+                            : 'bg-white text-slate-600 border-slate-200'
+                        }`}>
+                          📝 Exam:{' '}
+                          {studentFeeSummary.headStatus.exam.isFullYearPaid
+                            ? 'तीनों टर्म जमा (3× ✓)'
+                            : `1st ${studentFeeSummary.headStatus.exam.term1Paid ? '✓' : '—'} | 2nd ${studentFeeSummary.headStatus.exam.term2Paid ? '✓' : '—'} | 3rd ${studentFeeSummary.headStatus.exam.term3Paid ? '✓' : '—'}`}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -3428,13 +3495,13 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
 
               <div className="bg-white/10 border border-white/15 rounded-2xl p-3.5">
                 <div className="text-[10px] uppercase tracking-wider text-blue-200 font-bold">
-                  रसीद छूट / रियायत (Concession)
+                  स्थायी मासिक छूट (₹50/₹100/Custom)
                 </div>
-                <div className="text-2xl font-black text-purple-300 mt-0.5 tabular-nums">
-                  ₹{(schoolFeeTotals.totalDiscounts || 0).toLocaleString('en-IN')}
+                <div className="text-2xl font-black text-amber-300 mt-0.5 tabular-nums">
+                  {discountedSummary.totalDiscountedStudents} छात्र
                 </div>
                 <div className="text-[11px] text-blue-100 mt-0.5">
-                  फीस रसीदों में दी गई अतिरिक्त छूट
+                  अब तक छूट ₹{discountedSummary.totalDiscountTillDate.toLocaleString('en-IN')} • ₹{discountedSummary.totalMonthlySavings.toLocaleString('en-IN')}/माह
                 </div>
               </div>
             </div>
@@ -3444,19 +3511,19 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
           <div className="px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-xs text-slate-700 flex flex-wrap items-center justify-between gap-2">
             <div>
               <strong className="text-slate-900">💾 रिकॉर्ड कहाँ सेव होता है?</strong>{' '}
-              Google Sheet के <strong>&apos;Fee_Waivers&apos;</strong> टैब + सर्वर बैकअप + फोन मेमोरी में सुरक्षित होता है (साथ ही <em>Students</em> टैब में <code>Fee_Waiver</code> कॉलम भी पढ़ा जाता है)।
+              Google Sheet के <strong>&apos;Fee_Waivers&apos;</strong> टैब + सर्वर बैकअप + फोन मेमोरी में सुरक्षित होता है (साथ ही <em>Students</em> टैब में <code>Fee_Waiver</code> और <code>Monthly_Discount</code> भी पढ़ा जाता है)।
             </div>
           </div>
 
-          {/* Quick 1-Click Add Student to Fee Waiver */}
+          {/* Quick 1-Click Add Student to Fee Waiver or Permanent Monthly Tuition Discount */}
           <div className="bg-amber-50/70 border border-amber-200 rounded-2xl p-4 space-y-2.5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div className="text-xs font-extrabold text-amber-950 flex items-center gap-1.5">
                 <i className="fa-solid fa-user-plus text-amber-700"></i>
-                <span>नया छात्र ट्यूशन फीस माफी में जोड़ें (1-Click Tag)</span>
+                <span>नया छात्र 100% ट्यूशन माफी या मासिक छूट (₹50 / ₹100 / कस्टम) में जोड़ें</span>
               </div>
               <span className="text-[11px] text-amber-800">
-                टैग करते ही Google Sheet व सभी डिवाइस पर ट्यूशन फीस ₹0 ऑटो-अपडेट होगी
+                टैग करते ही Google Sheet व हर महीने फीस कलेक्शन में ऑटो-छूट लागू होगी
               </span>
             </div>
 
@@ -3466,7 +3533,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                 type="text"
                 value={waiverSearchQuery}
                 onChange={(e) => setWaiverSearchQuery(e.target.value)}
-                placeholder="छात्र का नाम, आईडी या क्लास लिखकर ट्यूशन फीस माफी में जोड़ें..."
+                placeholder="छात्र का नाम, आईडी या क्लास लिखकर ट्यूशन माफी या ₹50/₹100 मासिक छूट जोड़ें..."
                 className="w-full pl-9 pr-8 py-2.5 rounded-xl border border-amber-300 bg-white text-xs outline-none focus:border-blue-900"
               />
               {waiverSearchQuery && (
@@ -3481,30 +3548,188 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
             </div>
 
             {waiverAddSearchCandidates.length > 0 && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                {waiverAddSearchCandidates.map((cand) => (
-                  <div
-                    key={cand.Student_ID}
-                    className="flex items-center justify-between gap-2 bg-white border border-amber-200 rounded-xl p-2.5 text-xs"
-                  >
-                    <div className="min-w-0">
-                      <div className="font-bold text-slate-900 truncate">{cand.Student_Name}</div>
-                      <div className="text-[10px] text-slate-500 truncate">
-                        Class {getClassName(cand.Class)} • ID: {cand.Student_ID} • पिता: {cand.Father_Name || '—'}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-2.5 pt-1">
+                {waiverAddSearchCandidates.map((cand) => {
+                  const existingMoDisc = getStudentMonthlyDiscount(cand).monthlyDiscount;
+                  const customVal = customWaiverDiscMap[cand.Student_ID] ?? (existingMoDisc > 0 ? String(existingMoDisc) : '50');
+                  return (
+                    <div
+                      key={cand.Student_ID}
+                      className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-white border border-amber-200 rounded-xl p-3 text-xs"
+                    >
+                      <div className="min-w-0">
+                        <div className="font-bold text-slate-900 truncate flex items-center gap-1.5">
+                          <span>{cand.Student_Name}</span>
+                          {existingMoDisc > 0 && (
+                            <span className="px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 text-[10px] font-bold">
+                              ₹{existingMoDisc}/माह
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-slate-500 truncate">
+                          Class {getClassName(cand.Class)} • ID: {cand.Student_ID} • पिता: {cand.Father_Name || '—'}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            tagStudentMonthlyDiscount(cand.Student_ID, 50, 'स्थायी मासिक छूट ₹50/माह');
+                            setWaiverSearchQuery('');
+                          }}
+                          className="px-2 py-1 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-950 font-black text-[10px] border border-amber-300 cursor-pointer"
+                        >
+                          +₹50/माह
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            tagStudentMonthlyDiscount(cand.Student_ID, 100, 'स्थायी मासिक छूट ₹100/माह');
+                            setWaiverSearchQuery('');
+                          }}
+                          className="px-2 py-1 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-950 font-black text-[10px] border border-amber-300 cursor-pointer"
+                        >
+                          +₹100/माह
+                        </button>
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            min="0"
+                            value={customVal}
+                            onChange={(e) =>
+                              setCustomWaiverDiscMap((prev) => ({
+                                ...prev,
+                                [cand.Student_ID]: e.target.value,
+                              }))
+                            }
+                            className="w-14 px-1.5 py-1 rounded-lg border border-slate-300 text-[10px] font-bold outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const amt = Math.max(0, Math.round(Number(customVal) || 0));
+                              tagStudentMonthlyDiscount(cand.Student_ID, amt, amt > 0 ? `स्थायी मासिक छूट ₹${amt}/माह` : '');
+                              setWaiverSearchQuery('');
+                            }}
+                            className="px-2 py-1 rounded-lg bg-[#0c2340] text-amber-300 font-bold text-[10px] cursor-pointer"
+                          >
+                            सेट
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            tagStudentWaiver(cand.Student_ID, true, 'Tuition Fee Waived (केवल ट्यूशन फीस माफ)');
+                            setWaiverSearchQuery('');
+                          }}
+                          className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] cursor-pointer"
+                        >
+                          +100% माफ
+                        </button>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        tagStudentWaiver(cand.Student_ID, true, 'Tuition Fee Waived (केवल ट्यूशन फीस माफ)');
-                        setWaiverSearchQuery('');
-                      }}
-                      className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] shrink-0 cursor-pointer"
-                    >
-                      + ट्यूशन माफ करें
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Permanent Monthly Tuition Discount Table (₹50 / ₹100 / Custom per month) */}
+          <div className="space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h4 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                <span className="w-7 h-7 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center text-xs">
+                  🎁
+                </span>
+                <span>स्थायी मासिक ट्यूशन छूट वाले छात्र (₹50 / ₹100 / कस्टम प्रति माह)</span>
+              </h4>
+              <span className="text-xs font-bold text-amber-800 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-lg">
+                कुल {discountedSummary.totalDiscountedStudents} छात्र • ₹{discountedSummary.totalMonthlySavings.toLocaleString('en-IN')}/माह बचत
+              </span>
+            </div>
+
+            {discountedSummary.discountedStudents.length === 0 ? (
+              <div className="text-center py-6 bg-slate-50 rounded-2xl border border-dashed border-slate-300 text-slate-500 text-xs">
+                अभी किसी भी छात्र पर स्थायी ₹50/₹100 मासिक छूट सेट नहीं है। ऊपर सर्च बॉक्स से 1 क्लिक में जोड़ें।
+              </div>
+            ) : (
+              <div className="overflow-x-auto rounded-2xl border border-amber-200 bg-white">
+                <table className="w-full text-left text-xs text-slate-700">
+                  <thead className="bg-amber-900 text-amber-100 uppercase tracking-wider text-[10px]">
+                    <tr>
+                      <th className="px-4 py-2.5">छात्र (Student)</th>
+                      <th className="px-4 py-2.5">क्लास / माह</th>
+                      <th className="px-4 py-2.5 text-right">मूल ट्यूशन</th>
+                      <th className="px-4 py-2.5 text-right">मासिक छूट</th>
+                      <th className="px-4 py-2.5 text-right">नेट ट्यूशन</th>
+                      <th className="px-4 py-2.5 text-right">अब तक कुल छूट</th>
+                      <th className="px-4 py-2.5 text-center">बदलें / हटाएं</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-amber-100">
+                    {discountedSummary.discountedStudents.map((d) => (
+                      <tr key={d.student.Student_ID} className="hover:bg-amber-50/40">
+                        <td className="px-4 py-2.5">
+                          <div className="font-bold text-slate-900">{d.student.Student_Name}</div>
+                          <div className="text-[10px] text-slate-500 font-mono">
+                            {d.student.Student_ID} • पिता: {d.student.Father_Name || '—'}
+                          </div>
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-900 font-bold border border-blue-200 text-[10px]">
+                            {getClassName(d.student.Class)}
+                          </span>
+                          <div className="text-[10px] text-slate-500 mt-0.5">
+                            {d.startMonth} → {d.currentMonth} ({d.elapsedMonths} माह)
+                          </div>
+                        </td>
+                        <td className="px-4 py-2.5 text-right font-semibold tabular-nums">
+                          ₹{d.grossMonthlyTuition.toLocaleString('en-IN')}/माह
+                        </td>
+                        <td className="px-4 py-2.5 text-right tabular-nums">
+                          <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-950 font-black border border-amber-300">
+                            -₹{d.monthlyDiscount.toLocaleString('en-IN')}/माह
+                          </span>
+                        </td>
+                        <td className="px-4 py-2.5 text-right font-black text-emerald-700 tabular-nums">
+                          ₹{d.netMonthlyTuition.toLocaleString('en-IN')}/माह
+                        </td>
+                        <td className="px-4 py-2.5 text-right font-bold text-slate-800 tabular-nums">
+                          ₹{d.discountTillDate.toLocaleString('en-IN')}
+                        </td>
+                        <td className="px-4 py-2.5 text-center">
+                          <div className="inline-flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => tagStudentMonthlyDiscount(d.student.Student_ID, 50, 'स्थायी मासिक छूट ₹50/माह')}
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer ${
+                                d.monthlyDiscount === 50 ? 'bg-[#0c2340] text-amber-300 border-[#0c2340]' : 'bg-white text-slate-700 border-slate-300'
+                              }`}
+                            >
+                              ₹50
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => tagStudentMonthlyDiscount(d.student.Student_ID, 100, 'स्थायी मासिक छूट ₹100/माह')}
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer ${
+                                d.monthlyDiscount === 100 ? 'bg-[#0c2340] text-amber-300 border-[#0c2340]' : 'bg-white text-slate-700 border-slate-300'
+                              }`}
+                            >
+                              ₹100
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => tagStudentMonthlyDiscount(d.student.Student_ID, 0, '')}
+                              className="px-2 py-0.5 rounded bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white border border-rose-200 text-[10px] font-bold cursor-pointer"
+                            >
+                              हटाएं
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>
@@ -3513,9 +3738,9 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
           {waivedSummary.waivedStudents.length === 0 ? (
             <div className="text-center py-12 bg-slate-50 rounded-2xl border border-dashed border-slate-300 text-slate-500">
               <i className="fa-solid fa-hand-holding-heart text-4xl mb-3 text-amber-400"></i>
-              <p className="font-bold text-sm text-slate-700">अभी कोई भी छात्र ट्यूशन फीस माफी सूची में नहीं है</p>
+              <p className="font-bold text-sm text-slate-700">अभी कोई भी छात्र 100% ट्यूशन फीस माफी सूची में नहीं है</p>
               <p className="text-xs mt-1">
-                ऊपर दिए गए सर्च बॉक्स से किसी भी छात्र को 1 क्लिक में &quot;ट्यूशन फीस माफ&quot; टैग कर सकते हैं।
+                ऊपर दिए गए सर्च बॉक्स से किसी भी छात्र को 1 क्लिक में &quot;100% माफ&quot; टैग कर सकते हैं।
               </p>
             </div>
           ) : (
@@ -3830,9 +4055,10 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                         <span className="text-[10px] text-slate-500 font-bold block">
                           सत्र देय ({activeSelectedFamily.currentMonth} तक)
                         </span>
-                        {activeSelectedFamily.totalMonthlyTuition > 0 && (
+                        {activeSelectedFamily.totalNetMonthlyTuition > 0 && (
                           <span className="text-[9px] font-bold text-blue-900 bg-blue-100 px-1.5 py-0.2 rounded">
-                            ₹{activeSelectedFamily.totalMonthlyTuition.toLocaleString('en-IN')}/माह
+                            ₹{activeSelectedFamily.totalNetMonthlyTuition.toLocaleString('en-IN')}/माह
+                            {activeSelectedFamily.totalMonthlyDiscount > 0 ? ` (-₹${activeSelectedFamily.totalMonthlyDiscount})` : ''}
                           </span>
                         )}
                       </div>

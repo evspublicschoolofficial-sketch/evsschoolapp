@@ -455,7 +455,7 @@ function ensureFeatureBackupTabs(ss) {
   ensureTabSafe_(ss, "School_Holidays", ["School Holidays", "Holidays"], ["ID", "Date", "End_Date", "Title", "Category", "Description", "Timestamp"], added);
   ensureTabSafe_(ss, "Hall_Pass_Config", ["Hall Pass Config", "HallPassConfig", "Exam_Hall_Pass"], ["Config_Key", "Exam_Type", "Session", "Custom_Title", "Exam_Schedule_Line", "Instruction_Line", "Published_To_Parent", "Backside_Flip_Mode", "Datesheet_Arrival_Line", "Datesheet_Holiday_Note", "Datesheet_Rows_JSON", "Allowed_Overrides_JSON", "Updated_At"], added);
   ensureTabSafe_(ss, "Exam_Datesheet", ["Exam Datesheet", "Datesheet", "Exam_Schedule"], ["Date", "Day", "Play", "M1", "M2", "M3", "Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6 & 7", "Class 8"], added);
-  ensureTabSafe_(ss, "Fee_Waivers", ["Fee Waivers", "FeeWaivers"], ["Student_ID", "Is_Free", "Reason", "Updated_At", "Updated_TS"], added);
+  ensureTabSafe_(ss, "Fee_Waivers", ["Fee Waivers", "FeeWaivers"], ["Student_ID", "Is_Free", "Reason", "Updated_At", "Updated_TS", "Monthly_Discount"], added);
   ensureTabSafe_(ss, "Parent_Reviews", ["Parent Reviews", "ParentReviews"], ["Review_ID", "Student_ID", "Student_Name", "Class_Name", "Parent_Name", "Father_Name", "Parent_Mobile", "Rating", "Highlight_Category", "Review_Text", "Parent_Photo", "Marketing_Consent", "Status", "Featured", "Source", "Created_At", "Updated_At", "Survey_Answers_JSON"], added);
   return added;
 }
@@ -3990,6 +3990,9 @@ function handleGetFeeWaivers(ss) {
     if (updAtIdx === -1) updAtIdx = 3;
     var updTsIdx = hdr.indexOf("updated_ts");
     if (updTsIdx === -1) updTsIdx = 4;
+    var discIdx = hdr.indexOf("monthly_discount");
+    if (discIdx === -1) discIdx = hdr.indexOf("discount");
+    if (discIdx === -1) discIdx = 5;
 
     for (var i = 1; i < rows.length; i++) {
       var sid = String(rows[i][idIdx] || "").trim().toLowerCase();
@@ -4006,9 +4009,11 @@ function handleGetFeeWaivers(ss) {
           tsNum = 0;
         }
       }
+      var rawDisc = Number(rows[i][discIdx]);
       waivers[sid] = {
         isFree: parseFeeWaiverBool_(rows[i][freeIdx]),
         reason: String(rows[i][reasonIdx] || ""),
+        monthlyDiscount: (!isNaN(rawDisc) && rawDisc > 0) ? Math.round(rawDisc) : 0,
         updatedAt: tsNum || 0
       };
     }
@@ -4023,6 +4028,9 @@ function upsertFeeWaiverEntries_(ss, entriesObj) {
   ensureFeatureBackupTabs(ss);
   var sheet = findExistingSheet_(ss, ["Fee_Waivers", "Fee Waivers", "FeeWaivers"]);
   var existingRows = sheet.getDataRange().getValues();
+  if (existingRows.length >= 1 && (existingRows[0].length < 6 || String(existingRows[0][5] || "").trim() === "")) {
+    sheet.getRange(1, 6).setValue("Monthly_Discount");
+  }
   var rowIndexById = {};
   for (var i = 1; i < existingRows.length; i++) {
     var existingSid = String(existingRows[i][0] || "").trim().toLowerCase();
@@ -4040,10 +4048,11 @@ function upsertFeeWaiverEntries_(ss, entriesObj) {
     if (!sid) continue;
     var item = entriesObj[rawId] || {};
     var isFree = parseFeeWaiverBool_(item.isFree);
-    var reason = String(item.reason || (isFree ? "Tuition Fee Waived (केवल ट्यूशन फीस माफ)" : ""));
+    var monthlyDisc = Math.max(0, Math.round(Number(item.monthlyDiscount) || 0));
+    var reason = String(item.reason || (isFree ? "Tuition Fee Waived (केवल ट्यूशन फीस माफ)" : (monthlyDisc > 0 ? ("स्थायी मासिक छूट ₹" + monthlyDisc + "/माह") : "")));
     var tsVal = Number(item.updatedAt) || nowMs;
     var istStr = Utilities.formatDate(new Date(tsVal), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss") || nowIst;
-    var rowArr = [sid, isFree ? "TRUE" : "FALSE", reason, istStr, tsVal];
+    var rowArr = [sid, isFree ? "TRUE" : "FALSE", reason, istStr, tsVal, monthlyDisc];
 
     if (rowIndexById[sid]) {
       sheet.getRange(rowIndexById[sid], 1, 1, rowArr.length).setValues([rowArr]);
@@ -4091,6 +4100,7 @@ function handleSaveFeeWaiver(ss, data) {
   entries[sid] = {
     isFree: parseFeeWaiverBool_(data.isFree !== undefined ? data.isFree : data.is_free),
     reason: String(data.reason || ""),
+    monthlyDiscount: Math.max(0, Math.round(Number(data.monthlyDiscount !== undefined ? data.monthlyDiscount : data.monthly_discount) || 0)),
     updatedAt: Number(data.updatedAt) || Date.now()
   };
   var count = upsertFeeWaiverEntries_(ss, entries);

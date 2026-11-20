@@ -271,7 +271,7 @@ function saveStaffSalaryConfigCache() {
 // FEE WAIVERS PERSISTENCE (/api/fee-waivers) - Cross-Device Sync
 // =========================================================================
 const FEE_WAIVERS_FILE = '/tmp/evs_fee_waivers.json';
-let feeWaiversStore: Record<string, { isFree: boolean; reason: string; updatedAt: number }> = {};
+let feeWaiversStore: Record<string, { isFree: boolean; reason: string; monthlyDiscount?: number; updatedAt: number }> = {};
 try {
   if (fs.existsSync(FEE_WAIVERS_FILE)) {
     const rawWaivers = fs.readFileSync(FEE_WAIVERS_FILE, 'utf-8');
@@ -685,7 +685,7 @@ async function forwardToGoogleAppsScript(payload: any) {
       } catch {}
     } else if (formattedPayload.action === 'saveFeeWaiver') {
       try {
-        const getUrl = `${targetUrl}?action=saveFeeWaiver&studentId=${encodeURIComponent(formattedPayload.studentId || '')}&isFree=${encodeURIComponent(String(Boolean(formattedPayload.isFree)))}&reason=${encodeURIComponent(formattedPayload.reason || '')}&updatedAt=${encodeURIComponent(String(formattedPayload.updatedAt || Date.now()))}`;
+        const getUrl = `${targetUrl}?action=saveFeeWaiver&studentId=${encodeURIComponent(formattedPayload.studentId || '')}&isFree=${encodeURIComponent(String(Boolean(formattedPayload.isFree)))}&reason=${encodeURIComponent(formattedPayload.reason || '')}&monthlyDiscount=${encodeURIComponent(String(Math.max(0, Math.round(Number(formattedPayload.monthlyDiscount) || 0))))}&updatedAt=${encodeURIComponent(String(formattedPayload.updatedAt || Date.now()))}`;
         if (getUrl.length < 7500) {
           const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(15000) });
           const gText = await gRes.text();
@@ -829,12 +829,14 @@ async function syncFeeWaiversFromGoogleSheet(force = false, overrideUrl?: string
         const nextEntry = {
           isFree: Boolean(val.isFree),
           reason: String(val.reason || ''),
+          monthlyDiscount: Math.max(0, Math.round(Number(val.monthlyDiscount) || 0)),
           updatedAt: incomingTs || Date.now(),
         };
         if (
           !existing ||
           existing.isFree !== nextEntry.isFree ||
           existing.reason !== nextEntry.reason ||
+          (Number(existing.monthlyDiscount) || 0) !== nextEntry.monthlyDiscount ||
           incomingTs > (Number(existing.updatedAt) || 0)
         ) {
           feeWaiversStore[sId] = nextEntry;
@@ -4688,7 +4690,7 @@ async function startServer() {
       const targetUrl = resolveTargetAppsScriptUrl(req);
       const body = req.body || {};
       let changed = false;
-      const entriesToForward: Record<string, { isFree: boolean; reason: string; updatedAt: number }> = {};
+      const entriesToForward: Record<string, { isFree: boolean; reason: string; monthlyDiscount?: number; updatedAt: number }> = {};
 
       if (body.entries && typeof body.entries === 'object') {
         for (const [rawId, val] of Object.entries(body.entries)) {
@@ -4699,6 +4701,7 @@ async function startServer() {
           const entry = {
             isFree: Boolean(v.isFree),
             reason: String(v.reason || ''),
+            monthlyDiscount: Math.max(0, Math.round(Number(v.monthlyDiscount) || 0)),
             updatedAt: incomingTs,
           };
           entriesToForward[sId] = entry;
@@ -4714,6 +4717,7 @@ async function startServer() {
         const entry = {
           isFree: Boolean(body.isFree),
           reason: String(body.reason || ''),
+          monthlyDiscount: Math.max(0, Math.round(Number(body.monthlyDiscount) || 0)),
           updatedAt: incomingTs,
         };
         feeWaiversStore[sId] = entry;
@@ -4748,6 +4752,7 @@ async function startServer() {
           studentId: onlyId,
           isFree: e.isFree,
           reason: e.reason,
+          monthlyDiscount: e.monthlyDiscount || 0,
           updatedAt: e.updatedAt,
           appsScriptUrl: targetUrl,
         });

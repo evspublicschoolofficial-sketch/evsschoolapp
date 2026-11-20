@@ -435,44 +435,153 @@ export const isFreeStudent = (
 };
 
 /**
- * Tag or untag a student with 100% Fee Waiver
+ * Check if a student has a permanent monthly tuition discount (e.g., ₹50 or ₹100 per month)
+ */
+export const getStudentMonthlyDiscount = (
+  student?: Student | null
+): { monthlyDiscount: number; reason: string } => {
+  if (!student) return { monthlyDiscount: 0, reason: '' };
+  if (isFreeStudent(student).isFree) return { monthlyDiscount: 0, reason: '' };
+
+  const sId = String(student.Student_ID || '').toLowerCase().trim();
+
+  // 1. Check Fee Waivers / Discounts Map (synced with Server & Google Sheet 'Fee_Waivers')
+  try {
+    if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+      const savedMap = localStorage.getItem('evs_free_students_map');
+      if (savedMap && sId) {
+        const map: Record<string, FeeWaiverEntry> = JSON.parse(savedMap);
+        if (map[sId] !== undefined && map[sId].monthlyDiscount !== undefined) {
+          const val = Math.max(0, Math.round(Number(map[sId].monthlyDiscount) || 0));
+          return {
+            monthlyDiscount: val,
+            reason: map[sId].reason || (val > 0 ? `स्थायी मासिक छूट ₹${val}/माह` : ''),
+          };
+        }
+      }
+    }
+  } catch {}
+
+  // 2. Fallback to Student record columns (Monthly_Discount / Discount_Per_Month)
+  const rawDisc = Number(
+    (student as any).Monthly_Discount ??
+      (student as any).Discount_Per_Month ??
+      0
+  );
+  if (!isNaN(rawDisc) && rawDisc > 0) {
+    const val = Math.round(rawDisc);
+    return { monthlyDiscount: val, reason: `मासिक ट्यूशन छूट ₹${val}/माह` };
+  }
+
+  return { monthlyDiscount: 0, reason: '' };
+};
+
+/**
+ * Tag or untag a student with 100% Fee Waiver and/or Monthly Tuition Discount
  */
 export interface FeeWaiverEntry {
   isFree: boolean;
   reason: string;
+  monthlyDiscount?: number;
   updatedAt?: number;
 }
+
+const pushFeeWaiverEntryToServer = (sId: string, entry: FeeWaiverEntry) => {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(
+    new CustomEvent(FREE_STUDENTS_UPDATED_EVENT, {
+      detail: {
+        studentId: sId,
+        isFree: entry.isFree,
+        reason: entry.reason,
+        monthlyDiscount: entry.monthlyDiscount || 0,
+      },
+    })
+  );
+  let appsScriptUrl: string | undefined;
+  try {
+    const storedUrl = localStorage.getItem('evs_apps_script_url');
+    if (storedUrl && storedUrl.trim().startsWith('http')) appsScriptUrl = storedUrl.trim();
+  } catch {}
+  fetch('/api/fee-waivers', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      studentId: sId,
+      isFree: entry.isFree,
+      reason: entry.reason,
+      monthlyDiscount: Math.max(0, Math.round(Number(entry.monthlyDiscount) || 0)),
+      updatedAt: entry.updatedAt || Date.now(),
+      appsScriptUrl,
+    }),
+  }).catch(() => {});
+};
 
 export const tagStudentWaiver = (
   studentId: string,
   isFree: boolean,
-  reason: string = 'Tuition Fee Waived (केवल ट्यूशन फीस माफ)'
+  reason: string = 'Tuition Fee Waived (केवल ट्यूशन फीस माफ)',
+  monthlyDiscount?: number
 ) => {
   try {
     const sId = studentId.toLowerCase().trim();
     const updatedAt = Date.now();
     const savedMap = localStorage.getItem('evs_free_students_map');
     const map: Record<string, FeeWaiverEntry> = savedMap ? JSON.parse(savedMap) : {};
-    map[sId] = { isFree, reason, updatedAt };
+    const prev = map[sId];
+    const nextMonthlyDiscount =
+      monthlyDiscount !== undefined
+        ? Math.max(0, Math.round(Number(monthlyDiscount) || 0))
+        : Math.max(0, Math.round(Number(prev?.monthlyDiscount) || 0));
+    const entry: FeeWaiverEntry = {
+      isFree,
+      reason,
+      monthlyDiscount: nextMonthlyDiscount,
+      updatedAt,
+    };
+    map[sId] = entry;
     saveToPhoneMemory('evs_free_students_map', map);
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(
-        new CustomEvent(FREE_STUDENTS_UPDATED_EVENT, { detail: { studentId: sId, isFree, reason } })
-      );
-      let appsScriptUrl: string | undefined;
-      try {
-        const storedUrl = localStorage.getItem('evs_apps_script_url');
-        if (storedUrl && storedUrl.trim().startsWith('http')) appsScriptUrl = storedUrl.trim();
-      } catch {}
-      // Persist to backend server + Google Sheet ('Fee_Waivers' tab) so Mobile, Desktop & Parent Portal stay 100% synchronized
-      fetch('/api/fee-waivers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ studentId: sId, isFree, reason, updatedAt, appsScriptUrl }),
-      }).catch(() => {});
-    }
+    pushFeeWaiverEntryToServer(sId, entry);
   } catch (e) {
     console.warn('Could not save free student map:', e);
+  }
+};
+
+/**
+ * Set or clear a permanent per-student monthly tuition discount (e.g. ₹50 / ₹100 / custom)
+ */
+export const tagStudentMonthlyDiscount = (
+  studentId: string,
+  monthlyDiscount: number,
+  reason?: string
+) => {
+  try {
+    const sId = studentId.toLowerCase().trim();
+    const updatedAt = Date.now();
+    const cleanAmt = Math.max(0, Math.round(Number(monthlyDiscount) || 0));
+    const savedMap = localStorage.getItem('evs_free_students_map');
+    const map: Record<string, FeeWaiverEntry> = savedMap ? JSON.parse(savedMap) : {};
+    const prev = map[sId];
+    const keepIsFree = Boolean(prev?.isFree && cleanAmt === 0);
+    const nextReason =
+      reason !== undefined
+        ? reason
+        : cleanAmt > 0
+        ? `स्थायी मासिक छूट ₹${cleanAmt}/माह`
+        : keepIsFree
+        ? (prev?.reason || 'Tuition Fee Waived (केवल ट्यूशन फीस माफ)')
+        : '';
+    const entry: FeeWaiverEntry = {
+      isFree: cleanAmt > 0 ? false : Boolean(prev?.isFree),
+      reason: nextReason,
+      monthlyDiscount: cleanAmt,
+      updatedAt,
+    };
+    map[sId] = entry;
+    saveToPhoneMemory('evs_free_students_map', map);
+    pushFeeWaiverEntryToServer(sId, entry);
+  } catch (e) {
+    console.warn('Could not save monthly discount:', e);
   }
 };
 
@@ -521,6 +630,7 @@ export const fetchFeeWaiversDirectGViz = async (
       const reasonIdx = headerList.findIndex((c: string) => c.includes('reason') || c.includes('remark'));
       const updAtIdx = headerList.findIndex((c: string) => c === 'updated_at');
       const updTsIdx = headerList.findIndex((c: string) => c === 'updated_ts');
+      const discIdx = headerList.findIndex((c: string) => c === 'monthly_discount' || c === 'monthlydiscount' || c === 'discount');
 
       const result: Record<string, FeeWaiverEntry> = {};
       for (let r = startRowIdx; r < rawRows.length; r++) {
@@ -536,6 +646,7 @@ export const fetchFeeWaiversDirectGViz = async (
           freeStr === '1' ||
           /(free|waiv|माफ)/i.test(freeStr);
         const reason = reasonIdx !== -1 ? String(cells[reasonIdx] || '') : '';
+        const monthlyDiscount = discIdx !== -1 ? Math.max(0, Math.round(Number(cells[discIdx]) || 0)) : 0;
         let tsNum = updTsIdx !== -1 ? Number(cells[updTsIdx]) : 0;
         if ((!tsNum || isNaN(tsNum)) && updAtIdx !== -1 && cells[updAtIdx]) {
           const parsed = Date.parse(String(cells[updAtIdx]));
@@ -544,6 +655,7 @@ export const fetchFeeWaiversDirectGViz = async (
         result[sid] = {
           isFree,
           reason,
+          monthlyDiscount,
           updatedAt: tsNum && !isNaN(tsNum) ? tsNum : 0,
         };
       }
@@ -616,27 +728,43 @@ export const syncFeeWaiversWithServer = async (
       if (loc && srv) {
         const locTs = Number(loc.updatedAt) || 0;
         const srvTs = Number(srv.updatedAt) || 0;
+        const locDisc = Math.max(0, Math.round(Number(loc.monthlyDiscount) || 0));
+        const srvDisc = Math.max(0, Math.round(Number(srv.monthlyDiscount) || 0));
         if (srvTs > locTs) {
-          merged[id] = srv;
-          if (loc.isFree !== srv.isFree || loc.reason !== srv.reason) {
+          merged[id] = {
+            ...srv,
+            monthlyDiscount: srv.monthlyDiscount !== undefined ? srvDisc : locDisc,
+          };
+          if (loc.isFree !== srv.isFree || loc.reason !== srv.reason || locDisc !== srvDisc) {
             localChanged = true;
           }
         } else {
-          merged[id] = loc;
-          if (locTs > srvTs || loc.isFree !== srv.isFree) {
+          merged[id] = {
+            ...loc,
+            monthlyDiscount: loc.monthlyDiscount !== undefined ? locDisc : srvDisc,
+          };
+          if (locTs > srvTs || loc.isFree !== srv.isFree || locDisc !== srvDisc) {
             entriesToPush[id] = {
               isFree: Boolean(loc.isFree),
               reason: String(loc.reason || ''),
+              monthlyDiscount: merged[id].monthlyDiscount || 0,
               updatedAt: locTs || Date.now(),
             };
           }
         }
       } else if (srv) {
-        merged[id] = srv;
+        merged[id] = {
+          ...srv,
+          monthlyDiscount: Math.max(0, Math.round(Number(srv.monthlyDiscount) || 0)),
+        };
         localChanged = true;
       } else if (loc) {
         const ts = Number(loc.updatedAt) || Date.now();
-        merged[id] = { ...loc, updatedAt: ts };
+        merged[id] = {
+          ...loc,
+          monthlyDiscount: Math.max(0, Math.round(Number(loc.monthlyDiscount) || 0)),
+          updatedAt: ts,
+        };
         entriesToPush[id] = merged[id];
       }
     });

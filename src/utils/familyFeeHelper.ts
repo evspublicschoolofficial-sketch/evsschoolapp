@@ -31,6 +31,8 @@ export interface FamilyFeeSummary {
   totalAdvance: number;
   netBalance: number;
   totalMonthlyTuition: number;
+  totalMonthlyDiscount: number;
+  totalNetMonthlyTuition: number;
 }
 
 /**
@@ -130,6 +132,8 @@ export const computeFamilyFeeSummary = (
   let totalDue = 0;
   let totalAdvance = 0;
   let totalMonthlyTuition = 0;
+  let totalMonthlyDiscount = 0;
+  let totalNetMonthlyTuition = 0;
 
   members.forEach((m) => {
     totalBilled += m.metrics.totalSessionFee || 0;
@@ -138,7 +142,12 @@ export const computeFamilyFeeSummary = (
     totalOtherBilled += m.metrics.otherBilledFees || 0;
     totalPaid += m.metrics.totalPaid || 0;
     totalDiscount += m.metrics.totalDiscount || 0;
-    totalMonthlyTuition += m.metrics.monthlyTuition || 0;
+    const grossMo = m.metrics.monthlyTuition || 0;
+    const discMo = Math.min(grossMo, m.metrics.monthlyDiscount || 0);
+    const netMo = m.metrics.netMonthlyTuition ?? Math.max(0, grossMo - discMo);
+    totalMonthlyTuition += grossMo;
+    totalMonthlyDiscount += discMo;
+    totalNetMonthlyTuition += netMo;
     if (m.metrics.dueBalance > 0) {
       totalDue += m.metrics.dueBalance;
     } else if (m.metrics.dueBalance < 0) {
@@ -162,6 +171,8 @@ export const computeFamilyFeeSummary = (
     totalAdvance,
     netBalance: totalDue - totalAdvance,
     totalMonthlyTuition,
+    totalMonthlyDiscount,
+    totalNetMonthlyTuition,
   };
 };
 

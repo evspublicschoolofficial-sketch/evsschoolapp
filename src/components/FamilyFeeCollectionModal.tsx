@@ -8,8 +8,20 @@ import {
   distributeLumpSumAcrossFamily,
   FamilyFeeSummary,
 } from '../utils/familyFeeHelper';
-import { getStandardFeeAmount } from '../utils/feeMaster';
-import { isStudentFeeExempt } from '../utils/feeCalculation';
+import {
+  FREE_STUDENTS_UPDATED_EVENT,
+  getStandardFeeAmount,
+  getStudentMonthlyDiscount,
+} from '../utils/feeMaster';
+import {
+  getStudentHeadPaymentStatus,
+  isAdmissionFeeRecord,
+  isBooksFeeRecord,
+  isExamFeeRecord,
+  isStudentFeeExempt,
+  isTuitionFeeRecord,
+  StudentHeadPaymentStatus,
+} from '../utils/feeCalculation';
 import { openWhatsappAlert } from '../utils/whatsappReminders';
 
 interface FamilyFeeCollectionModalProps {
@@ -62,10 +74,18 @@ const FEE_TYPES = [
   'Miscellaneous / Other (अन्य)',
 ];
 
+const EXAM_TERM_OPTIONS = [
+  '1st Term Exam (प्रथम टर्म / तिमाही - 1×)',
+  '2nd Term Exam (द्वितीय टर्म / छमाही - 1×)',
+  '3rd / Annual Exam (वार्षिक परीक्षा - 1×)',
+  'Full Year Exam (तीनों टर्म एक साथ / 3× All 3 Terms)',
+];
+
 const MONTHS_OPTIONS = [
   'April', 'May', 'June', 'July', 'August', 'September',
   'October', 'November', 'December', 'January', 'February', 'March',
   'Multi-Month Dues', 'Advance Deposit',
+  ...EXAM_TERM_OPTIONS,
 ];
 
 export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> = ({
@@ -133,6 +153,182 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
   }, [isOpen, initialFamily, managerName]);
 
   const [collectionScope, setCollectionScope] = useState<'monthly' | 'total_due'>('monthly');
+  const [examTermChoice, setExamTermChoice] = useState<string>(EXAM_TERM_OPTIONS[0]);
+  const [waiverVersion, setWaiverVersion] = useState<number>(0);
+
+  useEffect(() => {
+    const handler = () => setWaiverVersion((v) => v + 1);
+    window.addEventListener(FREE_STUDENTS_UPDATED_EVENT, handler);
+    return () => window.removeEventListener(FREE_STUDENTS_UPDATED_EVENT, handler);
+  }, []);
+
+  // Precompute Admission / Books / Exam (1x/3x) lock status per member
+  const memberHeadStatusMap = useMemo(() => {
+    const map: Record<string, StudentHeadPaymentStatus> = {};
+    if (!activeFamily) return map;
+    activeFamily.members.forEach((m) => {
+      map[m.student.Student_ID] = getStudentHeadPaymentStatus(m.student, feeRecords);
+    });
+    return map;
+  }, [activeFamily, feeRecords, waiverVersion]);
+
+  const computeRowSuggestionForHead = (
+    st: Student,
+    feeTypeVal: string,
+    monthVal: string,
+    hs?: StudentHeadPaymentStatus
+  ) => {
+    const status = hs || getStudentHeadPaymentStatus(st, feeRecords);
+    if (isAdmissionFeeRecord(feeTypeVal)) {
+      if (status.admission.isPaid) {
+        return {
+          isLocked: true,
+          lockReason: 'प्रवेश शुल्क पहले से जमा ✓',
+          suggestedTotal: 0,
+          suggestedDiscount: 0,
+          suggestedPaid: 0,
+          partialNote: '',
+        };
+      }
+      const amt = status.admission.isPartial ? status.admission.remaining : status.admission.standardFee;
+      return {
+        isLocked: false,
+        lockReason: '',
+        suggestedTotal: amt,
+        suggestedDiscount: 0,
+        suggestedPaid: amt,
+        partialNote: status.admission.isPartial
+          ? `पहले जमा ₹${status.admission.settled.toLocaleString('en-IN')} • केवल शेष ₹${amt.toLocaleString('en-IN')}`
+          : '',
+      };
+    }
+
+    if (isBooksFeeRecord(feeTypeVal)) {
+      if (status.books.isPaid) {
+        return {
+          isLocked: true,
+          lockReason: 'पुस्तक शुल्क पहले से जमा ✓',
+          suggestedTotal: 0,
+          suggestedDiscount: 0,
+          suggestedPaid: 0,
+          partialNote: '',
+        };
+      }
+      const amt = status.books.isPartial ? status.books.remaining : status.books.standardFee;
+      return {
+        isLocked: false,
+        lockReason: '',
+        suggestedTotal: amt,
+        suggestedDiscount: 0,
+        suggestedPaid: amt,
+        partialNote: status.books.isPartial
+          ? `पहले जमा ₹${status.books.settled.toLocaleString('en-IN')} • केवल शेष ₹${amt.toLocaleString('en-IN')}`
+          : '',
+      };
+    }
+
+    if (isExamFeeRecord(feeTypeVal)) {
+      const mLow = String(monthVal || '').toLowerCase();
+      const isFullYear = /(3x|3×|all\s*3|three\s*term|तीनों\s*टर्म|full\s*year|full\s*session|पूरे\s*साल)/i.test(mLow);
+      const isT1 = !isFullYear && /(1st|term\s*1|प्रथम|तिमाही)/i.test(mLow);
+      const isT2 = !isFullYear && /(2nd|term\s*2|half|द्वितीय|अर्धवार्षिक|छमाही)/i.test(mLow);
+      const isT3 = !isFullYear && /(3rd|term\s*3|annual|तृतीय|वार्षिक)/i.test(mLow);
+
+      if (status.exam.isFullYearPaid) {
+        return {
+          isLocked: true,
+          lockReason: 'पूरे साल की परीक्षा फीस (3×) जमा ✓',
+          suggestedTotal: 0,
+          suggestedDiscount: 0,
+          suggestedPaid: 0,
+          partialNote: '',
+        };
+      }
+      if (isT1 && status.exam.term1Paid) {
+        return {
+          isLocked: true,
+          lockReason: '1st Term परीक्षा फीस पहले से जमा ✓',
+          suggestedTotal: 0,
+          suggestedDiscount: 0,
+          suggestedPaid: 0,
+          partialNote: '',
+        };
+      }
+      if (isT2 && status.exam.term2Paid) {
+        return {
+          isLocked: true,
+          lockReason: '2nd Term परीक्षा फीस पहले से जमा ✓',
+          suggestedTotal: 0,
+          suggestedDiscount: 0,
+          suggestedPaid: 0,
+          partialNote: '',
+        };
+      }
+      if (isT3 && status.exam.term3Paid) {
+        return {
+          isLocked: true,
+          lockReason: '3rd Term परीक्षा फीस पहले से जमा ✓',
+          suggestedTotal: 0,
+          suggestedDiscount: 0,
+          suggestedPaid: 0,
+          partialNote: '',
+        };
+      }
+
+      const amt = isFullYear
+        ? status.exam.remainingFullYearAmount > 0
+          ? status.exam.remainingFullYearAmount
+          : status.exam.fullYearFee
+        : status.exam.perTermFee;
+
+      return {
+        isLocked: false,
+        lockReason: '',
+        suggestedTotal: amt,
+        suggestedDiscount: 0,
+        suggestedPaid: amt,
+        partialNote:
+          isFullYear && status.exam.paidTermsCount > 0
+            ? `${status.exam.paidTermsCount} टर्म जमा • बचे ${status.exam.remainingTermsCount} टर्म`
+            : '',
+      };
+    }
+
+    if (isTuitionFeeRecord(feeTypeVal)) {
+      if (isStudentFeeExempt(st)) {
+        return {
+          isLocked: false,
+          lockReason: '',
+          suggestedTotal: 0,
+          suggestedDiscount: 0,
+          suggestedPaid: 0,
+          partialNote: '',
+        };
+      }
+      const stdTuition = getStandardFeeAmount(st.Class, 'Monthly Tuition Fee', st as any) || 450;
+      const monthlyDisc = Math.min(stdTuition, getStudentMonthlyDiscount(st as any).monthlyDiscount);
+      const netTuition = Math.max(0, stdTuition - monthlyDisc);
+      return {
+        isLocked: false,
+        lockReason: '',
+        suggestedTotal: stdTuition,
+        suggestedDiscount: monthlyDisc,
+        suggestedPaid: netTuition,
+        partialNote: '',
+      };
+    }
+
+    const isAdv = feeTypeVal.toLowerCase().includes('advance') || feeTypeVal.includes('अग्रिम');
+    const stdAmt = isAdv ? 0 : getStandardFeeAmount(st.Class, feeTypeVal, st as any);
+    return {
+      isLocked: false,
+      lockReason: '',
+      suggestedTotal: isAdv ? 0 : stdAmt,
+      suggestedDiscount: 0,
+      suggestedPaid: isAdv ? 500 : stdAmt,
+      partialNote: '',
+    };
+  };
 
   // Helper to apply either 1-month tuition (simple single-student default) or total current-month dues
   const applyCollectionScope = (scope: 'monthly' | 'total_due', fam: FamilyFeeSummary | null) => {
@@ -147,21 +343,38 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
     fam.members.forEach((m) => {
       const st = m.student;
       const due = m.dueAmount;
-      const stdTuition = isStudentFeeExempt(st)
+      const isExempt = isStudentFeeExempt(st);
+      const stdTuition = isExempt
         ? 0
         : (m.metrics.monthlyTuition || getStandardFeeAmount(st.Class, 'Monthly Tuition Fee', st as any) || 450);
-      const targetAmt =
-        scope === 'total_due'
-          ? (due > 0 ? due : stdTuition)
-          : (due > 0 && due < stdTuition ? due : stdTuition);
-      nextRows[st.Student_ID] = {
-        selected: scope === 'total_due' ? (due > 0 || fam.totalDue === 0) : (stdTuition > 0 || due > 0 || fam.totalDue === 0),
-        feeType: 'Monthly Tuition Fee (मासिक शिक्षण शुल्क)',
-        month: scope === 'total_due' ? 'Multi-Month Dues' : cleanMonth,
-        totalAmount: String(targetAmt),
-        discountAmount: '0',
-        amountPaid: String(targetAmt),
-      };
+      const monthlyDisc = isExempt
+        ? 0
+        : Math.min(stdTuition, m.metrics.monthlyDiscount ?? getStudentMonthlyDiscount(st as any).monthlyDiscount);
+      const netTuition = Math.max(0, stdTuition - monthlyDisc);
+
+      if (scope === 'total_due') {
+        const targetAmt = due > 0 ? due : netTuition;
+        nextRows[st.Student_ID] = {
+          selected: due > 0 || fam.totalDue === 0,
+          feeType: 'Monthly Tuition Fee (मासिक शिक्षण शुल्क)',
+          month: 'Multi-Month Dues',
+          totalAmount: String(targetAmt),
+          discountAmount: '0',
+          amountPaid: String(targetAmt),
+        };
+      } else {
+        const payAmt = due > 0 && due < netTuition ? due : netTuition;
+        const totAmt = due > 0 && due < netTuition ? due : stdTuition;
+        const discAmt = due > 0 && due < netTuition ? 0 : monthlyDisc;
+        nextRows[st.Student_ID] = {
+          selected: netTuition > 0 || due > 0 || fam.totalDue === 0,
+          feeType: 'Monthly Tuition Fee (मासिक शिक्षण शुल्क)',
+          month: cleanMonth,
+          totalAmount: String(totAmt),
+          discountAmount: String(discAmt),
+          amountPaid: String(payAmt),
+        };
+      }
     });
     setRowsState(nextRows);
   };
@@ -170,10 +383,18 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
   useEffect(() => {
     if (!isOpen || !activeFamily) return;
     applyCollectionScope('monthly', activeFamily);
-  }, [isOpen, activeFamily?.mobileKey]);
+  }, [isOpen, activeFamily?.mobileKey, waiverVersion]);
 
   const handleApplyGlobalFeeType = (newType: string) => {
     setGlobalFeeType(newType);
+    const defaultTargetMonth = isExamFeeRecord(newType)
+      ? examTermChoice
+      : isAdmissionFeeRecord(newType) || isBooksFeeRecord(newType)
+      ? 'Full Academic Session'
+      : globalMonth;
+    if (isExamFeeRecord(newType)) {
+      setGlobalMonth(examTermChoice);
+    }
     if (!activeFamily) return;
     setRowsState((prev) => {
       const next = { ...prev };
@@ -181,14 +402,50 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
         const st = m.student;
         const cur = next[st.Student_ID];
         if (!cur) return;
-        const isAdv = newType.toLowerCase().includes('advance') || newType.includes('अग्रिम');
-        const stdAmt = isAdv ? 0 : getStandardFeeAmount(st.Class, newType, st as any);
-        const amt = isAdv ? (Number(cur.amountPaid) || 500) : stdAmt;
+        const sugg = computeRowSuggestionForHead(
+          st,
+          newType,
+          defaultTargetMonth,
+          memberHeadStatusMap[st.Student_ID]
+        );
         next[st.Student_ID] = {
           ...cur,
+          selected: !sugg.isLocked,
           feeType: newType,
-          totalAmount: String(isAdv ? 0 : amt),
-          amountPaid: String(amt),
+          month: isExamFeeRecord(newType) ? examTermChoice : cur.month,
+          totalAmount: String(sugg.suggestedTotal),
+          discountAmount: String(sugg.suggestedDiscount),
+          amountPaid: String(sugg.suggestedPaid),
+        };
+      });
+      return next;
+    });
+  };
+
+  const handleApplyGlobalExamTerm = (termPeriod: string) => {
+    setExamTermChoice(termPeriod);
+    setGlobalMonth(termPeriod);
+    if (!activeFamily) return;
+    setRowsState((prev) => {
+      const next = { ...prev };
+      activeFamily.members.forEach((m) => {
+        const st = m.student;
+        const cur = next[st.Student_ID];
+        if (!cur) return;
+        const sugg = computeRowSuggestionForHead(
+          st,
+          globalFeeType,
+          termPeriod,
+          memberHeadStatusMap[st.Student_ID]
+        );
+        next[st.Student_ID] = {
+          ...cur,
+          selected: !sugg.isLocked,
+          feeType: globalFeeType,
+          month: termPeriod,
+          totalAmount: String(sugg.suggestedTotal),
+          discountAmount: '0',
+          amountPaid: String(sugg.suggestedPaid),
         };
       });
       return next;
@@ -254,7 +511,15 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
 
     activeFamily.members.forEach((m) => {
       const row = rowsState[m.student.Student_ID];
-      if (!row || !row.selected) {
+      const sugg = row
+        ? computeRowSuggestionForHead(
+            m.student,
+            row.feeType,
+            row.month,
+            memberHeadStatusMap[m.student.Student_ID]
+          )
+        : null;
+      if (!row || !row.selected || sugg?.isLocked) {
         remainingDue += m.dueAmount;
         return;
       }
@@ -265,11 +530,24 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
       grandTotal += tot;
       grandDiscount += disc;
       grandPaid += paid;
-      remainingDue += Math.max(0, m.dueAmount - paid - disc);
+
+      const isTuition = isTuitionFeeRecord(row.feeType);
+      const isAdmission = isAdmissionFeeRecord(row.feeType);
+      if (isTuition) {
+        const alreadyCountedMoDisc =
+          collectionScope === 'total_due' ? 0 : (m.metrics.monthlyDiscount || 0);
+        const extraDisc = Math.max(0, disc - alreadyCountedMoDisc);
+        remainingDue += Math.max(0, m.dueAmount - paid - extraDisc);
+      } else if (isAdmission) {
+        remainingDue += Math.max(0, m.dueAmount - paid - disc);
+      } else {
+        const extraHeadBal = Math.max(0, tot - disc - paid);
+        remainingDue += m.dueAmount + extraHeadBal;
+      }
     });
 
     return { selectedCount, grandTotal, grandDiscount, grandPaid, remainingDue };
-  }, [activeFamily, rowsState]);
+  }, [activeFamily, rowsState, memberHeadStatusMap, collectionScope]);
 
   const handleSubmitCombined = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -281,11 +559,19 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
 
     const chosenMembers = activeFamily.members.filter((m) => {
       const r = rowsState[m.student.Student_ID];
-      return r && r.selected && ((Number(r.amountPaid) || 0) > 0 || (Number(r.discountAmount) || 0) > 0);
+      if (!r || !r.selected) return false;
+      const sugg = computeRowSuggestionForHead(
+        m.student,
+        r.feeType,
+        r.month,
+        memberHeadStatusMap[m.student.Student_ID]
+      );
+      if (sugg.isLocked) return false;
+      return (Number(r.amountPaid) || 0) > 0 || (Number(r.discountAmount) || 0) > 0;
     });
 
     if (chosenMembers.length === 0) {
-      setErrorMsg('कृपया कम से कम 1 बच्चे का चयन करें और उसकी जमा राशि दर्ज करें।');
+      setErrorMsg('कृपया कम से कम 1 पात्र बच्चे का चयन करें और उसकी जमा राशि दर्ज करें।');
       return;
     }
 
@@ -304,7 +590,14 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
         const netPay = Math.max(0, totalAmt - discAmt);
         const balAfter = netPay - paidAmt;
         const recNo = `${batchId}-${i + 1}`;
-        const remainingStudentDue = Math.max(0, m.dueAmount - paidAmt - discAmt);
+        const isTuition = isTuitionFeeRecord(row.feeType);
+        const isAdmission = isAdmissionFeeRecord(row.feeType);
+        const alreadyCountedMoDisc =
+          isTuition && collectionScope !== 'total_due' ? (m.metrics.monthlyDiscount || 0) : 0;
+        const extraDisc = Math.max(0, discAmt - alreadyCountedMoDisc);
+        const remainingStudentDue = isTuition || isAdmission
+          ? Math.max(0, m.dueAmount - paidAmt - extraDisc)
+          : m.dueAmount + Math.max(0, netPay - paidAmt);
 
         const record: FeeCollectionRecord = {
           Receipt_Number: recNo,
@@ -653,9 +946,12 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
                         <span className="font-mono text-xs font-bold text-indigo-900">
                           📱 {activeFamily.displayMobile}
                         </span>
-                        {activeFamily.totalMonthlyTuition > 0 && (
+                        {activeFamily.totalNetMonthlyTuition > 0 && (
                           <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-900 text-[10px] font-bold">
-                            मासिक ट्यूशन कुल: ₹{activeFamily.totalMonthlyTuition.toLocaleString('en-IN')}/माह
+                            मासिक ट्यूशन कुल: ₹{activeFamily.totalNetMonthlyTuition.toLocaleString('en-IN')}/माह
+                            {activeFamily.totalMonthlyDiscount > 0 && (
+                              <span className="text-amber-800 ml-1">(छूट -₹{activeFamily.totalMonthlyDiscount})</span>
+                            )}
                           </span>
                         )}
                       </div>
@@ -698,7 +994,7 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
                             : 'bg-white text-slate-800 border-amber-300 hover:bg-amber-100'
                         }`}
                       >
-                        1 माह की फीस ({activeFamily.currentMonth}: ₹{activeFamily.totalMonthlyTuition.toLocaleString('en-IN')})
+                        1 माह की फीस ({activeFamily.currentMonth}: ₹{activeFamily.totalNetMonthlyTuition.toLocaleString('en-IN')})
                       </button>
                       <button
                         type="button"
@@ -795,10 +1091,47 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
                     </div>
                   </div>
 
+                  {/* Option A Global Exam Term Switcher when Examination Fee is selected */}
+                  {isExamFeeRecord(globalFeeType) && (
+                    <div className="p-3 rounded-2xl bg-indigo-50 border border-indigo-200 space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <span className="font-black text-indigo-950 flex items-center gap-1.5">
+                          <i className="fa-solid fa-file-signature text-indigo-600"></i>
+                          <span>सभी बच्चों के लिए परीक्षा टर्म चुनें (1× टर्म या 3× पूरे साल)</span>
+                        </span>
+                        <span className="text-[10px] font-semibold text-indigo-800">
+                          जिन बच्चों की यह टर्म या 3× परीक्षा फीस पहले से जमा है वे अपने-आप लॉक हो जाएंगे ✓
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        {[
+                          { label: '1st Term (1×)', period: EXAM_TERM_OPTIONS[0] },
+                          { label: '2nd Term (1×)', period: EXAM_TERM_OPTIONS[1] },
+                          { label: '3rd / Annual (1×)', period: EXAM_TERM_OPTIONS[2] },
+                          { label: 'तीनों टर्म एक साथ (3×)', period: EXAM_TERM_OPTIONS[3] },
+                        ].map((opt) => (
+                          <button
+                            key={opt.period}
+                            type="button"
+                            onClick={() => handleApplyGlobalExamTerm(opt.period)}
+                            className={`px-3 py-2 rounded-xl text-xs font-black border cursor-pointer transition-all ${
+                              examTermChoice === opt.period
+                                ? 'bg-[#0c2340] text-amber-300 border-[#0c2340] shadow-xs'
+                                : 'bg-white text-slate-800 border-indigo-200 hover:border-indigo-400'
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Multi-Child Editable Breakdown */}
                   <div className="space-y-2.5">
                     {activeFamily.members.map((m) => {
                       const st = m.student;
+                      const hs = memberHeadStatusMap[st.Student_ID];
                       const row = rowsState[st.Student_ID] || {
                         selected: true,
                         feeType: globalFeeType,
@@ -807,32 +1140,46 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
                         discountAmount: '0',
                         amountPaid: String(m.dueAmount),
                       };
+                      const rowSugg = computeRowSuggestionForHead(st, row.feeType, row.month, hs);
+                      const isRowLocked = rowSugg.isLocked;
                       const paidNum = Math.max(0, Number(row.amountPaid) || 0);
                       const discNum = Math.max(0, Number(row.discountAmount) || 0);
-                      const balAfter = Math.max(0, m.dueAmount - paidNum - discNum);
+                      const totNum = Math.max(0, Number(row.totalAmount) || 0);
+                      const isTuition = isTuitionFeeRecord(row.feeType);
+                      const isAdmission = isAdmissionFeeRecord(row.feeType);
+                      const alreadyCountedMoDisc =
+                        isTuition && collectionScope !== 'total_due' ? (m.metrics.monthlyDiscount || 0) : 0;
+                      const extraDisc = Math.max(0, discNum - alreadyCountedMoDisc);
+                      const balAfter = isTuition || isAdmission
+                        ? Math.max(0, m.dueAmount - paidNum - extraDisc)
+                        : m.dueAmount + Math.max(0, totNum - discNum - paidNum);
+                      const childMoDisc = isStudentFeeExempt(st) ? 0 : (m.metrics.monthlyDiscount || 0);
 
                       return (
                         <div
                           key={st.Student_ID}
                           className={`p-3.5 rounded-2xl border transition-all ${
-                            row.selected
+                            isRowLocked
+                              ? 'bg-emerald-50/40 border-emerald-300 opacity-85'
+                              : row.selected
                               ? 'bg-white border-blue-300 shadow-xs'
                               : 'bg-slate-50 border-slate-200 opacity-70'
                           }`}
                         >
                           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
                             {/* Left: Checkbox + Child Info */}
-                            <label className="flex items-start gap-2.5 cursor-pointer min-w-0 flex-1">
+                            <label className={`flex items-start gap-2.5 min-w-0 flex-1 ${isRowLocked ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
                               <input
                                 type="checkbox"
-                                checked={row.selected}
+                                checked={row.selected && !isRowLocked}
+                                disabled={isRowLocked}
                                 onChange={(e) =>
                                   setRowsState((prev) => ({
                                     ...prev,
                                     [st.Student_ID]: { ...row, selected: e.target.checked },
                                   }))
                                 }
-                                className="mt-1 w-4 h-4 accent-[#0c2340] rounded cursor-pointer"
+                                className="mt-1 w-4 h-4 accent-[#0c2340] rounded cursor-pointer disabled:cursor-not-allowed"
                               />
                               <div className="min-w-0">
                                 <div className="flex items-center gap-2 flex-wrap">
@@ -841,12 +1188,24 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
                                     {getClassName(st.Class)}
                                   </span>
                                   <span className="font-mono text-[10px] text-slate-500">ID: {st.Student_ID}</span>
+                                  {childMoDisc > 0 && (
+                                    <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-bold">
+                                      🎁 ₹{childMoDisc}/माह छूट (नेट ₹{m.metrics.netMonthlyTuition})
+                                    </span>
+                                  )}
+                                  {isRowLocked && (
+                                    <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 border border-emerald-400 text-[10px] font-black inline-flex items-center gap-1">
+                                      <i className="fa-solid fa-lock text-[9px]"></i>
+                                      <span>{rowSugg.lockReason}</span>
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="text-[11px] text-slate-600 flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1">
                                   <span>
                                     सत्र ({m.currentMonth} तक): <strong>₹{m.metrics.totalSessionFee.toLocaleString('en-IN')}</strong>
                                     <span className="text-slate-500">
                                       {' '}({m.elapsedMonths} माह × ₹{(m.metrics.monthlyTuition || 0).toLocaleString('en-IN')}
+                                      {childMoDisc > 0 ? ` - छूट ₹${(childMoDisc * m.elapsedMonths).toLocaleString('en-IN')}` : ''}
                                       {(m.metrics.admissionFee || 0) > 0 ? ` + प्रवेश ₹${m.metrics.admissionFee!.toLocaleString('en-IN')}` : ''}
                                       {(m.metrics.otherBilledFees || 0) > 0 ? ` + अन्य ₹${m.metrics.otherBilledFees!.toLocaleString('en-IN')}` : ''})
                                     </span>
@@ -863,6 +1222,11 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
                                     </strong>
                                   </span>
                                 </div>
+                                {rowSugg.partialNote && !isRowLocked && (
+                                  <div className="text-[10px] font-bold text-amber-800 mt-0.5">
+                                    ℹ️ {rowSugg.partialNote}
+                                  </div>
+                                )}
                               </div>
                             </label>
 
@@ -871,30 +1235,44 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
                               <div>
                                 <span className="block text-[10px] font-bold text-slate-500 mb-0.5">मद (Type)</span>
                                 <select
-                                  disabled={!row.selected}
+                                  disabled={!row.selected && !isRowLocked}
                                   value={row.feeType}
                                   onChange={(e) => {
                                     const newType = e.target.value;
-                                    const isAdv = newType.toLowerCase().includes('advance') || newType.includes('अग्रिम');
-                                    const stdAmt = isAdv ? 0 : getStandardFeeAmount(st.Class, newType, st as any);
-                                    const nextPaid = isAdv ? (Number(row.amountPaid) || 500) : stdAmt;
+                                    const nextMonth = isExamFeeRecord(newType)
+                                      ? EXAM_TERM_OPTIONS.includes(row.month)
+                                        ? row.month
+                                        : examTermChoice
+                                      : row.month;
+                                    const sugg = computeRowSuggestionForHead(st, newType, nextMonth, hs);
                                     setRowsState((prev) => ({
                                       ...prev,
                                       [st.Student_ID]: {
                                         ...row,
+                                        selected: !sugg.isLocked,
                                         feeType: newType,
-                                        totalAmount: String(isAdv ? 0 : stdAmt),
-                                        amountPaid: String(nextPaid),
+                                        month: nextMonth,
+                                        totalAmount: String(sugg.suggestedTotal),
+                                        discountAmount: String(sugg.suggestedDiscount),
+                                        amountPaid: String(sugg.suggestedPaid),
                                       },
                                     }));
                                   }}
                                   className="w-full px-2 py-1.5 rounded-lg border border-slate-300 bg-white text-[11px] font-semibold"
                                 >
-                                  {FEE_TYPES.map((ft) => (
-                                    <option key={ft} value={ft}>
-                                      {ft.split('(')[0].trim()}
-                                    </option>
-                                  ))}
+                                  {FEE_TYPES.map((ft) => {
+                                    const lockLabel =
+                                      (isAdmissionFeeRecord(ft) && hs?.admission.isPaid) ||
+                                      (isBooksFeeRecord(ft) && hs?.books.isPaid) ||
+                                      (isExamFeeRecord(ft) && hs?.exam.isFullYearPaid)
+                                        ? ' (जमा ✓)'
+                                        : '';
+                                    return (
+                                      <option key={ft} value={ft}>
+                                        {ft.split('(')[0].trim()}{lockLabel}
+                                      </option>
+                                    );
+                                  })}
                                 </select>
                               </div>
                               <div>
@@ -902,7 +1280,7 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
                                 <input
                                   type="number"
                                   min="0"
-                                  disabled={!row.selected}
+                                  disabled={!row.selected || isRowLocked}
                                   value={row.discountAmount}
                                   onChange={(e) =>
                                     setRowsState((prev) => ({
@@ -910,7 +1288,7 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
                                       [st.Student_ID]: { ...row, discountAmount: e.target.value },
                                     }))
                                   }
-                                  className="w-full px-2 py-1.5 rounded-lg border border-slate-300 font-bold text-amber-800"
+                                  className="w-full px-2 py-1.5 rounded-lg border border-slate-300 font-bold text-amber-800 disabled:bg-slate-100"
                                 />
                               </div>
                               <div>
@@ -918,7 +1296,7 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
                                 <input
                                   type="number"
                                   min="0"
-                                  disabled={!row.selected}
+                                  disabled={!row.selected || isRowLocked}
                                   value={row.amountPaid}
                                   onChange={(e) => {
                                     const val = e.target.value;
@@ -931,7 +1309,7 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
                                       },
                                     }));
                                   }}
-                                  className="w-full px-2.5 py-1.5 rounded-lg border-2 border-emerald-500 bg-emerald-50/40 font-black text-emerald-900"
+                                  className="w-full px-2.5 py-1.5 rounded-lg border-2 border-emerald-500 bg-emerald-50/40 font-black text-emerald-900 disabled:bg-slate-100 disabled:border-slate-200"
                                 />
                               </div>
                               <div className="text-right">

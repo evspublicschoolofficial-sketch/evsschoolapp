@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
 import { Student } from '../App';
 import { formatStudentPhotoUrl } from './StudentAvatar';
-import { isFreeStudent, tagStudentWaiver } from '../utils/feeMaster';
+import { getStudentMonthlyDiscount, isFreeStudent, tagStudentWaiver } from '../utils/feeMaster';
 
 export interface NewStudentData {
   Student_ID: string;
@@ -188,7 +188,9 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
         setParentMobile(String(studentToEdit.Parent_Mobile || ''));
         setVillageRoute(studentToEdit['Village/rRoute'] || studentToEdit.Village || '');
         setOpeningBalance(studentToEdit.Balance_Amount !== undefined ? String(studentToEdit.Balance_Amount) : '0');
-        setFeeDiscount(studentToEdit.Discount !== undefined && studentToEdit.Discount !== null ? String(studentToEdit.Discount) : (studentToEdit.Monthly_Discount !== undefined && studentToEdit.Monthly_Discount !== null ? String(studentToEdit.Monthly_Discount) : '0'));
+        const mapDisc = getStudentMonthlyDiscount(studentToEdit as any).monthlyDiscount;
+        const fallbackDisc = studentToEdit.Discount !== undefined && studentToEdit.Discount !== null ? String(studentToEdit.Discount) : (studentToEdit.Monthly_Discount !== undefined && studentToEdit.Monthly_Discount !== null ? String(studentToEdit.Monthly_Discount) : '0');
+        setFeeDiscount(mapDisc > 0 ? String(mapDisc) : fallbackDisc);
         setIsFeeWaived(isFreeStudent(studentToEdit as any).isFree);
         setSessionStartMonth(studentToEdit.Session_Start_Month || 'April');
         setStudentPhotoUrl(studentToEdit.Student_Photo || '');
@@ -352,10 +354,16 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
         QRCode: generatedQrUrl,
       };
 
+      const monthlyDiscNum = feeDiscount ? Math.max(0, Math.round(parseFloat(feeDiscount) || 0)) : 0;
       tagStudentWaiver(
         sId,
         isFeeWaived,
-        isFeeWaived ? 'Tuition Fee Waived (केवल ट्यूशन फीस माफ)' : ''
+        isFeeWaived
+          ? 'Tuition Fee Waived (केवल ट्यूशन फीस माफ)'
+          : monthlyDiscNum > 0
+          ? `स्थायी मासिक छूट ₹${monthlyDiscNum}/माह`
+          : '',
+        isFeeWaived ? 0 : monthlyDiscNum
       );
 
       const result: any = await onStudentAdded(newStudent, sendWelcomeWhatsApp);
