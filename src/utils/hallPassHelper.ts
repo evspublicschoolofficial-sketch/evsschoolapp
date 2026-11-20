@@ -8,6 +8,7 @@ import { directGetFromSheet, dualSyncWriteToSheet } from './sheetDirectSync';
 export const HALL_PASS_CONFIG_STORAGE_KEY = 'evs_hall_pass_config_v1';
 
 export const DATESHEET_CLASS_COLUMNS = [
+  'Play',
   'M1',
   'M2',
   'M3',
@@ -25,6 +26,7 @@ export const DEFAULT_HALF_YEARLY_DATESHEET_ROWS: HallPassDatesheetRow[] = [
     date: '23/11/2026',
     day: 'Mon',
     subjects: {
+      Play: 'Maths (Written)',
       M1: 'Maths (Written)',
       M2: 'Maths (Written)',
       M3: 'English',
@@ -41,6 +43,7 @@ export const DEFAULT_HALF_YEARLY_DATESHEET_ROWS: HallPassDatesheetRow[] = [
     date: '25/11/2026',
     day: 'Wed',
     subjects: {
+      Play: 'Maths (Oral)',
       M1: 'Maths (Oral)',
       M2: 'Maths (Oral)',
       M3: 'Hindi',
@@ -57,6 +60,7 @@ export const DEFAULT_HALF_YEARLY_DATESHEET_ROWS: HallPassDatesheetRow[] = [
     date: '26/11/2026',
     day: 'Thu',
     subjects: {
+      Play: 'English (Written)',
       M1: 'English (Written)',
       M2: 'English (Written)',
       M3: 'Maths',
@@ -73,6 +77,7 @@ export const DEFAULT_HALF_YEARLY_DATESHEET_ROWS: HallPassDatesheetRow[] = [
     date: '27/11/2026',
     day: 'Fri',
     subjects: {
+      Play: 'English (Oral)',
       M1: 'English (Oral)',
       M2: 'English (Oral)',
       M3: 'EVS',
@@ -89,6 +94,7 @@ export const DEFAULT_HALF_YEARLY_DATESHEET_ROWS: HallPassDatesheetRow[] = [
     date: '28/11/2026',
     day: 'Sat',
     subjects: {
+      Play: 'Hindi (Written)',
       M1: 'Hindi (Written)',
       M2: 'Hindi (Written)',
       M3: 'Computer',
@@ -105,6 +111,7 @@ export const DEFAULT_HALF_YEARLY_DATESHEET_ROWS: HallPassDatesheetRow[] = [
     date: '30/11/2026',
     day: 'Mon',
     subjects: {
+      Play: 'Hindi (Oral)',
       M1: 'Hindi (Oral)',
       M2: 'Hindi (Oral)',
       M3: 'Drawing',
@@ -121,6 +128,7 @@ export const DEFAULT_HALF_YEARLY_DATESHEET_ROWS: HallPassDatesheetRow[] = [
     date: '01/12/2026',
     day: 'Tue',
     subjects: {
+      Play: 'Drawing',
       M1: 'Drawing',
       M2: 'Drawing',
       M3: 'Urdu',
@@ -137,6 +145,7 @@ export const DEFAULT_HALF_YEARLY_DATESHEET_ROWS: HallPassDatesheetRow[] = [
     date: '02/12/2026',
     day: 'Wed',
     subjects: {
+      Play: 'G.K. (Oral)',
       M1: 'G.K. (Oral)',
       M2: 'G.K. (Oral)',
       M3: 'G.K.',
@@ -153,6 +162,7 @@ export const DEFAULT_HALF_YEARLY_DATESHEET_ROWS: HallPassDatesheetRow[] = [
     date: '03/12/2026',
     day: 'Thu',
     subjects: {
+      Play: 'PT / Conversation',
       M1: 'PT / Conversation',
       M2: 'PT / Conversation',
       M3: 'PT / Conversation',
@@ -242,7 +252,8 @@ export function resolveDatesheetClassKey(rawClass?: string | null, mappedLabel?:
   const combined = `${String(rawClass || '').trim()} ${String(mappedLabel || '').trim()}`.toLowerCase();
   const code = String(rawClass || '').trim().toUpperCase();
 
-  if (code === 'C1' || code === 'C2' || /\b(m1|nursery|play)\b/i.test(combined)) return 'M1';
+  if (code === 'C1' || /\b(play|play\s*group|play\s*class)\b/i.test(combined)) return 'Play';
+  if (code === 'C2' || /\b(m1|nursery)\b/i.test(combined)) return 'M1';
   if (code === 'C3' || /\b(m2|lkg)\b/i.test(combined)) return 'M2';
   if (code === 'C4' || /\b(m3|ukg)\b/i.test(combined)) return 'M3';
   if (code === 'C5' || /\b(1st|class\s*1)\b/i.test(combined) || /^1$/.test(code)) return 'Class 1';
@@ -271,7 +282,10 @@ export function getStudentDatesheetSchedule(
     .map((r) => ({
       date: r.date,
       day: r.day,
-      subject: r.subjects?.[classKey] || '—',
+      subject:
+        r.subjects?.[classKey] ||
+        (classKey === 'Play' ? r.subjects?.['M1'] : undefined) ||
+        '—',
     }))
     .filter((r) => r.date || r.subject !== '—');
 }
@@ -383,6 +397,18 @@ export function chunkIntoPages<T>(items: T[], perPage: number = 9): T[][] {
 }
 
 function mergeWithDefaults(parsed: any): HallPassConfig {
+  const rawRows: HallPassDatesheetRow[] =
+    Array.isArray(parsed?.datesheetRows) && parsed.datesheetRows.length > 0
+      ? parsed.datesheetRows
+      : DEFAULT_HALF_YEARLY_DATESHEET_ROWS;
+  const normalizedRows = rawRows.map((row) => {
+    const subjects = { ...(row.subjects || {}) };
+    if (!subjects.Play && subjects.M1) {
+      subjects.Play = subjects.M1;
+    }
+    return { ...row, subjects };
+  });
+
   return {
     ...DEFAULT_HALL_PASS_CONFIG,
     ...(parsed || {}),
@@ -390,10 +416,7 @@ function mergeWithDefaults(parsed: any): HallPassConfig {
       parsed?.allowedOverrides && typeof parsed.allowedOverrides === 'object'
         ? parsed.allowedOverrides
         : {},
-    datesheetRows:
-      Array.isArray(parsed?.datesheetRows) && parsed.datesheetRows.length > 0
-        ? parsed.datesheetRows
-        : DEFAULT_HALF_YEARLY_DATESHEET_ROWS,
+    datesheetRows: normalizedRows,
     backsideFlipMode: parsed?.backsideFlipMode === 'row_flip' ? 'row_flip' : 'book_flip',
     cardLayout:
       parsed?.cardLayout === 'landscape_polypack_90x55' ||

@@ -226,8 +226,8 @@ const drawFrontSlot = (
   const bodyX = cx + padX;
   const bodyW = cw - padX * 2;
   const photoY = cy + headerH + 2.2;
-  const photoW = 17.5;
-  const photoH = 22.0;
+  const photoW = 18.0;
+  const photoH = 23.0;
 
   doc.setFillColor(...SLATE_100);
   doc.setDrawColor(...NAVY);
@@ -254,85 +254,100 @@ const drawFrontSlot = (
     });
   }
 
-  // Right Identity Column
+  // Right Identity Column (Highlighted Student Name & Highlighted School ID)
   const infoX = bodyX + photoW + 2.2;
   const infoW = bodyW - photoW - 2.2;
 
-  doc.setTextColor(...BLACK);
+  doc.setTextColor(...NAVY);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10.5);
+  doc.setFontSize(11.2);
   const nameLines = doc.splitTextToSize(String(student.Student_Name || '').toUpperCase(), infoW).slice(0, 2);
-  doc.text(nameLines, infoX, photoY + 3.6);
+  doc.text(nameLines, infoX, photoY + 3.8);
 
-  const fatherY = photoY + (nameLines.length > 1 ? 10.2 : 7.0);
+  const fatherY = photoY + (nameLines.length > 1 ? 10.6 : 7.4);
   doc.setTextColor(...SLATE_700);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7.4);
   doc.text(fitText(doc, `S/o · D/o ${student.Father_Name || '—'}`, infoW), infoX, fatherY);
 
-  // Prominent ID & Roll Boxes
-  const boxY = photoY + photoH - 9.2;
+  // Highlighted SCHOOL ID (amber-100 + thick navy border) & ROLL NO Boxes
+  const boxY = photoY + photoH - 9.8;
   const boxGap = 1.6;
-  const singleBoxW = (infoW - boxGap) / 2;
-  const boxH = 8.6;
+  const idBoxW = infoW * 0.57;
+  const rollBoxW = infoW - idBoxW - boxGap;
+  const boxH = 9.4;
 
-  // SCHOOL ID Box
-  doc.setFillColor(...SLATE_50);
+  // SCHOOL ID Highlighted Box
+  doc.setFillColor(254, 243, 199);
   doc.setDrawColor(...NAVY);
-  doc.setLineWidth(0.38);
-  doc.rect(infoX, boxY, singleBoxW, boxH, 'FD');
-  doc.setTextColor(...SLATE_500);
+  doc.setLineWidth(0.55);
+  doc.rect(infoX, boxY, idBoxW, boxH, 'FD');
+  doc.setTextColor(...NAVY);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(5.5);
-  doc.text('SCHOOL ID', infoX + 1.2, boxY + 2.6);
-  doc.setTextColor(...NAVY);
-  doc.setFontSize(9.5);
-  doc.text(fitText(doc, String(student.Student_ID || '—'), singleBoxW - 2), infoX + 1.2, boxY + 7.1);
+  doc.text('SCHOOL ID', infoX + 1.2, boxY + 2.7);
+  doc.setTextColor(...BLACK);
+  doc.setFontSize(11.0);
+  doc.text(fitText(doc, String(student.Student_ID || '—'), idBoxW - 2.0), infoX + 1.2, boxY + 7.8);
 
   // ROLL NO Box
-  const rollBoxX = infoX + singleBoxW + boxGap;
+  const rollBoxX = infoX + idBoxW + boxGap;
   doc.setFillColor(...SLATE_50);
-  doc.rect(rollBoxX, boxY, singleBoxW, boxH, 'FD');
+  doc.setLineWidth(0.38);
+  doc.rect(rollBoxX, boxY, rollBoxW, boxH, 'FD');
   doc.setTextColor(...SLATE_500);
   doc.setFontSize(5.5);
-  doc.text('ROLL NO.', rollBoxX + 1.2, boxY + 2.6);
+  doc.text('ROLL NO.', rollBoxX + 1.1, boxY + 2.7);
   doc.setTextColor(...BLACK);
   doc.setFontSize(9.5);
-  doc.text(fitText(doc, String(student.Roll_Number || '—'), singleBoxW - 2), rollBoxX + 1.2, boxY + 7.1);
+  doc.text(fitText(doc, String(student.Roll_Number || '—'), rollBoxW - 1.8), rollBoxX + 1.1, boxY + 7.6);
 
   let nextY = photoY + photoH + 2.4;
   if (showClassOnCard) {
     doc.setTextColor(...BLACK);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.6);
+    doc.setFontSize(7.8);
     doc.text(fitText(doc, `Class: ${classNameLabel}`, bodyW), bodyX, nextY + 1.4);
-    nextY += 3.8;
+    nextY += 4.0;
   }
 
-  // EXAM FEE HIGHLIGHT STRIP (Strictly class-based Exam Fee from Fee Structure)
-  const feeBoxH = 7.4;
+  // EXAM FEE + TEACHER WRITE-IN PAID/STATUS BOX
+  const feeBoxH = 10.2;
   const examFeeAmount =
     typeof item.examFee === 'number' && !isNaN(item.examFee)
       ? item.examFee
       : getClassExamFee(student.Class);
   const examFeeText = `Rs. ${examFeeAmount.toLocaleString('en-IN')}`;
+  const feeLeftW = bodyW * 0.42;
 
-  doc.setFillColor(255, 251, 235); // Soft amber-50 fill
+  doc.setFillColor(255, 251, 235);
   doc.setDrawColor(...NAVY);
   doc.setLineWidth(0.45);
-  doc.rect(bodyX, nextY, bodyW, feeBoxH, 'FD');
+  doc.rect(bodyX, nextY, feeLeftW, feeBoxH, 'FD');
+
+  doc.setFillColor(...WHITE);
+  doc.rect(bodyX + feeLeftW, nextY, bodyW - feeLeftW, feeBoxH, 'FD');
 
   doc.setTextColor(...NAVY);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7.5);
-  doc.text('EXAM FEE', bodyX + 1.8, nextY + 4.9);
+  doc.setFontSize(6.2);
+  doc.text('EXAM FEE', bodyX + 1.5, nextY + 3.4);
 
   doc.setTextColor(...BLACK);
   doc.setFontSize(10.0);
-  doc.text(fitText(doc, examFeeText, bodyW - 22), bodyX + bodyW - 1.8, nextY + 5.1, { align: 'right' });
+  doc.text(fitText(doc, examFeeText, feeLeftW - 2.6), bodyX + 1.5, nextY + 8.1);
+
+  // Right White Pen Box for Teacher Status
+  doc.setTextColor(...SLATE_500);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(5.5);
+  doc.text('Paid / Status (Teacher):', bodyX + feeLeftW + 1.5, nextY + 3.2);
+  doc.setDrawColor(...SLATE_300);
+  doc.setLineWidth(0.25);
+  doc.line(bodyX + feeLeftW + 1.5, nextY + 8.4, bodyX + bodyW - 1.5, nextY + 8.4);
 
   // Exam Timing Schedule line
-  const schedY = nextY + feeBoxH + 4.2;
+  const schedY = nextY + feeBoxH + 4.4;
   doc.setTextColor(...BLACK);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7.4);
@@ -346,7 +361,7 @@ const drawFrontSlot = (
   doc.line(bodyX, schedY + 1.6, bodyX + bodyW, schedY + 1.6);
 
   // BOTTOM ROW: LARGE QR CODE + INSTRUCTIONS + PRINCIPAL SIGN
-  const qrSize = 21.5;
+  const qrSize = 22.0;
   const qrY = cy + ch - qrSize - 2.3;
   doc.setFillColor(...WHITE);
   doc.setDrawColor(...NAVY);
@@ -365,7 +380,7 @@ const drawFrontSlot = (
   const instW = bodyW - qrSize - signW - 3.5;
   doc.setTextColor(...SLATE_700);
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(6.5);
+  doc.setFontSize(6.6);
   const instLines = doc.splitTextToSize(
     config.instructionLine || 'Bring Hall Pass, School ID & stationery daily.',
     Math.max(12, instW)
@@ -581,44 +596,44 @@ const drawFrontLandscapeSlot = (
   doc.rect(cx, cy, cw, ch, 'FD');
 
   // TOP HEADER STRIP
-  const headerH = 9.4;
+  const headerH = 8.8;
   doc.setFillColor(...NAVY);
   doc.rect(cx, cy, cw, headerH, 'F');
   doc.setFillColor(...AMBER);
-  doc.rect(cx, cy + headerH - 0.65, cw, 0.65, 'F');
+  doc.rect(cx, cy + headerH - 0.6, cw, 0.6, 'F');
 
   doc.setTextColor(...WHITE);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8.4);
-  doc.text('E.V.S. PUBLIC SCHOOL', cx + 2.0, cy + 3.7);
+  doc.setFontSize(8.2);
+  doc.text('E.V.S. PUBLIC SCHOOL', cx + 2.0, cy + 3.6);
 
   doc.setTextColor(...LIGHT_BLUE_TEXT);
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(5.5);
-  doc.text('Chilkana Sultanpur, Saharanpur (U.P.)', cx + 2.0, cy + 6.7);
+  doc.setFontSize(5.4);
+  doc.text('Chilkana Sultanpur, Saharanpur (U.P.)', cx + 2.0, cy + 6.5);
 
   const badgeW = 14.5;
-  const badgeH = 3.6;
+  const badgeH = 3.5;
   const badgeX = cx + cw - badgeW - 1.8;
-  const badgeY = cy + 1.1;
+  const badgeY = cy + 1.0;
   doc.setFillColor(...AMBER);
   doc.rect(badgeX, badgeY, badgeW, badgeH, 'F');
   doc.setTextColor(15, 23, 42);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(6.0);
-  doc.text('HALL PASS', badgeX + badgeW / 2, badgeY + 2.6, { align: 'center' });
+  doc.text('HALL PASS', badgeX + badgeW / 2, badgeY + 2.5, { align: 'center' });
 
   doc.setTextColor(...WHITE);
-  doc.setFontSize(6.2);
-  doc.text(String(config.session || '2026-27'), badgeX - 1.5, badgeY + 2.6, { align: 'right' });
+  doc.setFontSize(6.1);
+  doc.text(String(config.session || '2026-27'), badgeX - 1.5, badgeY + 2.5, { align: 'right' });
 
   doc.setTextColor(...AMBER_TEXT);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(6.0);
-  doc.text(fitText(doc, examTitle, 38), cx + cw - 1.8, cy + 7.6, { align: 'right' });
+  doc.setFontSize(5.8);
+  doc.text(fitText(doc, examTitle, 38), cx + cw - 1.8, cy + 7.3, { align: 'right' });
 
   // BOTTOM INSTRUCTION STRIP
-  const footerH = 4.2;
+  const footerH = 4.0;
   const footerY = cy + ch - footerH;
   doc.setFillColor(...SLATE_50);
   doc.rect(cx + 0.2, footerY, cw - 0.4, footerH - 0.2, 'F');
@@ -627,26 +642,64 @@ const drawFrontLandscapeSlot = (
   doc.line(cx, footerY, cx + cw, footerY);
   doc.setTextColor(...SLATE_700);
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(5.7);
+  doc.setFontSize(5.6);
   doc.text(
     fitText(doc, config.instructionLine || 'Bring Hall Pass, School ID & stationery daily.', cw - 3.6),
     cx + 1.8,
-    footerY + 2.8
+    footerY + 2.7
   );
 
-  // 3-COLUMN HORIZONTAL BODY
+  // FULL-WIDTH EXAM FEE + TEACHER WRITE-IN PAID/STATUS BOX (Cleanly occupies lower zone)
   const padX = 2.0;
   const bodyX = cx + padX;
   const bodyW = cw - padX * 2;
-  const bodyTop = cy + headerH + 1.8;
   const isCompactH = cardH < 60;
+  const feeH = isCompactH ? 7.2 : 8.8;
+  const feeY = footerY - feeH - 1.4;
+  const examFeeAmount =
+    typeof item.examFee === 'number' && !isNaN(item.examFee)
+      ? item.examFee
+      : getClassExamFee(student.Class);
+  const examFeeText = `Rs. ${examFeeAmount.toLocaleString('en-IN')}`;
+  const feeLeftW = 34.0;
 
-  // Left: Student Photo
-  const photoW = isCompactH ? 15.5 : 17.5;
-  const photoH = isCompactH ? 19.5 : 22.0;
+  doc.setFillColor(255, 251, 235);
+  doc.setDrawColor(...NAVY);
+  doc.setLineWidth(0.45);
+  doc.rect(bodyX, feeY, feeLeftW, feeH, 'FD');
+
+  doc.setFillColor(...WHITE);
+  doc.rect(bodyX + feeLeftW, feeY, bodyW - feeLeftW, feeH, 'FD');
+
+  doc.setTextColor(...NAVY);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.2);
+  doc.text('EXAM FEE:', bodyX + 1.5, feeY + feeH * 0.62);
+  doc.setTextColor(...BLACK);
+  doc.setFontSize(9.5);
+  doc.text(fitText(doc, examFeeText, feeLeftW - 15.5), bodyX + feeLeftW - 1.5, feeY + feeH * 0.65, {
+    align: 'right',
+  });
+
+  // Blank White Write-In Box for Teacher Paid/Unpaid mark
+  doc.setTextColor(...SLATE_500);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(5.8);
+  doc.text('Paid / Status (Teacher):', bodyX + feeLeftW + 1.8, feeY + 3.2);
+  doc.setDrawColor(...SLATE_300);
+  doc.setLineWidth(0.25);
+  doc.line(bodyX + feeLeftW + 1.8, feeY + feeH - 1.6, bodyX + bodyW - 1.8, feeY + feeH - 1.6);
+
+  // TOP 3-COLUMN IDENTITY BODY (Balanced vertical fit from header to fee bar)
+  const bodyTop = cy + headerH + 1.6;
+  const topZoneH = feeY - bodyTop - 1.4;
+
+  // Left: Student Photo + Class
+  const photoW = isCompactH ? 16.0 : 18.5;
+  const photoH = Math.min(isCompactH ? 20.5 : 24.5, topZoneH - (showClassOnCard ? 4.2 : 0.8));
   doc.setFillColor(...SLATE_100);
   doc.setDrawColor(...NAVY);
-  doc.setLineWidth(0.4);
+  doc.setLineWidth(0.45);
   doc.rect(bodyX, bodyTop, photoW, photoH, 'FD');
 
   if (photoDataUrl) {
@@ -655,7 +708,7 @@ const drawFrontLandscapeSlot = (
     } catch {
       doc.setTextColor(...NAVY);
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(10);
+      doc.setFontSize(11);
       doc.text(getInitials(student.Student_Name), bodyX + photoW / 2, bodyTop + photoH / 2 + 1.2, {
         align: 'center',
       });
@@ -663,7 +716,7 @@ const drawFrontLandscapeSlot = (
   } else {
     doc.setTextColor(...NAVY);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
+    doc.setFontSize(11);
     doc.text(getInitials(student.Student_Name), bodyX + photoW / 2, bodyTop + photoH / 2 + 1.2, {
       align: 'center',
     });
@@ -672,19 +725,19 @@ const drawFrontLandscapeSlot = (
   if (showClassOnCard) {
     doc.setTextColor(...NAVY);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(6.6);
-    doc.text(fitText(doc, classNameLabel, photoW + 1), bodyX + photoW / 2, bodyTop + photoH + 3.4, {
+    doc.setFontSize(7.0);
+    doc.text(fitText(doc, classNameLabel, photoW + 2), bodyX + photoW / 2, bodyTop + photoH + 3.4, {
       align: 'center',
     });
   }
 
   // Right: QR Code + Principal Sign
-  const qrSize = isCompactH ? 17.5 : 19.5;
+  const qrSize = isCompactH ? 17.5 : 20.5;
   const qrX = cx + cw - padX - qrSize;
   const qrY = bodyTop;
   doc.setFillColor(...WHITE);
   doc.setDrawColor(...NAVY);
-  doc.setLineWidth(0.4);
+  doc.setLineWidth(0.45);
   doc.rect(qrX, qrY, qrSize, qrSize, 'FD');
   if (qrDataUrl) {
     try {
@@ -692,7 +745,7 @@ const drawFrontLandscapeSlot = (
     } catch {}
   }
 
-  const signLineY = footerY - 3.6;
+  const signLineY = feeY - 4.0;
   doc.setDrawColor(...BLACK);
   doc.setLineWidth(0.35);
   doc.line(qrX, signLineY, qrX + qrSize, signLineY);
@@ -701,77 +754,61 @@ const drawFrontLandscapeSlot = (
   doc.setFontSize(5.8);
   doc.text('Principal Sign.', qrX + qrSize / 2, signLineY + 2.3, { align: 'center' });
 
-  // Center: Student Identity + ID/Roll + Exam Fee + Timing
+  // Center: HIGHLIGHTED BIG Student Name + Highlighted Big SCHOOL ID + Roll + Timing
   const infoX = bodyX + photoW + 2.2;
   const infoW = qrX - infoX - 2.2;
 
-  doc.setTextColor(...BLACK);
+  doc.setTextColor(...NAVY);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.text(fitText(doc, String(student.Student_Name || '').toUpperCase(), infoW), infoX, bodyTop + 3.4);
+  doc.setFontSize(isCompactH ? 10.8 : 11.8);
+  doc.text(fitText(doc, String(student.Student_Name || '').toUpperCase(), infoW), infoX, bodyTop + 3.8);
 
   doc.setTextColor(...SLATE_700);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(6.7);
-  doc.text(fitText(doc, `S/o · D/o ${student.Father_Name || '—'}`, infoW), infoX, bodyTop + 6.9);
+  doc.setFontSize(7.0);
+  doc.text(fitText(doc, `S/o · D/o ${student.Father_Name || '—'}`, infoW), infoX, bodyTop + 7.3);
+  doc.setDrawColor(...SLATE_300);
+  doc.setLineWidth(0.2);
+  doc.line(infoX, bodyTop + 8.3, infoX + infoW, bodyTop + 8.3);
 
-  // SCHOOL ID + ROLL NO boxes
-  const boxY = bodyTop + 8.6;
+  // Highlighted SCHOOL ID + ROLL NO boxes
+  const boxY = bodyTop + 9.4;
   const boxGap = 1.5;
-  const singleBoxW = (infoW - boxGap) / 2;
-  const boxH = 7.2;
+  const idBoxW = infoW * 0.58;
+  const rollBoxW = infoW - idBoxW - boxGap;
+  const boxH = isCompactH ? 8.8 : 10.2;
 
-  doc.setFillColor(...SLATE_50);
+  doc.setFillColor(254, 243, 199);
   doc.setDrawColor(...NAVY);
-  doc.setLineWidth(0.35);
-  doc.rect(infoX, boxY, singleBoxW, boxH, 'FD');
-  doc.setTextColor(...SLATE_500);
+  doc.setLineWidth(0.55);
+  doc.rect(infoX, boxY, idBoxW, boxH, 'FD');
+  doc.setTextColor(...NAVY);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(5.0);
-  doc.text('SCHOOL ID', infoX + 1.0, boxY + 2.3);
-  doc.setTextColor(...NAVY);
-  doc.setFontSize(8.4);
-  doc.text(fitText(doc, String(student.Student_ID || '—'), singleBoxW - 1.8), infoX + 1.0, boxY + 6.0);
-
-  const rollBoxX = infoX + singleBoxW + boxGap;
-  doc.setFillColor(...SLATE_50);
-  doc.rect(rollBoxX, boxY, singleBoxW, boxH, 'FD');
-  doc.setTextColor(...SLATE_500);
-  doc.setFontSize(5.0);
-  doc.text('ROLL NO.', rollBoxX + 1.0, boxY + 2.3);
+  doc.setFontSize(5.2);
+  doc.text('SCHOOL ID', infoX + 1.2, boxY + 2.5);
   doc.setTextColor(...BLACK);
-  doc.setFontSize(8.4);
-  doc.text(fitText(doc, String(student.Roll_Number || '—'), singleBoxW - 1.8), rollBoxX + 1.0, boxY + 6.0);
+  doc.setFontSize(isCompactH ? 10.5 : 11.5);
+  doc.text(fitText(doc, String(student.Student_ID || '—'), idBoxW - 2.0), infoX + 1.2, boxY + boxH - 1.7);
 
-  // EXAM FEE Strip
-  const feeY = boxY + boxH + 1.5;
-  const feeH = 6.0;
-  const examFeeAmount =
-    typeof item.examFee === 'number' && !isNaN(item.examFee)
-      ? item.examFee
-      : getClassExamFee(student.Class);
-  const examFeeText = `Rs. ${examFeeAmount.toLocaleString('en-IN')}`;
-
-  doc.setFillColor(255, 251, 235);
-  doc.setDrawColor(...NAVY);
+  const rollBoxX = infoX + idBoxW + boxGap;
+  doc.setFillColor(...SLATE_50);
   doc.setLineWidth(0.38);
-  doc.rect(infoX, feeY, infoW, feeH, 'FD');
-  doc.setTextColor(...NAVY);
+  doc.rect(rollBoxX, boxY, rollBoxW, boxH, 'FD');
+  doc.setTextColor(...SLATE_500);
+  doc.setFontSize(5.2);
+  doc.text('ROLL NO.', rollBoxX + 1.0, boxY + 2.5);
+  doc.setTextColor(...BLACK);
+  doc.setFontSize(9.0);
+  doc.text(fitText(doc, String(student.Roll_Number || '—'), rollBoxW - 1.8), rollBoxX + 1.0, boxY + boxH - 1.8);
+
+  // Timing Line cleanly below boxes
+  doc.setTextColor(...BLACK);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(6.6);
-  doc.text('EXAM FEE', infoX + 1.5, feeY + 4.1);
-  doc.setTextColor(...BLACK);
-  doc.setFontSize(8.8);
-  doc.text(fitText(doc, examFeeText, infoW - 18), infoX + infoW - 1.5, feeY + 4.3, { align: 'right' });
-
-  // Timing Line
-  doc.setTextColor(...BLACK);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(6.5);
   doc.text(
     fitText(doc, config.examScheduleLine || 'Exam: 09:30 AM - 12:00 PM', infoW),
     infoX,
-    feeY + feeH + 3.4
+    boxY + boxH + 3.6
   );
 };
 

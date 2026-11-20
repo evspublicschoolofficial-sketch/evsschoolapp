@@ -183,6 +183,13 @@ export const FloatingSocialBar: React.FC<FloatingSocialBarProps> = ({
   };
 
   useEffect(() => {
+    try {
+      const lastSocialFetch = Number(localStorage.getItem('evs_social_links_last_fetch') || '0');
+      if (lastSocialFetch && Date.now() - lastSocialFetch < 6 * 60 * 60 * 1000) {
+        return;
+      }
+      localStorage.setItem('evs_social_links_last_fetch', String(Date.now()));
+    } catch {}
     fetchSocialLinksFromSheet(false);
   }, [spreadsheetId]);
 

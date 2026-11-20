@@ -43,7 +43,7 @@ const FEE_HEAD_OPTIONS = [
 const MONTH_OPTIONS = [
   'April', 'May', 'June', 'July', 'August', 'September',
   'October', 'November', 'December', 'January', 'February', 'March',
-  'Full Academic Session', 'Advance Deposit',
+  'Multi-Month Dues', 'Advance Deposit',
 ];
 
 export const ParentUpiFeeSection: React.FC<ParentUpiFeeSectionProps> = ({

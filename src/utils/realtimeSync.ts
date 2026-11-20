@@ -102,27 +102,6 @@ class RealtimeSyncManager {
         } catch {}
       }
     });
-
-    // Auto-refresh when user returns to this tab / window
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') {
-        this.notifyListeners({
-          type: 'APP_DATA_UPDATED',
-          entity: 'all',
-          action: 'visibility_change',
-          timestamp: Date.now(),
-        });
-      }
-    });
-
-    window.addEventListener('focus', () => {
-      this.notifyListeners({
-        type: 'APP_DATA_UPDATED',
-        entity: 'all',
-        action: 'window_focus',
-        timestamp: Date.now(),
-      });
-    });
   }
 
   /**

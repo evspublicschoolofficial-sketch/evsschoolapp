@@ -2,7 +2,6 @@
 // Detects GitHub/Server builds both via Service Worker waiting state AND live version.json / /api/app-version checks.
 
 import {
-  dispatchGitHubFullReload,
   getSyncedGitHubSha,
   setPendingFullReloadAfterUpdate,
   setSyncedGitHubSha,
@@ -159,10 +158,10 @@ export function initPWAUpdater() {
         .register('/sw.js', { updateViaCache: 'none' })
         .then((reg) => {
           attachRegistrationListeners(reg);
-          // Defer initial update check slightly so main school data loads instantaneously first
+          // Defer initial update check so app UI renders instantaneously first
           setTimeout(() => {
             checkForAppUpdate(false);
-          }, 4000);
+          }, 8000);
         })
         .catch((err) => {
           console.warn('ServiceWorker registration error:', err);
@@ -177,13 +176,13 @@ export function initPWAUpdater() {
   } else {
     setTimeout(() => {
       checkForAppUpdate(false);
-    }, 4000);
+    }, 8000);
   }
 
-  // Re-check whenever user resumes/switches back to the installed PWA on phone
+  // Re-check periodically when returning to the installed PWA (throttled to every 5 minutes)
   const handleResumeCheck = () => {
     const now = Date.now();
-    if (now - lastCheckTimestamp < 10_000) return;
+    if (now - lastCheckTimestamp < 300_000) return;
     if (document.visibilityState === 'visible') {
       checkForAppUpdate(false);
     }
@@ -193,12 +192,12 @@ export function initPWAUpdater() {
   window.addEventListener('focus', handleResumeCheck);
   window.addEventListener('online', () => checkForAppUpdate(false));
 
-  // Periodic background check every 60 seconds while open
+  // Periodic background check every 10 minutes while open
   setInterval(() => {
     if (document.visibilityState === 'visible') {
       checkForAppUpdate(false);
     }
-  }, 60_000);
+  }, 600_000);
 }
 
 export async function checkForAppUpdate(isManual = false): Promise<boolean> {
@@ -231,15 +230,8 @@ export async function checkForAppUpdate(isManual = false): Promise<boolean> {
     if (serverInfo?.version) {
       if (serverInfo.githubLatestSha) {
         const prevSyncedSha = getSyncedGitHubSha();
-        if (!prevSyncedSha) {
+        if (!prevSyncedSha || prevSyncedSha !== serverInfo.githubLatestSha) {
           setSyncedGitHubSha(serverInfo.githubLatestSha);
-        } else if (prevSyncedSha !== serverInfo.githubLatestSha) {
-          setSyncedGitHubSha(serverInfo.githubLatestSha);
-          dispatchGitHubFullReload({
-            reason: 'github-sha-changed',
-            githubSha: serverInfo.githubLatestSha,
-            version: serverInfo.version,
-          });
         }
       }
 

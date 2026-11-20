@@ -3823,31 +3823,58 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                     </div>
                   </div>
 
-                  {/* 4 Family Totals */}
+                  {/* 4 Family Totals (Mirrors Single-Student Current-Month Metrics) */}
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                     <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
-                      <span className="text-[10px] text-slate-500 font-bold block">कुल पारिवारिक देय</span>
-                      <strong className="text-base font-black text-slate-900 tabular-nums">
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="text-[10px] text-slate-500 font-bold block">
+                          सत्र देय ({activeSelectedFamily.currentMonth} तक)
+                        </span>
+                        {activeSelectedFamily.totalMonthlyTuition > 0 && (
+                          <span className="text-[9px] font-bold text-blue-900 bg-blue-100 px-1.5 py-0.2 rounded">
+                            ₹{activeSelectedFamily.totalMonthlyTuition.toLocaleString('en-IN')}/माह
+                          </span>
+                        )}
+                      </div>
+                      <strong className="text-base font-black text-slate-900 tabular-nums mt-0.5 block">
                         ₹{activeSelectedFamily.totalBilled.toLocaleString('en-IN')}
                       </strong>
+                      <span className="text-[10px] text-indigo-700 block mt-0.5">
+                        ट्यूशन ₹{activeSelectedFamily.totalTuitionBilled.toLocaleString('en-IN')}
+                        {activeSelectedFamily.totalAdmissionFee > 0 ? ` + प्रवेश ₹${activeSelectedFamily.totalAdmissionFee.toLocaleString('en-IN')}` : ''}
+                        {activeSelectedFamily.totalOtherBilled > 0 ? ` + अन्य ₹${activeSelectedFamily.totalOtherBilled.toLocaleString('en-IN')}` : ''}
+                      </span>
                     </div>
                     <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200">
                       <span className="text-[10px] text-emerald-700 font-bold block">कुल जमा राशि</span>
-                      <strong className="text-base font-black text-emerald-900 tabular-nums">
+                      <strong className="text-base font-black text-emerald-900 tabular-nums mt-0.5 block">
                         ₹{activeSelectedFamily.totalPaid.toLocaleString('en-IN')}
                       </strong>
+                      <span className="text-[10px] text-emerald-700 block mt-0.5">
+                        कुल {activeSelectedFamily.members.reduce((s, m) => s + (m.metrics.receiptsCount || 0), 0)} रसीदें जारी
+                      </span>
                     </div>
                     <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200">
-                      <span className="text-[10px] text-amber-800 font-bold block">कुल छूट</span>
-                      <strong className="text-base font-black text-amber-900 tabular-nums">
+                      <span className="text-[10px] text-amber-800 font-bold block">कुल छूट / रियायत</span>
+                      <strong className="text-base font-black text-amber-900 tabular-nums mt-0.5 block">
                         ₹{activeSelectedFamily.totalDiscount.toLocaleString('en-IN')}
                       </strong>
+                      {activeSelectedFamily.totalAdvance > 0 && (
+                        <span className="text-[10px] text-purple-700 font-bold block mt-0.5">
+                          अग्रिम: -₹{activeSelectedFamily.totalAdvance.toLocaleString('en-IN')}
+                        </span>
+                      )}
                     </div>
                     <div className="p-3 rounded-2xl bg-rose-50 border border-rose-300">
-                      <span className="text-[10px] text-rose-800 font-bold block">सभी बच्चों का बकाया</span>
-                      <strong className="text-lg font-black text-rose-900 tabular-nums">
+                      <span className="text-[10px] text-rose-800 font-bold block">
+                        वर्तमान बकाया ({activeSelectedFamily.currentMonth} तक)
+                      </span>
+                      <strong className={`text-lg font-black tabular-nums mt-0.5 block ${activeSelectedFamily.totalDue > 0 ? 'text-rose-900' : 'text-emerald-800'}`}>
                         ₹{activeSelectedFamily.totalDue.toLocaleString('en-IN')}
                       </strong>
+                      <span className="text-[10px] text-rose-700 block mt-0.5">
+                        देय ₹{activeSelectedFamily.totalBilled.toLocaleString('en-IN')} - जमा ₹{activeSelectedFamily.totalPaid.toLocaleString('en-IN')}
+                      </span>
                     </div>
                   </div>
 
@@ -3856,7 +3883,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                     <div className="text-xs font-black text-slate-800 flex items-center justify-between">
                       <span>इस मोबाइल नंबर से जुड़े सभी बच्चे ({activeSelectedFamily.members.length})</span>
                       <span className="text-[11px] font-medium text-slate-500">
-                        किसी भी बच्चे की अलग या एक साथ फीस जोड़ें
+                        प्रत्येक बच्चे की सिंगल-स्टूडेंट की तरह {activeSelectedFamily.currentMonth} तक की गणना
                       </span>
                     </div>
 
@@ -3879,14 +3906,34 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                               <span className="font-mono text-[10px] text-slate-500">
                                 ID: {st.Student_ID} {st.Roll_Number ? `• रोल: ${st.Roll_Number}` : ''}
                               </span>
+                              {isStudentFeeExempt(st) && (
+                                <span className="px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                                  ट्यूशन माफ
+                                </span>
+                              )}
                             </div>
 
-                            <div className="text-[11px] text-slate-600 flex flex-wrap items-center gap-2 pl-8">
-                              <span>सत्र फीस: ₹{m.metrics.totalSessionFee.toLocaleString('en-IN')}</span>
+                            <div className="text-[11px] text-slate-600 flex flex-wrap items-center gap-x-2 gap-y-0.5 pl-8">
+                              <span>
+                                सत्र देय ({m.currentMonth} तक): <strong className="text-slate-900">₹{m.metrics.totalSessionFee.toLocaleString('en-IN')}</strong>
+                                <span className="text-indigo-700 font-medium">
+                                  {' '}({m.elapsedMonths} माह × ₹{(m.metrics.monthlyTuition || 0).toLocaleString('en-IN')}
+                                  {(m.metrics.admissionFee || 0) > 0 ? ` + प्रवेश ₹${m.metrics.admissionFee!.toLocaleString('en-IN')}` : ''}
+                                  {(m.metrics.otherBilledFees || 0) > 0 ? ` + अन्य ₹${m.metrics.otherBilledFees!.toLocaleString('en-IN')}` : ''})
+                                </span>
+                              </span>
                               <span>·</span>
                               <span className="text-emerald-700 font-bold">
                                 जमा: ₹{m.metrics.totalPaid.toLocaleString('en-IN')}
                               </span>
+                              {(m.metrics.totalDiscount || 0) > 0 && (
+                                <>
+                                  <span>·</span>
+                                  <span className="text-amber-700 font-bold">
+                                    छूट: -₹{m.metrics.totalDiscount.toLocaleString('en-IN')}
+                                  </span>
+                                </>
+                              )}
                               {(m.metrics.admissionDue || 0) > 0 && (
                                 <span className="px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 text-[10px] font-bold">
                                   प्रवेश बकाया: ₹{m.metrics.admissionDue}

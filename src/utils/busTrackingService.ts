@@ -454,6 +454,7 @@ function ensureFeatureBackupTabs(ss) {
   ensureTabSafe_(ss, "Syllabus_Tracker", ["Syllabus Tracker"], ["ID", "Teacher_ID", "Teacher_Name", "Class", "Subject", "Month", "Week_Number", "Week_Label", "Chapter_Title", "Topic_Description", "Planned_Date", "Target_Completion_Date", "Completed_Date", "Status", "Timestamp"], added);
   ensureTabSafe_(ss, "School_Holidays", ["School Holidays", "Holidays"], ["ID", "Date", "End_Date", "Title", "Category", "Description", "Timestamp"], added);
   ensureTabSafe_(ss, "Hall_Pass_Config", ["Hall Pass Config", "HallPassConfig", "Exam_Hall_Pass"], ["Config_Key", "Exam_Type", "Session", "Custom_Title", "Exam_Schedule_Line", "Instruction_Line", "Published_To_Parent", "Backside_Flip_Mode", "Datesheet_Arrival_Line", "Datesheet_Holiday_Note", "Datesheet_Rows_JSON", "Allowed_Overrides_JSON", "Updated_At"], added);
+  ensureTabSafe_(ss, "Exam_Datesheet", ["Exam Datesheet", "Datesheet", "Exam_Schedule"], ["Date", "Day", "Play", "M1", "M2", "M3", "Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6 & 7", "Class 8"], added);
   ensureTabSafe_(ss, "Fee_Waivers", ["Fee Waivers", "FeeWaivers"], ["Student_ID", "Is_Free", "Reason", "Updated_At", "Updated_TS"], added);
   ensureTabSafe_(ss, "Parent_Reviews", ["Parent Reviews", "ParentReviews"], ["Review_ID", "Student_ID", "Student_Name", "Class_Name", "Parent_Name", "Father_Name", "Parent_Mobile", "Rating", "Highlight_Category", "Review_Text", "Parent_Photo", "Marketing_Consent", "Status", "Featured", "Source", "Created_At", "Updated_At", "Survey_Answers_JSON"], added);
   return added;
@@ -473,6 +474,7 @@ function setupAllRequiredSheetsSilently() {
     busSheet.appendRow(["ecad7ddc", "Amjad", "30.056038, 77.419096", Utilities.formatDate(new Date(), "Asia/Kolkata", "dd/MM/yyyy HH:mm:ss")]);
   }
   ensureFeatureBackupTabs(ss);
+  seedExamDatesheetIfEmpty_(ss);
 }
 
 /**
@@ -543,15 +545,16 @@ function setupAllRequiredSheets() {
   // 10. Route_Stops
   ensureTabSafe_(ss, "Route_Stops", ["Route_Stop", "Stoppages", "Stops"], ["Stop_ID", "Route_ID", "Stop_Name", "Sequence_Order", "Latitude", "Longitude", "Morning_Time", "Evening_Time", "Village_Name", "Student_Count", "Notes"], created);
 
-  // 11-21. All Feature Backup & Module Tabs
+  // 11-22. All Feature Backup & Module Tabs
   var featureCreated = ensureFeatureBackupTabs(ss);
   for (var fi = 0; fi < featureCreated.length; fi++) {
     created.push(featureCreated[fi]);
   }
+  seedExamDatesheetIfEmpty_(ss);
 
   var msg = created.length > 0
     ? "✅ पहले से मौजूद टैब सुरक्षित रखते हुए " + created.length + " नए टैब बनाए गए: " + created.join(", ")
-    : "✅ सभी 24 आवश्यक टैब पहले से मौजूद हैं (कोई पुराना डेटा या टैब बदला नहीं गया)!";
+    : "✅ सभी 25 आवश्यक टैब पहले से मौजूद हैं (कोई पुराना डेटा या टैब बदला नहीं गया)!";
 
   try {
     SpreadsheetApp.getUi().alert("🏫 EVS स्कूल ऑटोमेशन", msg, SpreadsheetApp.getUi().ButtonSet.OK);
@@ -561,7 +564,7 @@ function setupAllRequiredSheets() {
     status: "success",
     message: msg,
     created: created,
-    totalRequiredChecked: 24
+    totalRequiredChecked: 25
   };
 }
 
@@ -729,6 +732,9 @@ function doGet(e) {
   if (action === "getHallPassConfig") {
     return handleGetHallPassConfig(ss);
   }
+  if (action === "getExamDatesheet") {
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", rows: readExamDatesheetTabRows_(ss) })).setMimeType(ContentService.MimeType.JSON);
+  }
   if (action === "getFeeWaivers") {
     return handleGetFeeWaivers(ss);
   }
@@ -737,7 +743,7 @@ function doGet(e) {
   }
 
   // 10. GET FALLBACK: Delegate write actions when called via GET query parameters
-  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig" || action === "saveFeeWaiver" || action === "saveFeeWaiversBatch" || action === "saveParentReview" || action === "updateParentReviewStatus" || action === "deleteParentReview") {
+  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig" || action === "saveExamDatesheet" || action === "saveFeeWaiver" || action === "saveFeeWaiversBatch" || action === "saveParentReview" || action === "updateParentReviewStatus" || action === "deleteParentReview") {
     return doPost(e);
   }
 
@@ -1430,9 +1436,12 @@ function doPost(e) {
       return handleDeleteRowById_(ss, "School_Holidays", data.id);
     }
 
-    // 16. EXAM HALL PASS, DATESHEET & FEE OVERRIDES (Hall_Pass_Config - 2-Way Sync)
+    // 16. EXAM HALL PASS, DATESHEET & FEE OVERRIDES (Hall_Pass_Config + Exam_Datesheet - 2-Way Sync)
     if (action === "saveHallPassConfig") {
       return handleSaveHallPassConfig(ss, data);
+    }
+    if (action === "saveExamDatesheet") {
+      return handleSaveExamDatesheet(ss, data);
     }
 
     // 17. FEE WAIVERS DIRECTORY (Fee_Waivers - Tuition-Only Waiver 2-Way Sync)
@@ -3662,18 +3671,192 @@ function handleSaveSchoolHoliday(ss, data) {
 }
 
 // =========================================================================
-// FEATURE 16: EXAM HALL PASS, DATESHEET & OVERRIDE SETTINGS (Hall_Pass_Config)
+// FEATURE 16: EXAM HALL PASS, DATESHEET & OVERRIDE SETTINGS
+// (Hall_Pass_Config + Exam_Datesheet Table - 2-Way Sync)
 // =========================================================================
+var EXAM_DATESHEET_CLASS_COLS_ = ["Play", "M1", "M2", "M3", "Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6 & 7", "Class 8"];
+var EXAM_DATESHEET_HEADERS_ = ["Date", "Day", "Play", "M1", "M2", "M3", "Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6 & 7", "Class 8"];
+
+function getDefaultExamDatesheetRows_() {
+  return [
+    { date: "23/11/2026", day: "Mon", subjects: { "Play": "Maths (Written)", "M1": "Maths (Written)", "M2": "Maths (Written)", "M3": "English", "Class 1": "English", "Class 2": "English", "Class 3": "English", "Class 4": "English", "Class 5": "EVS", "Class 6 & 7": "Science", "Class 8": "SST" } },
+    { date: "25/11/2026", day: "Wed", subjects: { "Play": "Maths (Oral)", "M1": "Maths (Oral)", "M2": "Maths (Oral)", "M3": "Hindi", "Class 1": "Computer", "Class 2": "EVS", "Class 3": "Maths", "Class 4": "Maths", "Class 5": "Maths", "Class 6 & 7": "English", "Class 8": "Science" } },
+    { date: "26/11/2026", day: "Thu", subjects: { "Play": "English (Written)", "M1": "English (Written)", "M2": "English (Written)", "M3": "Maths", "Class 1": "Hindi", "Class 2": "Urdu", "Class 3": "EVS", "Class 4": "EVS", "Class 5": "Computer", "Class 6 & 7": "SST", "Class 8": "Maths" } },
+    { date: "27/11/2026", day: "Fri", subjects: { "Play": "English (Oral)", "M1": "English (Oral)", "M2": "English (Oral)", "M3": "EVS", "Class 1": "Urdu", "Class 2": "Hindi", "Class 3": "Hindi", "Class 4": "Hindi", "Class 5": "Hindi", "Class 6 & 7": "Hindi", "Class 8": "English" } },
+    { date: "28/11/2026", day: "Sat", subjects: { "Play": "Hindi (Written)", "M1": "Hindi (Written)", "M2": "Hindi (Written)", "M3": "Computer", "Class 1": "EVS", "Class 2": "Maths", "Class 3": "Computer", "Class 4": "Urdu", "Class 5": "English", "Class 6 & 7": "Maths", "Class 8": "Hindi" } },
+    { date: "30/11/2026", day: "Mon", subjects: { "Play": "Hindi (Oral)", "M1": "Hindi (Oral)", "M2": "Hindi (Oral)", "M3": "Drawing", "Class 1": "Maths", "Class 2": "Computer", "Class 3": "Urdu", "Class 4": "Computer", "Class 5": "Urdu", "Class 6 & 7": "Urdu", "Class 8": "Urdu" } },
+    { date: "01/12/2026", day: "Tue", subjects: { "Play": "Drawing", "M1": "Drawing", "M2": "Drawing", "M3": "Urdu", "Class 1": "G.K.", "Class 2": "Drawing", "Class 3": "G.K.", "Class 4": "G.K.", "Class 5": "G.K.", "Class 6 & 7": "Drawing", "Class 8": "Drawing" } },
+    { date: "02/12/2026", day: "Wed", subjects: { "Play": "G.K. (Oral)", "M1": "G.K. (Oral)", "M2": "G.K. (Oral)", "M3": "G.K.", "Class 1": "Drawing", "Class 2": "G.K.", "Class 3": "Drawing", "Class 4": "Drawing", "Class 5": "Drawing", "Class 6 & 7": "G.K.", "Class 8": "G.K." } },
+    { date: "03/12/2026", day: "Thu", subjects: { "Play": "PT / Conversation", "M1": "PT / Conversation", "M2": "PT / Conversation", "M3": "PT / Conversation", "Class 1": "PT / Conversation", "Class 2": "PT / Conversation", "Class 3": "PT / Conversation", "Class 4": "PT / Conversation", "Class 5": "PT / Conversation", "Class 6 & 7": "PT / Conversation", "Class 8": "PT / Conversation" } }
+  ];
+}
+
+function formatDatesheetCellText_(val, isDateCol) {
+  if (val === null || val === undefined) return "";
+  if (Object.prototype.toString.call(val) === "[object Date]" && !isNaN(val.getTime())) {
+    return isDateCol
+      ? Utilities.formatDate(val, "Asia/Kolkata", "dd/MM/yyyy")
+      : Utilities.formatDate(val, "Asia/Kolkata", "EEE");
+  }
+  return String(val).trim();
+}
+
+function readExamDatesheetTabRows_(ss) {
+  var sheet = findExistingSheet_(ss, ["Exam_Datesheet", "Exam Datesheet", "Datesheet", "Exam_Schedule"]);
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  var vals = sheet.getDataRange().getValues();
+  if (!vals || vals.length < 2) return [];
+
+  var rawHeaders = vals[0];
+  var colMap = {};
+  for (var h = 0; h < rawHeaders.length; h++) {
+    var keyNorm = String(rawHeaders[h] || "").trim().toLowerCase().replace(/\s+/g, " ");
+    if (keyNorm) colMap[keyNorm] = h;
+  }
+
+  var dateIdx = colMap["date"] !== undefined ? colMap["date"] : 0;
+  var dayIdx = colMap["day"] !== undefined ? colMap["day"] : 1;
+
+  var out = [];
+  for (var r = 1; r < vals.length; r++) {
+    var row = vals[r];
+    var dateVal = formatDatesheetCellText_(row[dateIdx], true);
+    var dayVal = formatDatesheetCellText_(row[dayIdx], false);
+    var subjects = {};
+    var hasSubject = false;
+
+    for (var c = 0; c < EXAM_DATESHEET_CLASS_COLS_.length; c++) {
+      var clsName = EXAM_DATESHEET_CLASS_COLS_[c];
+      var clsNorm = clsName.toLowerCase();
+      var idx = colMap[clsNorm];
+      if (idx === undefined && clsName === "Class 6 & 7") {
+        idx = colMap["class 6&7"] !== undefined ? colMap["class 6&7"] : colMap["class 6_7"];
+      }
+      if (idx === undefined && clsName === "Play") {
+        idx = colMap["play group"] !== undefined ? colMap["play group"] : colMap["play class"];
+      }
+      var cellText = idx !== undefined ? formatDatesheetCellText_(row[idx], false) : "";
+      subjects[clsName] = cellText;
+      if (cellText) hasSubject = true;
+    }
+
+    if (!subjects["Play"] && subjects["M1"]) {
+      subjects["Play"] = subjects["M1"];
+    }
+
+    if (dateVal || dayVal || hasSubject) {
+      out.push({
+        date: dateVal,
+        day: dayVal,
+        subjects: subjects
+      });
+    }
+  }
+  return out;
+}
+
+function writeExamDatesheetTabRows_(ss, rows) {
+  var sheet = findExistingSheet_(ss, ["Exam_Datesheet", "Exam Datesheet", "Datesheet", "Exam_Schedule"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    sheet = findExistingSheet_(ss, ["Exam_Datesheet", "Exam Datesheet", "Datesheet", "Exam_Schedule"]);
+  }
+  if (!sheet) return;
+
+  var headers = EXAM_DATESHEET_HEADERS_;
+  var hdrRange = sheet.getRange(1, 1, 1, headers.length);
+  hdrRange.setValues([headers]);
+  try {
+    hdrRange.setBackground("#0c2340").setFontColor("#fde68a").setFontWeight("bold");
+    sheet.setFrozenRows(1);
+  } catch (styleErr) {}
+
+  var lastRow = sheet.getLastRow();
+  var maxCols = Math.max(sheet.getLastColumn(), headers.length);
+  if (lastRow > 1) {
+    sheet.getRange(2, 1, lastRow - 1, maxCols).clearContent();
+  }
+
+  if (!rows || !rows.length) return;
+  var outValues = [];
+  for (var i = 0; i < rows.length; i++) {
+    var item = rows[i] || {};
+    var subj = item.subjects && typeof item.subjects === "object" ? item.subjects : {};
+    var line = [
+      String(item.date || ""),
+      String(item.day || "")
+    ];
+    for (var c = 0; c < EXAM_DATESHEET_CLASS_COLS_.length; c++) {
+      var cls = EXAM_DATESHEET_CLASS_COLS_[c];
+      var val = subj[cls] !== undefined && subj[cls] !== null ? String(subj[cls]) : "";
+      if (!val && cls === "Play" && subj["M1"]) {
+        val = String(subj["M1"]);
+      }
+      line.push(val);
+    }
+    outValues.push(line);
+  }
+
+  if (outValues.length > 0) {
+    var bodyRange = sheet.getRange(2, 1, outValues.length, headers.length);
+    bodyRange.setNumberFormat("@");
+    bodyRange.setValues(outValues);
+  }
+}
+
+function seedExamDatesheetIfEmpty_(ss) {
+  var dsSheet = findExistingSheet_(ss, ["Exam_Datesheet", "Exam Datesheet", "Datesheet", "Exam_Schedule"]);
+  if (!dsSheet || dsSheet.getLastRow() >= 2) return;
+
+  var seedRows = [];
+  var cfgSheet = findExistingSheet_(ss, ["Hall_Pass_Config", "Hall Pass Config", "HallPassConfig", "Exam_Hall_Pass"]);
+  if (cfgSheet && cfgSheet.getLastRow() >= 2) {
+    var r = cfgSheet.getDataRange().getValues()[1];
+    try {
+      if (r && r[10]) {
+        var parsed = JSON.parse(String(r[10]));
+        if (Array.isArray(parsed) && parsed.length > 0) seedRows = parsed;
+      }
+    } catch (eSeed) {}
+  }
+  if (!seedRows.length) {
+    seedRows = getDefaultExamDatesheetRows_();
+  }
+  writeExamDatesheetTabRows_(ss, seedRows);
+}
+
 function handleGetHallPassConfig(ss) {
   var sheet = findExistingSheet_(ss, ["Hall_Pass_Config", "Hall Pass Config", "HallPassConfig", "Exam_Hall_Pass"]);
   if (!sheet) {
     ensureFeatureBackupTabs(ss);
-    return ContentService.createTextOutput(JSON.stringify({ status: "success", config: null })).setMimeType(ContentService.MimeType.JSON);
+    sheet = findExistingSheet_(ss, ["Hall_Pass_Config", "Hall Pass Config", "HallPassConfig", "Exam_Hall_Pass"]);
   }
-  var rows = sheet.getDataRange().getValues();
+  var dsRowsFromTab = readExamDatesheetTabRows_(ss);
+  var rows = sheet ? sheet.getDataRange().getValues() : [];
+
   if (rows.length < 2) {
+    if (dsRowsFromTab.length > 0) {
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        config: {
+          examType: "Half-Yearly",
+          session: "2026-27",
+          customExamTitle: "",
+          examScheduleLine: "Half-Yearly Examination · Nov–Dec 2026 · 09:30 AM – 12:00 PM",
+          instructionLine: "Bring admit card daily · Arrive 15 mins early · Clear all pending dues before exam.",
+          publishedToParent: true,
+          backsideFlipMode: "book_flip",
+          datesheetArrivalLine: "Arrival: 08:45 AM · Exam: 09:30 AM – 12:00 PM",
+          datesheetHolidayNote: "24/11 Tue: Guru Nanak Jayanti Holiday · 29/11 Sun: Sunday Off",
+          datesheetRows: dsRowsFromTab,
+          allowedOverrides: {},
+          updatedAt: ""
+        }
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
     return ContentService.createTextOutput(JSON.stringify({ status: "success", config: null })).setMimeType(ContentService.MimeType.JSON);
   }
+
   var r = rows[1];
   var parsedDatesheet = [];
   var parsedOverrides = {};
@@ -3683,6 +3866,14 @@ function handleGetHallPassConfig(ss) {
   try {
     if (r[11]) parsedOverrides = JSON.parse(String(r[11]));
   } catch (e2) {}
+
+  var finalDatesheet = dsRowsFromTab.length > 0
+    ? dsRowsFromTab
+    : (Array.isArray(parsedDatesheet) ? parsedDatesheet : []);
+
+  if (dsRowsFromTab.length === 0 && finalDatesheet.length > 0) {
+    try { writeExamDatesheetTabRows_(ss, finalDatesheet); } catch (ePop) {}
+  }
 
   return ContentService.createTextOutput(JSON.stringify({
     status: "success",
@@ -3696,7 +3887,7 @@ function handleGetHallPassConfig(ss) {
       backsideFlipMode: String(r[7] || "book_flip") === "row_flip" ? "row_flip" : "book_flip",
       datesheetArrivalLine: String(r[8] || ""),
       datesheetHolidayNote: String(r[9] || ""),
-      datesheetRows: Array.isArray(parsedDatesheet) ? parsedDatesheet : [],
+      datesheetRows: finalDatesheet,
       allowedOverrides: (parsedOverrides && typeof parsedOverrides === "object") ? parsedOverrides : {},
       updatedAt: String(r[12] || "")
     }
@@ -3711,6 +3902,7 @@ function handleSaveHallPassConfig(ss, data) {
     try { c = JSON.parse(c); } catch (e) { c = data; }
   }
   var nowIst = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var dsRows = Array.isArray(c.datesheetRows) ? c.datesheetRows : [];
   var rowArr = [
     "HALL_PASS_SETTINGS",
     String(c.examType || "Half-Yearly"),
@@ -3722,7 +3914,7 @@ function handleSaveHallPassConfig(ss, data) {
     String(c.backsideFlipMode || "book_flip"),
     String(c.datesheetArrivalLine || ""),
     String(c.datesheetHolidayNote || ""),
-    JSON.stringify(Array.isArray(c.datesheetRows) ? c.datesheetRows : []),
+    JSON.stringify(dsRows),
     JSON.stringify((c.allowedOverrides && typeof c.allowedOverrides === "object") ? c.allowedOverrides : {}),
     formatToLocalIST_(c.updatedAt, nowIst)
   ];
@@ -3731,9 +3923,28 @@ function handleSaveHallPassConfig(ss, data) {
   } else {
     sheet.appendRow(rowArr);
   }
+
+  writeExamDatesheetTabRows_(ss, dsRows);
+
   return ContentService.createTextOutput(JSON.stringify({
     status: "success",
-    message: "Hall_Pass_Config saved permanently to Google Sheet!"
+    message: "Hall_Pass_Config & Exam_Datesheet saved permanently to Google Sheet!"
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveExamDatesheet(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var rows = data.rows ? (typeof data.rows === "string" ? JSON.parse(data.rows) : data.rows) : [];
+  if (!Array.isArray(rows)) rows = [];
+  writeExamDatesheetTabRows_(ss, rows);
+  var cfgSheet = findExistingSheet_(ss, ["Hall_Pass_Config", "Hall Pass Config", "HallPassConfig", "Exam_Hall_Pass"]);
+  if (cfgSheet && cfgSheet.getLastRow() >= 2) {
+    cfgSheet.getRange(2, 11).setValue(JSON.stringify(rows));
+    cfgSheet.getRange(2, 13).setValue(Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss"));
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Exam_Datesheet saved to Google Sheet!"
   })).setMimeType(ContentService.MimeType.JSON);
 }
 

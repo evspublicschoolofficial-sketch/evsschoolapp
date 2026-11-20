@@ -27,6 +27,7 @@ function onOpen(e) {
     var ui = SpreadsheetApp.getUi();
     ui.createMenu("🏫 EVS स्कूल ऑटोमेशन")
       .addItem("⚡ सभी आवश्यक टैब स्वतः बनाएं (Auto-Create All Tabs)", "setupAllRequiredSheets")
+      .addItem("💾 फीचर 2, 5, 6 बैकअप टैब बनाएं (WhatsApp/Salary/UPI)", "menuCreateFeatureBackupTabs")
       .addItem("📋 फीस मास्टर टैब बनाएं (Create Fee_Master)", "menuCreateFeeMaster")
       .addItem("📢 स्कूल नोटिस टैब बनाएं (Create School_Notices)", "menuCreateNotices")
       .addSeparator()
@@ -36,10 +37,18 @@ function onOpen(e) {
       .addToUi();
   } catch(uiErr) {}
 
-  // Automatically check and create Fee_Master and School_Notices tabs on opening the sheet
+  // Automatically check and create Fee_Master, School_Notices & backup tabs on opening the sheet
   try {
     setupAllRequiredSheetsSilently();
   } catch(silentErr) {}
+}
+
+function menuCreateFeatureBackupTabs() {
+  var ss = getSpreadsheet();
+  ensureFeatureBackupTabs(ss);
+  try {
+    SpreadsheetApp.getUi().alert("✅ 'WhatsApp_Alert_Logs', 'Staff_Salary_Config', 'Staff_Salary_Payroll', 'UPI_Settings', 'UPI_Payments', 'Exam_Marks', 'Report_Cards_Backup', 'Weekly_Tests', 'Teacher_Performance', 'Syllabus_Tracker', 'School_Holidays' सभी बैकअप टैब Google Sheet में तैयार हैं!");
+  } catch(e) {}
 }
 
 function menuCreateFeeMaster() {
@@ -58,180 +67,104 @@ function menuCreateNotices() {
   } catch(e) {}
 }
 
+function formatToLocalIST_(val, fallbackNowStr) {
+  var fallback = fallbackNowStr || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  if (!val) return fallback;
+  if (Object.prototype.toString.call(val) === "[object Date]") {
+    return Utilities.formatDate(val, "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  }
+  var s = String(val).trim();
+  if (!s) return fallback;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s) && (s.endsWith("Z") || /[+-]\d{2}:?\d{2}$/.test(s))) {
+    var dt = new Date(s);
+    if (!isNaN(dt.getTime())) {
+      return Utilities.formatDate(dt, "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+    }
+  }
+  return s;
+}
+
+function normalizeSheetKey_(name) {
+  return String(name || "").toLowerCase().replace(/[\\s_\\-]+/g, "");
+}
+
+function findExistingSheet_(ss, namesList) {
+  if (!ss) return null;
+  for (var i = 0; i < namesList.length; i++) {
+    var exact = ss.getSheetByName(namesList[i]);
+    if (exact) return exact;
+  }
+  var wanted = {};
+  for (var j = 0; j < namesList.length; j++) {
+    wanted[normalizeSheetKey_(namesList[j])] = true;
+  }
+  var allSheets = ss.getSheets();
+  for (var k = 0; k < allSheets.length; k++) {
+    if (wanted[normalizeSheetKey_(allSheets[k].getName())]) {
+      return allSheets[k];
+    }
+  }
+  return null;
+}
+
+function ensureTabSafe_(ss, primaryName, altNames, headers, createdList) {
+  var names = [primaryName].concat(altNames || []);
+  var sheet = findExistingSheet_(ss, names);
+  if (!sheet) {
+    sheet = ss.insertSheet(primaryName);
+    if (headers && headers.length > 0) sheet.appendRow(headers);
+    if (createdList) createdList.push(primaryName);
+    return sheet;
+  }
+  // If user already created this tab manually and left it completely blank, add Row-1 headers only.
+  // If it already has rows/data, DO NOT modify existing headers or rows!
+  if (sheet.getLastRow() === 0 && headers && headers.length > 0) {
+    sheet.appendRow(headers);
+  }
+  return sheet;
+}
+
+function ensureFeatureBackupTabs(ss) {
+  if (!ss) return [];
+  var added = [];
+  ensureTabSafe_(ss, "WhatsApp_Alert_Logs", ["WhatsApp Alert Logs", "Whatsapp_Logs"], ["Log_ID", "Date", "Time", "Alert_Type", "Recipient_Type", "Student_or_Staff_ID", "Recipient_Name", "Class_or_Role", "Mobile_Number", "Amount", "Message_Summary", "Sent_By"], added);
+  ensureTabSafe_(ss, "Staff_Salary_Config", ["Staff Salary Config", "Salary_Config"], ["User_ID", "Staff_Name", "Base_Salary", "Paid_Leave_Days", "Late_Threshold_Days", "Late_Penalty_Per_Day", "Late_Deduction_Per_Min", "Half_Day_Factor", "Overtime_Hourly_Rate", "Extra_Duty_Bonus", "Allowances", "Manual_Deduction", "Notes", "Updated_At"], added);
+  ensureTabSafe_(ss, "Staff_Salary_Payroll", ["Staff Salary Payroll", "Salary_Payroll"], ["Payroll_Key", "Month_Key", "Month_Label", "User_ID", "Staff_Name", "Role", "Mobile", "Working_Days", "Present_Days", "Absent_Days", "Half_Days", "Late_Days", "Late_Minutes", "Extra_Hours", "Extra_Duty_Days", "Base_Salary", "Additions", "Deductions", "Net_Payable", "Saved_At"], added);
+  ensureTabSafe_(ss, "UPI_Settings", ["UPI Settings"], ["Setting_Key", "UPI_ID", "Payee_Name", "Bank_Name", "Instructions", "Has_Static_QR", "Updated_At"], added);
+  ensureTabSafe_(ss, "UPI_Payments", ["UPI Payments", "UPI_Payment_Logs"], ["Payment_ID", "Created_At", "Student_ID", "Student_Name", "Class", "Parent_Mobile", "Payer_Name", "Amount", "Fee_Type", "Month", "UTR_Number", "Payment_App", "Payment_Date", "Notes", "Status", "Receipt_Number", "Manager_Note", "Verified_By", "Verified_At", "Has_Screenshot"], added);
+  ensureTabSafe_(ss, "Exam_Marks", ["Exam Marks", "ExamMarks"], ["Mark_ID", "Session", "Exam_Type", "Student_ID", "Student_Name", "Class", "Subject", "Max_Marks", "Marks_Obtained", "Attendance_Status", "Teacher_ID", "Teacher_Name", "Remarks", "Updated_At"], added);
+  ensureTabSafe_(ss, "Report_Cards_Backup", ["Report Cards Backup", "Report_Cards", "ReportCardsBackup"], ["Report_Key", "Session", "Student_ID", "Student_Name", "Class", "Roll_Number", "Weekly_Pct", "Quarterly_Pct", "HalfYearly_Pct", "Annual_Pct", "Overall_Pct", "Grade", "Attendance_Pct", "Present_Days", "Total_Days", "Teacher_Remark", "Principal_Remark", "Result_Status", "Published_For_Parent", "Updated_By", "Updated_At"], added);
+  ensureTabSafe_(ss, "Weekly_Tests", ["Weekly Tests", "Weekly_Subject_Tests"], ["ID", "Session_ID", "Teacher_ID", "Teacher_Name", "Class", "Month", "Week_Number", "Test_Date", "Subject", "Topic", "Student_ID", "Student_Name", "Max_Marks", "Marks_Obtained", "Status", "Remarks", "Timestamp"], added);
+  ensureTabSafe_(ss, "Teacher_Performance", ["Teacher Performance"], ["Record_ID", "Teacher_ID", "Teacher_Name", "Assigned_Class", "Month", "Academic_Year", "Syllabus_Score_30", "Test_Score_25", "Attendance_Score_15", "Homework_Score_15", "Punctuality_Score_15", "Total_Score_100", "Grade", "Evaluated_By", "Remarks", "Timestamp"], added);
+  ensureTabSafe_(ss, "Syllabus_Tracker", ["Syllabus Tracker"], ["ID", "Teacher_ID", "Teacher_Name", "Class", "Subject", "Month", "Week_Number", "Week_Label", "Chapter_Title", "Topic_Description", "Planned_Date", "Target_Completion_Date", "Completed_Date", "Status", "Timestamp"], added);
+  ensureTabSafe_(ss, "School_Holidays", ["School Holidays", "Holidays"], ["ID", "Date", "End_Date", "Title", "Category", "Description", "Timestamp"], added);
+  ensureTabSafe_(ss, "Hall_Pass_Config", ["Hall Pass Config", "HallPassConfig", "Exam_Hall_Pass"], ["Config_Key", "Exam_Type", "Session", "Custom_Title", "Exam_Schedule_Line", "Instruction_Line", "Published_To_Parent", "Backside_Flip_Mode", "Datesheet_Arrival_Line", "Datesheet_Holiday_Note", "Datesheet_Rows_JSON", "Allowed_Overrides_JSON", "Updated_At"], added);
+  ensureTabSafe_(ss, "Exam_Datesheet", ["Exam Datesheet", "Datesheet", "Exam_Schedule"], ["Date", "Day", "Play", "M1", "M2", "M3", "Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6 & 7", "Class 8"], added);
+  ensureTabSafe_(ss, "Fee_Waivers", ["Fee Waivers", "FeeWaivers"], ["Student_ID", "Is_Free", "Reason", "Updated_At", "Updated_TS"], added);
+  ensureTabSafe_(ss, "Parent_Reviews", ["Parent Reviews", "ParentReviews"], ["Review_ID", "Student_ID", "Student_Name", "Class_Name", "Parent_Name", "Father_Name", "Parent_Mobile", "Rating", "Highlight_Category", "Review_Text", "Parent_Photo", "Marketing_Consent", "Status", "Featured", "Source", "Created_At", "Updated_At", "Survey_Answers_JSON"], added);
+  return added;
+}
+
 function setupAllRequiredSheetsSilently() {
   var ss = getSpreadsheet();
   if (!ss) return;
-  var feeSheet = ss.getSheetByName("Fee_Master") || ss.getSheetByName("FeeMaster") || ss.getSheetByName("Fee Master");
+  var feeSheet = findExistingSheet_(ss, ["Fee_Master", "FeeMaster", "Fee Master"]);
   if (!feeSheet) handleGetFeeMaster(ss);
-  var notSheet = ss.getSheetByName("School_Notices") || ss.getSheetByName("Notices") || ss.getSheetByName("Notice");
+  var notSheet = findExistingSheet_(ss, ["School_Notices", "Notices", "Notice"]);
   if (!notSheet) handleGetNotices(ss);
-  var busSheet = ss.getSheetByName("Bus_Tracking");
+  var busSheet = findExistingSheet_(ss, ["Bus_Tracking", "Bus Tracking"]);
   if (!busSheet) {
     busSheet = ss.insertSheet("Bus_Tracking");
     busSheet.appendRow(["Bus_ID", "Driver_Name", "Current_Location", "Last_Updated"]);
     busSheet.appendRow(["ecad7ddc", "Amjad", "30.056038, 77.419096", Utilities.formatDate(new Date(), "Asia/Kolkata", "dd/MM/yyyy HH:mm:ss")]);
   }
-}
-/**
- * EVS Public School - Teacher Performance Tracker
- * Google Apps Script Handler
- */
-function saveTeacherPerformanceRecord(data) {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheetByName("Teacher_Performance");
-  
-  // यदि शीट नहीं बनी है तो स्वतः बना दें
-  if (!sheet) {
-    sheet = ss.insertSheet("Teacher_Performance");
-    sheet.appendRow([
-      "ID", "Teacher_ID", "Teacher_Name", "Assigned_Class", "Subject",
-      "Month", "Academic_Year", "Syllabus_Progress_Score", "Student_Test_Score",
-      "Attendance_Log_Score", "Homework_Check_Score", "Punctuality_Discipline_Score",
-      "Monthly_Total_Score", "Grade", "Rank", "Evaluation_Date",
-      "Evaluated_By", "Remarks", "Timestamp"
-    ]);
-    sheet.getRange(1, 1, 1, 19).setFontWeight("bold").setBackground("#0c2340").setFontColor("#fbbf24");
-  }
-  
-  var id = data.id || ("TP_" + (data.month || "2026") + "_" + (data.teacher_id || "T"));
-  var teacherId = data.teacher_id || "";
-  var teacherName = data.teacher_name || "";
-  var assignedClass = data.assigned_class || "";
-  var subject = data.subject || "";
-  var month = data.month || "";
-  var academicYear = data.academic_year || "2026-2027";
-  
-  var syllabus = Number(data.syllabus_progress_score) || 0;
-  var test = Number(data.student_test_score) || 0;
-  var attendance = Number(data.attendance_log_score) || 0;
-  var homework = Number(data.homework_check_score) || 0;
-  var punctuality = Number(data.punctuality_discipline_score) || 0;
-  
-  var total = Math.round((syllabus + test + attendance + homework + punctuality) * 10) / 10;
-  
-  var grade = "D";
-  if (total >= 90) grade = "A+";
-  else if (total >= 80) grade = "A";
-  else if (total >= 70) grade = "B";
-  else if (total >= 60) grade = "C";
-  
-  var evalDate = data.evaluation_date || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd");
-  var evaluatedBy = data.evaluated_by || "Manager / Principal";
-  var remarks = data.remarks || "";
-  var timestamp = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
-  
-  // पुरानी एंट्री अपडेट करें या नई रो जोड़ें
-  var dataRows = sheet.getDataRange().getValues();
-  var foundRowIndex = -1;
-  for (var i = 1; i < dataRows.length; i++) {
-    if (dataRows[i][0] == id || (dataRows[i][1] == teacherId && dataRows[i][5] == month)) {
-      foundRowIndex = i + 1;
-      break;
-    }
-  }
-  
-  var rowValues = [
-    id, teacherId, teacherName, assignedClass, subject,
-    month, academicYear, syllabus, test,
-    attendance, homework, punctuality,
-    total, grade, data.rank || "", evalDate,
-    evaluatedBy, remarks, timestamp
-  ];
-  
-  if (foundRowIndex > 0) {
-    sheet.getRange(foundRowIndex, 1, 1, 19).setValues([rowValues]);
-  } else {
-    sheet.appendRow(rowValues);
-  }
-  
-  return { success: true, message: "Teacher Performance Saved!", total: total, grade: grade };
-}
-/**
- * Syllabus Tracker Handler for Google Sheets
- */
-function saveSyllabusTopicRecord(data) {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheetByName("Syllabus_Tracker");
-  
-  if (!sheet) {
-    sheet = ss.insertSheet("Syllabus_Tracker");
-    sheet.appendRow([
-      "ID", "Teacher_ID", "Teacher_Name", "Class", "Subject",
-      "Month", "Week_Number", "Week_Label", "Chapter_Title",
-      "Topic_Description", "Planned_Date", "Target_Completion_Date",
-      "Completed_Date", "Status", "Timestamp"
-    ]);
-    sheet.getRange(1, 1, 1, 15).setFontWeight("bold").setBackground("#0c2340").setFontColor("#fbbf24");
-  }
-  
-  var id = data.id || ("SYL_" + new Date().getTime());
-  var teacherId = data.teacher_id || "";
-  var teacherName = data.teacher_name || "";
-  var className = data.class_name || "";
-  var subject = data.subject || "";
-  var month = data.month || "";
-  var weekNumber = Number(data.week_number) || 1;
-  var weekLabel = data.week_label || ("सप्ताह " + weekNumber);
-  var chapter = data.chapter_title || "";
-  var topic = data.topic_description || "";
-  var plannedDate = data.planned_date || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd");
-  var targetDate = data.target_completion_date || "";
-  var completedDate = data.completed_date || "";
-  var status = data.status || "Pending";
-  var timestamp = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
-  
-  var rows = sheet.getDataRange().getValues();
-  var foundRow = -1;
-  for (var i = 1; i < rows.length; i++) {
-    if (rows[i][0] == id) {
-      foundRow = i + 1;
-      break;
-    }
-  }
-  
-  var rowData = [
-    id, teacherId, teacherName, className, subject,
-    month, weekNumber, weekLabel, chapter,
-    topic, plannedDate, targetDate,
-    completedDate, status, timestamp
-  ];
-  
-  if (foundRow > 0) {
-    sheet.getRange(foundRow, 1, 1, 15).setValues([rowData]);
-  } else {
-    sheet.appendRow(rowData);
-  }
-  
-  return { success: true, message: "Syllabus Topic Saved Successfully!" };
-}
-
-function saveSchoolHolidayRecord(sheetApp, holiday) {
-  var ss = sheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheetByName("School_Holidays");
-  if (!sheet) {
-    sheet = ss.insertSheet("School_Holidays");
-    sheet.appendRow(["ID", "Date", "End_Date", "Title", "Category", "Description", "Created_At"]);
-  }
-  
-  // डुप्लीकेट चेक
-  var data = sheet.getDataRange().getValues();
-  for (var i = 1; i < data.length; i++) {
-    if (String(data[i][0]) === String(holiday.id) || String(data[i][1]) === String(holiday.date)) {
-      sheet.getRange(i + 1, 1, 1, 7).setValues([[
-        holiday.id, holiday.date, holiday.end_date || "", holiday.title, holiday.category || "festival", holiday.description || "", new Date().toISOString()
-      ]]);
-      return { success: true, updated: true };
-    }
-  }
-  
-  sheet.appendRow([
-    holiday.id, holiday.date, holiday.end_date || "", holiday.title, holiday.category || "festival", holiday.description || "", new Date().toISOString()
-  ]);
-  return { success: true, created: true };
+  ensureFeatureBackupTabs(ss);
+  seedExamDatesheetIfEmpty_(ss);
 }
 
 /**
  * Standalone runner: Run directly from Apps Script editor by selecting "setupAllRequiredSheets" and clicking Run!
+ * Safe for sheets with existing tabs — skips existing tabs and never deletes or overwrites existing data.
  */
 function setupAllRequiredSheets() {
   var ss = getSpreadsheet();
@@ -242,70 +175,71 @@ function setupAllRequiredSheets() {
   var created = [];
 
   // 1. Fee_Master
-  var feeMasterSheet = ss.getSheetByName("Fee_Master") || ss.getSheetByName("FeeMaster") || ss.getSheetByName("Fee Master");
-  if (!feeMasterSheet) {
+  if (!findExistingSheet_(ss, ["Fee_Master", "FeeMaster", "Fee Master"])) {
     handleGetFeeMaster(ss);
     created.push("Fee_Master");
   }
 
   // 2. School_Notices
-  var noticesSheet = ss.getSheetByName("School_Notices") || ss.getSheetByName("Notices") || ss.getSheetByName("Notice");
-  if (!noticesSheet) {
+  if (!findExistingSheet_(ss, ["School_Notices", "Notices", "Notice"])) {
     handleGetNotices(ss);
     created.push("School_Notices");
   }
 
   // 3. Bus_Tracking
-  var busSheet = ss.getSheetByName("Bus_Tracking");
-  if (!busSheet) {
-    busSheet = ss.insertSheet("Bus_Tracking");
+  if (!findExistingSheet_(ss, ["Bus_Tracking", "Bus Tracking"])) {
+    var busSheet = ss.insertSheet("Bus_Tracking");
     busSheet.appendRow(["Bus_ID", "Driver_Name", "Current_Location", "Last_Updated"]);
     busSheet.appendRow(["ecad7ddc", "Amjad", "30.056038, 77.419096", Utilities.formatDate(new Date(), "Asia/Kolkata", "dd/MM/yyyy HH:mm:ss")]);
     created.push("Bus_Tracking");
   }
 
   // 4. Students
-  var studentsSheet = ss.getSheetByName("Students");
-  if (!studentsSheet) {
-    studentsSheet = ss.insertSheet("Students");
-    studentsSheet.appendRow([
-      "Student_ID", "Student_Name", "Father_Name", "Mother_Name", "Mobile_Number", "Parent_Mobile",
-      "Class", "Section", "Roll_Number", "Date_Of_Birth", "Address", "Transport_Required",
-      "Bus_Stop", "Route", "Fee_Category", "Monthly_Fee", "Admission_Date", "Session_Start_Month", "Status"
-    ]);
-    created.push("Students");
-  }
+  ensureTabSafe_(ss, "Students", ["Student"], [
+    "Student_ID", "Admission_Number", "Roll_Number", "Student_Name", "Class",
+    "Father_Name", "Mother_Name", "Parent_Mobile", "Student_Photo", "Village/rRoute",
+    "Adhar_Card", "Adhar_Photo", "Balance_Amount", "Session_Start_Month", "QR code"
+  ], created);
 
-  // 5. Fees
-  var feesSheet = ss.getSheetByName("Fees") || ss.getSheetByName("Fee_Collection");
-  if (!feesSheet) {
-    feesSheet = ss.insertSheet("Fees");
-    feesSheet.appendRow([
-      "Receipt_No", "Date", "Student_ID", "Student_Name", "Class", "Month",
-      "Total_Amount", "Amount_Paid", "Balance_Amount", "Payment_Mode", "Collected_By", "Remarks"
-    ]);
-    created.push("Fees");
-  }
+  // 5. Fee_Collection
+  ensureTabSafe_(ss, "Fee_Collection", ["Fees", "Fee Collection"], [
+    "Receipt_Number", "Student_ID", "Date", "Fee_Type", "Month",
+    "Total_Amount", "Discount_Amount", "Net_Payable", "Amount_Paid",
+    "Balance_Amount", "Payment_Mode", "Received_By", "Allocations_Summary"
+  ], created);
 
   // 6. Homework
-  var hwSheet = ss.getSheetByName("Homework");
-  if (!hwSheet) {
-    hwSheet = ss.insertSheet("Homework");
-    hwSheet.appendRow(["Date", "Class", "Subject", "Title", "Description", "Assigned_By", "Status"]);
-    created.push("Homework");
-  }
+  ensureTabSafe_(ss, "Homework", ["HomeWork"], ["Homework_ID", "Date", "Class", "Subject", "Homework_Detail", "Target_Type", "", "", "", "", "Teacher"], created);
 
-  // 7. Behavior
-  var behSheet = ss.getSheetByName("Behavior") || ss.getSheetByName("Attendance");
-  if (!behSheet) {
-    behSheet = ss.insertSheet("Behavior");
-    behSheet.appendRow(["Date", "Student_ID", "Student_Name", "Class", "Roll_Number", "Is_Present", "Remark", "Teacher_Name"]);
-    created.push("Behavior");
+  // 7. Homework_Tracker
+  ensureTabSafe_(ss, "Homework_Tracker", ["Homework Tracker"], ["ID", "Date", "Class", "Student_ID", "Subject", "Last_homework_Status"], created);
+
+  // 8. Student_Behavior
+  ensureTabSafe_(ss, "Student_Behavior", ["Behavior", "Attendance", "Student Behavior"], [
+    "Behavior_ID", "Student_ID", "Date", "Class",
+    "Is_Bathed", "Nails_Clean", "Uniform_clean",
+    "Good_Manners", "Discipline", "Is_Present", "Remark", "AI_Feedback"
+  ], created);
+
+  // 9. Staff_Attendance
+  ensureTabSafe_(ss, "Staff_Attendance ", ["Staff_Attendance", "Staff Attendance"], [
+    "ID", "Name", "User_ID", "Designation", "Date", "Check_In_Time", "Check_Out_Time",
+    "Status", "Late_Minutes", "Extra_Hours", "Method", "Location", "Remark", "Timestamp", "Check_Out_Timestamp"
+  ], created);
+
+  // 10. Route_Stops
+  ensureTabSafe_(ss, "Route_Stops", ["Route_Stop", "Stoppages", "Stops"], ["Stop_ID", "Route_ID", "Stop_Name", "Sequence_Order", "Latitude", "Longitude", "Morning_Time", "Evening_Time", "Village_Name", "Student_Count", "Notes"], created);
+
+  // 11-22. All Feature Backup & Module Tabs
+  var featureCreated = ensureFeatureBackupTabs(ss);
+  for (var fi = 0; fi < featureCreated.length; fi++) {
+    created.push(featureCreated[fi]);
   }
+  seedExamDatesheetIfEmpty_(ss);
 
   var msg = created.length > 0
-    ? "✅ सफलतापूर्वक " + created.length + " नए टैब बनाए गए: " + created.join(", ")
-    : "✅ सभी आवश्यक टैब (Fee_Master, School_Notices, Students आदि) पहले से मौजूद हैं!";
+    ? "✅ पहले से मौजूद टैब सुरक्षित रखते हुए " + created.length + " नए टैब बनाए गए: " + created.join(", ")
+    : "✅ सभी 25 आवश्यक टैब पहले से मौजूद हैं (कोई पुराना डेटा या टैब बदला नहीं गया)!";
 
   try {
     SpreadsheetApp.getUi().alert("🏫 EVS स्कूल ऑटोमेशन", msg, SpreadsheetApp.getUi().ButtonSet.OK);
@@ -315,7 +249,7 @@ function setupAllRequiredSheets() {
     status: "success",
     message: msg,
     created: created,
-    totalRequiredChecked: 7
+    totalRequiredChecked: 25
   };
 }
 
@@ -391,17 +325,52 @@ function doGet(e) {
     return handleGetFeeMaster(ss);
   }
 
-  //for route map
-  if (action === 'getRouteStops') {
-  return handleGetRouteStops(e);
- }
-  if (action === "saveRouteStops" || action === "addRouteStop" || action === "deleteRouteStop") {
-  return handleSaveRouteStops(e);
-}
-
   // 8. GET NOTICES (Option B: Auto-Creates School_Notices sheet if not present)
   if (action === "getNotices") {
     return handleGetNotices(ss);
+  }
+
+  // 8B. GET STUDENT BEHAVIOR & ATTENDANCE
+  if (action === "getBehavior" || action === "getStudentBehavior") {
+    var bSheet = ss.getSheetByName("Student_Behavior");
+    if (!bSheet) {
+      return ContentService.createTextOutput(JSON.stringify({ status: "success", behavior: [] })).setMimeType(ContentService.MimeType.JSON);
+    }
+    var bVals = bSheet.getDataRange().getValues();
+    var bList = [];
+    for (var bi = 1; bi < bVals.length; bi++) {
+      var bRow = bVals[bi];
+      if (!bRow[0] && !bRow[1]) continue;
+      var rDt = bRow[2];
+      var rDtStr = "";
+      if (rDt) {
+        if (Object.prototype.toString.call(rDt) === '[object Date]') {
+          rDtStr = Utilities.formatDate(rDt, Session.getScriptTimeZone() || "Asia/Kolkata", "yyyy-MM-dd");
+        } else {
+          rDtStr = String(rDt).trim().slice(0, 10);
+        }
+      }
+      bList.push({
+        Behavior_ID: String(bRow[0] || ""),
+        Student_ID: String(bRow[1] || ""),
+        Date: rDtStr,
+        Class: String(bRow[3] || ""),
+        Is_Bathed: String(bRow[4] || "").toLowerCase() === "yes",
+        Nails_Clean: String(bRow[5] || "").toLowerCase() === "yes",
+        Uniform_clean: String(bRow[6] || "").toLowerCase() === "yes",
+        Good_Manners: String(bRow[7] || "Good"),
+        Discipline: String(bRow[8] || "").toLowerCase() === "good",
+        Is_Present: String(bRow[9] || "").toLowerCase() === "present",
+        Remark: String(bRow[10] || ""),
+        AI_Feedback: String(bRow[11] || "")
+      });
+    }
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", behavior: bList })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  // 8C. GET ROUTE STOPS (From Route_Stops tab)
+  if (action === "getRouteStops" || action === "getStoppages") {
+    return handleGetRouteStops(ss, e.parameter || {});
   }
 
   // 9. SETUP ALL REQUIRED SHEETS / AUTO-CREATE TABS
@@ -410,16 +379,56 @@ function doGet(e) {
     return ContentService.createTextOutput(JSON.stringify(setupRes))
       .setMimeType(ContentService.MimeType.JSON);
   }
-  if (action === "getTeacherPerformance") return handleGetTeacherPerformance(ss);
-  if (action === "getSyllabusTracker") return handleGetSyllabusTracker(ss);
-  if (action === "getSchoolHolidays") return handleGetSchoolHolidays(ss);
-  if (action === "getWeeklyTests") return handleGetWeeklyTests(ss);
-  if (action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "saveSchoolHoliday" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteSyllabusTopic" || action === "deleteSchoolHoliday" || action === "deleteWeeklyTest") {
-    return doPost(e);
+
+  // 9B. FEATURE 2, 5, 6 GET BACKUP READS
+  if (action === "getWhatsappLogs") {
+    return handleGetWhatsappLogs(ss);
+  }
+  if (action === "getStaffSalaryConfig") {
+    return handleGetStaffSalaryConfig(ss);
+  }
+  if (action === "getStaffSalaryPayroll") {
+    return handleGetStaffSalaryPayroll(ss);
+  }
+  if (action === "getUpiSettings") {
+    return handleGetUpiSettings(ss);
+  }
+  if (action === "getUpiPayments") {
+    return handleGetUpiPayments(ss);
+  }
+  if (action === "getExamMarks") {
+    return handleGetExamMarks(ss);
+  }
+  if (action === "getReportCardMeta") {
+    return handleGetReportCardMeta(ss);
+  }
+  if (action === "getWeeklyTests") {
+    return handleGetWeeklyTests(ss);
+  }
+  if (action === "getTeacherPerformance") {
+    return handleGetTeacherPerformance(ss);
+  }
+  if (action === "getSyllabusTracker") {
+    return handleGetSyllabusTracker(ss);
+  }
+  if (action === "getSchoolHolidays") {
+    return handleGetSchoolHolidays(ss);
+  }
+  if (action === "getHallPassConfig") {
+    return handleGetHallPassConfig(ss);
+  }
+  if (action === "getExamDatesheet") {
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", rows: readExamDatesheetTabRows_(ss) })).setMimeType(ContentService.MimeType.JSON);
+  }
+  if (action === "getFeeWaivers") {
+    return handleGetFeeWaivers(ss);
+  }
+  if (action === "getParentReviews") {
+    return handleGetParentReviews(ss);
   }
 
   // 10. GET FALLBACK: Delegate write actions when called via GET query parameters
-  if (action === "saveFeeMaster" || action === "addHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass") {
+  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig" || action === "saveExamDatesheet" || action === "saveFeeWaiver" || action === "saveFeeWaiversBatch" || action === "saveParentReview" || action === "updateParentReviewStatus" || action === "deleteParentReview") {
     return doPost(e);
   }
 
@@ -460,7 +469,7 @@ function doPost(e) {
         sheet.appendRow(["Homework_ID", "Date", "Class", "Subject", "Homework_Detail", "Target_Type", "", "", "", "", "Teacher"]);
       }
       var hwId = String(data.homework_id || data.id || "HW-" + Date.now()).trim();
-      var hwDate = String(data.date || new Date().toISOString().split("T")[0]).trim();
+      var hwDate = String(data.date || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd")).trim();
       var hwClass = String(data.class_name || data.class || "").trim();
       var hwSubj = String(data.subject || "").trim();
       var hwDetail = String(data.detail || data.Homework_Detail || "").trim();
@@ -515,10 +524,14 @@ function doPost(e) {
     if (action === "updateBusTracking" || action === "updateLocation") {
       return handleUpdateBusTracking(ss, data);
     }
-    // 2. UPDATE route stop (BUS LIVE LOCATION)
-    if (action === 'saveRouteStops') {
-  return handleSaveRouteStops(postData);
- }
+
+    // 2B. SAVE / SYNC ROUTE STOPS (Route_Stops tab)
+    if (action === "saveRouteStops" || action === "addRouteStop" || action === "updateRouteStops") {
+      return handleSaveRouteStops(ss, data);
+    }
+    if (action === "deleteRouteStop") {
+      return handleDeleteRouteStop(ss, data);
+    }
 
     // 3. ADD FEE RECORD (Supports Discount, Net Payable & Multi-Month Allocation)
     if (action === "addFee") {
@@ -534,7 +547,7 @@ function doPost(e) {
       sheet.appendRow([
         data.receipt_no || "REC-" + Date.now(),
         data.student_id || "",
-        data.date || new Date().toISOString().split("T")[0],
+        data.date || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd"),
         data.fee_type || "Monthly",
         data.month || "",
         data.total_amount !== undefined ? Number(data.total_amount) : 0,
@@ -714,7 +727,7 @@ function doPost(e) {
         if (!it) continue;
         var sId = String(it.student_id || it.Student_ID || "").trim();
         if (!sId) continue;
-        var dt = String(it.date || it.Date || new Date().toISOString().split("T")[0]).trim();
+        var dt = String(it.date || it.Date || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd")).trim();
         var bId = String(it.behavior_id || it.Behavior_ID || ("BEH-" + sId + "-" + dt)).trim();
         var cls = String(it.class || it.Class || "").trim();
 
@@ -780,7 +793,7 @@ function doPost(e) {
 
       var recId = String(data.record_id || data.id || "TRK-" + Date.now()).trim();
       var sId = String(data.student_id || "").trim();
-      var curDate = String(data.date || new Date().toISOString().split("T")[0]).trim();
+      var curDate = String(data.date || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd")).trim();
       var compDate = cleanDateForCompare(curDate);
       var curRawStatus = String(data.status || "Completed").trim();
       var curStatus = /incom|pend|adhura|not/i.test(curRawStatus) ? "Incompleted" : "Completed";
@@ -847,7 +860,7 @@ function doPost(e) {
       }
 
       var sIds = data.student_ids || [];
-      var curDate = String(data.date || new Date().toISOString().split("T")[0]).trim();
+      var curDate = String(data.date || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd")).trim();
       var compDate = cleanDateForCompare(curDate);
       var curRawStatus = String(data.status || "Completed").trim();
       var curStatus = /incom|pend|adhura|not/i.test(curRawStatus) ? "Incompleted" : "Completed";
@@ -920,40 +933,6 @@ function doPost(e) {
       var studentId = data.student_id || ("S-" + Date.now());
       var qrFormula = '=IMAGE(CONCATENATE("https://api.qrserver.com/v1/create-qr-code/?data=", "' + studentId + '", "&size=250x250"))';
       
-      var row = [];
-      for (var i = 0; i < headers.length; i++) {
-        var h = String(headers[i] || "").trim().toLowerCase();
-        if (h === "student_id" || h === "student id" || h === "id") {
-          row.push(studentId);
-        } else if (h === "admission_number" || h === "admission no" || h === "adm_no") {
-          row.push(data.admission_number || "");
-        } else if (h === "roll_number" || h === "roll no" || h === "roll") {
-          row.push(data.roll_number || "");
-        } else if (h === "student_name" || h === "name" || h === "student name") {
-          row.push(data.student_name || "");
-        } else if (h === "class") {
-          row.push(data.class || "");
-        } else if (h === "father_name" || h === "father name") {
-          row.push(data.father_name || "");
-        } else if (h === "mother_name" || h === "mother name") {
-          row.push(data.mother_name || "");
-        } else if (h === "parent_mobile" || h === "mobile" || h === "parent mobile" || h === "phone") {
-          row.push(data.parent_mobile || "");
-        } else if (h === "student_photo" || h === "photo") {
-          row.push(data.student_photo || "");
-        } else if (h.indexOf("village") !== -1 || h.indexOf("route") !== -1) {
-          row.push(data.village_route || data.village || "");
-        } else if (h.indexOf("balance") !== -1) {
-          row.push(data.balance_amount !== undefined ? Number(data.balance_amount) : 0);
-        } else if (h.indexOf("start_month") !== -1 || h.indexOf("session_start") !== -1 || h.indexOf("start month") !== -1 || h.indexOf("fee_start") !== -1) {
-          row.push(data.session_start_month || data.Session_Start_Month || "April");
-        } else if (h.indexOf("qr") !== -1) {
-          row.push(qrFormula);
-        } else {
-          row.push("");
-        }
-      }
-
       // Check if studentId already exists to update row, or find target row
       var targetRow = -1;
       var currentLastRow = sheet.getLastRow();
@@ -979,6 +958,54 @@ function doPost(e) {
       }
       if (targetRow === -1) {
         targetRow = currentLastRow === 0 ? 2 : currentLastRow + 1;
+      }
+
+      var existingRowVals = [];
+      if (targetRow <= currentLastRow && currentLastRow > 1) {
+        try {
+          existingRowVals = sheet.getRange(targetRow, 1, 1, headers.length).getValues()[0] || [];
+        } catch (e) {
+          existingRowVals = [];
+        }
+      }
+
+      var row = [];
+      for (var i = 0; i < headers.length; i++) {
+        var h = String(headers[i] || "").trim().toLowerCase();
+        if (h === "student_id" || h === "student id" || h === "id") {
+          row.push(studentId);
+        } else if (h === "admission_number" || h === "admission no" || h === "adm_no") {
+          row.push(data.admission_number !== undefined ? data.admission_number : (existingRowVals[i] || ""));
+        } else if (h === "roll_number" || h === "roll no" || h === "roll") {
+          row.push(data.roll_number !== undefined ? data.roll_number : (existingRowVals[i] || ""));
+        } else if (h === "student_name" || h === "name" || h === "student name") {
+          row.push(data.student_name !== undefined ? data.student_name : (existingRowVals[i] || ""));
+        } else if (h === "class") {
+          row.push(data.class !== undefined ? data.class : (existingRowVals[i] || ""));
+        } else if (h === "father_name" || h === "father name") {
+          row.push(data.father_name !== undefined ? data.father_name : (existingRowVals[i] || ""));
+        } else if (h === "mother_name" || h === "mother name") {
+          row.push(data.mother_name !== undefined ? data.mother_name : (existingRowVals[i] || ""));
+        } else if (h === "parent_mobile" || h === "mobile" || h === "parent mobile" || h === "phone") {
+          row.push(data.parent_mobile !== undefined ? data.parent_mobile : (existingRowVals[i] || ""));
+        } else if (h === "student_photo" || h === "photo") {
+          var pVal = (data.student_photo !== undefined && data.student_photo !== null) ? String(data.student_photo).trim() : "";
+          row.push(pVal || (existingRowVals[i] !== undefined ? existingRowVals[i] : ""));
+        } else if (h.indexOf("village") !== -1 || h.indexOf("route") !== -1) {
+          row.push(data.village_route !== undefined ? data.village_route : (data.village !== undefined ? data.village : (existingRowVals[i] || "")));
+        } else if (h.indexOf("balance") !== -1) {
+          row.push(data.balance_amount !== undefined ? Number(data.balance_amount) : (existingRowVals[i] !== undefined ? existingRowVals[i] : 0));
+        } else if (h.indexOf("start_month") !== -1 || h.indexOf("session_start") !== -1 || h.indexOf("start month") !== -1 || h.indexOf("fee_start") !== -1) {
+          row.push(data.session_start_month || data.Session_Start_Month || (existingRowVals[i] || "April"));
+        } else if (h === "fee_waiver" || h === "is_free_student") {
+          row.push(data.fee_waiver !== undefined && data.fee_waiver !== "" ? data.fee_waiver : (existingRowVals[i] !== undefined ? existingRowVals[i] : ""));
+        } else if (h === "discount" || h === "monthly_discount" || h === "fee_discount") {
+          row.push(data[h] !== undefined ? data[h] : (existingRowVals[i] !== undefined ? existingRowVals[i] : ""));
+        } else if (h.indexOf("qr") !== -1) {
+          row.push(existingRowVals[i] || qrFormula);
+        } else {
+          row.push(existingRowVals[i] !== undefined ? existingRowVals[i] : "");
+        }
       }
 
       sheet.getRange(targetRow, 1, 1, row.length).setValues([row]);
@@ -1023,15 +1050,103 @@ function doPost(e) {
       return handleRecordStaffAttendance(ss, data);
     }
 
-    // 9. TEACHER PERFORMANCE, SYLLABUS TRACKER, SCHOOL HOLIDAYS & WEEKLY TESTS (WRITE + DELETE)
-    if (action === "saveTeacherPerformance") return handleSaveTeacherPerformance(ss, data);
-    if (action === "saveSyllabusTopic") return handleSaveSyllabusTopic(ss, data);
-    if (action === "deleteSyllabusTopic") return handleDeleteRowById(ss, "Syllabus_Tracker", data.id);
-    if (action === "saveSchoolHoliday") return handleSaveSchoolHoliday(ss, data);
-    if (action === "deleteSchoolHoliday") return handleDeleteRowById(ss, "School_Holidays", data.id);
-    if (action === "saveWeeklyTest") return handleSaveWeeklyTest(ss, data);
-    if (action === "saveWeeklyTestsBatch") return handleSaveWeeklyTestsBatch(ss, data);
-    if (action === "deleteWeeklyTest") return handleDeleteRowById(ss, "Weekly_Tests", data.id);
+    // 9. FEATURE 2 BACKUP: LOG WHATSAPP ALERT
+    if (action === "logWhatsappAlert") {
+      return handleLogWhatsappAlert(ss, data);
+    }
+
+    // 10. FEATURE 5 BACKUP: SAVE STAFF SALARY CONFIG & MONTHLY PAYROLL
+    if (action === "saveStaffSalaryConfig") {
+      return handleSaveStaffSalaryConfig(ss, data);
+    }
+    if (action === "saveStaffSalaryPayroll") {
+      return handleSaveStaffSalaryPayroll(ss, data);
+    }
+
+    // 11. FEATURE 6 BACKUP: SAVE UPI SETTINGS, PAYMENT PROOF, VERIFICATION & BATCH SYNC
+    if (action === "saveUpiSettings") {
+      return handleSaveUpiSettings(ss, data);
+    }
+    if (action === "saveUpiPayment") {
+      return handleSaveUpiPayment(ss, data);
+    }
+    if (action === "verifyUpiPayment") {
+      return handleVerifyUpiPayment(ss, data);
+    }
+    if (action === "syncAllUpiPayments") {
+      return handleSyncAllUpiPayments(ss, data);
+    }
+
+    // 12. REPORT CARD & EXAM MARKS BACKUP (Quarterly, Half-Yearly, Annual & Report Card Remarks)
+    if (action === "saveExamMarksBatch") {
+      return handleSaveExamMarksBatch(ss, data);
+    }
+    if (action === "deleteExamMark") {
+      return handleDeleteExamMark(ss, data);
+    }
+    if (action === "saveReportCardMeta") {
+      return handleSaveReportCardMeta(ss, data);
+    }
+    if (action === "syncReportCardsBatch") {
+      return handleSyncReportCardsBatch(ss, data);
+    }
+
+    // 13. DELETE HOMEWORK
+    if (action === "deleteHomework") {
+      return handleDeleteHomework(ss, data);
+    }
+
+    // 14. WEEKLY SUBJECT TESTS (Weekly_Tests - 2-Way Sync)
+    if (action === "saveWeeklyTestsBatch" || action === "saveWeeklyTest") {
+      return handleSaveWeeklyTestsBatch(ss, data);
+    }
+    if (action === "deleteWeeklyTest") {
+      return handleDeleteRowById_(ss, "Weekly_Tests", data.id || data.test_id);
+    }
+
+    // 15. TEACHER PERFORMANCE, SYLLABUS TRACKER & SCHOOL HOLIDAYS (2-Way Sync)
+    if (action === "saveTeacherPerformance") {
+      return handleSaveTeacherPerformance(ss, data);
+    }
+    if (action === "saveSyllabusTopic") {
+      return handleSaveSyllabusTopic(ss, data);
+    }
+    if (action === "deleteSyllabusTopic") {
+      return handleDeleteRowById_(ss, "Syllabus_Tracker", data.id);
+    }
+    if (action === "saveSchoolHoliday") {
+      return handleSaveSchoolHoliday(ss, data);
+    }
+    if (action === "deleteSchoolHoliday") {
+      return handleDeleteRowById_(ss, "School_Holidays", data.id);
+    }
+
+    // 16. EXAM HALL PASS, DATESHEET & FEE OVERRIDES (Hall_Pass_Config + Exam_Datesheet - 2-Way Sync)
+    if (action === "saveHallPassConfig") {
+      return handleSaveHallPassConfig(ss, data);
+    }
+    if (action === "saveExamDatesheet") {
+      return handleSaveExamDatesheet(ss, data);
+    }
+
+    // 17. FEE WAIVERS DIRECTORY (Fee_Waivers - Tuition-Only Waiver 2-Way Sync)
+    if (action === "saveFeeWaiver") {
+      return handleSaveFeeWaiver(ss, data);
+    }
+    if (action === "saveFeeWaiversBatch") {
+      return handleSaveFeeWaiversBatch(ss, data);
+    }
+
+    // 18. PARENT REVIEWS & MARKETING TESTIMONIALS (Parent_Reviews - 2-Way Sync)
+    if (action === "saveParentReview") {
+      return handleSaveParentReview(ss, data);
+    }
+    if (action === "updateParentReviewStatus") {
+      return handleUpdateParentReviewStatus(ss, data);
+    }
+    if (action === "deleteParentReview") {
+      return handleDeleteRowById_(ss, "Parent_Reviews", data.reviewId || data.id);
+    }
 
     return ContentService.createTextOutput(JSON.stringify({
       status: "error",
@@ -1105,10 +1220,145 @@ function handleUpdateBusTracking(ss, data) {
   })).setMimeType(ContentService.MimeType.JSON);
 }
 
-function handleRecordStaffAttendance(ss, data) {
-  var sheet = ss.getSheetByName("Staff_Attendance") || ss.getSheetByName("Staff_Attendance ") || ss.getSheetByName("Staff Attendance");
+function handleSaveRouteStops(ss, data) {
+  var sheet = ss.getSheetByName("Route_Stops") || ss.getSheetByName("Route_Stop") || ss.getSheetByName("Stoppages") || ss.getSheetByName("Stops");
   if (!sheet) {
-    sheet = ss.insertSheet("Staff_Attendance");
+    sheet = ss.insertSheet("Route_Stops");
+    sheet.appendRow(["Stop_ID", "Route_ID", "Stop_Name", "Sequence_Order", "Latitude", "Longitude", "Morning_Time", "Evening_Time", "Village_Name", "Student_Count", "Notes"]);
+  }
+
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(["Stop_ID", "Route_ID", "Stop_Name", "Sequence_Order", "Latitude", "Longitude", "Morning_Time", "Evening_Time", "Village_Name", "Student_Count", "Notes"]);
+  }
+
+  var routeId = String(data.route_id || data.routeId || "route-1").trim();
+  var stops = [];
+  if (Array.isArray(data.stops)) {
+    stops = data.stops;
+  } else if (typeof data.stops === "string") {
+    try {
+      stops = JSON.parse(data.stops);
+    } catch(e) {
+      stops = [];
+    }
+  }
+
+  // Support single stop add/edit
+  if ((!stops || stops.length === 0) && (data.stop_name || data.name || data.lat)) {
+    stops = [{
+      id: data.stop_id || data.id || ("stop-" + Date.now().toString().slice(-6)),
+      name: data.stop_name || data.name || "Stop",
+      sequence: Number(data.sequence || data.sequence_order || 1),
+      lat: Number(data.lat || data.latitude || 0),
+      lng: Number(data.lng || data.longitude || 0),
+      morningTime: data.morning_time || data.morningTime || "07:30 AM",
+      eveningTime: data.evening_time || data.eveningTime || "02:30 PM",
+      villageName: data.village_name || data.villageName || "",
+      studentCount: Number(data.student_count || data.studentCount || 0),
+      notes: data.notes || ""
+    }];
+  }
+
+  var existingData = sheet.getDataRange().getValues();
+  var headerRow = existingData.length > 0 ? existingData[0] : ["Stop_ID", "Route_ID", "Stop_Name", "Sequence_Order", "Latitude", "Longitude", "Morning_Time", "Evening_Time", "Village_Name", "Student_Count", "Notes"];
+
+  // Retain stops from OTHER routes
+  var otherRoutesRows = [];
+  for (var r = 1; r < existingData.length; r++) {
+    var row = existingData[r];
+    var rRoute = String(row[1] || "").trim();
+    if (rRoute && rRoute.toLowerCase() !== routeId.toLowerCase()) {
+      otherRoutesRows.push(row);
+    }
+  }
+
+  // Generate clean rows for THIS route
+  var thisRouteRows = [];
+  for (var i = 0; i < stops.length; i++) {
+    var st = stops[i];
+    if (!st) continue;
+    thisRouteRows.push([
+      String(st.id || ("stop-" + (i + 1))),
+      routeId,
+      String(st.name || ("स्टॉप " + (i + 1))),
+      Number(st.sequence || (i + 1)),
+      Number(st.lat || 0),
+      Number(st.lng || 0),
+      String(st.morningTime || st.scheduledTime || ""),
+      String(st.eveningTime || ""),
+      String(st.villageName || ""),
+      Number(st.studentCount || 0),
+      String(st.notes || "")
+    ]);
+  }
+
+  sheet.clearContents();
+  var allRows = [headerRow].concat(otherRoutesRows).concat(thisRouteRows);
+  if (allRows.length > 0) {
+    sheet.getRange(1, 1, allRows.length, allRows[0].length).setValues(allRows);
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Route stops for " + routeId + " saved to Google Sheet Route_Stops tab! Total stops: " + stops.length,
+    route_id: routeId,
+    count: stops.length
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetRouteStops(ss, params) {
+  var sheet = ss.getSheetByName("Route_Stops") || ss.getSheetByName("Route_Stop") || ss.getSheetByName("Stoppages") || ss.getSheetByName("Stops");
+  if (!sheet) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", stops: [] })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var data = sheet.getDataRange().getValues();
+  var routeId = String(params.route_id || params.routeId || "").trim().toLowerCase();
+  var stops = [];
+  for (var r = 1; r < data.length; r++) {
+    var row = data[r];
+    if (!row[0] && !row[2]) continue;
+    var rowRoute = String(row[1] || "").trim().toLowerCase();
+    if (routeId && rowRoute && rowRoute !== routeId) continue;
+    stops.push({
+      id: String(row[0] || ("stop-" + r)),
+      routeId: String(row[1] || "route-1"),
+      name: String(row[2] || ""),
+      sequence: Number(row[3]) || r,
+      lat: Number(row[4]) || 0,
+      lng: Number(row[5]) || 0,
+      morningTime: String(row[6] || ""),
+      eveningTime: String(row[7] || ""),
+      scheduledTime: String(row[6] || row[7] || ""),
+      villageName: String(row[8] || ""),
+      studentCount: Number(row[9]) || 0,
+      notes: String(row[10] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", stops: stops })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleDeleteRouteStop(ss, data) {
+  var sheet = ss.getSheetByName("Route_Stops") || ss.getSheetByName("Route_Stop") || ss.getSheetByName("Stoppages") || ss.getSheetByName("Stops");
+  if (!sheet) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "Route_Stops sheet not found" })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var stopId = String(data.stop_id || data.id || "").trim().toLowerCase();
+  var rows = sheet.getDataRange().getValues();
+  var deleted = false;
+  for (var r = rows.length - 1; r >= 1; r--) {
+    if (String(rows[r][0] || "").trim().toLowerCase() === stopId) {
+      sheet.deleteRow(r + 1);
+      deleted = true;
+      break;
+    }
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: deleted ? "success" : "not_found", message: deleted ? "Stop deleted" : "Stop not found" })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleRecordStaffAttendance(ss, data) {
+  var sheet = ss.getSheetByName("Staff_Attendance ") || ss.getSheetByName("Staff_Attendance") || ss.getSheetByName("Staff Attendance");
+  if (!sheet) {
+    sheet = ss.insertSheet("Staff_Attendance ");
   }
 
   // Ensure header row exists
@@ -1302,6 +1552,7 @@ function generatePastDues() {
     }
   }
 
+  var waiverTabMap = getFeeWaiverMapForBilling_(ss);
   var rowsToAppend = [];
   var totalBilledRows = 0;
   var skippedStudentsCount = 0;
@@ -1311,24 +1562,29 @@ function generatePastDues() {
     var sId = idIdx !== -1 ? String(row[idIdx] || "").trim() : "";
     if (!sId) continue;
 
-    // Check 100% Fee Waiver / Free Student
+    // Check Tuition Fee Waiver / Free Tuition Student (Fee_Waivers tab takes priority, then Students cols)
     var isFree = false;
-    if (waiverIdx !== -1) {
-      var wVal = String(row[waiverIdx] || "").toLowerCase();
-      if (wVal === "true" || wVal === "yes" || wVal.indexOf("100") !== -1 || wVal.indexOf("free") !== -1 || wVal.indexOf("माफ") !== -1) {
-        isFree = true;
+    var normSidKey = sId.toLowerCase();
+    if (waiverTabMap[normSidKey] !== undefined) {
+      isFree = waiverTabMap[normSidKey];
+    } else {
+      if (waiverIdx !== -1) {
+        var wVal = String(row[waiverIdx] || "").toLowerCase();
+        if (wVal === "true" || wVal === "yes" || wVal.indexOf("100") !== -1 || wVal.indexOf("free") !== -1 || wVal.indexOf("माफ") !== -1) {
+          isFree = true;
+        }
       }
-    }
-    if (categoryIdx !== -1) {
-      var catVal = String(row[categoryIdx] || "").toLowerCase();
-      if (catVal.indexOf("rte") !== -1 || catVal.indexOf("free") !== -1 || catVal.indexOf("माफ") !== -1) {
-        isFree = true;
+      if (categoryIdx !== -1) {
+        var catVal = String(row[categoryIdx] || "").toLowerCase();
+        if (catVal.indexOf("rte") !== -1 || catVal.indexOf("free") !== -1 || catVal.indexOf("माफ") !== -1) {
+          isFree = true;
+        }
       }
-    }
-    if (remarkIdx !== -1) {
-      var remVal = String(row[remarkIdx] || "").toLowerCase();
-      if (remVal.indexOf("फीस माफ") !== -1 || remVal.indexOf("100% waiver") !== -1) {
-        isFree = true;
+      if (remarkIdx !== -1) {
+        var remVal = String(row[remarkIdx] || "").toLowerCase();
+        if (remVal.indexOf("फीस माफ") !== -1 || remVal.indexOf("100% waiver") !== -1) {
+          isFree = true;
+        }
       }
     }
 
@@ -1561,6 +1817,7 @@ function generateMonthlyDues() {
     }
   }
 
+  var waiverTabMap = getFeeWaiverMapForBilling_(ss);
   var generatedCount = 0;
   var skippedFreeCount = 0;
   var skippedNotStartedCount = 0;
@@ -1572,24 +1829,29 @@ function generateMonthlyDues() {
     var sId = idIdx !== -1 ? String(row[idIdx] || "").trim() : "";
     if (!sId) continue;
 
-    // 1. Check if student has 100% Fee Waiver (Free Student)
+    // 1. Check if student has Tuition Fee Waiver (Fee_Waivers tab first, then Students cols)
     var isFree = false;
-    if (waiverIdx !== -1) {
-      var wVal = String(row[waiverIdx] || "").toLowerCase();
-      if (wVal === "true" || wVal === "yes" || wVal.indexOf("100") !== -1 || wVal.indexOf("free") !== -1 || wVal.indexOf("माफ") !== -1) {
-        isFree = true;
+    var normSidKey = sId.toLowerCase();
+    if (waiverTabMap[normSidKey] !== undefined) {
+      isFree = waiverTabMap[normSidKey];
+    } else {
+      if (waiverIdx !== -1) {
+        var wVal = String(row[waiverIdx] || "").toLowerCase();
+        if (wVal === "true" || wVal === "yes" || wVal.indexOf("100") !== -1 || wVal.indexOf("free") !== -1 || wVal.indexOf("माफ") !== -1) {
+          isFree = true;
+        }
       }
-    }
-    if (categoryIdx !== -1) {
-      var catVal = String(row[categoryIdx] || "").toLowerCase();
-      if (catVal.indexOf("rte") !== -1 || catVal.indexOf("free") !== -1 || catVal.indexOf("माफ") !== -1) {
-        isFree = true;
+      if (categoryIdx !== -1) {
+        var catVal = String(row[categoryIdx] || "").toLowerCase();
+        if (catVal.indexOf("rte") !== -1 || catVal.indexOf("free") !== -1 || catVal.indexOf("माफ") !== -1) {
+          isFree = true;
+        }
       }
-    }
-    if (remarkIdx !== -1) {
-      var remVal = String(row[remarkIdx] || "").toLowerCase();
-      if (remVal.indexOf("फीस माफ") !== -1 || remVal.indexOf("100% waiver") !== -1) {
-        isFree = true;
+      if (remarkIdx !== -1) {
+        var remVal = String(row[remarkIdx] || "").toLowerCase();
+        if (remVal.indexOf("फीस माफ") !== -1 || remVal.indexOf("100% waiver") !== -1) {
+          isFree = true;
+        }
       }
     }
 
@@ -2022,226 +2284,758 @@ function handleSyncNotices(ss, data) {
     notice_id: singleRow[0]
   })).setMimeType(ContentService.MimeType.JSON);
 }
-  // ==========================================
-// 🚌 ROUTE STOPS ADD-ON (स्टॉपेज ट्रैकिंग मॉड्यूल)
-// ==========================================
 
-function handleGetRouteStops(e) {
-  try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var sheet = ss.getSheetByName("Route_Stops");
-    if (!sheet) {
-      return ContentService.createTextOutput(JSON.stringify({
-        status: "success",
-        stops: []
-      })).setMimeType(ContentService.MimeType.JSON);
+// =========================================================================
+// FEATURE 2 BACKUP: WhatsApp_Alert_Logs HANDLERS
+// =========================================================================
+function handleGetWhatsappLogs(ss) {
+  var sheet = findExistingSheet_(ss, ["WhatsApp_Alert_Logs", "WhatsApp Alert Logs", "Whatsapp_Logs"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", logs: [] })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var logs = [];
+  for (var r = 1; r < rows.length; r++) {
+    var row = rows[r];
+    if (!row[0]) continue;
+    logs.push({
+      id: String(row[0] || ""),
+      date: String(row[1] || ""),
+      time: String(row[2] || ""),
+      alertType: String(row[3] || ""),
+      recipientType: String(row[4] || ""),
+      recipientId: String(row[5] || ""),
+      recipientName: String(row[6] || ""),
+      classOrRole: String(row[7] || ""),
+      mobile: String(row[8] || ""),
+      amount: Number(row[9] || 0),
+      summary: String(row[10] || ""),
+      sentBy: String(row[11] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", logs: logs.reverse() })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleLogWhatsappAlert(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["WhatsApp_Alert_Logs", "WhatsApp Alert Logs", "Whatsapp_Logs"]);
+  var item = data.log || data;
+  if (typeof item === "string") {
+    try { item = JSON.parse(item); } catch(e) { item = data; }
+  }
+  var now = new Date();
+  var dateStr = String(item.date || Utilities.formatDate(now, "Asia/Kolkata", "yyyy-MM-dd"));
+  var timeStr = String(item.time || Utilities.formatDate(now, "Asia/Kolkata", "hh:mm a"));
+  var logId = String(item.id || ("WA-" + Date.now()));
+
+  var rows = sheet.getDataRange().getValues();
+  for (var r = 1; r < rows.length; r++) {
+    if (String(rows[r][0] || "") === logId) {
+      return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "Log already backed up", id: logId })).setMimeType(ContentService.MimeType.JSON);
     }
-    
-    var data = sheet.getDataRange().getValues();
-    if (data.length <= 1) {
-      return ContentService.createTextOutput(JSON.stringify({
-        status: "success",
-        stops: []
-      })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  sheet.appendRow([
+    logId,
+    dateStr,
+    timeStr,
+    String(item.alertType || "WhatsApp Alert"),
+    String(item.recipientType || "Parent"),
+    String(item.recipientId || ""),
+    String(item.recipientName || ""),
+    String(item.classOrRole || ""),
+    String(item.mobile || ""),
+    Number(item.amount || 0),
+    String(item.summary || "").slice(0, 350),
+    String(item.sentBy || "Manager")
+  ]);
+
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "WhatsApp alert logged to Google Sheet!", id: logId })).setMimeType(ContentService.MimeType.JSON);
+}
+
+// =========================================================================
+// FEATURE 5 BACKUP: Staff_Salary_Config & Staff_Salary_Payroll HANDLERS
+// =========================================================================
+function handleGetStaffSalaryConfig(ss) {
+  var sheet = findExistingSheet_(ss, ["Staff_Salary_Config", "Staff Salary Config", "Salary_Config"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", configs: {} })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var configs = {};
+  for (var r = 1; r < rows.length; r++) {
+    var row = rows[r];
+    var uid = String(row[0] || "").trim();
+    if (!uid) continue;
+    configs[uid] = {
+      userId: uid,
+      name: String(row[1] || ""),
+      baseSalary: Number(row[2] || 8000),
+      paidLeaveDays: Number(row[3] || 1),
+      lateThresholdDays: Number(row[4] || 2),
+      latePenaltyPerDay: Number(row[5] || 100),
+      lateDeductionPerMinute: Number(row[6] || 0),
+      halfDayFactor: Number(row[7] !== "" ? row[7] : 0.5),
+      overtimeHourlyRate: Number(row[8] || 80),
+      extraDutyDayBonus: Number(row[9] || 350),
+      allowances: Number(row[10] || 0),
+      manualDeduction: Number(row[11] || 0),
+      notes: String(row[12] || ""),
+      updatedAt: String(row[13] || "")
+    };
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", configs: configs })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveStaffSalaryConfig(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Staff_Salary_Config", "Staff Salary Config", "Salary_Config"]);
+  var list = [];
+  if (data.configs && typeof data.configs === "object" && !Array.isArray(data.configs)) {
+    for (var k in data.configs) {
+      if (data.configs[k]) list.push(data.configs[k]);
     }
-    
-    var stops = [];
-    for (var i = 1; i < data.length; i++) {
-      var row = data[i];
-      if (row[0]) {
-        stops.push({
-          id: String(row[0]),
-          name: String(row[1] || ""),
-          lat: Number(row[2]) || 0,
-          lng: Number(row[3]) || 0,
-          order: Number(row[4]) || i,
-          pickupTime: String(row[5] || ""),
-          dropTime: String(row[6] || ""),
-          studentsCount: Number(row[7]) || 0,
-          vanId: String(row[8] || "van-1"),
-          village: String(row[9] || "")
-        });
-      }
+  } else {
+    var single = data.config || data;
+    if (typeof single === "string") {
+      try { single = JSON.parse(single); } catch(e) { single = data; }
     }
-    
-    return ContentService.createTextOutput(JSON.stringify({
-      status: "success",
-      stops: stops
-    })).setMimeType(ContentService.MimeType.JSON);
-  } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({
-      status: "error",
-      message: err.toString()
-    })).setMimeType(ContentService.MimeType.JSON);
+    if (single && single.userId) list.push(single);
+  }
+
+  var rows = sheet.getDataRange().getValues();
+  var rowMap = {};
+  for (var r = 1; r < rows.length; r++) {
+    var uid = String(rows[r][0] || "").trim();
+    if (uid) rowMap[uid.toLowerCase()] = r + 1;
+  }
+
+  var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var saved = 0;
+  for (var i = 0; i < list.length; i++) {
+    var cfg = list[i];
+    var uidVal = String(cfg.userId || "").trim();
+    if (!uidVal) continue;
+    var rowArr = [
+      uidVal,
+      String(cfg.name || ""),
+      Number(cfg.baseSalary || 0),
+      Number(cfg.paidLeaveDays || 0),
+      Number(cfg.lateThresholdDays || 0),
+      Number(cfg.latePenaltyPerDay || 0),
+      Number(cfg.lateDeductionPerMinute || 0),
+      Number(cfg.halfDayFactor !== undefined ? cfg.halfDayFactor : 0.5),
+      Number(cfg.overtimeHourlyRate || 0),
+      Number(cfg.extraDutyDayBonus || 0),
+      Number(cfg.allowances || 0),
+      Number(cfg.manualDeduction || 0),
+      String(cfg.notes || ""),
+      formatToLocalIST_(cfg.updatedAt, nowStr)
+    ];
+    var targetRow = rowMap[uidVal.toLowerCase()];
+    if (targetRow) {
+      sheet.getRange(targetRow, 1, 1, 14).setValues([rowArr]);
+    } else {
+      sheet.appendRow(rowArr);
+      rowMap[uidVal.toLowerCase()] = sheet.getLastRow();
+    }
+    saved++;
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Staff_Salary_Config sheet backed up (" + saved + " saved)!",
+    count: saved
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetStaffSalaryPayroll(ss) {
+  var sheet = findExistingSheet_(ss, ["Staff_Salary_Payroll", "Staff Salary Payroll", "Salary_Payroll"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", payroll: [] })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var list = [];
+  for (var r = 1; r < rows.length; r++) {
+    var row = rows[r];
+    if (!row[0]) continue;
+    list.push({
+      payrollKey: String(row[0] || ""),
+      monthKey: String(row[1] || ""),
+      monthName: String(row[2] || ""),
+      userId: String(row[3] || ""),
+      name: String(row[4] || ""),
+      role: String(row[5] || ""),
+      mobile: String(row[6] || ""),
+      workingDays: Number(row[7] || 0),
+      presentDays: Number(row[8] || 0),
+      absentDays: Number(row[9] || 0),
+      halfDays: Number(row[10] || 0),
+      lateDays: Number(row[11] || 0),
+      totalLateMinutes: Number(row[12] || 0),
+      extraOvertimeHours: Number(row[13] || 0),
+      extraDutyDays: Number(row[14] || 0),
+      baseSalary: Number(row[15] || 0),
+      totalAdditions: Number(row[16] || 0),
+      totalDeductions: Number(row[17] || 0),
+      netPayable: Number(row[18] || 0),
+      savedAt: String(row[19] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", payroll: list })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveStaffSalaryPayroll(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Staff_Salary_Payroll", "Staff Salary Payroll", "Salary_Payroll"]);
+  var records = data.records;
+  if (typeof records === "string") {
+    try { records = JSON.parse(records); } catch(e) { records = []; }
+  }
+  if (!Array.isArray(records)) {
+    records = data.record ? [data.record] : [];
+  }
+
+  var existing = sheet.getDataRange().getValues();
+  var keyMap = {};
+  for (var r = 1; r < existing.length; r++) {
+    var k = String(existing[r][0] || "").trim().toLowerCase();
+    if (k) keyMap[k] = r + 1;
+  }
+
+  var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var saved = 0;
+  for (var i = 0; i < records.length; i++) {
+    var rec = records[i];
+    if (!rec || !rec.userId) continue;
+    var pKey = String(rec.payrollKey || (String(rec.monthKey || "cur") + "::" + String(rec.userId))).trim();
+    var rowArr = [
+      pKey,
+      String(rec.monthKey || ""),
+      String(rec.monthName || ""),
+      String(rec.userId || ""),
+      String(rec.name || ""),
+      String(rec.role || ""),
+      String(rec.mobile || ""),
+      Number(rec.workingDays || 0),
+      Number(rec.presentDays || 0),
+      Number(rec.absentDays || 0),
+      Number(rec.halfDays || 0),
+      Number(rec.lateDays || 0),
+      Number(rec.totalLateMinutes || 0),
+      Number(rec.extraOvertimeHours || 0),
+      Number(rec.extraDutyDays || 0),
+      Number(rec.baseSalary || 0),
+      Number(rec.totalAdditions || 0),
+      Number(rec.totalDeductions || 0),
+      Number(rec.netPayable || 0),
+      formatToLocalIST_(rec.savedAt, nowStr)
+    ];
+    var tRow = keyMap[pKey.toLowerCase()];
+    if (tRow) {
+      sheet.getRange(tRow, 1, 1, 20).setValues([rowArr]);
+    } else {
+      sheet.appendRow(rowArr);
+      keyMap[pKey.toLowerCase()] = sheet.getLastRow();
+    }
+    saved++;
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Staff_Salary_Payroll backed up (" + saved + " payslips)!",
+    count: saved
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+// =========================================================================
+// FEATURE 6 BACKUP: UPI_Settings & UPI_Payments HANDLERS
+// =========================================================================
+function handleGetUpiSettings(ss) {
+  var sheet = findExistingSheet_(ss, ["UPI_Settings", "UPI Settings"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", settings: null })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  if (rows.length < 2) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", settings: null })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var r = rows[1];
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    settings: {
+      upiId: String(r[1] || ""),
+      payeeName: String(r[2] || "E.V.S. Public School"),
+      bankName: String(r[3] || ""),
+      instructions: String(r[4] || ""),
+      updatedAt: String(r[6] || "")
+    }
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveUpiSettings(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["UPI_Settings", "UPI Settings"]);
+  var s = data.settings || data;
+  if (typeof s === "string") {
+    try { s = JSON.parse(s); } catch(e) { s = data; }
+  }
+  var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var rowArr = [
+    "SCHOOL_UPI",
+    String(s.upiId || ""),
+    String(s.payeeName || "E.V.S. Public School"),
+    String(s.bankName || ""),
+    String(s.instructions || ""),
+    (s.hasStaticQr || (s.staticQrImage && String(s.staticQrImage).length > 10)) ? "YES" : "NO",
+    formatToLocalIST_(s.updatedAt, nowStr)
+  ];
+  if (sheet.getLastRow() >= 2) {
+    sheet.getRange(2, 1, 1, 7).setValues([rowArr]);
+  } else {
+    sheet.appendRow(rowArr);
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "UPI_Settings backed up to Google Sheet!"
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetUpiPayments(ss) {
+  var sheet = findExistingSheet_(ss, ["UPI_Payments", "UPI Payments", "UPI_Payment_Logs"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", payments: [] })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var list = [];
+  for (var r = 1; r < rows.length; r++) {
+    var row = rows[r];
+    if (!row[0]) continue;
+    list.push({
+      id: String(row[0] || ""),
+      createdAt: String(row[1] || ""),
+      studentId: String(row[2] || ""),
+      studentName: String(row[3] || ""),
+      className: String(row[4] || ""),
+      parentMobile: String(row[5] || ""),
+      payerName: String(row[6] || ""),
+      amount: Number(row[7] || 0),
+      feeType: String(row[8] || "Monthly Tuition Fee"),
+      month: String(row[9] || ""),
+      utrNumber: String(row[10] || ""),
+      paymentApp: String(row[11] || "UPI"),
+      paymentDate: String(row[12] || ""),
+      notes: String(row[13] || ""),
+      status: String(row[14] || "Pending"),
+      receiptNumber: String(row[15] || ""),
+      managerNote: String(row[16] || ""),
+      verifiedBy: String(row[17] || ""),
+      verifiedAt: String(row[18] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", payments: list })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function upsertUpiPaymentRow(sheet, p) {
+  var pid = String(p.id || "").trim();
+  if (!pid) return;
+  var rows = sheet.getDataRange().getValues();
+  var tRow = -1;
+  for (var r = 1; r < rows.length; r++) {
+    if (String(rows[r][0] || "").trim() === pid) {
+      tRow = r + 1;
+      break;
+    }
+  }
+  var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var rowArr = [
+    pid,
+    formatToLocalIST_(p.createdAt, nowStr),
+    String(p.studentId || ""),
+    String(p.studentName || ""),
+    String(p.className || ""),
+    String(p.parentMobile || ""),
+    String(p.payerName || ""),
+    Number(p.amount || 0),
+    String(p.feeType || "Monthly Tuition Fee"),
+    String(p.month || ""),
+    String(p.utrNumber || ""),
+    String(p.paymentApp || "UPI"),
+    String(p.paymentDate || ""),
+    String(p.notes || ""),
+    String(p.status || "Pending"),
+    String(p.receiptNumber || ""),
+    String(p.managerNote || ""),
+    String(p.verifiedBy || ""),
+    p.verifiedAt ? formatToLocalIST_(p.verifiedAt, nowStr) : "",
+    (p.hasScreenshot || (p.screenshotData && String(p.screenshotData).length > 10)) ? "YES" : "NO"
+  ];
+  if (tRow > 0) {
+    sheet.getRange(tRow, 1, 1, 20).setValues([rowArr]);
+  } else {
+    sheet.appendRow(rowArr);
   }
 }
 
-function handleSaveRouteStops(postData) {
-  try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var sheet = ss.getSheetByName("Route_Stops");
-    if (!sheet) {
-      sheet = ss.insertSheet("Route_Stops");
-      sheet.appendRow([
-        "Stop_ID", "Stop_Name", "Latitude", "Longitude",
-        "Sequence_Order", "Morning_Pickup_Time", "Evening_Drop_Time",
-        "Students_Count", "Van_ID", "Village_Area", "Last_Updated"
-      ]);
-      sheet.getRange(1, 1, 1, 11).setFontWeight("bold").setBackground("#d9ead3");
-    }
-    
-    var stops = postData.stops || [];
-    var vanId = postData.vanId || "van-1";
-    var timestamp = new Date().toISOString();
-    
-    var existingData = sheet.getDataRange().getValues();
-    var rowsToKeep = [];
-    if (existingData.length > 0) {
-      rowsToKeep.push(existingData[0]); // Header
-      for (var r = 1; r < existingData.length; r++) {
-        var rowVanId = String(existingData[r][8] || "van-1");
-        if (rowVanId !== vanId) {
-          rowsToKeep.push(existingData[r]);
-        }
-      }
-    }
-    
-    var newRows = [];
-    for (var i = 0; i < stops.length; i++) {
-      var s = stops[i];
-      newRows.push([
-        s.id || ("stop_" + (i + 1)),
-        s.name || "",
-        s.lat || 0,
-        s.lng || 0,
-        s.order !== undefined ? s.order : (i + 1),
-        s.pickupTime || "",
-        s.dropTime || "",
-        s.studentsCount || 0,
-        s.vanId || vanId,
-        s.village || "",
-        timestamp
-      ]);
-    }
-    
-    sheet.clearContents();
-    var finalData = rowsToKeep.concat(newRows);
-    if (finalData.length > 0) {
-      sheet.getRange(1, 1, finalData.length, finalData[0].length).setValues(finalData);
-    }
-    
-    return ContentService.createTextOutput(JSON.stringify({
-      status: "success",
-      message: stops.length + " स्टॉपेज Route_Stops में सुरक्षित हो गए!",
-      count: stops.length
-    })).setMimeType(ContentService.MimeType.JSON);
-  } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({
-      status: "error",
-      message: err.toString()
-    })).setMimeType(ContentService.MimeType.JSON);
+function handleSaveUpiPayment(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["UPI_Payments", "UPI Payments", "UPI_Payment_Logs"]);
+  var p = data.payment || data;
+  if (typeof p === "string") {
+    try { p = JSON.parse(p); } catch(e) { p = data; }
   }
+  upsertUpiPaymentRow(sheet, p);
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "UPI payment backed up to UPI_Payments sheet!",
+    id: p.id
+  })).setMimeType(ContentService.MimeType.JSON);
 }
-function handleSaveRouteStops(arg1, arg2) {
-  try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    if (!ss) ss = SpreadsheetApp.openById("1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU");
-    var sheet = ss.getSheetByName("Route_Stops");
-    if (!sheet) {
-      sheet = ss.insertSheet("Route_Stops");
-      sheet.appendRow(["Stop_ID", "Route_ID", "Stop_Name", "Sequence_Order", "Latitude", "Longitude", "Morning_Time", "Evening_Time", "Village_Name", "Student_Count", "Notes"]);
-      sheet.getRange(1, 1, 1, 11).setFontWeight("bold").setBackground("#d9ead3");
-    }
 
-    var e = (arg2 !== undefined) ? arg2 : arg1;
-    var params = {};
-    if (e) {
-      if (e.parameter) {
-        for (var p in e.parameter) params[p] = e.parameter[p];
-      }
-      if (e.postData && e.postData.contents) {
-        try {
-          var body = JSON.parse(e.postData.contents);
-          for (var b in body) params[b] = body[b];
-        } catch(err) {}
-      }
-      if (!e.parameter && !e.postData) {
-        for (var k in e) params[k] = e[k];
-      }
-    }
-
-    var routeId = String(params.route_id || params.routeId || "route-1").trim();
-    var stops = [];
-    if (Array.isArray(params.stops)) {
-      stops = params.stops;
-    } else if (typeof params.stops === "string") {
-      try { stops = JSON.parse(params.stops); } catch(err) { stops = []; }
-    }
-
-    if ((!stops || stops.length === 0) && (params.stop_name || params.name || params.lat)) {
-      stops = [{
-        id: params.stop_id || params.id || ("stop-" + Date.now().toString().slice(-6)),
-        name: params.stop_name || params.name || "Stop",
-        sequence: Number(params.sequence || params.sequence_order || 1),
-        lat: Number(params.lat || params.latitude || 0),
-        lng: Number(params.lng || params.longitude || 0),
-        morningTime: params.morning_time || params.morningTime || "07:30 AM",
-        eveningTime: params.evening_time || params.eveningTime || "02:30 PM",
-        villageName: params.village_name || params.villageName || "",
-        studentCount: Number(params.student_count || params.studentCount || 0),
-        notes: params.notes || ""
-      }];
-    }
-
-    var existingData = sheet.getDataRange().getValues();
-    var headerRow = existingData.length > 0 ? existingData[0] : ["Stop_ID", "Route_ID", "Stop_Name", "Sequence_Order", "Latitude", "Longitude", "Morning_Time", "Evening_Time", "Village_Name", "Student_Count", "Notes"];
-
-    var otherRoutesRows = [];
-    for (var r = 1; r < existingData.length; r++) {
-      var row = existingData[r];
-      var rRoute = String(row[1] || "").trim();
-      if (rRoute && rRoute.toLowerCase() !== routeId.toLowerCase()) {
-        otherRoutesRows.push(row);
-      }
-    }
-
-    var thisRouteRows = [];
-    for (var i = 0; i < stops.length; i++) {
-      var st = stops[i];
-      if (!st) continue;
-      thisRouteRows.push([
-        String(st.id || ("stop-" + (i + 1))),
-        routeId,
-        String(st.name || ("स्टॉप " + (i + 1))),
-        Number(st.sequence || (i + 1)),
-        Number(st.lat || 0),
-        Number(st.lng || 0),
-        String(st.morningTime || st.scheduledTime || ""),
-        String(st.eveningTime || ""),
-        String(st.villageName || ""),
-        Number(st.studentCount || 0),
-        String(st.notes || "")
-      ]);
-    }
-
-    sheet.clearContents();
-    var allRows = [headerRow].concat(otherRoutesRows).concat(thisRouteRows);
-    if (allRows.length > 0) {
-      sheet.getRange(1, 1, allRows.length, allRows[0].length).setValues(allRows);
-    }
-
-    return ContentService.createTextOutput(JSON.stringify({
-      status: "success",
-      message: "Route stops saved successfully!",
-      count: stops.length
-    })).setMimeType(ContentService.MimeType.JSON);
-  } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({
-      status: "error",
-      message: err.toString()
-    })).setMimeType(ContentService.MimeType.JSON);
+function handleVerifyUpiPayment(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["UPI_Payments", "UPI Payments", "UPI_Payment_Logs"]);
+  var p = data.payment || data;
+  if (typeof p === "string") {
+    try { p = JSON.parse(p); } catch(e) { p = data; }
   }
+  if (p && p.studentId) {
+    upsertUpiPaymentRow(sheet, p);
+  } else if (p && p.id) {
+    var rows = sheet.getDataRange().getValues();
+    for (var r = 1; r < rows.length; r++) {
+      if (String(rows[r][0] || "").trim() === String(p.id).trim()) {
+        sheet.getRange(r + 1, 15, 1, 5).setValues([[
+          String(p.status || "Approved"),
+          String(p.receiptNumber || ""),
+          String(p.managerNote || ""),
+          String(p.verifiedBy || "School Manager"),
+          formatToLocalIST_(p.verifiedAt, Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss"))
+        ]]);
+        break;
+      }
+    }
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "UPI verification status updated in UPI_Payments sheet!"
+  })).setMimeType(ContentService.MimeType.JSON);
 }
+
+function handleSyncAllUpiPayments(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["UPI_Payments", "UPI Payments", "UPI_Payment_Logs"]);
+  if (data.settings) {
+    handleSaveUpiSettings(ss, { settings: data.settings });
+  }
+  var payments = data.payments;
+  if (typeof payments === "string") {
+    try { payments = JSON.parse(payments); } catch(e) { payments = []; }
+  }
+  if (!Array.isArray(payments)) payments = [];
+  for (var i = 0; i < payments.length; i++) {
+    upsertUpiPaymentRow(sheet, payments[i]);
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "UPI_Payments & UPI_Settings synced (" + payments.length + " records)!",
+    count: payments.length
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+// =========================================================================
+// REPORT CARD BACKUP: Exam_Marks & Report_Cards_Backup HANDLERS
+// =========================================================================
+function handleGetExamMarks(ss) {
+  var sheet = findExistingSheet_(ss, ["Exam_Marks", "Exam Marks", "ExamMarks"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", marks: [] })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var list = [];
+  for (var r = 1; r < rows.length; r++) {
+    var row = rows[r];
+    if (!row[0] && !row[3]) continue;
+    list.push({
+      id: String(row[0] || ""),
+      session: String(row[1] || "2026-27"),
+      exam_type: String(row[2] || "Quarterly"),
+      student_id: String(row[3] || ""),
+      student_name: String(row[4] || ""),
+      class_name: String(row[5] || ""),
+      subject: String(row[6] || ""),
+      max_marks: Number(row[7] || 50),
+      marks_obtained: Number(row[8] || 0),
+      attendance_status: String(row[9] || "Present") === "Absent" ? "Absent" : "Present",
+      teacher_id: String(row[10] || ""),
+      teacher_name: String(row[11] || ""),
+      remarks: String(row[12] || ""),
+      updated_at: String(row[13] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", marks: list })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function upsertExamMarksArray(sheet, records) {
+  if (!Array.isArray(records) || records.length === 0) return 0;
+  var rows = sheet.getDataRange().getValues();
+  var idMap = {};
+  var compositeMap = {};
+  for (var r = 1; r < rows.length; r++) {
+    var rId = String(rows[r][0] || "").trim().toLowerCase();
+    var compKey = [
+      String(rows[r][1] || "2026-27").trim().toLowerCase(),
+      String(rows[r][2] || "").trim().toLowerCase(),
+      String(rows[r][3] || "").trim().toLowerCase(),
+      String(rows[r][6] || "").trim().toLowerCase()
+    ].join("::");
+    if (rId) idMap[rId] = r + 1;
+    if (rows[r][3] && rows[r][6]) compositeMap[compKey] = r + 1;
+  }
+
+  var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var count = 0;
+  var newRows = [];
+  for (var i = 0; i < records.length; i++) {
+    var rec = records[i];
+    if (!rec || !rec.student_id || !rec.subject) continue;
+    var markId = String(rec.id || ("EM-" + Date.now() + "-" + i)).trim();
+    var sess = String(rec.session || "2026-27").trim();
+    var exType = String(rec.exam_type || "Quarterly").trim();
+    var sId = String(rec.student_id || "").trim();
+    var subj = String(rec.subject || "").trim();
+    var comp = [sess.toLowerCase(), exType.toLowerCase(), sId.toLowerCase(), subj.toLowerCase()].join("::");
+    var rowArr = [
+      markId,
+      sess,
+      exType,
+      sId,
+      String(rec.student_name || ""),
+      String(rec.class_name || ""),
+      subj,
+      Number(rec.max_marks || 50),
+      Number(rec.marks_obtained || 0),
+      String(rec.attendance_status || "Present") === "Absent" ? "Absent" : "Present",
+      String(rec.teacher_id || ""),
+      String(rec.teacher_name || ""),
+      String(rec.remarks || ""),
+      formatToLocalIST_(rec.updated_at, nowStr)
+    ];
+    var targetRow = idMap[markId.toLowerCase()] || compositeMap[comp];
+    if (targetRow) {
+      sheet.getRange(targetRow, 1, 1, 14).setValues([rowArr]);
+    } else {
+      newRows.push(rowArr);
+      var projectedRow = sheet.getLastRow() + newRows.length;
+      idMap[markId.toLowerCase()] = projectedRow;
+      compositeMap[comp] = projectedRow;
+    }
+    count++;
+  }
+  if (newRows.length > 0) {
+    var startRow = sheet.getLastRow() + 1;
+    sheet.getRange(startRow, 1, newRows.length, 14).setValues(newRows);
+  }
+  return count;
+}
+
+function handleSaveExamMarksBatch(ss, data) {
+  var sheet = ensureTabSafe_(ss, "Exam_Marks", ["Exam Marks", "ExamMarks"], ["Mark_ID", "Session", "Exam_Type", "Student_ID", "Student_Name", "Class", "Subject", "Max_Marks", "Marks_Obtained", "Attendance_Status", "Teacher_ID", "Teacher_Name", "Remarks", "Updated_At"]);
+  var records = data.records;
+  if (typeof records === "string") {
+    try { records = JSON.parse(records); } catch(e) { records = []; }
+  }
+  if (!Array.isArray(records)) records = data.record ? [data.record] : [];
+  var count = upsertExamMarksArray(sheet, records);
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Exam_Marks backed up (" + count + " records)!",
+    count: count
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleDeleteExamMark(ss, data) {
+  var sheet = findExistingSheet_(ss, ["Exam_Marks", "Exam Marks", "ExamMarks"]);
+  if (!sheet) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", deleted: false })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var targetId = String(data.id || data.mark_id || "").trim().toLowerCase();
+  var rows = sheet.getDataRange().getValues();
+  var deleted = false;
+  for (var r = rows.length - 1; r >= 1; r--) {
+    if (String(rows[r][0] || "").trim().toLowerCase() === targetId) {
+      sheet.deleteRow(r + 1);
+      deleted = true;
+      break;
+    }
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", deleted: deleted })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetReportCardMeta(ss) {
+  var sheet = findExistingSheet_(ss, ["Report_Cards_Backup", "Report Cards Backup", "Report_Cards", "ReportCardsBackup"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", meta: {} })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var meta = {};
+  for (var r = 1; r < rows.length; r++) {
+    var row = rows[r];
+    var rKey = String(row[0] || "").trim();
+    if (!rKey) continue;
+    var pubRaw = String(row[18] || "YES").trim().toUpperCase();
+    meta[rKey] = {
+      reportKey: rKey,
+      session: String(row[1] || "2026-27"),
+      studentId: String(row[2] || ""),
+      teacherRemark: String(row[15] || ""),
+      principalRemark: String(row[16] || ""),
+      resultStatus: String(row[17] || "PROMOTED"),
+      publishedToParent: pubRaw !== "FALSE" && pubRaw !== "NO" && pubRaw !== "HIDDEN",
+      updatedBy: String(row[19] || ""),
+      updatedAt: String(row[20] || "")
+    };
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", meta: meta })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveReportCardMeta(ss, data) {
+  var sheet = ensureTabSafe_(ss, "Report_Cards_Backup", ["Report Cards Backup", "Report_Cards", "ReportCardsBackup"], ["Report_Key", "Session", "Student_ID", "Student_Name", "Class", "Roll_Number", "Weekly_Pct", "Quarterly_Pct", "HalfYearly_Pct", "Annual_Pct", "Overall_Pct", "Grade", "Attendance_Pct", "Present_Days", "Total_Days", "Teacher_Remark", "Principal_Remark", "Result_Status", "Published_For_Parent", "Updated_By", "Updated_At"]);
+  var m = data.meta || data;
+  if (typeof m === "string") {
+    try { m = JSON.parse(m); } catch(e) { m = data; }
+  }
+  var rKey = String(m.reportKey || ((m.session || "2026-27") + "::" + (m.studentId || ""))).trim();
+  if (!rKey || rKey.endsWith("::")) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "reportKey required" })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var tRow = -1;
+  for (var r = 1; r < rows.length; r++) {
+    if (String(rows[r][0] || "").trim().toLowerCase() === rKey.toLowerCase()) {
+      tRow = r + 1;
+      break;
+    }
+  }
+  var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var pubStr = (m.publishedToParent === false) ? "NO" : "YES";
+  if (tRow > 0) {
+    sheet.getRange(tRow, 16, 1, 6).setValues([[
+      String(m.teacherRemark || ""),
+      String(m.principalRemark || ""),
+      String(m.resultStatus || "PROMOTED"),
+      pubStr,
+      String(m.updatedBy || "Staff"),
+      formatToLocalIST_(m.updatedAt, nowStr)
+    ]]);
+  } else {
+    sheet.appendRow([
+      rKey,
+      String(m.session || "2026-27"),
+      String(m.studentId || ""),
+      String(m.studentName || ""),
+      String(m.className || ""),
+      String(m.rollNumber || ""),
+      "", "", "", "", "", "", "", "", "",
+      String(m.teacherRemark || ""),
+      String(m.principalRemark || ""),
+      String(m.resultStatus || "PROMOTED"),
+      pubStr,
+      String(m.updatedBy || "Staff"),
+      formatToLocalIST_(m.updatedAt, nowStr)
+    ]);
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Report card remarks backed up in Report_Cards_Backup!",
+    reportKey: rKey
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSyncReportCardsBatch(ss, data) {
+  var emSheet = ensureTabSafe_(ss, "Exam_Marks", ["Exam Marks", "ExamMarks"], ["Mark_ID", "Session", "Exam_Type", "Student_ID", "Student_Name", "Class", "Subject", "Max_Marks", "Marks_Obtained", "Attendance_Status", "Teacher_ID", "Teacher_Name", "Remarks", "Updated_At"]);
+  var rcSheet = ensureTabSafe_(ss, "Report_Cards_Backup", ["Report Cards Backup", "Report_Cards", "ReportCardsBackup"], ["Report_Key", "Session", "Student_ID", "Student_Name", "Class", "Roll_Number", "Weekly_Pct", "Quarterly_Pct", "HalfYearly_Pct", "Annual_Pct", "Overall_Pct", "Grade", "Attendance_Pct", "Present_Days", "Total_Days", "Teacher_Remark", "Principal_Remark", "Result_Status", "Published_For_Parent", "Updated_By", "Updated_At"]);
+
+  var examMarks = data.examMarks;
+  if (typeof examMarks === "string") {
+    try { examMarks = JSON.parse(examMarks); } catch(e) { examMarks = []; }
+  }
+  var emCount = upsertExamMarksArray(emSheet, examMarks || []);
+
+  var backups = data.backups;
+  if (typeof backups === "string") {
+    try { backups = JSON.parse(backups); } catch(e) { backups = []; }
+  }
+  if (!Array.isArray(backups)) backups = [];
+
+  var existing = rcSheet.getDataRange().getValues();
+  var keyMap = {};
+  for (var r = 1; r < existing.length; r++) {
+    var k = String(existing[r][0] || "").trim().toLowerCase();
+    if (k) keyMap[k] = r + 1;
+  }
+
+  var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var rcCount = 0;
+  var newRcRows = [];
+  for (var i = 0; i < backups.length; i++) {
+    var b = backups[i];
+    if (!b || !b.reportKey) continue;
+    var rKey = String(b.reportKey).trim();
+    var rowArr = [
+      rKey,
+      String(b.session || "2026-27"),
+      String(b.studentId || ""),
+      String(b.studentName || ""),
+      String(b.className || ""),
+      String(b.rollNumber || ""),
+      Number(b.weeklyPct || 0),
+      Number(b.quarterlyPct || 0),
+      Number(b.halfYearlyPct || 0),
+      Number(b.annualPct || 0),
+      Number(b.overallPct || 0),
+      String(b.grade || "-"),
+      Number(b.attendancePct || 0),
+      Number(b.presentDays || 0),
+      Number(b.totalDays || 0),
+      String(b.teacherRemark || ""),
+      String(b.principalRemark || ""),
+      String(b.resultStatus || "PROMOTED"),
+      (b.publishedToParent === false) ? "NO" : "YES",
+      String(b.updatedBy || "Manager"),
+      formatToLocalIST_(b.updatedAt, nowStr)
+    ];
+    var tRow = keyMap[rKey.toLowerCase()];
+    if (tRow) {
+      rcSheet.getRange(tRow, 1, 1, 21).setValues([rowArr]);
+    } else {
+      newRcRows.push(rowArr);
+      keyMap[rKey.toLowerCase()] = rcSheet.getLastRow() + newRcRows.length;
+    }
+    rcCount++;
+  }
+  if (newRcRows.length > 0) {
+    rcSheet.getRange(rcSheet.getLastRow() + 1, 1, newRcRows.length, 21).setValues(newRcRows);
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Exam_Marks (" + emCount + ") और Report_Cards_Backup (" + rcCount + ") सफलतापूर्वक बैकअप हुए!",
+    examMarksCount: emCount,
+    reportCardsCount: rcCount
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+// =========================================================================
+// WEEKLY TESTS, TEACHER PERFORMANCE, SYLLABUS & HOLIDAYS (2-WAY SYNC)
+// =========================================================================
 function formatCellMonth_(val) {
   if (!val) return "";
   if (Object.prototype.toString.call(val) === "[object Date]") {
@@ -2265,255 +3059,57 @@ function isHolidayDateFirst_(sheet) {
   var lastCol = sheet.getLastColumn();
   if (sheet.getLastRow() < 1 || lastCol < 4) return false;
   var hdr = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
-  return String(hdr[1] || "").toLowerCase().indexOf("date") !== -1;
+  var colB = String(hdr[1] || "").toLowerCase();
+  return colB.indexOf("date") !== -1;
 }
 
-function isTp19Col_(sheet) {
-  var lastCol = sheet.getLastColumn();
-  if (sheet.getLastRow() < 1 || lastCol < 6) return false;
-  var hdr = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
-  var colE = String(hdr[4] || "").toLowerCase();
-  return colE.indexOf("subject") !== -1 || lastCol >= 18;
-}
-
-function handleGetTeacherPerformance(ss) {
-  var sheet = ss.getSheetByName("Teacher_Performance");
-  if (!sheet) {
-    return ContentService.createTextOutput(JSON.stringify({ status: "success", records: [] })).setMimeType(ContentService.MimeType.JSON);
-  }
-  var rows = sheet.getDataRange().getValues();
-  var is19 = isTp19Col_(sheet);
-  var records = [];
-  for (var i = 1; i < rows.length; i++) {
-    var r = rows[i];
-    if (!r[0] && !r[1]) continue;
-    if (is19) {
-      records.push({
-        id: String(r[0] || ("tp_" + i)),
-        teacher_id: String(r[1] || ""),
-        teacher_name: String(r[2] || ""),
-        assigned_class: String(r[3] || ""),
-        subject: String(r[4] || ""),
-        month: formatCellMonth_(r[5]),
-        academic_year: String(r[6] || "2026-2027"),
-        syllabus_progress_score: Number(r[7] || 0),
-        student_test_score: Number(r[8] || 0),
-        attendance_logging_score: Number(r[9] || 0),
-        homework_evaluation_score: Number(r[10] || 0),
-        punctuality_discipline_score: Number(r[11] || 0),
-        monthly_total_score: Number(r[12] || 0),
-        grade: String(r[13] || "B"),
-        evaluation_date: formatCellDate_(r[15]),
-        evaluated_by: String(r[16] || "Principal / Manager"),
-        remarks: String(r[17] || ""),
-        timestamp: String(r[18] || "")
-      });
-    } else {
-      records.push({
-        id: String(r[0] || ("tp_" + i)),
-        teacher_id: String(r[1] || ""),
-        teacher_name: String(r[2] || ""),
-        assigned_class: String(r[3] || ""),
-        month: formatCellMonth_(r[4]),
-        academic_year: String(r[5] || "2026-2027"),
-        syllabus_progress_score: Number(r[6] || 0),
-        student_test_score: Number(r[7] || 0),
-        attendance_logging_score: Number(r[8] || 0),
-        homework_evaluation_score: Number(r[9] || 0),
-        punctuality_discipline_score: Number(r[10] || 0),
-        monthly_total_score: Number(r[11] || 0),
-        grade: String(r[12] || "B"),
-        evaluated_by: String(r[13] || "Principal / Manager"),
-        remarks: String(r[14] || ""),
-        timestamp: String(r[15] || "")
-      });
-    }
-  }
-  return ContentService.createTextOutput(JSON.stringify({ status: "success", records: records })).setMimeType(ContentService.MimeType.JSON);
-}
-
-function handleGetSyllabusTracker(ss) {
-  var sheet = ss.getSheetByName("Syllabus_Tracker");
-  if (!sheet) {
-    return ContentService.createTextOutput(JSON.stringify({ status: "success", topics: [] })).setMimeType(ContentService.MimeType.JSON);
-  }
-  var rows = sheet.getDataRange().getValues();
-  var topics = [];
-  for (var i = 1; i < rows.length; i++) {
-    var r = rows[i];
-    if (!r[0] && !r[8] && !r[9]) continue;
-    topics.push({
-      id: String(r[0] || ("syl_" + i)),
-      teacher_id: String(r[1] || ""),
-      teacher_name: String(r[2] || ""),
-      class_name: String(r[3] || ""),
-      subject: String(r[4] || ""),
-      month: formatCellMonth_(r[5]),
-      week_number: Number(r[6] || 1),
-      week_label: String(r[7] || ""),
-      chapter_title: String(r[8] || ""),
-      topic_description: String(r[9] || ""),
-      planned_date: formatCellDate_(r[10]),
-      target_completion_date: formatCellDate_(r[11]),
-      completed_date: formatCellDate_(r[12]),
-      status: String(r[13] || "Pending"),
-      timestamp: String(r[14] || "")
-    });
-  }
-  return ContentService.createTextOutput(JSON.stringify({ status: "success", topics: topics })).setMimeType(ContentService.MimeType.JSON);
-}
-
-function handleGetSchoolHolidays(ss) {
-  var sheet = ss.getSheetByName("School_Holidays");
-  if (!sheet) {
-    return ContentService.createTextOutput(JSON.stringify({ status: "success", holidays: [] })).setMimeType(ContentService.MimeType.JSON);
-  }
-  var rows = sheet.getDataRange().getValues();
-  var dateFirst = isHolidayDateFirst_(sheet);
-  var holidays = [];
-  for (var i = 1; i < rows.length; i++) {
-    var r = rows[i];
-    if (!r[1] && !r[2]) continue;
-    holidays.push({
-      id: String(r[0] || ("hol_" + i)),
-      title: String((dateFirst ? r[3] : r[1]) || ""),
-      date: formatCellDate_(dateFirst ? r[1] : r[2]),
-      end_date: formatCellDate_(dateFirst ? r[2] : r[3]),
-      category: String(r[4] || "festival"),
-      description: String(r[5] || ""),
-      timestamp: String(r[6] || "")
-    });
-  }
-  return ContentService.createTextOutput(JSON.stringify({ status: "success", holidays: holidays })).setMimeType(ContentService.MimeType.JSON);
-}
-
-function handleSaveTeacherPerformance(ss, data) {
-  var sheet = ss.getSheetByName("Teacher_Performance");
-  if (!sheet) {
-    sheet = ss.insertSheet("Teacher_Performance");
-    sheet.appendRow([
-      "Record_ID", "Teacher_ID", "Teacher_Name", "Assigned_Class",
-      "Month", "Academic_Year", "Syllabus_Score_30", "Test_Score_25",
-      "Attendance_Score_15", "Homework_Score_15", "Punctuality_Score_15",
-      "Total_Score_100", "Grade", "Evaluated_By", "Remarks", "Timestamp"
-    ]);
-  }
-  var rec = data.record ? (typeof data.record === "string" ? JSON.parse(data.record) : data.record) : data;
-  var recordId = String(rec.id || ("tp_" + rec.month + "_" + rec.teacher_id));
-  var is19 = isTp19Col_(sheet);
-  var monthColIdx = is19 ? 5 : 4;
-  var rows = sheet.getDataRange().getValues();
-  var rowIndex = -1;
-  for (var i = 1; i < rows.length; i++) {
-    if (String(rows[i][0]) === recordId || (String(rows[i][1]) === String(rec.teacher_id) && formatCellMonth_(rows[i][monthColIdx]) === String(rec.month))) {
-      rowIndex = i + 1;
-      break;
-    }
-  }
-  var rowData = is19
-    ? [
-        recordId, rec.teacher_id || "", rec.teacher_name || "", rec.assigned_class || "", rec.subject || "",
-        "'" + String(rec.month || ""), rec.academic_year || "2026-2027",
-        Number(rec.syllabus_progress_score || 0), Number(rec.student_test_score || 0),
-        Number(rec.attendance_logging_score || 0), Number(rec.homework_evaluation_score || 0),
-        Number(rec.punctuality_discipline_score || 0), Number(rec.monthly_total_score || 0),
-        rec.grade || "B", rec.rank || "", rec.evaluation_date || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd"),
-        rec.evaluated_by || "Principal / Manager", rec.remarks || "", new Date()
-      ]
-    : [
-        recordId, rec.teacher_id || "", rec.teacher_name || "", rec.assigned_class || "",
-        "'" + String(rec.month || ""), rec.academic_year || "2026-2027",
-        Number(rec.syllabus_progress_score || 0), Number(rec.student_test_score || 0),
-        Number(rec.attendance_logging_score || 0), Number(rec.homework_evaluation_score || 0),
-        Number(rec.punctuality_discipline_score || 0), Number(rec.monthly_total_score || 0),
-        rec.grade || "B", rec.evaluated_by || "Principal / Manager", rec.remarks || "", new Date()
-      ];
-  if (rowIndex > 0) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
-  else sheet.appendRow(rowData);
-  return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "Teacher performance saved!" })).setMimeType(ContentService.MimeType.JSON);
-}
-
-function handleSaveSyllabusTopic(ss, data) {
-  var sheet = ss.getSheetByName("Syllabus_Tracker");
-  if (!sheet) {
-    sheet = ss.insertSheet("Syllabus_Tracker");
-    sheet.appendRow([
-      "ID", "Teacher_ID", "Teacher_Name", "Class", "Subject",
-      "Month", "Week_Number", "Week_Label", "Chapter_Title", "Topic_Description",
-      "Planned_Date", "Target_Completion_Date", "Completed_Date", "Status", "Timestamp"
-    ]);
-  }
-  var t = data.topic ? (typeof data.topic === "string" ? JSON.parse(data.topic) : data.topic) : data;
-  var topicId = String(t.id || ("syl_" + Date.now()));
-  var rows = sheet.getDataRange().getValues();
-  var rowIndex = -1;
-  for (var i = 1; i < rows.length; i++) {
-    if (String(rows[i][0]) === topicId) { rowIndex = i + 1; break; }
-  }
-  var rowData = [
-    topicId, t.teacher_id || "", t.teacher_name || "", t.class_name || "", t.subject || "",
-    "'" + String(t.month || ""), Number(t.week_number || 1), t.week_label || "",
-    t.chapter_title || "", t.topic_description || "", t.planned_date || "",
-    t.target_completion_date || "", t.completed_date || "", t.status || "Pending", new Date()
-  ];
-  if (rowIndex > 0) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
-  else sheet.appendRow(rowData);
-  return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "Syllabus topic saved!" })).setMimeType(ContentService.MimeType.JSON);
-}
-
-function handleSaveSchoolHoliday(ss, data) {
-  var sheet = ss.getSheetByName("School_Holidays");
-  if (!sheet) {
-    sheet = ss.insertSheet("School_Holidays");
-    sheet.appendRow(["ID", "Date", "End_Date", "Title", "Category", "Description", "Timestamp"]);
-  }
-  var h = data.holiday ? (typeof data.holiday === "string" ? JSON.parse(data.holiday) : data.holiday) : data;
-  var holId = String(h.id || ("hol_" + Date.now()));
-  var dateFirst = isHolidayDateFirst_(sheet);
-  var rows = sheet.getDataRange().getValues();
-  var rowIndex = -1;
-  for (var i = 1; i < rows.length; i++) {
-    if (String(rows[i][0]) === holId) { rowIndex = i + 1; break; }
-  }
-  var rowData = dateFirst
-    ? [holId, "'" + String(h.date || ""), h.end_date ? ("'" + String(h.end_date)) : "", h.title || "", h.category || "festival", h.description || "", new Date()]
-    : [holId, h.title || "", "'" + String(h.date || ""), h.end_date ? ("'" + String(h.end_date)) : "", h.category || "festival", h.description || "", new Date()];
-  if (rowIndex > 0) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
-  else sheet.appendRow(rowData);
-  return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "Holiday saved!" })).setMimeType(ContentService.MimeType.JSON);
-}
-
-function handleDeleteRowById(ss, sheetName, id) {
+function handleDeleteRowById_(ss, sheetName, id) {
   var sheet = ss.getSheetByName(sheetName);
   if (!sheet || !id) {
-    return ContentService.createTextOutput(JSON.stringify({ status: "success" })).setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", deleted: false })).setMimeType(ContentService.MimeType.JSON);
   }
+  var targetId = String(id).trim().toLowerCase();
   var rows = sheet.getDataRange().getValues();
+  var deleted = false;
   for (var i = rows.length - 1; i >= 1; i--) {
-    if (String(rows[i][0]) === String(id)) {
+    if (String(rows[i][0] || "").trim().toLowerCase() === targetId) {
       sheet.deleteRow(i + 1);
+      deleted = true;
       break;
     }
   }
-  return ContentService.createTextOutput(JSON.stringify({ status: "success", deleted: id })).setMimeType(ContentService.MimeType.JSON);
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", deleted: deleted, id: id })).setMimeType(ContentService.MimeType.JSON);
 }
 
-function getOrCreateWeeklyTestsSheet_(ss) {
-  var sheet = ss.getSheetByName("Weekly_Tests");
+function handleDeleteHomework(ss, data) {
+  var sheet = ss.getSheetByName("Homework");
   if (!sheet) {
-    sheet = ss.insertSheet("Weekly_Tests");
-    sheet.appendRow([
-      "ID", "Session_ID", "Teacher_ID", "Teacher_Name", "Class", "Month",
-      "Week_Number", "Test_Date", "Subject", "Topic", "Student_ID", "Student_Name",
-      "Max_Marks", "Marks_Obtained", "Status", "Remarks", "Timestamp"
-    ]);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", deleted: false })).setMimeType(ContentService.MimeType.JSON);
   }
-  return sheet;
+  var targetId = String(data.homework_id || data.id || "").trim().toLowerCase();
+  var targetDate = String(data.date || "").trim();
+  var targetClass = String(data.class_name || data.class || "").trim().toLowerCase();
+  var targetSubj = String(data.subject || "").trim().toLowerCase();
+  var rows = sheet.getDataRange().getValues();
+  var deleted = false;
+  for (var i = rows.length - 1; i >= 1; i--) {
+    var rId = String(rows[i][0] || "").trim().toLowerCase();
+    var rDate = formatCellDate_(rows[i][1]);
+    var rClass = String(rows[i][2] || "").trim().toLowerCase();
+    var rSubj = String(rows[i][3] || "").trim().toLowerCase();
+    if ((targetId && rId === targetId) ||
+        (targetDate && rDate === targetDate && targetClass && rClass === targetClass && targetSubj && rSubj === targetSubj)) {
+      sheet.deleteRow(i + 1);
+      deleted = true;
+    }
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", deleted: deleted })).setMimeType(ContentService.MimeType.JSON);
 }
 
 function handleGetWeeklyTests(ss) {
-  var sheet = ss.getSheetByName("Weekly_Tests");
+  var sheet = findExistingSheet_(ss, ["Weekly_Tests", "Weekly Tests", "Weekly_Subject_Tests"]);
   if (!sheet) {
+    ensureFeatureBackupTabs(ss);
     return ContentService.createTextOutput(JSON.stringify({ status: "success", tests: [] })).setMimeType(ContentService.MimeType.JSON);
   }
   var rows = sheet.getDataRange().getValues();
@@ -2544,39 +3140,817 @@ function handleGetWeeklyTests(ss) {
   return ContentService.createTextOutput(JSON.stringify({ status: "success", tests: tests })).setMimeType(ContentService.MimeType.JSON);
 }
 
-function upsertWeeklyTestRow_(sheet, existingRows, rec) {
-  var recId = String(rec.id || ("wt_" + Date.now()));
+function handleSaveWeeklyTestsBatch(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Weekly_Tests", "Weekly Tests", "Weekly_Subject_Tests"]);
+  var records = data.records;
+  if (typeof records === "string") {
+    try { records = JSON.parse(records); } catch(e) { records = []; }
+  }
+  if (!Array.isArray(records)) {
+    var single = data.record ? (typeof data.record === "string" ? JSON.parse(data.record) : data.record) : data;
+    records = (single && (single.student_id || single.student_name)) ? [single] : [];
+  }
+  var rows = sheet.getDataRange().getValues();
+  var idMap = {};
+  for (var r = 1; r < rows.length; r++) {
+    var rId = String(rows[r][0] || "").trim().toLowerCase();
+    if (rId) idMap[rId] = r + 1;
+  }
+  var nowStr = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var saved = 0;
+  for (var i = 0; i < records.length; i++) {
+    var rec = records[i];
+    if (!rec || (!rec.student_id && !rec.student_name)) continue;
+    var recId = String(rec.id || ("wt_" + Date.now() + "_" + i)).trim();
+    var rowArr = [
+      recId,
+      String(rec.test_session_id || ""),
+      String(rec.teacher_id || ""),
+      String(rec.teacher_name || ""),
+      String(rec.class_name || ""),
+      "'" + String(rec.month || ""),
+      Number(rec.week_number || 1),
+      "'" + String(rec.test_date || ""),
+      String(rec.subject || ""),
+      String(rec.topic_name || ""),
+      String(rec.student_id || ""),
+      String(rec.student_name || ""),
+      Number(rec.max_marks || 20),
+      Number(rec.marks_obtained || 0),
+      String(rec.attendance_status || "Present") === "Absent" ? "Absent" : "Present",
+      String(rec.remarks || ""),
+      formatToLocalIST_(rec.timestamp, nowStr)
+    ];
+    var tRow = idMap[recId.toLowerCase()];
+    if (tRow) {
+      sheet.getRange(tRow, 1, 1, 17).setValues([rowArr]);
+    } else {
+      sheet.appendRow(rowArr);
+      idMap[recId.toLowerCase()] = sheet.getLastRow();
+    }
+    saved++;
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Weekly_Tests backed up (" + saved + " entries)!",
+    count: saved
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetTeacherPerformance(ss) {
+  var sheet = findExistingSheet_(ss, ["Teacher_Performance", "Teacher Performance"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", records: [] })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var records = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r[0] && !r[1]) continue;
+    records.push({
+      id: String(r[0] || ("tp_" + i)),
+      teacher_id: String(r[1] || ""),
+      teacher_name: String(r[2] || ""),
+      assigned_class: String(r[3] || ""),
+      month: formatCellMonth_(r[4]),
+      academic_year: String(r[5] || "2026-2027"),
+      syllabus_progress_score: Number(r[6] || 0),
+      student_test_score: Number(r[7] || 0),
+      attendance_logging_score: Number(r[8] || 0),
+      homework_evaluation_score: Number(r[9] || 0),
+      punctuality_discipline_score: Number(r[10] || 0),
+      monthly_total_score: Number(r[11] || 0),
+      grade: String(r[12] || "B"),
+      evaluated_by: String(r[13] || "Principal / Manager"),
+      remarks: String(r[14] || ""),
+      timestamp: String(r[15] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", records: records })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveTeacherPerformance(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Teacher_Performance", "Teacher Performance"]);
+  var rec = data.record ? (typeof data.record === "string" ? JSON.parse(data.record) : data.record) : data;
+  var recordId = String(rec.id || ("tp_" + rec.month + "_" + rec.teacher_id));
+  var rows = sheet.getDataRange().getValues();
   var rowIndex = -1;
-  for (var i = 1; i < existingRows.length; i++) {
-    if (String(existingRows[i][0]) === recId) { rowIndex = i + 1; break; }
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]) === recordId || (String(rows[i][1]) === String(rec.teacher_id) && formatCellMonth_(rows[i][4]) === String(rec.month))) {
+      rowIndex = i + 1;
+      break;
+    }
   }
   var rowData = [
-    recId, rec.test_session_id || "", rec.teacher_id || "", rec.teacher_name || "",
-    rec.class_name || "", "'" + String(rec.month || ""), Number(rec.week_number || 1),
-    rec.test_date ? ("'" + String(rec.test_date)) : "", rec.subject || "", rec.topic_name || "",
-    rec.student_id || "", rec.student_name || "", Number(rec.max_marks || 20),
-    Number(rec.marks_obtained || 0), rec.attendance_status || "Present", rec.remarks || "", new Date()
+    recordId, rec.teacher_id || "", rec.teacher_name || "", rec.assigned_class || "",
+    "'" + String(rec.month || ""), rec.academic_year || "2026-2027",
+    Number(rec.syllabus_progress_score || 0), Number(rec.student_test_score || 0),
+    Number(rec.attendance_logging_score || 0), Number(rec.homework_evaluation_score || 0),
+    Number(rec.punctuality_discipline_score || 0), Number(rec.monthly_total_score || 0),
+    rec.grade || "B", rec.evaluated_by || "Principal / Manager", rec.remarks || "", formatToLocalIST_(rec.timestamp)
   ];
   if (rowIndex > 0) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
   else sheet.appendRow(rowData);
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "Teacher performance saved!" })).setMimeType(ContentService.MimeType.JSON);
 }
 
-function handleSaveWeeklyTest(ss, data) {
-  var sheet = getOrCreateWeeklyTestsSheet_(ss);
-  var rec = data.record ? (typeof data.record === "string" ? JSON.parse(data.record) : data.record) : data;
-  var existingRows = sheet.getDataRange().getValues();
-  upsertWeeklyTestRow_(sheet, existingRows, rec);
-  return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "Weekly test saved!" })).setMimeType(ContentService.MimeType.JSON);
-}
-
-function handleSaveWeeklyTestsBatch(ss, data) {
-  var sheet = getOrCreateWeeklyTestsSheet_(ss);
-  var list = data.records ? (typeof data.records === "string" ? JSON.parse(data.records) : data.records) : [];
-  if (!Array.isArray(list)) list = [list];
-  var existingRows = sheet.getDataRange().getValues();
-  for (var i = 0; i < list.length; i++) {
-    if (list[i]) upsertWeeklyTestRow_(sheet, existingRows, list[i]);
+function handleGetSyllabusTracker(ss) {
+  var sheet = findExistingSheet_(ss, ["Syllabus_Tracker", "Syllabus Tracker"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", topics: [] })).setMimeType(ContentService.MimeType.JSON);
   }
-  return ContentService.createTextOutput(JSON.stringify({ status: "success", saved: list.length, message: "Weekly tests batch saved!" })).setMimeType(ContentService.MimeType.JSON);
+  var rows = sheet.getDataRange().getValues();
+  var topics = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r[0] && !r[8] && !r[9]) continue;
+    topics.push({
+      id: String(r[0] || ("syl_" + i)),
+      teacher_id: String(r[1] || ""),
+      teacher_name: String(r[2] || ""),
+      class_name: String(r[3] || ""),
+      subject: String(r[4] || ""),
+      month: formatCellMonth_(r[5]),
+      week_number: Number(r[6] || 1),
+      week_label: String(r[7] || ""),
+      chapter_title: String(r[8] || ""),
+      topic_description: String(r[9] || ""),
+      planned_date: formatCellDate_(r[10]),
+      target_completion_date: formatCellDate_(r[11]),
+      completed_date: formatCellDate_(r[12]),
+      status: String(r[13] || "Pending"),
+      timestamp: String(r[14] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", topics: topics })).setMimeType(ContentService.MimeType.JSON);
 }
 
+function handleSaveSyllabusTopic(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Syllabus_Tracker", "Syllabus Tracker"]);
+  var t = data.topic ? (typeof data.topic === "string" ? JSON.parse(data.topic) : data.topic) : data;
+  var topicId = String(t.id || ("syl_" + Date.now()));
+  var rows = sheet.getDataRange().getValues();
+  var rowIndex = -1;
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]) === topicId) { rowIndex = i + 1; break; }
+  }
+  var rowData = [
+    topicId, t.teacher_id || "", t.teacher_name || "", t.class_name || "", t.subject || "",
+    "'" + String(t.month || ""), Number(t.week_number || 1), t.week_label || "",
+    t.chapter_title || "", t.topic_description || "", t.planned_date || "",
+    t.target_completion_date || "", t.completed_date || "", t.status || "Pending", formatToLocalIST_(t.timestamp)
+  ];
+  if (rowIndex > 0) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
+  else sheet.appendRow(rowData);
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "Syllabus topic saved!" })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetSchoolHolidays(ss) {
+  var sheet = findExistingSheet_(ss, ["School_Holidays", "School Holidays", "Holidays"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", holidays: [] })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var dateFirst = isHolidayDateFirst_(sheet);
+  var holidays = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r[1] && !r[2]) continue;
+    holidays.push({
+      id: String(r[0] || ("hol_" + i)),
+      title: String((dateFirst ? r[3] : r[1]) || ""),
+      date: formatCellDate_(dateFirst ? r[1] : r[2]),
+      end_date: formatCellDate_(dateFirst ? r[2] : r[3]),
+      category: String(r[4] || "festival"),
+      description: String(r[5] || ""),
+      timestamp: String(r[6] || "")
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", holidays: holidays })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveSchoolHoliday(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["School_Holidays", "School Holidays", "Holidays"]);
+  var h = data.holiday ? (typeof data.holiday === "string" ? JSON.parse(data.holiday) : data.holiday) : data;
+  var holId = String(h.id || ("hol_" + Date.now()));
+  var dateFirst = isHolidayDateFirst_(sheet);
+  var rows = sheet.getDataRange().getValues();
+  var rowIndex = -1;
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]) === holId) { rowIndex = i + 1; break; }
+  }
+  var nowIst = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var rowData = dateFirst
+    ? [holId, "'" + String(h.date || ""), h.end_date ? ("'" + String(h.end_date)) : "", h.title || "", h.category || "festival", h.description || "", formatToLocalIST_(h.timestamp, nowIst)]
+    : [holId, h.title || "", "'" + String(h.date || ""), h.end_date ? ("'" + String(h.end_date)) : "", h.category || "festival", h.description || "", formatToLocalIST_(h.timestamp, nowIst)];
+  if (rowIndex > 0) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
+  else sheet.appendRow(rowData);
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "Holiday saved!" })).setMimeType(ContentService.MimeType.JSON);
+}
+
+// =========================================================================
+// FEATURE 16: EXAM HALL PASS, DATESHEET & OVERRIDE SETTINGS
+// (Hall_Pass_Config + Exam_Datesheet Table - 2-Way Sync)
+// =========================================================================
+var EXAM_DATESHEET_CLASS_COLS_ = ["Play", "M1", "M2", "M3", "Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6 & 7", "Class 8"];
+var EXAM_DATESHEET_HEADERS_ = ["Date", "Day", "Play", "M1", "M2", "M3", "Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6 & 7", "Class 8"];
+
+function getDefaultExamDatesheetRows_() {
+  return [
+    { date: "23/11/2026", day: "Mon", subjects: { "Play": "Maths (Written)", "M1": "Maths (Written)", "M2": "Maths (Written)", "M3": "English", "Class 1": "English", "Class 2": "English", "Class 3": "English", "Class 4": "English", "Class 5": "EVS", "Class 6 & 7": "Science", "Class 8": "SST" } },
+    { date: "25/11/2026", day: "Wed", subjects: { "Play": "Maths (Oral)", "M1": "Maths (Oral)", "M2": "Maths (Oral)", "M3": "Hindi", "Class 1": "Computer", "Class 2": "EVS", "Class 3": "Maths", "Class 4": "Maths", "Class 5": "Maths", "Class 6 & 7": "English", "Class 8": "Science" } },
+    { date: "26/11/2026", day: "Thu", subjects: { "Play": "English (Written)", "M1": "English (Written)", "M2": "English (Written)", "M3": "Maths", "Class 1": "Hindi", "Class 2": "Urdu", "Class 3": "EVS", "Class 4": "EVS", "Class 5": "Computer", "Class 6 & 7": "SST", "Class 8": "Maths" } },
+    { date: "27/11/2026", day: "Fri", subjects: { "Play": "English (Oral)", "M1": "English (Oral)", "M2": "English (Oral)", "M3": "EVS", "Class 1": "Urdu", "Class 2": "Hindi", "Class 3": "Hindi", "Class 4": "Hindi", "Class 5": "Hindi", "Class 6 & 7": "Hindi", "Class 8": "English" } },
+    { date: "28/11/2026", day: "Sat", subjects: { "Play": "Hindi (Written)", "M1": "Hindi (Written)", "M2": "Hindi (Written)", "M3": "Computer", "Class 1": "EVS", "Class 2": "Maths", "Class 3": "Computer", "Class 4": "Urdu", "Class 5": "English", "Class 6 & 7": "Maths", "Class 8": "Hindi" } },
+    { date: "30/11/2026", day: "Mon", subjects: { "Play": "Hindi (Oral)", "M1": "Hindi (Oral)", "M2": "Hindi (Oral)", "M3": "Drawing", "Class 1": "Maths", "Class 2": "Computer", "Class 3": "Urdu", "Class 4": "Computer", "Class 5": "Urdu", "Class 6 & 7": "Urdu", "Class 8": "Urdu" } },
+    { date: "01/12/2026", day: "Tue", subjects: { "Play": "Drawing", "M1": "Drawing", "M2": "Drawing", "M3": "Urdu", "Class 1": "G.K.", "Class 2": "Drawing", "Class 3": "G.K.", "Class 4": "G.K.", "Class 5": "G.K.", "Class 6 & 7": "Drawing", "Class 8": "Drawing" } },
+    { date: "02/12/2026", day: "Wed", subjects: { "Play": "G.K. (Oral)", "M1": "G.K. (Oral)", "M2": "G.K. (Oral)", "M3": "G.K.", "Class 1": "Drawing", "Class 2": "G.K.", "Class 3": "Drawing", "Class 4": "Drawing", "Class 5": "Drawing", "Class 6 & 7": "G.K.", "Class 8": "G.K." } },
+    { date: "03/12/2026", day: "Thu", subjects: { "Play": "PT / Conversation", "M1": "PT / Conversation", "M2": "PT / Conversation", "M3": "PT / Conversation", "Class 1": "PT / Conversation", "Class 2": "PT / Conversation", "Class 3": "PT / Conversation", "Class 4": "PT / Conversation", "Class 5": "PT / Conversation", "Class 6 & 7": "PT / Conversation", "Class 8": "PT / Conversation" } }
+  ];
+}
+
+function formatDatesheetCellText_(val, isDateCol) {
+  if (val === null || val === undefined) return "";
+  if (Object.prototype.toString.call(val) === "[object Date]" && !isNaN(val.getTime())) {
+    return isDateCol
+      ? Utilities.formatDate(val, "Asia/Kolkata", "dd/MM/yyyy")
+      : Utilities.formatDate(val, "Asia/Kolkata", "EEE");
+  }
+  return String(val).trim();
+}
+
+function readExamDatesheetTabRows_(ss) {
+  var sheet = findExistingSheet_(ss, ["Exam_Datesheet", "Exam Datesheet", "Datesheet", "Exam_Schedule"]);
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  var vals = sheet.getDataRange().getValues();
+  if (!vals || vals.length < 2) return [];
+
+  var rawHeaders = vals[0];
+  var colMap = {};
+  for (var h = 0; h < rawHeaders.length; h++) {
+    var keyNorm = String(rawHeaders[h] || "").trim().toLowerCase().replace(/\s+/g, " ");
+    if (keyNorm) colMap[keyNorm] = h;
+  }
+
+  var dateIdx = colMap["date"] !== undefined ? colMap["date"] : 0;
+  var dayIdx = colMap["day"] !== undefined ? colMap["day"] : 1;
+
+  var out = [];
+  for (var r = 1; r < vals.length; r++) {
+    var row = vals[r];
+    var dateVal = formatDatesheetCellText_(row[dateIdx], true);
+    var dayVal = formatDatesheetCellText_(row[dayIdx], false);
+    var subjects = {};
+    var hasSubject = false;
+
+    for (var c = 0; c < EXAM_DATESHEET_CLASS_COLS_.length; c++) {
+      var clsName = EXAM_DATESHEET_CLASS_COLS_[c];
+      var clsNorm = clsName.toLowerCase();
+      var idx = colMap[clsNorm];
+      if (idx === undefined && clsName === "Class 6 & 7") {
+        idx = colMap["class 6&7"] !== undefined ? colMap["class 6&7"] : colMap["class 6_7"];
+      }
+      if (idx === undefined && clsName === "Play") {
+        idx = colMap["play group"] !== undefined ? colMap["play group"] : colMap["play class"];
+      }
+      var cellText = idx !== undefined ? formatDatesheetCellText_(row[idx], false) : "";
+      subjects[clsName] = cellText;
+      if (cellText) hasSubject = true;
+    }
+
+    if (!subjects["Play"] && subjects["M1"]) {
+      subjects["Play"] = subjects["M1"];
+    }
+
+    if (dateVal || dayVal || hasSubject) {
+      out.push({
+        date: dateVal,
+        day: dayVal,
+        subjects: subjects
+      });
+    }
+  }
+  return out;
+}
+
+function writeExamDatesheetTabRows_(ss, rows) {
+  var sheet = findExistingSheet_(ss, ["Exam_Datesheet", "Exam Datesheet", "Datesheet", "Exam_Schedule"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    sheet = findExistingSheet_(ss, ["Exam_Datesheet", "Exam Datesheet", "Datesheet", "Exam_Schedule"]);
+  }
+  if (!sheet) return;
+
+  var headers = EXAM_DATESHEET_HEADERS_;
+  var hdrRange = sheet.getRange(1, 1, 1, headers.length);
+  hdrRange.setValues([headers]);
+  try {
+    hdrRange.setBackground("#0c2340").setFontColor("#fde68a").setFontWeight("bold");
+    sheet.setFrozenRows(1);
+  } catch (styleErr) {}
+
+  var lastRow = sheet.getLastRow();
+  var maxCols = Math.max(sheet.getLastColumn(), headers.length);
+  if (lastRow > 1) {
+    sheet.getRange(2, 1, lastRow - 1, maxCols).clearContent();
+  }
+
+  if (!rows || !rows.length) return;
+  var outValues = [];
+  for (var i = 0; i < rows.length; i++) {
+    var item = rows[i] || {};
+    var subj = item.subjects && typeof item.subjects === "object" ? item.subjects : {};
+    var line = [
+      String(item.date || ""),
+      String(item.day || "")
+    ];
+    for (var c = 0; c < EXAM_DATESHEET_CLASS_COLS_.length; c++) {
+      var cls = EXAM_DATESHEET_CLASS_COLS_[c];
+      var val = subj[cls] !== undefined && subj[cls] !== null ? String(subj[cls]) : "";
+      if (!val && cls === "Play" && subj["M1"]) {
+        val = String(subj["M1"]);
+      }
+      line.push(val);
+    }
+    outValues.push(line);
+  }
+
+  if (outValues.length > 0) {
+    var bodyRange = sheet.getRange(2, 1, outValues.length, headers.length);
+    bodyRange.setNumberFormat("@");
+    bodyRange.setValues(outValues);
+  }
+}
+
+function seedExamDatesheetIfEmpty_(ss) {
+  var dsSheet = findExistingSheet_(ss, ["Exam_Datesheet", "Exam Datesheet", "Datesheet", "Exam_Schedule"]);
+  if (!dsSheet || dsSheet.getLastRow() >= 2) return;
+
+  var seedRows = [];
+  var cfgSheet = findExistingSheet_(ss, ["Hall_Pass_Config", "Hall Pass Config", "HallPassConfig", "Exam_Hall_Pass"]);
+  if (cfgSheet && cfgSheet.getLastRow() >= 2) {
+    var r = cfgSheet.getDataRange().getValues()[1];
+    try {
+      if (r && r[10]) {
+        var parsed = JSON.parse(String(r[10]));
+        if (Array.isArray(parsed) && parsed.length > 0) seedRows = parsed;
+      }
+    } catch (eSeed) {}
+  }
+  if (!seedRows.length) {
+    seedRows = getDefaultExamDatesheetRows_();
+  }
+  writeExamDatesheetTabRows_(ss, seedRows);
+}
+
+function handleGetHallPassConfig(ss) {
+  var sheet = findExistingSheet_(ss, ["Hall_Pass_Config", "Hall Pass Config", "HallPassConfig", "Exam_Hall_Pass"]);
+  if (!sheet) {
+    ensureFeatureBackupTabs(ss);
+    sheet = findExistingSheet_(ss, ["Hall_Pass_Config", "Hall Pass Config", "HallPassConfig", "Exam_Hall_Pass"]);
+  }
+  var dsRowsFromTab = readExamDatesheetTabRows_(ss);
+  var rows = sheet ? sheet.getDataRange().getValues() : [];
+
+  if (rows.length < 2) {
+    if (dsRowsFromTab.length > 0) {
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        config: {
+          examType: "Half-Yearly",
+          session: "2026-27",
+          customExamTitle: "",
+          examScheduleLine: "Half-Yearly Examination · Nov–Dec 2026 · 09:30 AM – 12:00 PM",
+          instructionLine: "Bring admit card daily · Arrive 15 mins early · Clear all pending dues before exam.",
+          publishedToParent: true,
+          backsideFlipMode: "book_flip",
+          datesheetArrivalLine: "Arrival: 08:45 AM · Exam: 09:30 AM – 12:00 PM",
+          datesheetHolidayNote: "24/11 Tue: Guru Nanak Jayanti Holiday · 29/11 Sun: Sunday Off",
+          datesheetRows: dsRowsFromTab,
+          allowedOverrides: {},
+          updatedAt: ""
+        }
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", config: null })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  var r = rows[1];
+  var parsedDatesheet = [];
+  var parsedOverrides = {};
+  try {
+    if (r[10]) parsedDatesheet = JSON.parse(String(r[10]));
+  } catch (e1) {}
+  try {
+    if (r[11]) parsedOverrides = JSON.parse(String(r[11]));
+  } catch (e2) {}
+
+  var finalDatesheet = dsRowsFromTab.length > 0
+    ? dsRowsFromTab
+    : (Array.isArray(parsedDatesheet) ? parsedDatesheet : []);
+
+  if (dsRowsFromTab.length === 0 && finalDatesheet.length > 0) {
+    try { writeExamDatesheetTabRows_(ss, finalDatesheet); } catch (ePop) {}
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    config: {
+      examType: String(r[1] || "Half-Yearly"),
+      session: String(r[2] || "2026-27"),
+      customExamTitle: String(r[3] || ""),
+      examScheduleLine: String(r[4] || ""),
+      instructionLine: String(r[5] || ""),
+      publishedToParent: String(r[6] || "TRUE").toUpperCase() !== "FALSE",
+      backsideFlipMode: String(r[7] || "book_flip") === "row_flip" ? "row_flip" : "book_flip",
+      datesheetArrivalLine: String(r[8] || ""),
+      datesheetHolidayNote: String(r[9] || ""),
+      datesheetRows: finalDatesheet,
+      allowedOverrides: (parsedOverrides && typeof parsedOverrides === "object") ? parsedOverrides : {},
+      updatedAt: String(r[12] || "")
+    }
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveHallPassConfig(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Hall_Pass_Config", "Hall Pass Config", "HallPassConfig", "Exam_Hall_Pass"]);
+  var c = data.config ? (typeof data.config === "string" ? JSON.parse(data.config) : data.config) : data;
+  if (typeof c === "string") {
+    try { c = JSON.parse(c); } catch (e) { c = data; }
+  }
+  var nowIst = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var dsRows = Array.isArray(c.datesheetRows) ? c.datesheetRows : [];
+  var rowArr = [
+    "HALL_PASS_SETTINGS",
+    String(c.examType || "Half-Yearly"),
+    String(c.session || "2026-27"),
+    String(c.customExamTitle || ""),
+    String(c.examScheduleLine || ""),
+    String(c.instructionLine || ""),
+    c.publishedToParent === false ? "FALSE" : "TRUE",
+    String(c.backsideFlipMode || "book_flip"),
+    String(c.datesheetArrivalLine || ""),
+    String(c.datesheetHolidayNote || ""),
+    JSON.stringify(dsRows),
+    JSON.stringify((c.allowedOverrides && typeof c.allowedOverrides === "object") ? c.allowedOverrides : {}),
+    formatToLocalIST_(c.updatedAt, nowIst)
+  ];
+  if (sheet.getLastRow() >= 2) {
+    sheet.getRange(2, 1, 1, rowArr.length).setValues([rowArr]);
+  } else {
+    sheet.appendRow(rowArr);
+  }
+
+  writeExamDatesheetTabRows_(ss, dsRows);
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Hall_Pass_Config & Exam_Datesheet saved permanently to Google Sheet!"
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveExamDatesheet(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var rows = data.rows ? (typeof data.rows === "string" ? JSON.parse(data.rows) : data.rows) : [];
+  if (!Array.isArray(rows)) rows = [];
+  writeExamDatesheetTabRows_(ss, rows);
+  var cfgSheet = findExistingSheet_(ss, ["Hall_Pass_Config", "Hall Pass Config", "HallPassConfig", "Exam_Hall_Pass"]);
+  if (cfgSheet && cfgSheet.getLastRow() >= 2) {
+    cfgSheet.getRange(2, 11).setValue(JSON.stringify(rows));
+    cfgSheet.getRange(2, 13).setValue(Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss"));
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Exam_Datesheet saved to Google Sheet!"
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+// =========================================================================
+// FEATURE 17: FEE WAIVERS DIRECTORY (Fee_Waivers - Tuition-Only Waiver)
+// =========================================================================
+function parseFeeWaiverBool_(val) {
+  if (val === true) return true;
+  if (val === false || val === null || val === undefined) return false;
+  var s = String(val).trim().toLowerCase();
+  if (!s || s === "false" || s === "no" || s === "0" || s === "none") return false;
+  return s === "true" || s === "yes" || s === "1" || s.indexOf("free") !== -1 || s.indexOf("waiv") !== -1 || s.indexOf("माफ") !== -1;
+}
+
+function getFeeWaiverMapForBilling_(ss) {
+  var out = {};
+  var sheet = findExistingSheet_(ss, ["Fee_Waivers", "Fee Waivers", "FeeWaivers"]);
+  if (!sheet || sheet.getLastRow() < 2) return out;
+  var rows = sheet.getDataRange().getValues();
+  for (var i = 1; i < rows.length; i++) {
+    var sid = String(rows[i][0] || "").trim().toLowerCase();
+    if (!sid) continue;
+    out[sid] = parseFeeWaiverBool_(rows[i][1]);
+  }
+  return out;
+}
+
+function handleGetFeeWaivers(ss) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Fee_Waivers", "Fee Waivers", "FeeWaivers"]);
+  var waivers = {};
+  if (sheet && sheet.getLastRow() >= 2) {
+    var rows = sheet.getDataRange().getValues();
+    var hdr = rows[0].map(function(h) { return String(h || "").trim().toLowerCase(); });
+    var idIdx = hdr.indexOf("student_id");
+    if (idIdx === -1) idIdx = 0;
+    var freeIdx = hdr.indexOf("is_free");
+    if (freeIdx === -1) freeIdx = hdr.indexOf("fee_waiver");
+    if (freeIdx === -1) freeIdx = 1;
+    var reasonIdx = hdr.indexOf("reason");
+    if (reasonIdx === -1) reasonIdx = 2;
+    var updAtIdx = hdr.indexOf("updated_at");
+    if (updAtIdx === -1) updAtIdx = 3;
+    var updTsIdx = hdr.indexOf("updated_ts");
+    if (updTsIdx === -1) updTsIdx = 4;
+
+    for (var i = 1; i < rows.length; i++) {
+      var sid = String(rows[i][idIdx] || "").trim().toLowerCase();
+      if (!sid) continue;
+      var tsNum = Number(rows[i][updTsIdx]);
+      if (isNaN(tsNum) || tsNum <= 0) {
+        var dtVal = rows[i][updAtIdx];
+        if (dtVal instanceof Date) {
+          tsNum = dtVal.getTime();
+        } else if (dtVal) {
+          var parsedMs = Date.parse(String(dtVal));
+          tsNum = isNaN(parsedMs) ? 0 : parsedMs;
+        } else {
+          tsNum = 0;
+        }
+      }
+      waivers[sid] = {
+        isFree: parseFeeWaiverBool_(rows[i][freeIdx]),
+        reason: String(rows[i][reasonIdx] || ""),
+        updatedAt: tsNum || 0
+      };
+    }
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    waivers: waivers
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function upsertFeeWaiverEntries_(ss, entriesObj) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Fee_Waivers", "Fee Waivers", "FeeWaivers"]);
+  var existingRows = sheet.getDataRange().getValues();
+  var rowIndexById = {};
+  for (var i = 1; i < existingRows.length; i++) {
+    var existingSid = String(existingRows[i][0] || "").trim().toLowerCase();
+    if (existingSid) rowIndexById[existingSid] = i + 1;
+  }
+
+  var nowMs = Date.now();
+  var nowIst = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var updatedCount = 0;
+  var normalizedUpdates = {};
+
+  for (var rawId in entriesObj) {
+    if (!Object.prototype.hasOwnProperty.call(entriesObj, rawId)) continue;
+    var sid = String(rawId || "").trim().toLowerCase();
+    if (!sid) continue;
+    var item = entriesObj[rawId] || {};
+    var isFree = parseFeeWaiverBool_(item.isFree);
+    var reason = String(item.reason || (isFree ? "Tuition Fee Waived (केवल ट्यूशन फीस माफ)" : ""));
+    var tsVal = Number(item.updatedAt) || nowMs;
+    var istStr = Utilities.formatDate(new Date(tsVal), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss") || nowIst;
+    var rowArr = [sid, isFree ? "TRUE" : "FALSE", reason, istStr, tsVal];
+
+    if (rowIndexById[sid]) {
+      sheet.getRange(rowIndexById[sid], 1, 1, rowArr.length).setValues([rowArr]);
+    } else {
+      sheet.appendRow(rowArr);
+      rowIndexById[sid] = sheet.getLastRow();
+    }
+    normalizedUpdates[sid] = isFree ? "TRUE" : "FALSE";
+    updatedCount++;
+  }
+
+  // Also mirror into Students sheet if Fee_Waiver / Is_Free_Student column already exists
+  try {
+    var studentsSheet = ss.getSheetByName("Students");
+    if (studentsSheet && studentsSheet.getLastRow() >= 2) {
+      var sData = studentsSheet.getDataRange().getValues();
+      var sHdr = sData[0].map(function(h) { return String(h || "").trim().toLowerCase(); });
+      var sIdIdx = sHdr.indexOf("student_id");
+      if (sIdIdx === -1) sIdIdx = 0;
+      var sWaiverIdx = sHdr.indexOf("fee_waiver");
+      if (sWaiverIdx === -1) sWaiverIdx = sHdr.indexOf("is_free_student");
+      if (sWaiverIdx !== -1) {
+        for (var r = 1; r < sData.length; r++) {
+          var rowSid = String(sData[r][sIdIdx] || "").trim().toLowerCase();
+          if (rowSid && normalizedUpdates[rowSid] !== undefined) {
+            studentsSheet.getRange(r + 1, sWaiverIdx + 1).setValue(normalizedUpdates[rowSid]);
+          }
+        }
+      }
+    }
+  } catch (mirrorErr) {}
+
+  return updatedCount;
+}
+
+function handleSaveFeeWaiver(ss, data) {
+  var sid = String(data.studentId || data.student_id || "").trim().toLowerCase();
+  if (!sid) {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "error",
+      message: "studentId is required"
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var entries = {};
+  entries[sid] = {
+    isFree: parseFeeWaiverBool_(data.isFree !== undefined ? data.isFree : data.is_free),
+    reason: String(data.reason || ""),
+    updatedAt: Number(data.updatedAt) || Date.now()
+  };
+  var count = upsertFeeWaiverEntries_(ss, entries);
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    count: count,
+    message: "Fee_Waivers saved permanently to Google Sheet!"
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveFeeWaiversBatch(ss, data) {
+  var entries = data.entries;
+  if (typeof entries === "string") {
+    try { entries = JSON.parse(entries); } catch (e) { entries = {}; }
+  }
+  if (!entries || typeof entries !== "object") entries = {};
+  var count = upsertFeeWaiverEntries_(ss, entries);
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    count: count,
+    message: "Fee_Waivers batch saved permanently to Google Sheet!"
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+// =========================================================================
+// FEATURE 18: PARENT REVIEWS & MARKETING TESTIMONIALS (Parent_Reviews)
+// =========================================================================
+function handleGetParentReviews(ss) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Parent_Reviews", "Parent Reviews", "ParentReviews"]);
+  var reviews = [];
+  if (sheet && sheet.getLastRow() >= 2) {
+    var rows = sheet.getDataRange().getValues();
+    for (var i = 1; i < rows.length; i++) {
+      var r = rows[i];
+      if (!r[0] && !r[9]) continue;
+      var rawConsent = String(r[11] || "FALSE").trim().toUpperCase();
+      var rawFeat = String(r[13] || "FALSE").trim().toUpperCase();
+      var rawStatus = String(r[12] || "pending").trim().toLowerCase();
+      var statusVal = (rawStatus === "approved" || rawStatus === "hidden") ? rawStatus : "pending";
+      var parsedSurvey = null;
+      if (r[17]) {
+        try { parsedSurvey = JSON.parse(String(r[17])); } catch (eS) { parsedSurvey = null; }
+      }
+      var surveyArr = (parsedSurvey && Array.isArray(parsedSurvey.answers)) ? parsedSurvey.answers : (Array.isArray(parsedSurvey) ? parsedSurvey : []);
+      reviews.push({
+        id: String(r[0] || ("REV-" + i)),
+        studentId: String(r[1] || ""),
+        studentName: String(r[2] || ""),
+        className: String(r[3] || ""),
+        parentName: String(r[4] || ""),
+        fatherName: String(r[5] || ""),
+        parentMobile: String(r[6] || ""),
+        rating: Math.min(5, Math.max(1, Number(r[7] || 5))),
+        category: String(r[8] || "संपूर्ण अनुभव"),
+        reviewText: String(r[9] || ""),
+        photoUrl: String(r[10] || ""),
+        marketingConsent: rawConsent === "TRUE" || rawConsent === "YES" || rawConsent === "1",
+        status: statusVal,
+        featured: rawFeat === "TRUE" || rawFeat === "YES" || rawFeat === "1",
+        source: String(r[14] || "parent_portal"),
+        createdAt: String(r[15] || ""),
+        updatedAt: String(r[16] || ""),
+        surveyAnswers: surveyArr,
+        yesCount: parsedSurvey && parsedSurvey.yesCount !== undefined ? Number(parsedSurvey.yesCount) : undefined,
+        totalQuestions: parsedSurvey && parsedSurvey.totalQuestions !== undefined ? Number(parsedSurvey.totalQuestions) : undefined,
+        satisfactionPct: parsedSurvey && parsedSurvey.satisfactionPct !== undefined ? Number(parsedSurvey.satisfactionPct) : undefined
+      });
+    }
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    reviews: reviews
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveParentReview(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Parent_Reviews", "Parent Reviews", "ParentReviews"]);
+  var rev = data.review ? (typeof data.review === "string" ? JSON.parse(data.review) : data.review) : data;
+  if (typeof rev === "string") {
+    try { rev = JSON.parse(rev); } catch (e) { rev = data; }
+  }
+  var revId = String(rev.id || ("REV-" + Date.now())).trim();
+  var nowIst = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var consentStr = (rev.marketingConsent === true || String(rev.marketingConsent).toUpperCase() === "TRUE") ? "TRUE" : "FALSE";
+  var featuredStr = (rev.featured === true || String(rev.featured).toUpperCase() === "TRUE") ? "TRUE" : "FALSE";
+  var statusStr = String(rev.status || "pending").trim().toLowerCase();
+  if (statusStr !== "approved" && statusStr !== "hidden") statusStr = "pending";
+  var surveyPayloadStr = "";
+  if (Array.isArray(rev.surveyAnswers) && rev.surveyAnswers.length > 0) {
+    surveyPayloadStr = JSON.stringify({
+      answers: rev.surveyAnswers,
+      yesCount: Number(rev.yesCount || 0),
+      totalQuestions: Number(rev.totalQuestions || rev.surveyAnswers.length),
+      satisfactionPct: Number(rev.satisfactionPct || 0)
+    });
+  }
+
+  var rowArr = [
+    revId,
+    String(rev.studentId || ""),
+    String(rev.studentName || ""),
+    String(rev.className || ""),
+    String(rev.parentName || ""),
+    String(rev.fatherName || ""),
+    String(rev.parentMobile || ""),
+    Math.min(5, Math.max(1, Number(rev.rating || 5))),
+    String(rev.category || "संपूर्ण अनुभव"),
+    String(rev.reviewText || ""),
+    String(rev.photoUrl || "").slice(0, 45000),
+    consentStr,
+    statusStr,
+    featuredStr,
+    String(rev.source || "parent_portal"),
+    formatToLocalIST_(rev.createdAt, nowIst),
+    formatToLocalIST_(rev.updatedAt, nowIst),
+    surveyPayloadStr
+  ];
+
+  var rows = sheet.getDataRange().getValues();
+  var targetRow = -1;
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0] || "").trim().toLowerCase() === revId.toLowerCase()) {
+      targetRow = i + 1;
+      break;
+    }
+  }
+  if (targetRow > 0) {
+    sheet.getRange(targetRow, 1, 1, rowArr.length).setValues([rowArr]);
+  } else {
+    sheet.appendRow(rowArr);
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    reviewId: revId,
+    message: "Parent_Reviews saved permanently to Google Sheet!"
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleUpdateParentReviewStatus(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Parent_Reviews", "Parent Reviews", "ParentReviews"]);
+  var revId = String(data.reviewId || data.id || "").trim().toLowerCase();
+  if (!revId) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "reviewId required" })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var rows = sheet.getDataRange().getValues();
+  var nowIst = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0] || "").trim().toLowerCase() === revId) {
+      var rNum = i + 1;
+      if (data.status !== undefined) {
+        var st = String(data.status).trim().toLowerCase();
+        if (st === "approved" || st === "hidden" || st === "pending") {
+          sheet.getRange(rNum, 13).setValue(st);
+        }
+      }
+      if (data.featured !== undefined) {
+        var fVal = (data.featured === true || String(data.featured).toUpperCase() === "TRUE") ? "TRUE" : "FALSE";
+        sheet.getRange(rNum, 14).setValue(fVal);
+      }
+      if (data.marketingConsent !== undefined) {
+        var cVal = (data.marketingConsent === true || String(data.marketingConsent).toUpperCase() === "TRUE") ? "TRUE" : "FALSE";
+        sheet.getRange(rNum, 12).setValue(cVal);
+      }
+      sheet.getRange(rNum, 17).setValue(nowIst);
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        message: "Parent review status updated in Sheet!"
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "not_found",
+    message: "Review ID not found in sheet"
+  })).setMimeType(ContentService.MimeType.JSON);
+}

@@ -20,6 +20,9 @@ export interface StudentFeeMetrics {
   isAdvance: boolean;      // dueBalance < 0
   advanceAmount: number;   // Math.abs(dueBalance) if isAdvance else 0
   receiptsCount: number;
+  startMonth?: string;
+  currentMonth?: string;
+  elapsedMonths?: number;
 }
 
 export interface SchoolFeeTotals {
@@ -537,6 +540,9 @@ export const computeStudentFeeMetrics = (
     isAdvance: summary.isAdvance,
     advanceAmount: summary.advanceAmount,
     receiptsCount: summary.recordsCount,
+    startMonth: summary.startMonth,
+    currentMonth: summary.currentMonth,
+    elapsedMonths: summary.elapsedMonths,
   };
 };
 

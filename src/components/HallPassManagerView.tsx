@@ -211,13 +211,13 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
     setSavingConfig(false);
     if (res.sheetSynced) {
       setSheetSyncWarning(null);
-      setSaveNotice('✓ परीक्षा हॉल पास व Datesheet सेटिंग्स ऐप और Google Sheet (Hall_Pass_Config) दोनों में सेव हो गईं।');
+      setSaveNotice('✓ परीक्षा हॉल पास व Datesheet सेटिंग्स ऐप और Google Sheet (Hall_Pass_Config + Exam_Datesheet) दोनों में सेव हो गईं।');
     } else {
       setSaveNotice('✓ सेटिंग्स ऐप में सेव हो गई हैं।');
       setSheetSyncWarning(
         res.sheetError
-          ? `Google Sheet (Hall_Pass_Config) सिंक लंबित: ${res.sheetError}`
-          : 'Google Sheet में "Hall_Pass_Config" टैब चलाने हेतु एक बार Apps Script अपडेट करें।'
+          ? `Google Sheet (Hall_Pass_Config / Exam_Datesheet) सिंक लंबित: ${res.sheetError}`
+          : 'Google Sheet में "Hall_Pass_Config" व "Exam_Datesheet" टैब चलाने हेतु एक बार Apps Script अपडेट करें।'
       );
     }
     setTimeout(() => setSaveNotice(null), 4500);
@@ -464,7 +464,7 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
               type="button"
               onClick={() => setShowSheetSetupModal(true)}
               className="px-3 py-2 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-950 text-xs font-bold cursor-pointer transition-colors inline-flex items-center gap-1.5"
-              title="Google Sheet में Hall_Pass_Config टैब जोड़ने का Apps Script कोड देखें"
+              title="Google Sheet में Hall_Pass_Config और Exam_Datesheet टैब जोड़ने का Apps Script कोड देखें"
             >
               <i className="fa-solid fa-table"></i>
               <span>शीट टैब सेटअप</span>
@@ -758,10 +758,10 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <h3 className="text-xs sm:text-sm font-black text-slate-900">
-                  बैकसाइड Datesheet तालिका (M1 से Class 8 तक)
+                  बैकसाइड Datesheet तालिका (Play से Class 8 तक)
                 </h3>
                 <p className="text-[11px] text-slate-500">
-                  हर बच्चे के हॉल पास के पीछे उसकी कक्षा (जैसे M1, Class 1, Class 6 &amp; 7) की यही Datesheet प्रिंट होगी।
+                  हर बच्चे के हॉल पास के पीछे उसकी कक्षा (जैसे Play, M1, Class 1, Class 6 &amp; 7) की यही Datesheet प्रिंट होगी।
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">

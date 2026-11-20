@@ -168,18 +168,22 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // CASE 1: HTML Document Navigation (Always Network-First with cache: no-store)
+  // CASE 1: HTML Document Navigation (Instant Cache-First with Background Revalidation for 0.05s boot)
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      fetch(event.request, { cache: 'no-store' })
-        .then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            const clone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put('/index.html', clone));
-          }
-          return networkResponse;
-        })
-        .catch(() => caches.match('/index.html'))
+      caches.match('/index.html').then((cachedHtml) => {
+        const networkFetch = fetch(event.request, { cache: 'no-store' })
+          .then((networkResponse) => {
+            if (networkResponse && networkResponse.status === 200) {
+              const clone = networkResponse.clone();
+              caches.open(CACHE_NAME).then((cache) => cache.put('/index.html', clone));
+            }
+            return networkResponse;
+          })
+          .catch(() => cachedHtml);
+
+        return cachedHtml || networkFetch;
+      })
     );
     return;
   }

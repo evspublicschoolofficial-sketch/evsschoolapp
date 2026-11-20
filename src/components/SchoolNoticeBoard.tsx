@@ -148,15 +148,23 @@ export const SchoolNoticeBoard: React.FC<SchoolNoticeBoardProps> = ({
     };
   }, []);
 
-  // Fetch notices from Google Sheet (Option B) on mount and on real-time update
+  // Fetch notices from Google Sheet on mount ONLY if cache is older than 30 minutes
   useEffect(() => {
     let isMounted = true;
     const fetchLatestNotices = async () => {
       try {
+        const lastTs = Number(localStorage.getItem('evs_notices_last_fetch') || '0');
+        const hasCachedNotices = notices && notices.length > 0 && Boolean(localStorage.getItem('evs_school_notices'));
+        if (hasCachedNotices && lastTs && Date.now() - lastTs < 30 * 60 * 1000) {
+          return;
+        }
         const url = getAppsScriptUrl();
         const sheetNotices = await fetchNoticesFromGoogleSheet(url);
         if (isMounted && sheetNotices && sheetNotices.length > 0) {
           setNotices(sheetNotices);
+          try {
+            localStorage.setItem('evs_notices_last_fetch', String(Date.now()));
+          } catch {}
         }
       } catch (e) {
         // silent fallback to local/seed

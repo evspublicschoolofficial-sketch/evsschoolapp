@@ -10,14 +10,21 @@ export interface FamilyMemberFeeSummary {
   metrics: StudentFeeMetrics;
   dueAmount: number;
   advanceAmount: number;
+  startMonth: string;
+  currentMonth: string;
+  elapsedMonths: number;
 }
 
 export interface FamilyFeeSummary {
   mobileKey: string;
   displayMobile: string;
   fatherName: string;
+  currentMonth: string;
   members: FamilyMemberFeeSummary[];
   totalBilled: number;
+  totalAdmissionFee: number;
+  totalTuitionBilled: number;
+  totalOtherBilled: number;
   totalPaid: number;
   totalDiscount: number;
   totalDue: number;
@@ -35,6 +42,11 @@ export const normalizeMobile10 = (mobile?: string | null): string => {
   return digits.length >= 10 ? digits.slice(-10) : digits;
 };
 
+const getStudentMobileValue = (s?: Student | null): string => {
+  if (!s) return '';
+  return String(s.Parent_Mobile || (s as any).Mobile_Number || (s as any).Mobile || '').trim();
+};
+
 /**
  * Finds all students sharing the given mobile number (full 10-digit or >=4-digit suffix)
  */
@@ -44,7 +56,7 @@ export const findFamilyStudentsByMobile = (students: Student[], mobileQuery: str
   const normQuery = digits.length >= 10 ? digits.slice(-10) : digits;
 
   return students.filter((s) => {
-    const rawMob = normalizeMobile10(s.Parent_Mobile || (s as any).Mobile_Number);
+    const rawMob = normalizeMobile10(getStudentMobileValue(s));
     if (!rawMob) return false;
     if (normQuery.length >= 10) {
       return rawMob === normQuery;
@@ -61,16 +73,17 @@ export const findSiblingsForStudent = (
   target: Student | null | undefined
 ): Student[] => {
   if (!target) return [];
-  const targetMob = normalizeMobile10(target.Parent_Mobile || (target as any).Mobile_Number);
+  const targetMob = normalizeMobile10(getStudentMobileValue(target));
   if (!targetMob || targetMob.length < 6) return [target];
   const matched = students.filter(
-    (s) => normalizeMobile10(s.Parent_Mobile || (s as any).Mobile_Number) === targetMob
+    (s) => normalizeMobile10(getStudentMobileValue(s)) === targetMob
   );
   return matched.length > 0 ? matched : [target];
 };
 
 /**
  * Computes combined fee summary across a list of family children
+ * using the exact same single-student current-month calculation (computeStudentFeeMetrics).
  */
 export const computeFamilyFeeSummary = (
   familyStudents: Student[],
@@ -94,16 +107,24 @@ export const computeFamilyFeeSummary = (
       metrics,
       dueAmount: metrics.dueBalance > 0 ? metrics.dueBalance : 0,
       advanceAmount: metrics.isAdvance ? metrics.advanceAmount : 0,
+      startMonth: metrics.startMonth || String(student.Session_Start_Month || 'April'),
+      currentMonth: metrics.currentMonth || new Date().toLocaleString('en-US', { month: 'long' }),
+      elapsedMonths: metrics.elapsedMonths ?? 1,
     };
   });
 
   const first = uniqueStudents[0];
-  const rawMobile = String(first?.Parent_Mobile || (first as any)?.Mobile_Number || '').trim();
+  const rawMobile = getStudentMobileValue(first);
   const mobileKey = normalizeMobile10(rawMobile) || `no-mobile-${normalizeStudentId(first?.Student_ID)}`;
   const fatherName =
     uniqueStudents.map((s) => String(s.Father_Name || '').trim()).find(Boolean) || 'अभिभावक (Parent)';
+  const currentMonth =
+    members[0]?.currentMonth || new Date().toLocaleString('en-US', { month: 'long' });
 
   let totalBilled = 0;
+  let totalAdmissionFee = 0;
+  let totalTuitionBilled = 0;
+  let totalOtherBilled = 0;
   let totalPaid = 0;
   let totalDiscount = 0;
   let totalDue = 0;
@@ -112,6 +133,9 @@ export const computeFamilyFeeSummary = (
 
   members.forEach((m) => {
     totalBilled += m.metrics.totalSessionFee || 0;
+    totalAdmissionFee += m.metrics.admissionFee || 0;
+    totalTuitionBilled += m.metrics.tuitionBilled || 0;
+    totalOtherBilled += m.metrics.otherBilledFees || 0;
     totalPaid += m.metrics.totalPaid || 0;
     totalDiscount += m.metrics.totalDiscount || 0;
     totalMonthlyTuition += m.metrics.monthlyTuition || 0;
@@ -126,8 +150,12 @@ export const computeFamilyFeeSummary = (
     mobileKey,
     displayMobile: mobileKey.length === 10 && /^\d+$/.test(mobileKey) ? mobileKey : rawMobile || 'N/A',
     fatherName,
+    currentMonth,
     members,
     totalBilled,
+    totalAdmissionFee,
+    totalTuitionBilled,
+    totalOtherBilled,
     totalPaid,
     totalDiscount,
     totalDue,
@@ -149,7 +177,7 @@ export const buildFamilyGroups = (
   const map = new Map<string, Student[]>();
 
   students.forEach((st) => {
-    const mob = normalizeMobile10(st.Parent_Mobile || (st as any).Mobile_Number);
+    const mob = normalizeMobile10(getStudentMobileValue(st));
     const key = mob.length >= 6 ? mob : `single::${normalizeStudentId(st.Student_ID)}`;
     if (!map.has(key)) map.set(key, []);
     map.get(key)!.push(st);
@@ -236,22 +264,23 @@ export const buildFamilyWhatsappDueReminder = (
           : m.advanceAmount > 0
           ? `अग्रिम -₹${m.advanceAmount.toLocaleString('en-IN')}`
           : `पूरी जमा ✓`;
-      return `${idx + 1}. *${m.student.Student_Name}* (${cls}) — *${dueStr}*`;
+      return `${idx + 1}. *${m.student.Student_Name}* (${cls}) — देय ₹${m.metrics.totalSessionFee.toLocaleString('en-IN')} | जमा ₹${m.metrics.totalPaid.toLocaleString('en-IN')} | *${dueStr}*`;
     })
     .join('\n');
 
   return (
     `*ई.वी.एस. पब्लिक स्कूल (E.V.S. Public School)*\n` +
-    `*पारिवारिक स्कूल फीस विवरण (${family.members.length} बच्चे)*\n` +
+    `*पारिवारिक स्कूल फीस विवरण (${family.members.length} बच्चे • ${family.currentMonth} तक)*\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
     `👨‍👧‍👦 *अभिभावक:* ${family.fatherName}\n` +
     `📱 *मोबाइल नं:* ${family.displayMobile}\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
     `${childLines}\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `💵 *कुल सत्र फीस:* ₹${family.totalBilled.toLocaleString('en-IN')}\n` +
+    `💵 *कुल देय (${family.currentMonth} तक):* ₹${family.totalBilled.toLocaleString('en-IN')}\n` +
+    (family.totalDiscount > 0 ? `🎁 *कुल छूट:* ₹${family.totalDiscount.toLocaleString('en-IN')}\n` : '') +
     `✅ *अब तक कुल जमा:* ₹${family.totalPaid.toLocaleString('en-IN')}\n` +
-    `⚠️ *पूरे परिवार का कुल शेष बकाया:* *₹${family.totalDue.toLocaleString('en-IN')}*\n` +
+    `⚠️ *कुल शेष बकाया (${family.currentMonth} तक):* *₹${family.totalDue.toLocaleString('en-IN')}*\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
     `कृपया विद्यालय कार्यालय में या पेरेंट पोर्टल UPI से उपरोक्त बकाया शुल्क समय पर जमा कराएँ। धन्यवाद!`
   );

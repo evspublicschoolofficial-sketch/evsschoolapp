@@ -20,7 +20,7 @@ import { FloatingSocialBar } from './components/FloatingSocialBar';
 import { fetchFeeMasterDirectGViz, FREE_STUDENTS_UPDATED_EVENT, FEE_MASTER_UPDATED_EVENT, syncFeeWaiversWithServer } from './utils/feeMaster';
 import { initGeolocationPrewarmer, syncSchoolLocationFromServer } from './utils/schoolLocationService';
 import { computeStudentFeeMetrics, computeSchoolFeeTotals, normalizeStudentId, reconcileFeeRecords, calculateStudentSummary, isStudentFeeExempt } from './utils/feeCalculation';
-import { computeFamilyFeeSummary, FamilyFeeSummary } from './utils/familyFeeHelper';
+import { computeFamilyFeeSummary, FamilyFeeSummary, findFamilyStudentsByMobile, findSiblingsForStudent } from './utils/familyFeeHelper';
 import { useFeeSettlementTransition, AnimatedSettledCurrency } from './components/FeeSettlementAnimator';
 import { realtimeSync } from './utils/realtimeSync';
 import { AppLanguage, getStoredLanguage, setStoredLanguage, TRANSLATIONS } from './utils/translations';
@@ -1318,7 +1318,8 @@ export default function App() {
   const [loadingStudents, setLoadingStudents] = useState<boolean>(() => {
     try {
       const cached = localStorage.getItem(CACHE_KEY_STUDENTS);
-      return !cached;
+      const ts = localStorage.getItem(CACHE_KEY_TIMESTAMP);
+      return !cached && !ts;
     } catch {
       return false;
     }
@@ -1326,7 +1327,8 @@ export default function App() {
   const [loadingHomework, setLoadingHomework] = useState<boolean>(() => {
     try {
       const cached = localStorage.getItem(CACHE_KEY_HOMEWORK);
-      return !cached;
+      const ts = localStorage.getItem(CACHE_KEY_TIMESTAMP);
+      return !cached && !ts;
     } catch {
       return false;
     }
@@ -1408,6 +1410,50 @@ export default function App() {
       }
     } catch {}
   }, [parentLoggedIn, selectedStudent, parentChildren, parentMobileInput]);
+
+  // Keep cached Parent Portal selectedStudent & parentChildren synchronized with fresh Students sheet data
+  useEffect(() => {
+    if (!parentLoggedIn || students.length === 0) return;
+
+    const byId = new Map<string, Student>();
+    students.forEach((s) => {
+      const id = normalizeStudentId(s.Student_ID);
+      if (id) byId.set(id, s);
+    });
+
+    const primaryTarget = selectedStudent || parentChildren[0] || null;
+    if (!primaryTarget) return;
+
+    const freshPrimary = byId.get(normalizeStudentId(primaryTarget.Student_ID)) || primaryTarget;
+    const autoSiblings = findSiblingsForStudent(students, freshPrimary);
+
+    // Preserve any manually linked siblings as well as newly detected mobile siblings
+    const mergedMap = new Map<string, Student>();
+    parentChildren.forEach((c) => {
+      const id = normalizeStudentId(c.Student_ID);
+      if (id) mergedMap.set(id, byId.get(id) || c);
+    });
+    autoSiblings.forEach((c) => {
+      const id = normalizeStudentId(c.Student_ID);
+      if (id) mergedMap.set(id, byId.get(id) || c);
+    });
+    const nextChildren = Array.from(mergedMap.values());
+
+    if (selectedStudent) {
+      const updatedSel = byId.get(normalizeStudentId(selectedStudent.Student_ID));
+      if (updatedSel && JSON.stringify(updatedSel) !== JSON.stringify(selectedStudent)) {
+        setSelectedStudent(updatedSel);
+      }
+    }
+
+    if (
+      nextChildren.length > 0 &&
+      (nextChildren.length !== parentChildren.length ||
+        JSON.stringify(nextChildren) !== JSON.stringify(parentChildren))
+    ) {
+      setParentChildren(nextChildren);
+    }
+  }, [students, parentLoggedIn]);
 
   const [parentSearchAttempted, setParentSearchAttempted] = useState<boolean>(false);
   const [parentLoginSubmitting, setParentLoginSubmitting] = useState<boolean>(false);
@@ -3952,6 +3998,9 @@ export default function App() {
 
       const needsFirstEverSeed = !hasTimestamp || (!hasCachedStudents && !hasCachedHomework);
 
+      let deferredWaiverTimer: ReturnType<typeof setTimeout> | null = null;
+      let deferredStaleSyncTimer: ReturnType<typeof setTimeout> | null = null;
+
       if (pendingPostUpdate || isBuildUpdated) {
         setSyncToastMessage('🔄 नया GitHub अपडेट मिला — पूरा स्कूल डेटा फोन मेमोरी में ताज़ा लोड हो रहा है...');
         await syncAllData(false, true);
@@ -3963,22 +4012,39 @@ export default function App() {
         // First time opening on this phone: load full school data & save into Phone Memory
         await syncAllData(false, true);
       } else {
-        // Phone memory already populated & NO GitHub update -> instant open,
-        // and silently keep Fee Waivers synchronized across devices (plus background fee/student sync if cache > 2 mins old)
+        // Phone memory already populated & NO app update -> 0.05s instant open!
+        // Never block startup or reload all sheets on every open; only run a quiet deferred
+        // refresh if cached data is genuinely older than 6 hours.
         setLoadingStudents(false);
         setLoadingHomework(false);
         if (!prevBuildSig && runningBuildId !== 'dev') {
           setSyncedBuildSignature(runningBuildId);
         }
-        syncFeeWaiversWithServer();
         const cachedTs = Number(hydrated[CACHE_KEY_TIMESTAMP] || lastSyncTimestamp || 0);
-        if (!cachedTs || Date.now() - cachedTs > 120000) {
-          syncAllData(false, false);
+        const cacheAgeMs = cachedTs ? Date.now() - cachedTs : 0;
+
+        if (cacheAgeMs > 30 * 60 * 1000) {
+          deferredWaiverTimer = setTimeout(() => {
+            if (isMounted) syncFeeWaiversWithServer();
+          }, 2500);
+        }
+        if (cachedTs && cacheAgeMs > 6 * 60 * 60 * 1000) {
+          deferredStaleSyncTimer = setTimeout(() => {
+            if (isMounted) syncAllData(false, false);
+          }, 4000);
         }
       }
+
+      return () => {
+        if (deferredWaiverTimer) clearTimeout(deferredWaiverTimer);
+        if (deferredStaleSyncTimer) clearTimeout(deferredStaleSyncTimer);
+      };
     };
 
-    bootstrapPhoneMemory();
+    let cleanupDeferred: (() => void) | undefined;
+    bootstrapPhoneMemory().then((cleanup) => {
+      cleanupDeferred = cleanup;
+    });
 
     // 2. Listen for live GitHub update events from pwaUpdater (automatically performs full reload into Phone Memory)
     const handleGitHubUpdateFullReload = async () => {
@@ -3993,8 +4059,9 @@ export default function App() {
     window.addEventListener(GITHUB_FULL_RELOAD_EVENT, handleGitHubUpdateFullReload);
 
     // 3. Subscribe to real-time push updates (cross-tab via BroadcastChannel & cross-device via WebSocket)
-    // Targeted entity refresh only when an actual write/edit occurs elsewhere; zero periodic polling storm.
+    // Targeted entity refresh only when an actual write/edit occurs elsewhere; zero periodic/focus reload storm.
     const unsubscribe = realtimeSync.subscribe((event) => {
+      if (event.action === 'visibility_change' || event.action === 'window_focus') return;
       console.log('[RealtimeSync] Auto-refreshing data for entity:', event.entity);
       if (event.entity === 'fee') {
         fetchFeeCollection();
@@ -4036,6 +4103,7 @@ export default function App() {
 
     return () => {
       isMounted = false;
+      if (cleanupDeferred) cleanupDeferred();
       window.removeEventListener(GITHUB_FULL_RELOAD_EVENT, handleGitHubUpdateFullReload);
       unsubscribe();
     };
@@ -4105,14 +4173,7 @@ export default function App() {
     // 1. Search by registered Parent_Mobile (finds all siblings enrolled under this mobile)
     let matched: Student[] = [];
     if (cleanDigits.length >= 4) {
-      matched = studentData.filter((s) => {
-        const rawMobile = String(s.Parent_Mobile || s.Mobile || '').replace(/\D/g, '');
-        return (
-          rawMobile === cleanDigits ||
-          (rawMobile.length >= 10 && rawMobile.endsWith(cleanDigits)) ||
-          (cleanDigits.length >= 10 && cleanDigits.endsWith(rawMobile))
-        );
-      });
+      matched = findFamilyStudentsByMobile(studentData, cleanDigits);
     }
 
     // 2. If no mobile match, check if input matches Student_ID or Admission_Number
@@ -4125,20 +4186,8 @@ export default function App() {
 
       if (byIdOrAdm.length > 0) {
         // If matched by Student ID/Admission number, also lookup siblings sharing the same Parent_Mobile
-        const primaryMobile = String(byIdOrAdm[0].Parent_Mobile || '').replace(/\D/g, '');
-        if (primaryMobile && primaryMobile.length >= 10) {
-          const siblings = studentData.filter((s) => {
-            const rawMobile = String(s.Parent_Mobile || '').replace(/\D/g, '');
-            return (
-              rawMobile === primaryMobile ||
-              rawMobile.endsWith(primaryMobile) ||
-              primaryMobile.endsWith(rawMobile)
-            );
-          });
-          matched = siblings.length > 0 ? siblings : byIdOrAdm;
-        } else {
-          matched = byIdOrAdm;
-        }
+        const siblings = findSiblingsForStudent(studentData, byIdOrAdm[0]);
+        matched = siblings.length > 0 ? siblings : byIdOrAdm;
       }
     }
 
@@ -4435,13 +4484,26 @@ export default function App() {
     const remark = latestBehaviorRecord?.Remark || '';
     const cacheKey = `${sId}_${recordDate}_${isAbsent}_${hwCount}_${remark}`;
 
-    // If already generated/cached, use immediately and don't re-fetch
+    // If already generated/cached (in memory or localStorage), use immediately and don't re-fetch
     if (greetingCacheRef.current[cacheKey]) {
       setAiGreeting(greetingCacheRef.current[cacheKey]);
       setIsAiGenerated(true);
       setAiGreetingLoading(false);
       return;
     }
+    try {
+      const savedGreetingRaw = localStorage.getItem('evs_last_ai_greeting');
+      if (savedGreetingRaw) {
+        const parsedGreeting = JSON.parse(savedGreetingRaw);
+        if (parsedGreeting?.key === cacheKey && parsedGreeting?.text) {
+          greetingCacheRef.current[cacheKey] = parsedGreeting.text;
+          setAiGreeting(parsedGreeting.text);
+          setIsAiGenerated(true);
+          setAiGreetingLoading(false);
+          return;
+        }
+      }
+    } catch {}
 
     // Instant smart rule-based greeting in pure respectful Islamic/Hindi tone
     let localGreeting = '';
@@ -4480,6 +4542,9 @@ export default function App() {
       .then((data) => {
         if (data.success && data.greeting) {
           greetingCacheRef.current[cacheKey] = data.greeting;
+          try {
+            localStorage.setItem('evs_last_ai_greeting', JSON.stringify({ key: cacheKey, text: data.greeting }));
+          } catch {}
           setAiGreeting(data.greeting);
           setIsAiGenerated(true);
         }
@@ -4580,6 +4645,7 @@ export default function App() {
       fullYearFee: summary.fullYearFee,
       monthlyTuition: summary.monthlyTuition,
       admissionFee: summary.admissionFee,
+      otherBilledFees: summary.otherBilledFees,
       elapsedMonths: summary.elapsedMonths,
       currentMonth: summary.currentMonth,
       hasDues: summary.isDue,
@@ -9870,9 +9936,15 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
                           <div className="grid grid-cols-3 gap-2 sm:gap-3 text-right tabular-nums">
                             <div className="bg-white/10 rounded-xl px-2.5 py-1.5">
-                              <div className="text-[10px] text-slate-300">कुल सत्र फीस</div>
+                              <div className="text-[10px] text-slate-300">
+                                सत्र फीस ({parentFamilyFeeSummary.currentMonth || 'चालू माह'} तक)
+                              </div>
                               <div className="text-xs sm:text-sm font-black text-white">
                                 ₹{parentFamilyFeeSummary.totalBilled.toLocaleString('en-IN')}
+                              </div>
+                              <div className="text-[9px] text-slate-300 mt-0.5 truncate">
+                                प्रवेश ₹{parentFamilyFeeSummary.totalAdmissionFee.toLocaleString('en-IN')} + ट्यूशन ₹{parentFamilyFeeSummary.totalTuitionBilled.toLocaleString('en-IN')}
+                                {parentFamilyFeeSummary.totalOtherBilled > 0 ? ` + ₹${parentFamilyFeeSummary.totalOtherBilled.toLocaleString('en-IN')}` : ''}
                               </div>
                             </div>
                             <div className="bg-emerald-500/20 border border-emerald-400/30 rounded-xl px-2.5 py-1.5">
@@ -9880,6 +9952,11 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                               <div className="text-xs sm:text-sm font-black text-emerald-300">
                                 ₹{parentFamilyFeeSummary.totalPaid.toLocaleString('en-IN')}
                               </div>
+                              {parentFamilyFeeSummary.totalDiscount > 0 && (
+                                <div className="text-[9px] text-amber-200 mt-0.5">
+                                  छूट: -₹{parentFamilyFeeSummary.totalDiscount.toLocaleString('en-IN')}
+                                </div>
+                              )}
                             </div>
                             <div
                               className={`rounded-xl px-2.5 py-1.5 border transition-colors duration-500 ${
@@ -9893,7 +9970,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                   parentFamilyFeeSummary.totalDue <= 0 ? 'text-emerald-200' : 'text-amber-200'
                                 }`}
                               >
-                                {parentFamilyFeeSummary.totalDue <= 0 ? 'पारिवारिक बकाया चुकता' : 'कुल शेष बकाया'}
+                                {parentFamilyFeeSummary.totalDue <= 0
+                                  ? 'बकाया चुकता'
+                                  : `बकाया (${parentFamilyFeeSummary.currentMonth || 'चालू माह'} तक)`}
                               </div>
                               <div
                                 className={`text-xs sm:text-sm font-black ${
@@ -9952,7 +10031,16 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                   </span>
                                 </div>
                                 <div
-                                  className={`mt-2 pt-1.5 border-t flex items-center justify-between text-[11px] ${
+                                  className={`mt-1.5 text-[10px] leading-snug ${
+                                    isCurrent ? 'text-slate-500' : 'text-slate-300/90'
+                                  }`}
+                                >
+                                  सत्र ({member.currentMonth} तक): ₹{member.metrics.totalSessionFee.toLocaleString('en-IN')} ({member.elapsedMonths} माह × ₹{(member.metrics.monthlyTuition || 0).toLocaleString('en-IN')}
+                                  {(member.metrics.admissionFee || 0) > 0 ? ` + प्रवेश ₹${member.metrics.admissionFee!.toLocaleString('en-IN')}` : ''}
+                                  {(member.metrics.otherBilledFees || 0) > 0 ? ` + अन्य ₹${member.metrics.otherBilledFees!.toLocaleString('en-IN')}` : ''})
+                                </div>
+                                <div
+                                  className={`mt-1.5 pt-1.5 border-t flex items-center justify-between text-[11px] ${
                                     isCurrent ? 'border-slate-100 text-slate-600' : 'border-white/10 text-slate-300'
                                   }`}
                                 >

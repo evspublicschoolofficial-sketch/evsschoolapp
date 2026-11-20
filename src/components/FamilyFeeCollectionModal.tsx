@@ -65,7 +65,7 @@ const FEE_TYPES = [
 const MONTHS_OPTIONS = [
   'April', 'May', 'June', 'July', 'August', 'September',
   'October', 'November', 'December', 'January', 'February', 'March',
-  'Full Academic Session', 'Combined Family Settlement',
+  'Multi-Month Dues', 'Advance Deposit',
 ];
 
 export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> = ({
@@ -132,30 +132,44 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
     }
   }, [isOpen, initialFamily, managerName]);
 
-  // Populate child rows whenever activeFamily changes
-  useEffect(() => {
-    if (!isOpen || !activeFamily) return;
-    const defaultMonth = new Date().toLocaleString('en-US', { month: 'long' });
-    const cleanMonth = MONTHS_OPTIONS.includes(defaultMonth) ? defaultMonth : 'April';
-    const nextRows: Record<string, ChildPaymentRowState> = {};
+  const [collectionScope, setCollectionScope] = useState<'monthly' | 'total_due'>('monthly');
 
-    activeFamily.members.forEach((m) => {
+  // Helper to apply either 1-month tuition (simple single-student default) or total current-month dues
+  const applyCollectionScope = (scope: 'monthly' | 'total_due', fam: FamilyFeeSummary | null) => {
+    if (!fam) return;
+    setCollectionScope(scope);
+    const defaultMonth = fam.currentMonth || new Date().toLocaleString('en-US', { month: 'long' });
+    const cleanMonth = MONTHS_OPTIONS.includes(defaultMonth) ? defaultMonth : 'April';
+    setGlobalFeeType('Monthly Tuition Fee (मासिक शिक्षण शुल्क)');
+    setGlobalMonth(scope === 'total_due' ? 'Multi-Month Dues' : cleanMonth);
+
+    const nextRows: Record<string, ChildPaymentRowState> = {};
+    fam.members.forEach((m) => {
       const st = m.student;
       const due = m.dueAmount;
       const stdTuition = isStudentFeeExempt(st)
         ? 0
-        : (getStandardFeeAmount(st.Class, 'Monthly Tuition Fee', st as any) || 450);
-      const defaultTotal = due > 0 ? due : stdTuition;
+        : (m.metrics.monthlyTuition || getStandardFeeAmount(st.Class, 'Monthly Tuition Fee', st as any) || 450);
+      const targetAmt =
+        scope === 'total_due'
+          ? (due > 0 ? due : stdTuition)
+          : (due > 0 && due < stdTuition ? due : stdTuition);
       nextRows[st.Student_ID] = {
-        selected: due > 0 || activeFamily.totalDue === 0,
+        selected: scope === 'total_due' ? (due > 0 || fam.totalDue === 0) : (stdTuition > 0 || due > 0 || fam.totalDue === 0),
         feeType: 'Monthly Tuition Fee (मासिक शिक्षण शुल्क)',
-        month: cleanMonth,
-        totalAmount: String(defaultTotal),
+        month: scope === 'total_due' ? 'Multi-Month Dues' : cleanMonth,
+        totalAmount: String(targetAmt),
         discountAmount: '0',
-        amountPaid: String(due > 0 ? due : stdTuition),
+        amountPaid: String(targetAmt),
       };
     });
     setRowsState(nextRows);
+  };
+
+  // Populate child rows whenever activeFamily changes (defaults to simple 1-month fee like single student)
+  useEffect(() => {
+    if (!isOpen || !activeFamily) return;
+    applyCollectionScope('monthly', activeFamily);
   }, [isOpen, activeFamily?.mobileKey]);
 
   const handleApplyGlobalFeeType = (newType: string) => {
@@ -167,12 +181,14 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
         const st = m.student;
         const cur = next[st.Student_ID];
         if (!cur) return;
-        const stdAmt = getStandardFeeAmount(st.Class, newType, st as any);
+        const isAdv = newType.toLowerCase().includes('advance') || newType.includes('अग्रिम');
+        const stdAmt = isAdv ? 0 : getStandardFeeAmount(st.Class, newType, st as any);
+        const amt = isAdv ? (Number(cur.amountPaid) || 500) : stdAmt;
         next[st.Student_ID] = {
           ...cur,
           feeType: newType,
-          totalAmount: String(stdAmt > 0 ? stdAmt : Number(cur.totalAmount) || 0),
-          amountPaid: String(stdAmt > 0 ? stdAmt : Number(cur.amountPaid) || 0),
+          totalAmount: String(isAdv ? 0 : amt),
+          amountPaid: String(amt),
         };
       });
       return next;
@@ -191,28 +207,7 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
   };
 
   const handleFillFullDues = () => {
-    if (!activeFamily) return;
-    setRowsState((prev) => {
-      const next = { ...prev };
-      activeFamily.members.forEach((m) => {
-        const due = m.dueAmount;
-        const stdAmt = getStandardFeeAmount(m.student.Class, globalFeeType, m.student as any);
-        const amt = due > 0 ? due : stdAmt;
-        next[m.student.Student_ID] = {
-          ...(next[m.student.Student_ID] || {
-            selected: true,
-            feeType: globalFeeType,
-            month: globalMonth,
-            discountAmount: '0',
-          }),
-          selected: due > 0 || activeFamily.totalDue === 0,
-          totalAmount: String(amt),
-          discountAmount: '0',
-          amountPaid: String(amt),
-        };
-      });
-      return next;
-    });
+    applyCollectionScope('total_due', activeFamily);
   };
 
   const handleAutoSplitLumpSum = () => {
@@ -239,7 +234,7 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
         next[sId] = {
           ...cur,
           selected: alloc > 0,
-          totalAmount: String(m.dueAmount > 0 ? m.dueAmount : alloc),
+          totalAmount: String(alloc),
           amountPaid: String(alloc),
         };
       });
@@ -648,9 +643,9 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
 
               {activeFamily ? (
                 <>
-                  {/* Family Overview Banner */}
+                  {/* Family Overview Banner (Simple Single-Student-Style Current Month Summary) */}
                   <div className="rounded-2xl bg-gradient-to-r from-indigo-50 via-blue-50 to-emerald-50 border border-indigo-200 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div>
+                    <div className="space-y-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="px-2 py-0.5 rounded-full bg-[#0c2340] text-amber-300 text-[10px] font-black">
                           {activeFamily.members.length} बच्चे जुड़े हैं
@@ -658,45 +653,74 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
                         <span className="font-mono text-xs font-bold text-indigo-900">
                           📱 {activeFamily.displayMobile}
                         </span>
+                        {activeFamily.totalMonthlyTuition > 0 && (
+                          <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-900 text-[10px] font-bold">
+                            मासिक ट्यूशन कुल: ₹{activeFamily.totalMonthlyTuition.toLocaleString('en-IN')}/माह
+                          </span>
+                        )}
                       </div>
-                      <h4 className="font-black text-slate-900 text-base mt-1">
+                      <h4 className="font-black text-slate-900 text-base">
                         अभिभावक: {activeFamily.fatherName}
                       </h4>
-                      <p className="text-[11px] text-slate-600">
-                        सत्र देय: ₹{activeFamily.totalBilled.toLocaleString('en-IN')} • अब तक जमा: ₹
-                        {activeFamily.totalPaid.toLocaleString('en-IN')}
+                      <p className="text-[11px] text-slate-700 font-medium">
+                        सत्र देय ({activeFamily.currentMonth} तक):{' '}
+                        <strong className="text-slate-900">₹{activeFamily.totalBilled.toLocaleString('en-IN')}</strong>
+                        {' '}• कुल जमा:{' '}
+                        <strong className="text-emerald-700">₹{activeFamily.totalPaid.toLocaleString('en-IN')}</strong>
+                        {activeFamily.totalDiscount > 0 && (
+                          <>
+                            {' '}• छूट:{' '}
+                            <strong className="text-amber-700">-₹{activeFamily.totalDiscount.toLocaleString('en-IN')}</strong>
+                          </>
+                        )}
                       </p>
                     </div>
 
                     <div className="bg-white rounded-xl px-4 py-2.5 border border-rose-200 text-right shrink-0">
                       <span className="text-[10px] text-slate-500 font-bold block">
-                        सभी बच्चों का कुल बकाया (Family Due)
+                        वर्तमान बकाया ({activeFamily.currentMonth} तक)
                       </span>
-                      <span className="text-xl font-black text-rose-700 tabular-nums">
+                      <span className={`text-xl font-black tabular-nums ${activeFamily.totalDue > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
                         ₹{activeFamily.totalDue.toLocaleString('en-IN')}
                       </span>
                     </div>
                   </div>
 
-                  {/* Lump-Sum Auto Split Bar */}
-                  <div className="bg-amber-50/90 border border-amber-300 rounded-2xl p-3.5 flex flex-col md:flex-row md:items-center justify-between gap-3">
-                    <div className="text-xs">
-                      <div className="font-black text-amber-950 flex items-center gap-1.5">
-                        <i className="fa-solid fa-wand-magic-sparkles text-amber-600"></i>
-                        <span>एकमुश्त राशि ऑटो-बाँटें (Lump-Sum Auto-Split)</span>
-                      </div>
-                      <p className="text-[11px] text-amber-900">
-                        अभिभावक ने कुल जितना नकद/UPI दिया हो लिखें, सिस्टम सभी चुने हुए बच्चों में बकाया के अनुसार बाँट देगा।
-                      </p>
+                  {/* Simple Quick Mode Switcher (1 Month vs Total Current Dues + Optional Lump-Sum Split) */}
+                  <div className="bg-amber-50/90 border border-amber-300 rounded-2xl p-3.5 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => applyCollectionScope('monthly', activeFamily)}
+                        className={`px-3 py-2 rounded-xl text-xs font-black border cursor-pointer transition-colors ${
+                          collectionScope === 'monthly'
+                            ? 'bg-[#0c2340] text-amber-300 border-[#0c2340] shadow-xs'
+                            : 'bg-white text-slate-800 border-amber-300 hover:bg-amber-100'
+                        }`}
+                      >
+                        1 माह की फीस ({activeFamily.currentMonth}: ₹{activeFamily.totalMonthlyTuition.toLocaleString('en-IN')})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleFillFullDues}
+                        className={`px-3 py-2 rounded-xl text-xs font-black border cursor-pointer transition-colors ${
+                          collectionScope === 'total_due'
+                            ? 'bg-[#0c2340] text-amber-300 border-[#0c2340] shadow-xs'
+                            : 'bg-white text-amber-950 border-amber-300 hover:bg-amber-100'
+                        }`}
+                      >
+                        कुल बकाया ({activeFamily.currentMonth} तक: ₹{activeFamily.totalDue.toLocaleString('en-IN')})
+                      </button>
                     </div>
+
                     <div className="flex items-center gap-2 shrink-0">
                       <input
                         type="number"
                         min="0"
                         value={lumpSumInput}
                         onChange={(e) => setLumpSumInput(e.target.value)}
-                        placeholder="जैसे ₹2500"
-                        className="w-28 px-3 py-2 rounded-xl border border-amber-400 bg-white font-black text-xs text-slate-900 outline-none"
+                        placeholder="एकमुश्त ₹ (जैसे 1500)"
+                        className="w-36 px-3 py-2 rounded-xl border border-amber-400 bg-white font-bold text-xs text-slate-900 outline-none"
                       />
                       <button
                         type="button"
@@ -704,13 +728,6 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
                         className="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs cursor-pointer shadow-2xs"
                       >
                         ऑटो बाँटें
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleFillFullDues}
-                        className="px-3 py-2 rounded-xl bg-white hover:bg-amber-100 text-amber-950 border border-amber-300 font-bold text-xs cursor-pointer"
-                      >
-                        पूरा बकाया भरें
                       </button>
                     </div>
                   </div>
@@ -825,23 +842,26 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
                                   </span>
                                   <span className="font-mono text-[10px] text-slate-500">ID: {st.Student_ID}</span>
                                 </div>
-                                <div className="text-[11px] text-slate-600 flex flex-wrap items-center gap-2 mt-1">
+                                <div className="text-[11px] text-slate-600 flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1">
                                   <span>
-                                    कुल बकाया:{' '}
+                                    सत्र ({m.currentMonth} तक): <strong>₹{m.metrics.totalSessionFee.toLocaleString('en-IN')}</strong>
+                                    <span className="text-slate-500">
+                                      {' '}({m.elapsedMonths} माह × ₹{(m.metrics.monthlyTuition || 0).toLocaleString('en-IN')}
+                                      {(m.metrics.admissionFee || 0) > 0 ? ` + प्रवेश ₹${m.metrics.admissionFee!.toLocaleString('en-IN')}` : ''}
+                                      {(m.metrics.otherBilledFees || 0) > 0 ? ` + अन्य ₹${m.metrics.otherBilledFees!.toLocaleString('en-IN')}` : ''})
+                                    </span>
+                                  </span>
+                                  <span>·</span>
+                                  <span className="text-emerald-700 font-bold">
+                                    जमा: ₹{m.metrics.totalPaid.toLocaleString('en-IN')}
+                                  </span>
+                                  <span>·</span>
+                                  <span>
+                                    बकाया:{' '}
                                     <strong className={m.dueAmount > 0 ? 'text-rose-700' : 'text-emerald-700'}>
                                       ₹{m.dueAmount.toLocaleString('en-IN')}
                                     </strong>
                                   </span>
-                                  {(m.metrics.admissionDue || 0) > 0 && (
-                                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 font-semibold">
-                                      प्रवेश: ₹{m.metrics.admissionDue}
-                                    </span>
-                                  )}
-                                  {(m.metrics.tuitionDue || 0) > 0 && (
-                                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-indigo-100 text-indigo-900 font-semibold">
-                                      ट्यूशन: ₹{m.metrics.tuitionDue}
-                                    </span>
-                                  )}
                                 </div>
                               </div>
                             </label>
@@ -853,12 +873,21 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
                                 <select
                                   disabled={!row.selected}
                                   value={row.feeType}
-                                  onChange={(e) =>
+                                  onChange={(e) => {
+                                    const newType = e.target.value;
+                                    const isAdv = newType.toLowerCase().includes('advance') || newType.includes('अग्रिम');
+                                    const stdAmt = isAdv ? 0 : getStandardFeeAmount(st.Class, newType, st as any);
+                                    const nextPaid = isAdv ? (Number(row.amountPaid) || 500) : stdAmt;
                                     setRowsState((prev) => ({
                                       ...prev,
-                                      [st.Student_ID]: { ...row, feeType: e.target.value },
-                                    }))
-                                  }
+                                      [st.Student_ID]: {
+                                        ...row,
+                                        feeType: newType,
+                                        totalAmount: String(isAdv ? 0 : stdAmt),
+                                        amountPaid: String(nextPaid),
+                                      },
+                                    }));
+                                  }}
                                   className="w-full px-2 py-1.5 rounded-lg border border-slate-300 bg-white text-[11px] font-semibold"
                                 >
                                   {FEE_TYPES.map((ft) => (
@@ -891,12 +920,17 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
                                   min="0"
                                   disabled={!row.selected}
                                   value={row.amountPaid}
-                                  onChange={(e) =>
+                                  onChange={(e) => {
+                                    const val = e.target.value;
                                     setRowsState((prev) => ({
                                       ...prev,
-                                      [st.Student_ID]: { ...row, amountPaid: e.target.value },
-                                    }))
-                                  }
+                                      [st.Student_ID]: {
+                                        ...row,
+                                        amountPaid: val,
+                                        totalAmount: collectionScope === 'total_due' ? String((Number(val) || 0) + (Number(row.discountAmount) || 0)) : row.totalAmount,
+                                      },
+                                    }));
+                                  }}
                                   className="w-full px-2.5 py-1.5 rounded-lg border-2 border-emerald-500 bg-emerald-50/40 font-black text-emerald-900"
                                 />
                               </div>
