@@ -76,52 +76,49 @@ export const HallPassCard: React.FC<HallPassCardProps> = ({
               isStandalone ? '' : 'border-[1.3pt] border-[#0c2340] rounded-[2px]'
             }`}
           >
-            {/* HORIZONTAL HEADER STRIP */}
+            {/* HORIZONTAL HEADER STRIP (Enlarged two-row dark header) */}
             <div
-              className={`bg-[#0c2340] text-white border-b-[2px] border-amber-400 flex items-center justify-between gap-2 shrink-0 ${
-                isStandalone ? 'px-3.5 py-2' : 'px-2 py-[3px]'
+              className={`bg-[#0c2340] text-white border-b-[2.5px] border-amber-400 flex flex-col justify-center shrink-0 ${
+                isStandalone ? 'px-4 py-3 gap-1.5' : isPolypackInset ? 'px-2 py-1.5 gap-0.5' : 'px-2.5 py-2 gap-1'
               }`}
             >
-              <div className="min-w-0">
-                <div
-                  className={`font-black tracking-wide uppercase leading-none truncate ${
-                    isStandalone ? 'text-sm' : 'text-[9.5px]'
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div
+                    className={`font-black tracking-wide uppercase leading-none truncate ${
+                      isStandalone ? 'text-lg' : isPolypackInset ? 'text-[11.5px]' : 'text-[14px]'
+                    }`}
+                  >
+                    E.V.S. PUBLIC SCHOOL
+                  </div>
+                  <div
+                    className={`text-blue-100 font-bold leading-tight truncate ${
+                      isStandalone ? 'text-xs mt-1' : isPolypackInset ? 'text-[7.2px] mt-[2px]' : 'text-[8.2px] mt-[2px]'
+                    }`}
+                  >
+                    Chilkana Sultanpur, Saharanpur (U.P.)
+                  </div>
+                </div>
+
+                <span
+                  className={`bg-amber-400 text-slate-950 font-black uppercase rounded-[2px] px-1.5 py-[2px] border border-amber-200 shrink-0 leading-none ${
+                    isStandalone ? 'text-[11px]' : isPolypackInset ? 'text-[7.5px]' : 'text-[8.5px]'
                   }`}
                 >
-                  E.V.S. PUBLIC SCHOOL
-                </div>
-                <div
-                  className={`text-blue-100 font-semibold leading-tight truncate ${
-                    isStandalone ? 'text-[10px] mt-0.5' : 'text-[6.8px] mt-[1px]'
-                  }`}
-                >
-                  Chilkana Sultanpur, Saharanpur (U.P.)
-                </div>
+                  HALL PASS
+                </span>
               </div>
 
-              <div className="flex flex-col items-end shrink-0 leading-none gap-[2px]">
-                <div className="flex items-center gap-1.5">
-                  <span
-                    className={`font-bold tabular-nums text-white ${
-                      isStandalone ? 'text-[11px]' : 'text-[7.5px]'
-                    }`}
-                  >
-                    {config.session}
-                  </span>
-                  <span
-                    className={`bg-amber-400 text-slate-950 font-black uppercase rounded-[2px] px-1.5 py-[1px] border border-amber-200 ${
-                      isStandalone ? 'text-[10px]' : 'text-[7.5px]'
-                    }`}
-                  >
-                    HALL PASS
-                  </span>
-                </div>
-                <span
-                  className={`font-extrabold uppercase tracking-wide text-amber-300 truncate max-w-[140px] ${
-                    isStandalone ? 'text-[10px]' : 'text-[7px]'
-                  }`}
-                >
+              <div
+                className={`border-t border-white/25 pt-1 flex items-center justify-between gap-2 leading-none ${
+                  isStandalone ? 'text-[11px]' : isPolypackInset ? 'text-[7.2px]' : 'text-[8px]'
+                }`}
+              >
+                <span className="font-extrabold uppercase tracking-wide text-amber-300 truncate">
                   {examTitle}
+                </span>
+                <span className="font-bold tabular-nums text-white shrink-0">
+                  Session: {config.session}
                 </span>
               </div>
             </div>
@@ -398,21 +395,21 @@ export const HallPassCard: React.FC<HallPassCardProps> = ({
         {/* TOP OFFICIAL SCHOOL & EXAM HEADER */}
         <div
           className={`bg-[#0c2340] text-white border-b-[2.5px] border-amber-400 shrink-0 ${
-            isStandalone ? 'px-3.5 py-2.5' : 'px-2.5 py-1.5'
+            isStandalone ? 'px-4 py-3.5' : 'px-2.5 py-2.5'
           }`}
         >
-          <div className="flex items-center justify-between gap-1.5">
+          <div className="flex items-start justify-between gap-1.5">
             <div className="min-w-0">
               <div
                 className={`font-black tracking-wide uppercase leading-none truncate ${
-                  isStandalone ? 'text-base' : 'text-[11.5px]'
+                  isStandalone ? 'text-lg' : 'text-[13.5px]'
                 }`}
               >
                 E.V.S. PUBLIC SCHOOL
               </div>
               <div
-                className={`text-blue-100 font-semibold leading-tight truncate mt-0.5 ${
-                  isStandalone ? 'text-[11px]' : 'text-[8px]'
+                className={`text-blue-100 font-bold leading-tight truncate mt-1 ${
+                  isStandalone ? 'text-xs' : 'text-[8.8px]'
                 }`}
               >
                 Chilkana Sultanpur, Saharanpur (U.P.)
@@ -420,7 +417,7 @@ export const HallPassCard: React.FC<HallPassCardProps> = ({
             </div>
             <div
               className={`shrink-0 bg-amber-400 text-slate-950 font-black uppercase rounded-[2px] px-1.5 py-0.5 leading-none border border-amber-200 ${
-                isStandalone ? 'text-[11px]' : 'text-[8.5px]'
+                isStandalone ? 'text-[11px]' : 'text-[9px]'
               }`}
             >
               HALL PASS
@@ -428,8 +425,8 @@ export const HallPassCard: React.FC<HallPassCardProps> = ({
           </div>
 
           <div
-            className={`mt-1 pt-1 border-t border-white/20 flex items-center justify-between gap-1 font-extrabold text-amber-300 leading-none ${
-              isStandalone ? 'text-xs' : 'text-[9px]'
+            className={`mt-1.5 pt-1.5 border-t border-white/25 flex items-center justify-between gap-1 font-extrabold text-amber-300 leading-none ${
+              isStandalone ? 'text-xs' : 'text-[9.5px]'
             }`}
           >
             <span className="truncate uppercase tracking-wide">{examTitle}</span>

@@ -66,21 +66,21 @@ export const HallPassDatesheetCard: React.FC<HallPassDatesheetCardProps> = ({
           >
             {/* COMPACT HORIZONTAL HEADER */}
             <div
-              className={`bg-[#0c2340] text-white border-b-[2px] border-amber-400 flex items-center justify-between gap-1.5 ${
-                isStandalone ? 'px-3.5 py-1.5' : 'px-2 py-[3px]'
+              className={`bg-[#0c2340] text-white border-b-[2px] border-amber-400 flex items-center justify-between gap-1.5 shrink-0 ${
+                isStandalone ? 'px-3.5 py-2' : 'px-2.5 py-1.5'
               }`}
             >
               <div className="flex items-center gap-2 min-w-0">
                 <span
                   className={`font-black uppercase tracking-wide shrink-0 ${
-                    isStandalone ? 'text-xs' : 'text-[8.5px]'
+                    isStandalone ? 'text-sm' : 'text-[9.5px]'
                   }`}
                 >
                   DATESHEET · {classKey}
                 </span>
                 <span
                   className={`truncate uppercase text-blue-100 font-bold ${
-                    isStandalone ? 'text-[11px]' : 'text-[7.5px]'
+                    isStandalone ? 'text-xs' : 'text-[8.2px]'
                   }`}
                 >
                   {student.Student_Name}
@@ -90,14 +90,14 @@ export const HallPassDatesheetCard: React.FC<HallPassDatesheetCardProps> = ({
               <div className="flex items-center gap-1.5 shrink-0">
                 <span
                   className={`tabular-nums text-amber-300 font-bold ${
-                    isStandalone ? 'text-[10px]' : 'text-[7px]'
+                    isStandalone ? 'text-[11px]' : 'text-[7.5px]'
                   }`}
                 >
                   {examTitle.replace(' EXAMINATION', '')} ({config.session})
                 </span>
                 <span
-                  className={`font-black tabular-nums bg-amber-400 text-slate-950 rounded-[2px] px-1.5 py-[1px] leading-none ${
-                    isStandalone ? 'text-[10px]' : 'text-[7.5px]'
+                  className={`font-black tabular-nums bg-amber-400 text-slate-950 rounded-[2px] px-1.5 py-[1.5px] leading-none ${
+                    isStandalone ? 'text-[11px]' : 'text-[8px]'
                   }`}
                 >
                   ID: {student.Student_ID}
@@ -105,23 +105,23 @@ export const HallPassDatesheetCard: React.FC<HallPassDatesheetCardProps> = ({
               </div>
             </div>
 
-            {/* 2-COLUMN DATESHEET GRID */}
-            <div className={`flex-1 flex flex-col justify-between ${isStandalone ? 'p-2.5 gap-2' : 'px-1.5 py-1 gap-0.5'}`}>
-              <div className="grid grid-cols-2 gap-1.5 flex-1">
+            {/* 2-COLUMN DATESHEET GRID (Stretches rows cleanly to fill height) */}
+            <div className={`flex-1 flex flex-col justify-between min-h-0 ${isStandalone ? 'p-3 gap-2.5' : 'px-2 py-1.5 gap-1'}`}>
+              <div className="grid grid-cols-2 gap-2 flex-1 min-h-0">
                 {[leftRows, rightRows].map((colRows, colIdx) => (
-                  <table key={colIdx} className="w-full border-collapse border border-slate-200 self-start">
+                  <table key={colIdx} className="w-full h-full border-collapse border border-slate-300">
                     <thead>
-                      <tr className="border-b-[1pt] border-[#0c2340] bg-slate-100 text-[#0c2340]">
+                      <tr className="border-b-[1.2pt] border-[#0c2340] bg-slate-100 text-[#0c2340]">
                         <th
-                          className={`text-left font-black uppercase py-[1.5px] px-1 ${
-                            isStandalone ? 'text-[10px]' : 'text-[6.8px]'
+                          className={`text-left font-black uppercase py-1 px-1.5 ${
+                            isStandalone ? 'text-[11px]' : isPolypackInset ? 'text-[7.2px]' : 'text-[8px]'
                           }`}
                         >
                           DATE
                         </th>
                         <th
-                          className={`text-left font-black uppercase py-[1.5px] px-1 ${
-                            isStandalone ? 'text-[10px]' : 'text-[6.8px]'
+                          className={`text-left font-black uppercase py-1 px-1.5 ${
+                            isStandalone ? 'text-[11px]' : isPolypackInset ? 'text-[7.2px]' : 'text-[8px]'
                           }`}
                         >
                           SUBJECT
@@ -130,18 +130,18 @@ export const HallPassDatesheetCard: React.FC<HallPassDatesheetCardProps> = ({
                     </thead>
                     <tbody className="divide-y divide-slate-200">
                       {colRows.map((r, idx) => (
-                        <tr key={`${r.date}-${idx}`} className={idx % 2 === 1 ? 'bg-slate-50/70' : 'bg-white'}>
+                        <tr key={`${r.date}-${idx}`} className={idx % 2 === 1 ? 'bg-slate-50/80' : 'bg-white'}>
                           <td
-                            className={`py-[1.5px] px-1 font-extrabold text-slate-900 tabular-nums whitespace-nowrap ${
-                              isStandalone ? 'text-[11px]' : 'text-[7px]'
+                            className={`py-[3px] px-1.5 font-extrabold text-slate-900 tabular-nums whitespace-nowrap ${
+                              isStandalone ? 'text-xs py-1.5' : isPolypackInset ? 'text-[7.6px]' : 'text-[8.6px]'
                             }`}
                           >
                             {formatShortDate(r.date)}{' '}
                             <span className="font-bold text-slate-600">{r.day}</span>
                           </td>
                           <td
-                            className={`py-[1.5px] px-1 font-black text-black truncate max-w-[26mm] ${
-                              isStandalone ? 'text-[11px]' : 'text-[7.2px]'
+                            className={`py-[3px] px-1.5 font-black text-black truncate max-w-[27mm] ${
+                              isStandalone ? 'text-xs py-1.5' : isPolypackInset ? 'text-[8px]' : 'text-[9.2px]'
                             }`}
                           >
                             {r.subject}
@@ -154,10 +154,10 @@ export const HallPassDatesheetCard: React.FC<HallPassDatesheetCardProps> = ({
               </div>
 
               {/* FOOTER NOTES */}
-              <div className="border-t-[1pt] border-[#0c2340] pt-[2px] flex flex-wrap items-center justify-between gap-x-2 gap-y-[1px]">
+              <div className="border-t-[1pt] border-[#0c2340] pt-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-[1px] shrink-0">
                 <span
                   className={`font-bold text-slate-900 leading-tight truncate ${
-                    isStandalone ? 'text-[10px]' : 'text-[6.8px]'
+                    isStandalone ? 'text-[11px]' : 'text-[7.2px]'
                   }`}
                 >
                   {config.datesheetArrivalLine || 'Arrival: 08:45 AM · Exam: 09:30 AM – 12:00 PM'}
@@ -165,7 +165,7 @@ export const HallPassDatesheetCard: React.FC<HallPassDatesheetCardProps> = ({
                 {config.datesheetHolidayNote && (
                   <span
                     className={`font-extrabold text-slate-800 leading-tight truncate ${
-                      isStandalone ? 'text-[9.5px]' : 'text-[6.2px]'
+                      isStandalone ? 'text-[10px]' : 'text-[6.6px]'
                     }`}
                   >
                     Off: {config.datesheetHolidayNote}
@@ -229,20 +229,20 @@ export const HallPassDatesheetCard: React.FC<HallPassDatesheetCardProps> = ({
         </div>
 
         {/* DATESHEET TABLE */}
-        <div className={`flex-1 flex flex-col justify-between ${isStandalone ? 'p-3 gap-2' : 'px-1.5 py-1 gap-0.5'}`}>
-          <table className="w-full border-collapse">
+        <div className={`flex-1 flex flex-col justify-between min-h-0 ${isStandalone ? 'p-3.5 gap-2.5' : 'px-2 py-1.5 gap-1'}`}>
+          <table className="w-full flex-1 border-collapse">
             <thead>
               <tr className="border-b-[1.2pt] border-[#0c2340] bg-slate-100 text-[#0c2340]">
                 <th
-                  className={`text-left font-black uppercase py-[2px] px-1 ${
-                    isStandalone ? 'text-[11px]' : 'text-[8px]'
+                  className={`text-left font-black uppercase py-1 px-1.5 ${
+                    isStandalone ? 'text-xs' : 'text-[9px]'
                   }`}
                 >
                   DATE & DAY
                 </th>
                 <th
-                  className={`text-left font-black uppercase py-[2px] px-1 ${
-                    isStandalone ? 'text-[11px]' : 'text-[8px]'
+                  className={`text-left font-black uppercase py-1 px-1.5 ${
+                    isStandalone ? 'text-xs' : 'text-[9px]'
                   }`}
                 >
                   SUBJECT
@@ -251,18 +251,18 @@ export const HallPassDatesheetCard: React.FC<HallPassDatesheetCardProps> = ({
             </thead>
             <tbody className="divide-y divide-slate-300">
               {rows.map((r, idx) => (
-                <tr key={`${r.date}-${idx}`} className={idx % 2 === 1 ? 'bg-slate-50/70' : 'bg-white'}>
+                <tr key={`${r.date}-${idx}`} className={idx % 2 === 1 ? 'bg-slate-50/80' : 'bg-white'}>
                   <td
-                    className={`py-[2px] px-1 font-extrabold text-slate-900 tabular-nums whitespace-nowrap ${
-                      isStandalone ? 'text-xs py-1' : 'text-[8.5px]'
+                    className={`py-[3px] px-1.5 font-extrabold text-slate-900 tabular-nums whitespace-nowrap ${
+                      isStandalone ? 'text-sm py-1.5' : 'text-[9.5px]'
                     }`}
                   >
                     {formatShortDate(r.date)}{' '}
                     <span className="font-bold text-slate-600">{r.day}</span>
                   </td>
                   <td
-                    className={`py-[2px] px-1 font-black text-black truncate ${
-                      isStandalone ? 'text-xs py-1' : 'text-[9px]'
+                    className={`py-[3px] px-1.5 font-black text-black truncate ${
+                      isStandalone ? 'text-sm py-1.5' : 'text-[10px]'
                     }`}
                   >
                     {r.subject}

@@ -242,53 +242,53 @@ const drawFrontSlot = (
   doc.setLineWidth(0.5);
   doc.rect(cx, cy, cw, ch, 'FD');
 
-  // TOP HEADER BLOCK
-  const headerH = 14.2;
+  // TOP HEADER BLOCK (Enlarged bold dark header)
+  const headerH = 17.2;
   doc.setFillColor(...NAVY);
   doc.rect(cx, cy, cw, headerH, 'F');
 
   // Amber bottom accent strip under header
   doc.setFillColor(...AMBER);
-  doc.rect(cx, cy + headerH - 0.8, cw, 0.8, 'F');
+  doc.rect(cx, cy + headerH - 0.9, cw, 0.9, 'F');
 
-  // School Name
-  doc.setTextColor(...WHITE);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.text('E.V.S. PUBLIC SCHOOL', cx + 2.2, cy + 4.2);
-
-  // Address
-  doc.setTextColor(...LIGHT_BLUE_TEXT);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(6.2);
-  doc.text('Chilkana Sultanpur, Saharanpur (U.P.)', cx + 2.2, cy + 7.2);
-
-  // HALL PASS yellow badge
+  // HALL PASS yellow badge (top-right)
   const badgeW = 16.5;
-  const badgeH = 4.4;
-  const badgeX = cx + cw - badgeW - 2;
-  const badgeY = cy + 2.1;
+  const badgeH = 4.6;
+  const badgeX = cx + cw - badgeW - 2.0;
+  const badgeY = cy + 2.0;
   doc.setFillColor(...AMBER);
   doc.rect(badgeX, badgeY, badgeW, badgeH, 'F');
   doc.setTextColor(15, 23, 42);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(6.8);
-  doc.text('HALL PASS', badgeX + badgeW / 2, badgeY + 3.1, { align: 'center' });
+  doc.setFontSize(7.0);
+  doc.text('HALL PASS', badgeX + badgeW / 2, badgeY + 3.2, { align: 'center' });
 
-  // Thin white divider inside header
+  // School Name (larger)
+  doc.setTextColor(...WHITE);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11.4);
+  doc.text(fitText(doc, 'E.V.S. PUBLIC SCHOOL', cw - badgeW - 6.0), cx + 2.2, cy + 5.6);
+
+  // Address (larger)
+  doc.setTextColor(...LIGHT_BLUE_TEXT);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.8);
+  doc.text('Chilkana Sultanpur, Saharanpur (U.P.)', cx + 2.2, cy + 9.4);
+
+  // Thin divider inside header
   doc.setDrawColor(90, 115, 145);
-  doc.setLineWidth(0.18);
-  doc.line(cx + 2.2, cy + 8.6, cx + cw - 2.2, cy + 8.6);
+  doc.setLineWidth(0.2);
+  doc.line(cx + 2.2, cy + 11.2, cx + cw - 2.2, cy + 11.2);
 
   // Exam title + session
   doc.setTextColor(...AMBER_TEXT);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7.2);
-  doc.text(fitText(doc, examTitle, cw - 17), cx + 2.2, cy + 12.1);
+  doc.setFontSize(7.8);
+  doc.text(fitText(doc, examTitle, cw - 17), cx + 2.2, cy + 14.8);
 
   doc.setTextColor(...WHITE);
-  doc.setFontSize(7.2);
-  doc.text(String(config.session || '2026-27'), cx + cw - 2.2, cy + 12.1, { align: 'right' });
+  doc.setFontSize(7.8);
+  doc.text(String(config.session || '2026-27'), cx + cw - 2.2, cy + 14.8, { align: 'right' });
 
   // BODY TOP: PHOTO + STUDENT DETAILS
   const padX = 2.3;
@@ -504,51 +504,51 @@ const drawBackDatesheetSlot = (
   doc.rect(cx, cy, cw, ch, 'FD');
 
   // TOP HEADER
-  const headerH = 11.2;
+  const headerH = 12.4;
   doc.setFillColor(...NAVY);
   doc.rect(cx, cy, cw, headerH, 'F');
   doc.setFillColor(...AMBER);
-  doc.rect(cx, cy + headerH - 0.7, cw, 0.7, 'F');
+  doc.rect(cx, cy + headerH - 0.8, cw, 0.8, 'F');
 
   doc.setTextColor(...WHITE);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8.8);
-  doc.text(fitText(doc, `DATESHEET · ${classKey}`, cw - 20), cx + 2.0, cy + 4.3);
+  doc.setFontSize(9.5);
+  doc.text(fitText(doc, `DATESHEET · ${classKey}`, cw - 22), cx + 2.0, cy + 4.7);
 
   // ID Badge
   const idText = `ID: ${student.Student_ID}`;
-  doc.setFontSize(6.8);
-  const idW = Math.min(22, doc.getTextWidth(idText) + 3.2);
+  doc.setFontSize(7.2);
+  const idW = Math.min(22, doc.getTextWidth(idText) + 3.6);
   const idX = cx + cw - idW - 1.8;
   doc.setFillColor(...AMBER);
-  doc.rect(idX, cy + 1.5, idW, 3.8, 'F');
+  doc.rect(idX, cy + 1.5, idW, 4.0, 'F');
   doc.setTextColor(15, 23, 42);
-  doc.text(idText, idX + idW / 2, cy + 4.1, { align: 'center' });
+  doc.text(idText, idX + idW / 2, cy + 4.3, { align: 'center' });
 
   // Student Name + Exam/Session row
   doc.setTextColor(...WHITE);
-  doc.setFontSize(7.2);
+  doc.setFontSize(7.6);
   doc.text(
     fitText(doc, String(student.Student_Name || '').toUpperCase(), cw * 0.52),
     cx + 2.0,
-    cy + 8.7
+    cy + 9.6
   );
 
   doc.setTextColor(...AMBER_TEXT);
-  doc.setFontSize(6.6);
+  doc.setFontSize(6.9);
   const shortExam = `${examTitle.replace(' EXAMINATION', '')} (${config.session})`;
-  doc.text(fitText(doc, shortExam, cw * 0.44), cx + cw - 2.0, cy + 8.7, { align: 'right' });
+  doc.text(fitText(doc, shortExam, cw * 0.44), cx + cw - 2.0, cy + 9.6, { align: 'right' });
 
-  // DATESHEET TABLE
+  // DATESHEET TABLE (Larger rows & readable fonts filling vertical space)
   const padX = 2.0;
   const tblX = cx + padX;
   const tblW = cw - padX * 2;
-  const tblStartY = cy + headerH + 1.6;
+  const tblStartY = cy + headerH + 1.4;
   const footerH = 14.5;
-  const maxTblH = ch - headerH - footerH - 3.0;
+  const maxTblH = ch - headerH - footerH - 2.6;
 
   // Table Header
-  const thH = 4.8;
+  const thH = 5.2;
   doc.setFillColor(...SLATE_100);
   doc.setDrawColor(...NAVY);
   doc.setLineWidth(0.35);
@@ -557,16 +557,16 @@ const drawBackDatesheetSlot = (
 
   doc.setTextColor(...NAVY);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(6.8);
-  doc.text('DATE & DAY', tblX + 1.2, tblStartY + 3.4);
-  doc.text('SUBJECT', tblX + 22.5, tblStartY + 3.4);
+  doc.setFontSize(7.4);
+  doc.text('DATE & DAY', tblX + 1.2, tblStartY + 3.6);
+  doc.text('SUBJECT', tblX + 22.0, tblStartY + 3.6);
 
   const count = Math.max(rows.length, 1);
-  const rowH = Math.min(6.4, Math.max(4.4, (maxTblH - thH) / count));
+  const rowH = Math.min(7.2, Math.max(4.6, (maxTblH - thH) / count));
   let curY = tblStartY + thH;
 
   rows.forEach((r, idx) => {
-    if (curY + rowH > cy + ch - footerH - 0.8) return;
+    if (curY + rowH > cy + ch - footerH - 0.6) return;
     if (idx % 2 === 1) {
       doc.setFillColor(...SLATE_50);
       doc.rect(tblX, curY, tblW, rowH, 'F');
@@ -578,12 +578,12 @@ const drawBackDatesheetSlot = (
     const baseTextY = curY + rowH * 0.68;
     doc.setTextColor(...BLACK);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.4);
-    const dateDay = `${formatShortDate(r.date)} ${r.day}`.trim();
-    doc.text(fitText(doc, dateDay, 20), tblX + 1.2, baseTextY);
-
     doc.setFontSize(8.0);
-    doc.text(fitText(doc, r.subject, tblW - 23.5), tblX + 22.5, baseTextY);
+    const dateDay = `${formatShortDate(r.date)} ${r.day}`.trim();
+    doc.text(fitText(doc, dateDay, 19.5), tblX + 1.2, baseTextY);
+
+    doc.setFontSize(8.8);
+    doc.text(fitText(doc, r.subject, tblW - 23.0), tblX + 22.0, baseTextY);
     curY += rowH;
   });
 
@@ -663,45 +663,60 @@ const drawFrontLandscapeSlot = (
   doc.setLineWidth(0.45);
   doc.rect(cx, cy, cw, ch, 'FD');
 
-  // TOP HEADER STRIP
-  const headerH = 8.8;
+  // TOP HEADER STRIP (Doubled height ~16.5mm on full 67.5mm landscape & 13.5mm on 55mm polypack, larger bold school name)
+  const isCompactH = cardH < 60;
+  const headerH = isCompactH ? 13.5 : 16.5;
   doc.setFillColor(...NAVY);
   doc.rect(cx, cy, cw, headerH, 'F');
   doc.setFillColor(...AMBER);
-  doc.rect(cx, cy + headerH - 0.6, cw, 0.6, 'F');
+  doc.rect(cx, cy + headerH - 0.9, cw, 0.9, 'F');
 
-  doc.setTextColor(...WHITE);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8.2);
-  doc.text('E.V.S. PUBLIC SCHOOL', cx + 2.0, cy + 3.6);
-
-  doc.setTextColor(...LIGHT_BLUE_TEXT);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(5.4);
-  doc.text('Chilkana Sultanpur, Saharanpur (U.P.)', cx + 2.0, cy + 6.5);
-
-  const badgeW = 14.5;
-  const badgeH = 3.5;
+  const badgeW = isCompactH ? 15.5 : 18.0;
+  const badgeH = isCompactH ? 4.0 : 4.6;
   const badgeX = cx + cw - badgeW - 1.8;
-  const badgeY = cy + 1.0;
+  const badgeY = cy + (isCompactH ? 1.4 : 1.7);
   doc.setFillColor(...AMBER);
   doc.rect(badgeX, badgeY, badgeW, badgeH, 'F');
   doc.setTextColor(15, 23, 42);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(6.0);
-  doc.text('HALL PASS', badgeX + badgeW / 2, badgeY + 2.5, { align: 'center' });
+  doc.setFontSize(isCompactH ? 6.5 : 7.4);
+  doc.text('HALL PASS', badgeX + badgeW / 2, badgeY + (isCompactH ? 2.8 : 3.2), { align: 'center' });
 
   doc.setTextColor(...WHITE);
-  doc.setFontSize(6.1);
-  doc.text(String(config.session || '2026-27'), badgeX - 1.5, badgeY + 2.5, { align: 'right' });
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(isCompactH ? 11.0 : 13.4);
+  doc.text(
+    fitText(doc, 'E.V.S. PUBLIC SCHOOL', cw - badgeW - 5.2),
+    cx + 2.0,
+    cy + (isCompactH ? 4.9 : 6.0)
+  );
+
+  doc.setTextColor(...LIGHT_BLUE_TEXT);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(isCompactH ? 6.5 : 7.6);
+  doc.text('Chilkana Sultanpur, Saharanpur (U.P.)', cx + 2.0, cy + (isCompactH ? 8.1 : 9.7));
+
+  doc.setDrawColor(90, 115, 145);
+  doc.setLineWidth(0.2);
+  const divY = cy + (isCompactH ? 9.3 : 11.1);
+  doc.line(cx + 2.0, divY, cx + cw - 2.0, divY);
 
   doc.setTextColor(...AMBER_TEXT);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(5.8);
-  doc.text(fitText(doc, examTitle, 38), cx + cw - 1.8, cy + 7.3, { align: 'right' });
+  doc.setFontSize(isCompactH ? 6.8 : 8.0);
+  doc.text(fitText(doc, examTitle, cw - 24), cx + 2.0, cy + headerH - (isCompactH ? 1.8 : 2.1));
+
+  doc.setTextColor(...WHITE);
+  doc.setFontSize(isCompactH ? 6.8 : 7.8);
+  doc.text(
+    `Session: ${String(config.session || '2026-27')}`,
+    cx + cw - 1.8,
+    cy + headerH - (isCompactH ? 1.8 : 2.1),
+    { align: 'right' }
+  );
 
   // BOTTOM INSTRUCTION STRIP
-  const footerH = 4.0;
+  const footerH = isCompactH ? 3.8 : 4.2;
   const footerY = cy + ch - footerH;
   doc.setFillColor(...SLATE_50);
   doc.rect(cx + 0.2, footerY, cw - 0.4, footerH - 0.2, 'F');
@@ -710,20 +725,19 @@ const drawFrontLandscapeSlot = (
   doc.line(cx, footerY, cx + cw, footerY);
   doc.setTextColor(...SLATE_700);
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(5.6);
+  doc.setFontSize(isCompactH ? 5.6 : 6.0);
   doc.text(
     fitText(doc, config.instructionLine || 'Bring Hall Pass, School ID & stationery daily.', cw - 3.6),
     cx + 1.8,
-    footerY + 2.7
+    footerY + (isCompactH ? 2.6 : 2.9)
   );
 
   // FULL-WIDTH EXAM FEE + TEACHER WRITE-IN PAID/STATUS BOX (Cleanly occupies lower zone)
   const padX = 2.0;
   const bodyX = cx + padX;
   const bodyW = cw - padX * 2;
-  const isCompactH = cardH < 60;
-  const feeH = isCompactH ? 7.2 : 8.8;
-  const feeY = footerY - feeH - 1.4;
+  const feeH = isCompactH ? 7.2 : 9.0;
+  const feeY = footerY - feeH - 1.3;
   const examFeeAmount =
     typeof item.examFee === 'number' && !isNaN(item.examFee)
       ? item.examFee
@@ -919,33 +933,35 @@ const drawBackLandscapeDatesheetSlot = (
   doc.setLineWidth(0.45);
   doc.rect(cx, cy, cw, ch, 'FD');
 
-  // HEADER
-  const headerH = 7.4;
+  const isCompactH = cardH < 60;
+
+  // HEADER (Slightly taller & sharper)
+  const headerH = isCompactH ? 8.2 : 9.6;
   doc.setFillColor(...NAVY);
   doc.rect(cx, cy, cw, headerH, 'F');
   doc.setFillColor(...AMBER);
-  doc.rect(cx, cy + headerH - 0.55, cw, 0.55, 'F');
+  doc.rect(cx, cy + headerH - 0.65, cw, 0.65, 'F');
 
   doc.setTextColor(...WHITE);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7.4);
-  doc.text(fitText(doc, `DATESHEET · ${classKey}`, 36), cx + 1.8, cy + 4.7);
+  doc.setFontSize(isCompactH ? 7.8 : 8.8);
+  doc.text(fitText(doc, `DATESHEET · ${classKey}`, 38), cx + 1.8, cy + (isCompactH ? 5.2 : 6.0));
 
   doc.setTextColor(...LIGHT_BLUE_TEXT);
-  doc.setFontSize(6.5);
-  doc.text(fitText(doc, String(student.Student_Name || '').toUpperCase(), 26), cx + 38, cy + 4.7);
+  doc.setFontSize(isCompactH ? 6.8 : 7.6);
+  doc.text(fitText(doc, String(student.Student_Name || '').toUpperCase(), 26), cx + 41, cy + (isCompactH ? 5.2 : 6.0));
 
   const idText = `ID: ${student.Student_ID}`;
-  doc.setFontSize(6.2);
-  const idW = Math.min(18, doc.getTextWidth(idText) + 2.8);
+  doc.setFontSize(isCompactH ? 6.5 : 7.0);
+  const idW = Math.min(20, doc.getTextWidth(idText) + 3.4);
   const idX = cx + cw - idW - 1.6;
   doc.setFillColor(...AMBER);
-  doc.rect(idX, cy + 1.5, idW, 3.8, 'F');
+  doc.rect(idX, cy + (isCompactH ? 1.8 : 2.1), idW, isCompactH ? 4.0 : 4.5, 'F');
   doc.setTextColor(15, 23, 42);
-  doc.text(idText, idX + idW / 2, cy + 4.1, { align: 'center' });
+  doc.text(idText, idX + idW / 2, cy + (isCompactH ? 4.6 : 5.2), { align: 'center' });
 
   // FOOTER NOTES
-  const footerH = 8.4;
+  const footerH = isCompactH ? 7.8 : 8.8;
   const footY = cy + ch - footerH;
   doc.setDrawColor(...NAVY);
   doc.setLineWidth(0.35);
@@ -953,16 +969,16 @@ const drawBackLandscapeDatesheetSlot = (
 
   doc.setTextColor(...BLACK);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(5.9);
+  doc.setFontSize(isCompactH ? 6.1 : 6.6);
   doc.text(
     fitText(doc, config.datesheetArrivalLine || 'Arrival: 08:45 AM · Exam: 09:30 AM – 12:00 PM', cw - 3.6),
     cx + 1.8,
-    footY + 3.2
+    footY + 3.3
   );
 
   doc.setTextColor(...SLATE_700);
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(5.4);
+  doc.setFontSize(isCompactH ? 5.6 : 6.0);
   doc.text(
     fitText(
       doc,
@@ -972,59 +988,60 @@ const drawBackLandscapeDatesheetSlot = (
       cw - 3.6
     ),
     cx + 1.8,
-    footY + 6.5
+    footY + (isCompactH ? 6.4 : 6.9)
   );
 
-  // 2-COLUMN SPLIT DATESHEET TABLE
+  // 2-COLUMN SPLIT DATESHEET TABLE (Maximizes row height & font size to fill card cleanly)
   const padX = 1.8;
   const tblX = cx + padX;
   const tblW = cw - padX * 2;
   const colGap = 1.8;
   const colW = (tblW - colGap) / 2;
-  const tblStartY = cy + headerH + 1.3;
-  const maxTblH = footY - tblStartY - 1.0;
+  const tblStartY = cy + headerH + 1.2;
+  const maxTblH = footY - tblStartY - 0.8;
 
   const splitAt = Math.ceil(rows.length / 2);
   const columns = [rows.slice(0, splitAt), rows.slice(splitAt)];
-  const thH = 3.8;
+  const thH = isCompactH ? 4.2 : 5.0;
   const maxRowsPerCol = Math.max(splitAt, 1);
-  const rowH = Math.min(5.8, Math.max(3.8, (maxTblH - thH) / maxRowsPerCol));
+  const rowH = Math.min(isCompactH ? 6.4 : 8.2, Math.max(4.4, (maxTblH - thH) / maxRowsPerCol));
+  const subjOffsetX = isCompactH ? 15.2 : 16.5;
 
   columns.forEach((colRows, colIdx) => {
     const colX = tblX + colIdx * (colW + colGap);
 
     doc.setFillColor(...SLATE_100);
     doc.setDrawColor(...NAVY);
-    doc.setLineWidth(0.28);
+    doc.setLineWidth(0.32);
     doc.rect(colX, tblStartY, colW, thH, 'F');
     doc.line(colX, tblStartY + thH, colX + colW, tblStartY + thH);
 
     doc.setTextColor(...NAVY);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(5.8);
-    doc.text('DATE', colX + 1.0, tblStartY + 2.7);
-    doc.text('SUBJECT', colX + 17.5, tblStartY + 2.7);
+    doc.setFontSize(isCompactH ? 6.4 : 7.2);
+    doc.text('DATE', colX + 0.9, tblStartY + (isCompactH ? 3.0 : 3.5));
+    doc.text('SUBJECT', colX + subjOffsetX, tblStartY + (isCompactH ? 3.0 : 3.5));
 
     let curY = tblStartY + thH;
     colRows.forEach((r, idx) => {
-      if (curY + rowH > footY - 0.5) return;
+      if (curY + rowH > footY - 0.3) return;
       if (idx % 2 === 1) {
         doc.setFillColor(...SLATE_50);
         doc.rect(colX, curY, colW, rowH, 'F');
       }
       doc.setDrawColor(...SLATE_300);
-      doc.setLineWidth(0.16);
+      doc.setLineWidth(0.18);
       doc.line(colX, curY + rowH, colX + colW, curY + rowH);
 
-      const baseY = curY + rowH * 0.68;
+      const baseY = curY + rowH * 0.66;
       doc.setTextColor(...BLACK);
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(6.2);
+      doc.setFontSize(isCompactH ? 6.8 : 7.6);
       const dateDay = `${formatShortDate(r.date)} ${r.day}`.trim();
-      doc.text(fitText(doc, dateDay, 15.5), colX + 0.8, baseY);
+      doc.text(fitText(doc, dateDay, subjOffsetX - 1.4), colX + 0.8, baseY);
 
-      doc.setFontSize(6.5);
-      doc.text(fitText(doc, r.subject, colW - 18.5), colX + 17.5, baseY);
+      doc.setFontSize(isCompactH ? 7.2 : 8.4);
+      doc.text(fitText(doc, r.subject, colW - subjOffsetX - 0.8), colX + subjOffsetX, baseY);
       curY += rowH;
     });
   });

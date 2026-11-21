@@ -275,24 +275,97 @@ export function resolveDatesheetClassKey(rawClass?: string | null, mappedLabel?:
   return 'Class 1';
 }
 
+const normalizeDatesheetDdMm = (d?: string): string => {
+  const m = String(d || '').trim().match(/^(\d{1,2})\/(\d{1,2})/);
+  return m ? `${m[1].padStart(2, '0')}/${m[2].padStart(2, '0')}` : '';
+};
+
+const readSubjectForClassKey = (
+  subjects: Record<string, string> | undefined,
+  classKey: string
+): string => {
+  if (!subjects || typeof subjects !== 'object') return '';
+  const direct = String(subjects[classKey] || '').trim();
+  if (direct) return direct;
+
+  if (classKey === 'Play') {
+    const m1 = String(subjects['M1'] || subjects['Play Group'] || subjects['Play Class'] || '').trim();
+    if (m1) return m1;
+  }
+  if (classKey === 'Class 6 & 7') {
+    const alt67 = String(
+      subjects['Class 6&7'] ||
+        subjects['Class 6-7'] ||
+        subjects['Class 6'] ||
+        subjects['Class 7'] ||
+        subjects['6 & 7'] ||
+        subjects['6th & 7th'] ||
+        ''
+    ).trim();
+    if (alt67) return alt67;
+  }
+
+  // Case-insensitive whitespace-normalized fallback lookup
+  const targetNorm = classKey.toLowerCase().replace(/\s+/g, '');
+  for (const [k, v] of Object.entries(subjects)) {
+    if (k.toLowerCase().replace(/\s+/g, '') === targetNorm && String(v || '').trim()) {
+      return String(v).trim();
+    }
+  }
+  return '';
+};
+
+const backfillEmptyDatesheetColumns = (rows: HallPassDatesheetRow[]): HallPassDatesheetRow[] => {
+  const cloned = rows.map((row) => ({
+    ...row,
+    subjects: { ...(row.subjects || {}) },
+  }));
+
+  DATESHEET_CLASS_COLUMNS.forEach((cls) => {
+    const hasAnyForClass = cloned.some((r) => Boolean(readSubjectForClassKey(r.subjects, cls)));
+    if (!hasAnyForClass) {
+      cloned.forEach((r, idx) => {
+        const ddmm = normalizeDatesheetDdMm(r.date);
+        const defRow =
+          (ddmm
+            ? DEFAULT_HALF_YEARLY_DATESHEET_ROWS.find(
+                (dr) => normalizeDatesheetDdMm(dr.date) === ddmm
+              )
+            : undefined) || DEFAULT_HALF_YEARLY_DATESHEET_ROWS[idx];
+        const fallbackSub = defRow?.subjects?.[cls] || '';
+        if (fallbackSub) {
+          r.subjects[cls] = fallbackSub;
+        }
+      });
+    } else if (cls === 'Play') {
+      cloned.forEach((r) => {
+        if (!r.subjects.Play && r.subjects.M1) {
+          r.subjects.Play = r.subjects.M1;
+        }
+      });
+    }
+  });
+
+  return cloned;
+};
+
 export function getStudentDatesheetSchedule(
   config: HallPassConfig,
   rawClass?: string | null,
   mappedLabel?: string | null
 ): Array<{ date: string; day: string; subject: string }> {
   const classKey = resolveDatesheetClassKey(rawClass, mappedLabel);
-  const rows = Array.isArray(config.datesheetRows) && config.datesheetRows.length > 0
-    ? config.datesheetRows
-    : DEFAULT_HALF_YEARLY_DATESHEET_ROWS;
+  const rawRows =
+    Array.isArray(config.datesheetRows) && config.datesheetRows.length > 0
+      ? config.datesheetRows
+      : DEFAULT_HALF_YEARLY_DATESHEET_ROWS;
+  const rows = backfillEmptyDatesheetColumns(rawRows);
 
   return rows
     .map((r) => ({
       date: r.date,
       day: r.day,
-      subject:
-        r.subjects?.[classKey] ||
-        (classKey === 'Play' ? r.subjects?.['M1'] : undefined) ||
-        '—',
+      subject: readSubjectForClassKey(r.subjects, classKey) || '—',
     }))
     .filter((r) => r.date || r.subject !== '—');
 }
@@ -440,13 +513,7 @@ function mergeWithDefaults(parsed: any): HallPassConfig {
     Array.isArray(parsed?.datesheetRows) && parsed.datesheetRows.length > 0
       ? parsed.datesheetRows
       : DEFAULT_HALF_YEARLY_DATESHEET_ROWS;
-  const normalizedRows = rawRows.map((row) => {
-    const subjects = { ...(row.subjects || {}) };
-    if (!subjects.Play && subjects.M1) {
-      subjects.Play = subjects.M1;
-    }
-    return { ...row, subjects };
-  });
+  const normalizedRows = backfillEmptyDatesheetColumns(rawRows);
 
   return {
     ...DEFAULT_HALL_PASS_CONFIG,
