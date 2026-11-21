@@ -759,6 +759,100 @@ let lastHolidaySheetSync = 0;
 let lastWeeklyTestSheetSync = 0;
 let lastHallPassSheetSync = 0;
 
+const SERVER_SPREADSHEET_ID = '1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU';
+const SERVER_DATESHEET_COLS = ['Play', 'M1', 'M2', 'M3', 'Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6 & 7', 'Class 8'];
+
+function matchServerDatesheetHeader(rawHeader: string): string | null {
+  const norm = String(rawHeader || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const compact = norm.replace(/[^a-z0-9&]/g, '');
+  if (!norm) return null;
+  if (norm === 'date' || compact === 'examdate') return 'date';
+  if (norm === 'day') return 'day';
+  if (norm === 'play' || compact === 'playgroup' || compact === 'playclass') return 'Play';
+  if (norm === 'm1' || norm === 'nursery' || compact === 'nurserym1') return 'M1';
+  if (norm === 'm2' || norm === 'lkg' || compact === 'lkgm2') return 'M2';
+  if (norm === 'm3' || norm === 'ukg' || compact === 'ukgm3') return 'M3';
+  if (compact === 'class1' || norm === '1st' || norm === '1') return 'Class 1';
+  if (compact === 'class2' || norm === '2nd' || norm === '2') return 'Class 2';
+  if (compact === 'class3' || norm === '3rd' || norm === '3') return 'Class 3';
+  if (compact === 'class4' || norm === '4th' || norm === '4') return 'Class 4';
+  if (compact === 'class5' || norm === '5th' || norm === '5') return 'Class 5';
+  if (compact === 'class6&7' || compact === 'class67' || compact === '6&7' || compact === '6th&7th' || compact === 'class6' || compact === 'class7') {
+    return 'Class 6 & 7';
+  }
+  if (compact === 'class8' || norm === '8th' || norm === '8') return 'Class 8';
+  return null;
+}
+
+function formatServerGvizCell(cell: any, isDateCol: boolean): string {
+  if (!cell) return '';
+  if (cell.f && String(cell.f).trim()) return String(cell.f).trim();
+  const v = cell.v;
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'string') {
+    const gDate = v.match(/^Date\((\d+),(\d+),(\d+)/);
+    if (gDate && isDateCol) {
+      return `${gDate[3].padStart(2, '0')}/${String(Number(gDate[2]) + 1).padStart(2, '0')}/${gDate[1]}`;
+    }
+    return v.trim();
+  }
+  return String(v).trim();
+}
+
+async function fetchExamDatesheetGvizServer(): Promise<any[] | null> {
+  for (const tab of ['Exam_Datesheet', 'Exam Datesheet', 'Datesheet']) {
+    try {
+      const gvizUrl = `https://docs.google.com/spreadsheets/d/${SERVER_SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(tab)}&_t=${Date.now()}`;
+      const res = await fetch(gvizUrl, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) continue;
+      const text = await res.text();
+      const m = text.match(/setResponse\(([\s\S]*)\);?\s*$/);
+      if (!m) continue;
+      const json: any = JSON.parse(m[1]);
+      const cols = Array.isArray(json?.table?.cols) ? json.table.cols : [];
+      const rows = Array.isArray(json?.table?.rows) ? json.table.rows : [];
+      if (rows.length === 0) continue;
+
+      const hasColLabels = cols.some((c: any) => String(c?.label || '').trim().length > 0);
+      const rawHeaders: string[] = hasColLabels
+        ? cols.map((c: any) => String(c?.label || '').trim())
+        : (rows[0]?.c || []).map((c: any) => formatServerGvizCell(c, false));
+      const dataRows = hasColLabels ? rows : rows.slice(1);
+
+      const mappedCols = rawHeaders.map((h) => matchServerDatesheetHeader(h));
+      const dateIdx = mappedCols.indexOf('date');
+      const hasClassCol = mappedCols.some((c) => c && c !== 'date' && c !== 'day');
+      if (dateIdx === -1 || !hasClassCol) continue;
+
+      const parsedRows: any[] = [];
+      for (const r of dataRows) {
+        const cells = Array.isArray(r?.c) ? r.c : [];
+        let dateVal = '';
+        let dayVal = '';
+        const subjects: Record<string, string> = {};
+        SERVER_DATESHEET_COLS.forEach((col) => { subjects[col] = ''; });
+        let hasContent = false;
+        mappedCols.forEach((target, idx) => {
+          if (!target) return;
+          const cellText = formatServerGvizCell(cells[idx], target === 'date');
+          if (target === 'date') dateVal = cellText;
+          else if (target === 'day') dayVal = cellText;
+          else {
+            subjects[target] = cellText;
+            if (cellText) hasContent = true;
+          }
+        });
+        if (!subjects['Play'] && subjects['M1']) subjects['Play'] = subjects['M1'];
+        if (dateVal || dayVal || hasContent) {
+          parsedRows.push({ date: dateVal, day: dayVal, subjects });
+        }
+      }
+      if (parsedRows.length > 0) return parsedRows;
+    } catch {}
+  }
+  return null;
+}
+
 async function syncHallPassConfigFromGoogleSheet(force = false, overrideUrl?: string): Promise<boolean> {
   const now = Date.now();
   if (!force && now - lastHallPassSheetSync < 25000) return false;
@@ -766,15 +860,31 @@ async function syncHallPassConfigFromGoogleSheet(force = false, overrideUrl?: st
   try {
     const baseUrl = overrideUrl || currentAppsScriptUrl;
     const url = `${baseUrl}?action=getHallPassConfig&_t=${now}`;
-    const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(9000) });
-    if (!res.ok) return false;
-    const text = await res.text();
-    if (!text || text.trim().startsWith('<')) return false;
-    const json: any = JSON.parse(text);
-    if (!json || json.status === 'error' || !json.config || typeof json.config !== 'object') {
+    const [cfgResult, gvizRows] = await Promise.all([
+      fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(9000) })
+        .then(async (res) => {
+          if (!res.ok) return null;
+          const text = await res.text();
+          if (!text || text.trim().startsWith('<')) return null;
+          const json: any = JSON.parse(text);
+          return json && json.status !== 'error' && json.config && typeof json.config === 'object' ? json.config : null;
+        })
+        .catch(() => null),
+      fetchExamDatesheetGvizServer().catch(() => null),
+    ]);
+
+    if (!cfgResult && (!gvizRows || gvizRows.length === 0)) {
       return false;
     }
-    const sc = json.config;
+
+    const sc = cfgResult || {};
+    const resolvedRows =
+      Array.isArray(gvizRows) && gvizRows.length > 0
+        ? gvizRows
+        : Array.isArray(sc.datesheetRows) && sc.datesheetRows.length > 0
+        ? sc.datesheetRows
+        : hallPassConfigStore.datesheetRows;
+
     hallPassConfigStore = {
       ...DEFAULT_HALL_PASS_CONFIG,
       ...hallPassConfigStore,
@@ -787,7 +897,7 @@ async function syncHallPassConfigFromGoogleSheet(force = false, overrideUrl?: st
       backsideFlipMode: sc.backsideFlipMode === 'row_flip' ? 'row_flip' : (sc.backsideFlipMode === 'book_flip' ? 'book_flip' : hallPassConfigStore.backsideFlipMode),
       datesheetArrivalLine: sc.datesheetArrivalLine || hallPassConfigStore.datesheetArrivalLine,
       datesheetHolidayNote: sc.datesheetHolidayNote || hallPassConfigStore.datesheetHolidayNote,
-      datesheetRows: Array.isArray(sc.datesheetRows) && sc.datesheetRows.length > 0 ? sc.datesheetRows : hallPassConfigStore.datesheetRows,
+      datesheetRows: resolvedRows,
       allowedOverrides:
         sc.allowedOverrides && typeof sc.allowedOverrides === 'object' && !Array.isArray(sc.allowedOverrides)
           ? sc.allowedOverrides
@@ -4671,6 +4781,92 @@ async function startServer() {
       });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err?.message || 'Could not save hall pass config' });
+    }
+  });
+
+  const EXAM_SEATING_CACHE_FILE = '/tmp/evs_exam_seating_plan.json';
+  let examSeatingStore: { rows: any[]; roomMeta: Record<string, any>; updatedAt: string } = {
+    rows: [],
+    roomMeta: {},
+    updatedAt: '',
+  };
+  try {
+    if (fs.existsSync(EXAM_SEATING_CACHE_FILE)) {
+      const rawSeat = JSON.parse(fs.readFileSync(EXAM_SEATING_CACHE_FILE, 'utf-8'));
+      if (rawSeat && typeof rawSeat === 'object') {
+        examSeatingStore = {
+          rows: Array.isArray(rawSeat.rows) ? rawSeat.rows : [],
+          roomMeta: rawSeat.roomMeta && typeof rawSeat.roomMeta === 'object' ? rawSeat.roomMeta : {},
+          updatedAt: String(rawSeat.updatedAt || ''),
+        };
+      }
+    }
+  } catch {}
+
+  app.get('/api/exam-seating-plan', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      let sheetSynced = false;
+      try {
+        const gasRes = await fetch(`${targetUrl}?action=getExamSeatingPlan&_t=${Date.now()}`, {
+          redirect: 'follow',
+          signal: AbortSignal.timeout(8000),
+        });
+        if (gasRes.ok) {
+          const text = await gasRes.text();
+          if (text && !text.trim().startsWith('<')) {
+            const parsed: any = JSON.parse(text);
+            if (parsed?.status === 'success') {
+              sheetSynced = true;
+              if (Array.isArray(parsed.rows) && parsed.rows.length > 0) {
+                examSeatingStore = {
+                  rows: parsed.rows,
+                  roomMeta: parsed.roomMeta && typeof parsed.roomMeta === 'object' ? parsed.roomMeta : examSeatingStore.roomMeta,
+                  updatedAt: getLocalTimestampIST(),
+                };
+                try {
+                  fs.writeFileSync(EXAM_SEATING_CACHE_FILE, JSON.stringify(examSeatingStore, null, 2), 'utf-8');
+                } catch {}
+              }
+            }
+          }
+        }
+      } catch {}
+      return res.json({ success: true, sheetSynced, ...examSeatingStore });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Could not load seating plan' });
+    }
+  });
+
+  app.post('/api/exam-seating-plan', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+      const roomMeta = req.body?.roomMeta && typeof req.body.roomMeta === 'object' ? req.body.roomMeta : {};
+      examSeatingStore = {
+        rows,
+        roomMeta,
+        updatedAt: getLocalTimestampIST(),
+      };
+      try {
+        fs.writeFileSync(EXAM_SEATING_CACHE_FILE, JSON.stringify(examSeatingStore, null, 2), 'utf-8');
+      } catch {}
+
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'saveExamSeatingPlan',
+        rows,
+        appsScriptUrl: targetUrl,
+      });
+
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : gasResult.error,
+        savedCount: rows.length,
+        ...examSeatingStore,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Could not save seating plan' });
     }
   });
 

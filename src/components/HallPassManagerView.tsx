@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { ExamTermType, FeeCollectionRecord, HallPassCardLayout, HallPassConfig, HallPassDatesheetRow, Student } from '../types';
 import {
@@ -7,8 +7,10 @@ import {
   DATESHEET_CLASS_COLUMNS,
   DEFAULT_HALF_YEARLY_DATESHEET_ROWS,
   DEFAULT_HALL_PASS_CONFIG,
+  fetchHallPassConfigFromServer,
   getExamDisplayTitle,
   HALL_PASS_LAYOUT_SPECS,
+  importDatesheetFromGoogleSheet,
   mapPageSlotsForBackside,
   resolveHallPassLayout,
   saveHallPassConfigWithStatus,
@@ -20,6 +22,7 @@ import { HallPassCard } from './HallPassCard';
 import { HallPassDatesheetCard } from './HallPassDatesheetCard';
 import { generateAndDownloadHallPassPdf, HallPassPdfMode } from '../utils/hallPassPdfGenerator';
 import { GoogleSheetSyncModal } from './GoogleSheetSyncModal';
+import { ExamSeatingPlanView } from './ExamSeatingPlanView';
 
 interface HallPassManagerViewProps {
   students: Student[];
@@ -47,6 +50,7 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
   getStudentPhoto,
   managerName,
 }) => {
+  const [managerSection, setManagerSection] = useState<'hall_pass' | 'seating_plan'>('hall_pass');
   const [selectedClass, setSelectedClass] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'eligible' | 'hold'>('all');
@@ -57,11 +61,24 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [hasInitializedSelection, setHasInitializedSelection] = useState<boolean>(false);
   const [savingConfig, setSavingConfig] = useState<boolean>(false);
+  const [importingSheetDatesheet, setImportingSheetDatesheet] = useState<boolean>(false);
   const [downloadingPdf, setDownloadingPdf] = useState<HallPassPdfMode | null>(null);
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
   const [sheetSyncWarning, setSheetSyncWarning] = useState<string | null>(null);
   const [showSheetSetupModal, setShowSheetSetupModal] = useState<boolean>(false);
   const [qrMap, setQrMap] = useState<Record<string, string>>({});
+  const hasAutoSyncedRef = useRef<boolean>(false);
+
+  // Auto-pull fresh Hall Pass config & live Exam_Datesheet from Google Sheet on mount
+  useEffect(() => {
+    if (hasAutoSyncedRef.current) return;
+    hasAutoSyncedRef.current = true;
+    fetchHallPassConfigFromServer(true)
+      .then((fresh) => {
+        if (fresh) onConfigChange(fresh);
+      })
+      .catch(() => {});
+  }, [onConfigChange]);
 
   const flipMode = config.backsideFlipMode === 'row_flip' ? 'row_flip' : 'book_flip';
   const datesheetRows = useMemo(
@@ -271,6 +288,24 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
     });
   };
 
+  const handleImportDatesheetFromSheet = async () => {
+    if (importingSheetDatesheet) return;
+    setImportingSheetDatesheet(true);
+    setSaveNotice(null);
+    const res = await importDatesheetFromGoogleSheet(config);
+    setImportingSheetDatesheet(false);
+    if (res.error || res.importedCount === 0) {
+      setSaveNotice(res.error || 'Google Sheet से Datesheet प्राप्त नहीं हो सकी।');
+      setTimeout(() => setSaveNotice(null), 5000);
+      return;
+    }
+    onConfigChange(res.config);
+    setSaveNotice(
+      `✓ Google Sheet (Exam_Datesheet) से सभी कक्षाओं की ${res.importedCount} तिथियां सफलतापूर्वक Import हो गईं — अब बैकसाइड PDF में यही प्रिंट होंगी।`
+    );
+    setTimeout(() => setSaveNotice(null), 5500);
+  };
+
   // Printable items matching current view & selection
   const printableItems = useMemo(() => {
     return filteredList.filter((item) => selectedIds.has(normalizeStudentId(item.student.Student_ID)));
@@ -443,6 +478,48 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
 
   return (
     <div className="space-y-4">
+      {/* SECTION SWITCHER: HALL PASS + DATESHEET VS 6-ROOM SEATING PLAN */}
+      <div className="no-print bg-white border border-slate-200 rounded-2xl p-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setManagerSection('hall_pass')}
+            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-black cursor-pointer transition-colors inline-flex items-center gap-2 ${
+              managerSection === 'hall_pass'
+                ? 'bg-[#0c2340] text-amber-300'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+            }`}
+          >
+            <i className="fa-solid fa-id-card"></i>
+            <span>हॉल पास व बैकसाइड Datesheet (9 कार्ड/पेज)</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setManagerSection('seating_plan')}
+            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-black cursor-pointer transition-colors inline-flex items-center gap-2 ${
+              managerSection === 'seating_plan'
+                ? 'bg-[#0c2340] text-amber-300'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+            }`}
+          >
+            <i className="fa-solid fa-chair"></i>
+            <span>एग्जाम सीटिंग प्लान (6 कमरे · 3/बेंच)</span>
+          </button>
+        </div>
+        <span className="text-[11px] font-bold text-slate-500 px-2 tabular-nums">
+          कुल छात्र: {students.length}
+        </span>
+      </div>
+
+      {managerSection === 'seating_plan' ? (
+        <ExamSeatingPlanView
+          students={students}
+          config={config}
+          getClassName={getClassName}
+          onOpenSheetSetup={() => setShowSheetSetupModal(true)}
+        />
+      ) : (
+        <>
       {/* HEADER + 1-SIDED PRINTER WORKFLOW ACTIONS */}
       <div className="no-print bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-100 pb-3.5">
@@ -460,6 +537,16 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={handleImportDatesheetFromSheet}
+              disabled={importingSheetDatesheet}
+              className="px-3 py-2 rounded-xl border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 text-xs font-bold cursor-pointer transition-colors inline-flex items-center gap-1.5"
+              title="Google Sheet के Exam_Datesheet टैब से ताज़ा Datesheet सीधे ऐप में लाएं"
+            >
+              <i className={`fa-solid fa-arrows-rotate ${importingSheetDatesheet ? 'fa-spin' : ''}`}></i>
+              <span>{importingSheetDatesheet ? 'Import हो रही है...' : 'शीट से Datesheet Import करें'}</span>
+            </button>
             <button
               type="button"
               onClick={() => setShowSheetSetupModal(true)}
@@ -765,6 +852,15 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleImportDatesheetFromSheet}
+                  disabled={importingSheetDatesheet}
+                  className="px-2.5 py-1.5 rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 text-[11px] font-bold cursor-pointer inline-flex items-center gap-1"
+                >
+                  <i className={`fa-solid fa-arrows-rotate ${importingSheetDatesheet ? 'fa-spin' : ''}`}></i>
+                  <span>{importingSheetDatesheet ? 'Import हो रही है...' : 'Google Sheet से लाएं'}</span>
+                </button>
                 <button
                   type="button"
                   onClick={handleResetHalfYearlyPreset}
@@ -1204,6 +1300,8 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
           </div>
         )}
       </div>
+        </>
+      )}
 
       <GoogleSheetSyncModal
         isOpen={showSheetSetupModal}

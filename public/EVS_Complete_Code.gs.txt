@@ -140,6 +140,7 @@ function ensureFeatureBackupTabs(ss) {
   ensureTabSafe_(ss, "School_Holidays", ["School Holidays", "Holidays"], ["ID", "Date", "End_Date", "Title", "Category", "Description", "Timestamp"], added);
   ensureTabSafe_(ss, "Hall_Pass_Config", ["Hall Pass Config", "HallPassConfig", "Exam_Hall_Pass"], ["Config_Key", "Exam_Type", "Session", "Custom_Title", "Exam_Schedule_Line", "Instruction_Line", "Published_To_Parent", "Backside_Flip_Mode", "Datesheet_Arrival_Line", "Datesheet_Holiday_Note", "Datesheet_Rows_JSON", "Allowed_Overrides_JSON", "Updated_At"], added);
   ensureTabSafe_(ss, "Exam_Datesheet", ["Exam Datesheet", "Datesheet", "Exam_Schedule"], ["Date", "Day", "Play", "M1", "M2", "M3", "Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6 & 7", "Class 8"], added);
+  ensureTabSafe_(ss, "Exam_Seating_Plan", ["Exam Seating Plan", "Seating_Plan", "Seating Plan"], ["Slot_Key", "Room_No", "Wing", "Bench_No", "Seat_Position", "Student_ID", "Roll_Number", "Student_Name", "Class", "Invigilator", "Exam_Type", "Session", "Updated_At"], added);
   ensureTabSafe_(ss, "Fee_Waivers", ["Fee Waivers", "FeeWaivers"], ["Student_ID", "Is_Free", "Reason", "Updated_At", "Updated_TS", "Monthly_Discount"], added);
   ensureTabSafe_(ss, "Parent_Reviews", ["Parent Reviews", "ParentReviews"], ["Review_ID", "Student_ID", "Student_Name", "Class_Name", "Parent_Name", "Father_Name", "Parent_Mobile", "Rating", "Highlight_Category", "Review_Text", "Parent_Photo", "Marketing_Consent", "Status", "Featured", "Source", "Created_At", "Updated_At", "Survey_Answers_JSON"], added);
   return added;
@@ -420,6 +421,9 @@ function doGet(e) {
   if (action === "getExamDatesheet") {
     return ContentService.createTextOutput(JSON.stringify({ status: "success", rows: readExamDatesheetTabRows_(ss) })).setMimeType(ContentService.MimeType.JSON);
   }
+  if (action === "getExamSeatingPlan") {
+    return handleGetExamSeatingPlan(ss);
+  }
   if (action === "getFeeWaivers") {
     return handleGetFeeWaivers(ss);
   }
@@ -428,7 +432,7 @@ function doGet(e) {
   }
 
   // 10. GET FALLBACK: Delegate write actions when called via GET query parameters
-  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig" || action === "saveExamDatesheet" || action === "saveFeeWaiver" || action === "saveFeeWaiversBatch" || action === "saveParentReview" || action === "updateParentReviewStatus" || action === "deleteParentReview") {
+  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig" || action === "saveExamDatesheet" || action === "saveExamSeatingPlan" || action === "saveFeeWaiver" || action === "saveFeeWaiversBatch" || action === "saveParentReview" || action === "updateParentReviewStatus" || action === "deleteParentReview") {
     return doPost(e);
   }
 
@@ -1127,6 +1131,9 @@ function doPost(e) {
     }
     if (action === "saveExamDatesheet") {
       return handleSaveExamDatesheet(ss, data);
+    }
+    if (action === "saveExamSeatingPlan") {
+      return handleSaveExamSeatingPlan(ss, data);
     }
 
     // 17. FEE WAIVERS DIRECTORY (Fee_Waivers - Tuition-Only Waiver 2-Way Sync)
@@ -3630,6 +3637,94 @@ function handleSaveExamDatesheet(ss, data) {
   return ContentService.createTextOutput(JSON.stringify({
     status: "success",
     message: "Exam_Datesheet saved to Google Sheet!"
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetExamSeatingPlan(ss) {
+  var sheet = findExistingSheet_(ss, ["Exam_Seating_Plan", "Exam Seating Plan", "Seating_Plan", "Seating Plan"]);
+  if (!sheet || sheet.getLastRow() < 2) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", rows: [], roomMeta: {} })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var vals = sheet.getDataRange().getValues();
+  var out = [];
+  var roomMeta = {};
+  for (var i = 1; i < vals.length; i++) {
+    var r = vals[i];
+    if (!r[1] && !r[5] && !r[7]) continue;
+    var slotKey = String(r[0] || "").trim();
+    var roomNo = String(r[1] || "").trim();
+    var invig = String(r[9] || "").trim();
+    if (slotKey && !roomMeta[slotKey]) {
+      roomMeta[slotKey] = { roomNumber: roomNo, invigilator: invig };
+    }
+    out.push({
+      slotKey: slotKey,
+      roomNo: roomNo,
+      wing: String(r[2] || "").trim(),
+      benchNo: Number(r[3]) || 0,
+      seatPosition: String(r[4] || "").trim(),
+      studentId: String(r[5] || "").trim(),
+      rollNumber: String(r[6] || "").trim(),
+      studentName: String(r[7] || "").trim(),
+      className: String(r[8] || "").trim(),
+      invigilator: invig,
+      examType: String(r[10] || "").trim(),
+      session: String(r[11] || "").trim(),
+      updatedAt: String(r[12] || "").trim()
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", rows: out, roomMeta: roomMeta })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveExamSeatingPlan(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Exam_Seating_Plan", "Exam Seating Plan", "Seating_Plan", "Seating Plan"]);
+  if (!sheet) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "Exam_Seating_Plan tab not created" })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var headers = ["Slot_Key", "Room_No", "Wing", "Bench_No", "Seat_Position", "Student_ID", "Roll_Number", "Student_Name", "Class", "Invigilator", "Exam_Type", "Session", "Updated_At"];
+  var hdrRange = sheet.getRange(1, 1, 1, headers.length);
+  hdrRange.setValues([headers]);
+  try {
+    hdrRange.setBackground("#0c2340").setFontColor("#fde68a").setFontWeight("bold");
+    sheet.setFrozenRows(1);
+  } catch (eStyle) {}
+
+  var lastRow = sheet.getLastRow();
+  var maxCols = Math.max(sheet.getLastColumn(), headers.length);
+  if (lastRow > 1) {
+    sheet.getRange(2, 1, lastRow - 1, maxCols).clearContent();
+  }
+
+  var rows = data.rows ? (typeof data.rows === "string" ? JSON.parse(data.rows) : data.rows) : [];
+  if (!Array.isArray(rows)) rows = [];
+  var nowIst = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var outValues = [];
+  for (var i = 0; i < rows.length; i++) {
+    var item = rows[i] || {};
+    outValues.push([
+      String(item.slotKey || ""),
+      String(item.roomNo || ""),
+      String(item.wing || ""),
+      Number(item.benchNo) || 0,
+      String(item.seatPosition || ""),
+      String(item.studentId || ""),
+      String(item.rollNumber || ""),
+      String(item.studentName || ""),
+      String(item.className || ""),
+      String(item.invigilator || ""),
+      String(item.examType || ""),
+      String(item.session || ""),
+      nowIst
+    ]);
+  }
+  if (outValues.length > 0) {
+    sheet.getRange(2, 1, outValues.length, headers.length).setValues(outValues);
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    savedCount: outValues.length,
+    message: "Exam_Seating_Plan saved permanently to Google Sheet!"
   })).setMimeType(ContentService.MimeType.JSON);
 }
 

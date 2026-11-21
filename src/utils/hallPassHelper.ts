@@ -1,5 +1,5 @@
 import { ExamTermType, FeeCollectionRecord, HallPassCardLayout, HallPassConfig, HallPassDatesheetRow, Student } from '../types';
-import { getAppsScriptUrl } from './busTrackingService';
+import { getAppsScriptUrl, SPREADSHEET_ID } from './busTrackingService';
 import {
   calculateStudentSummary,
   getStudentHeadPaymentStatus,
@@ -315,6 +315,11 @@ const readSubjectForClassKey = (
   return '';
 };
 
+const isHolidayRow = (subjects: Record<string, string> | undefined): boolean => {
+  if (!subjects) return false;
+  return Object.values(subjects).some((v) => /\b(holiday|off|sunday)\b/i.test(String(v || '')));
+};
+
 const backfillEmptyDatesheetColumns = (rows: HallPassDatesheetRow[]): HallPassDatesheetRow[] => {
   const cloned = rows.map((row) => ({
     ...row,
@@ -324,14 +329,17 @@ const backfillEmptyDatesheetColumns = (rows: HallPassDatesheetRow[]): HallPassDa
   DATESHEET_CLASS_COLUMNS.forEach((cls) => {
     const hasAnyForClass = cloned.some((r) => Boolean(readSubjectForClassKey(r.subjects, cls)));
     if (!hasAnyForClass) {
-      cloned.forEach((r, idx) => {
+      cloned.forEach((r) => {
+        if (isHolidayRow(r.subjects)) {
+          r.subjects[cls] = 'Holiday';
+          return;
+        }
         const ddmm = normalizeDatesheetDdMm(r.date);
-        const defRow =
-          (ddmm
-            ? DEFAULT_HALF_YEARLY_DATESHEET_ROWS.find(
-                (dr) => normalizeDatesheetDdMm(dr.date) === ddmm
-              )
-            : undefined) || DEFAULT_HALF_YEARLY_DATESHEET_ROWS[idx];
+        const defRow = ddmm
+          ? DEFAULT_HALF_YEARLY_DATESHEET_ROWS.find(
+              (dr) => normalizeDatesheetDdMm(dr.date) === ddmm
+            )
+          : undefined;
         const fallbackSub = defRow?.subjects?.[cls] || '';
         if (fallbackSub) {
           r.subjects[cls] = fallbackSub;
@@ -545,8 +553,141 @@ export function loadLocalHallPassConfig(): HallPassConfig {
   return mergeWithDefaults(null);
 }
 
+const formatGvizCellText = (cell: any, isDateCol: boolean): string => {
+  if (!cell) return '';
+  if (cell.f && String(cell.f).trim()) {
+    return String(cell.f).trim();
+  }
+  const v = cell.v;
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'string') {
+    const gDate = v.match(/^Date\((\d+),(\d+),(\d+)/);
+    if (gDate && isDateCol) {
+      const dd = gDate[3].padStart(2, '0');
+      const mm = String(Number(gDate[2]) + 1).padStart(2, '0');
+      return `${dd}/${mm}/${gDate[1]}`;
+    }
+    return v.trim();
+  }
+  return String(v).trim();
+};
+
+const matchDatesheetColumnName = (rawHeader: string): (typeof DATESHEET_CLASS_COLUMNS)[number] | 'date' | 'day' | null => {
+  const norm = String(rawHeader || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const compact = norm.replace(/[^a-z0-9&]/g, '');
+  if (!norm) return null;
+  if (norm === 'date' || compact === 'examdate') return 'date';
+  if (norm === 'day') return 'day';
+  if (norm === 'play' || compact === 'playgroup' || compact === 'playclass') return 'Play';
+  if (norm === 'm1' || norm === 'nursery' || compact === 'nurserym1') return 'M1';
+  if (norm === 'm2' || norm === 'lkg' || compact === 'lkgm2') return 'M2';
+  if (norm === 'm3' || norm === 'ukg' || compact === 'ukgm3') return 'M3';
+  if (compact === 'class1' || norm === '1st' || norm === '1') return 'Class 1';
+  if (compact === 'class2' || norm === '2nd' || norm === '2') return 'Class 2';
+  if (compact === 'class3' || norm === '3rd' || norm === '3') return 'Class 3';
+  if (compact === 'class4' || norm === '4th' || norm === '4') return 'Class 4';
+  if (compact === 'class5' || norm === '5th' || norm === '5') return 'Class 5';
+  if (compact === 'class6&7' || compact === 'class67' || compact === '6&7' || compact === '6th&7th' || compact === 'class6' || compact === 'class7') {
+    return 'Class 6 & 7';
+  }
+  if (compact === 'class8' || norm === '8th' || norm === '8') return 'Class 8';
+  return null;
+};
+
+export async function fetchExamDatesheetFromGoogleSheetDirect(): Promise<HallPassDatesheetRow[] | null> {
+  const tabCandidates = ['Exam_Datesheet', 'Exam Datesheet', 'Datesheet'];
+  for (const tab of tabCandidates) {
+    try {
+      const gvizUrl = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(tab)}&_t=${Date.now()}`;
+      const res = await fetch(gvizUrl, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+      if (!res.ok) continue;
+      const text = await res.text();
+      const match = text.match(/setResponse\(([\s\S]*)\);?\s*$/);
+      if (!match) continue;
+      const json = JSON.parse(match[1]);
+      const cols = Array.isArray(json?.table?.cols) ? json.table.cols : [];
+      const rows = Array.isArray(json?.table?.rows) ? json.table.rows : [];
+      if (rows.length === 0) continue;
+
+      const hasColLabels = cols.some((c: any) => String(c?.label || '').trim().length > 0);
+      const rawHeaders: string[] = hasColLabels
+        ? cols.map((c: any) => String(c?.label || '').trim())
+        : (rows[0]?.c || []).map((c: any) => formatGvizCellText(c, false));
+      const dataRows = hasColLabels ? rows : rows.slice(1);
+
+      const mappedCols = rawHeaders.map((h) => matchDatesheetColumnName(h));
+      const dateIdx = mappedCols.indexOf('date');
+      const hasClassCol = mappedCols.some((m) => m && m !== 'date' && m !== 'day');
+      if (dateIdx === -1 || !hasClassCol) continue;
+
+      const parsedRows: HallPassDatesheetRow[] = [];
+      for (const r of dataRows) {
+        const cells = Array.isArray(r?.c) ? r.c : [];
+        let dateVal = '';
+        let dayVal = '';
+        const subjects: Record<string, string> = {};
+        DATESHEET_CLASS_COLUMNS.forEach((col) => {
+          subjects[col] = '';
+        });
+
+        let hasContent = false;
+        mappedCols.forEach((colTarget, idx) => {
+          if (!colTarget) return;
+          const cellText = formatGvizCellText(cells[idx], colTarget === 'date');
+          if (colTarget === 'date') {
+            dateVal = cellText;
+          } else if (colTarget === 'day') {
+            dayVal = cellText;
+          } else {
+            subjects[colTarget] = cellText;
+            if (cellText) hasContent = true;
+          }
+        });
+
+        if (!subjects.Play && subjects.M1) {
+          subjects.Play = subjects.M1;
+        }
+        if (dateVal || dayVal || hasContent) {
+          parsedRows.push({ date: dateVal, day: dayVal, subjects });
+        }
+      }
+
+      if (parsedRows.length > 0) {
+        return parsedRows;
+      }
+    } catch {}
+  }
+
+  try {
+    const direct = await directGetFromSheet('getExamDatesheet', getAppsScriptUrl());
+    if (direct.ok && Array.isArray(direct.json?.rows) && direct.json.rows.length > 0) {
+      return direct.json.rows;
+    }
+  } catch {}
+
+  return null;
+}
+
+const mergeSheetDatesheetIntoConfig = (
+  cfg: HallPassConfig,
+  sheetRows: HallPassDatesheetRow[] | null
+): HallPassConfig => {
+  if (!sheetRows || sheetRows.length === 0) return cfg;
+  const filledCount = sheetRows.reduce(
+    (acc, r) => acc + Object.values(r.subjects || {}).filter((v) => String(v || '').trim().length > 0).length,
+    0
+  );
+  if (filledCount === 0) return cfg;
+  return mergeWithDefaults({
+    ...cfg,
+    datesheetRows: sheetRows,
+  });
+};
+
 export async function fetchHallPassConfigFromServer(forceRefresh = false): Promise<HallPassConfig> {
   const activeUrl = getAppsScriptUrl();
+  let resolvedConfig: HallPassConfig | null = null;
+
   try {
     const res = await fetch(
       `/api/hall-pass-config${forceRefresh ? '?fresh=1&' : '?'}_t=${Date.now()}`,
@@ -559,23 +700,55 @@ export async function fetchHallPassConfigFromServer(forceRefresh = false): Promi
     if (res.ok) {
       const json = await res.json();
       if (json?.config && typeof json.config === 'object') {
-        const merged = mergeWithDefaults(json.config);
-        saveToPhoneMemory(HALL_PASS_CONFIG_STORAGE_KEY, merged);
-        return merged;
+        resolvedConfig = mergeWithDefaults(json.config);
       }
     }
   } catch {}
 
-  try {
-    const direct = await directGetFromSheet('getHallPassConfig', activeUrl);
-    if (direct.ok && direct.json?.config && typeof direct.json.config === 'object') {
-      const merged = mergeWithDefaults(direct.json.config);
+  if (!resolvedConfig) {
+    try {
+      const direct = await directGetFromSheet('getHallPassConfig', activeUrl);
+      if (direct.ok && direct.json?.config && typeof direct.json.config === 'object') {
+        resolvedConfig = mergeWithDefaults(direct.json.config);
+      }
+    } catch {}
+  }
+
+  const baseConfig = resolvedConfig || loadLocalHallPassConfig();
+
+  // Always check live Google Sheet Exam_Datesheet via GViz when force-refreshing or if datesheet came empty
+  if (forceRefresh || !resolvedConfig) {
+    const sheetRows = await fetchExamDatesheetFromGoogleSheetDirect();
+    if (sheetRows && sheetRows.length > 0) {
+      const merged = mergeSheetDatesheetIntoConfig(baseConfig, sheetRows);
       saveToPhoneMemory(HALL_PASS_CONFIG_STORAGE_KEY, merged);
       return merged;
     }
-  } catch {}
+  }
 
-  return loadLocalHallPassConfig();
+  saveToPhoneMemory(HALL_PASS_CONFIG_STORAGE_KEY, baseConfig);
+  return baseConfig;
+}
+
+export async function importDatesheetFromGoogleSheet(currentConfig: HallPassConfig): Promise<{
+  config: HallPassConfig;
+  importedCount: number;
+  error?: string;
+}> {
+  const rows = await fetchExamDatesheetFromGoogleSheetDirect();
+  if (!rows || rows.length === 0) {
+    return {
+      config: currentConfig,
+      importedCount: 0,
+      error: 'Google Sheet में Exam_Datesheet टैब खाली है या पढ़ा नहीं जा सका।',
+    };
+  }
+  const updated = mergeSheetDatesheetIntoConfig(currentConfig, rows);
+  saveToPhoneMemory(HALL_PASS_CONFIG_STORAGE_KEY, updated);
+  return {
+    config: updated,
+    importedCount: updated.datesheetRows.length,
+  };
 }
 
 export async function saveHallPassConfigWithStatus(config: HallPassConfig): Promise<{

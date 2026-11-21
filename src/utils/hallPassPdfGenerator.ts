@@ -1004,7 +1004,7 @@ const drawBackLandscapeDatesheetSlot = (
   const columns = [rows.slice(0, splitAt), rows.slice(splitAt)];
   const thH = isCompactH ? 4.2 : 5.0;
   const maxRowsPerCol = Math.max(splitAt, 1);
-  const rowH = Math.min(isCompactH ? 6.4 : 8.2, Math.max(4.4, (maxTblH - thH) / maxRowsPerCol));
+  const rowH = Math.min(isCompactH ? 6.4 : 8.2, Math.max(3.8, (maxTblH - thH) / maxRowsPerCol));
   const subjOffsetX = isCompactH ? 15.2 : 16.5;
 
   columns.forEach((colRows, colIdx) => {

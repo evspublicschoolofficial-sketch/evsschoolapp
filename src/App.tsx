@@ -12830,10 +12830,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             </span>
                             <div className="min-w-0">
                               <h4 className="font-black text-xs sm:text-sm text-slate-900 truncate">
-                                परीक्षा हॉल पास / एडमिट कार्ड
+                                परीक्षा हॉल पास व सीटिंग प्लान
                               </h4>
                               <p className="text-[11px] text-slate-500 truncate">
-                                1 A4 पेपर पर 9 पास · फ़ीस पात्रता व Allow छुट
+                                9 पास/पेज · Datesheet · 6-रूम सीटिंग प्लान
                               </p>
                             </div>
                           </div>
