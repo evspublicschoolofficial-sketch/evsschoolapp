@@ -1008,8 +1008,19 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
                       <td className="py-2 px-3 font-semibold text-slate-700 whitespace-nowrap">
                         {getClassName(item.student.Class)}
                       </td>
-                      <td className="py-2 px-3 whitespace-nowrap font-black text-[#0c2340] tabular-nums">
-                        ₹{item.examFee.toLocaleString('en-IN')}
+                      <td className="py-2 px-3 whitespace-nowrap tabular-nums">
+                        <div className="font-black text-[#0c2340]">
+                          ₹{item.examFee.toLocaleString('en-IN')}
+                        </div>
+                        {item.isExamFeePaid ? (
+                          <div className="mt-0.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-extrabold">
+                            <i className="fa-solid fa-check"></i> Paid (Auto Tick)
+                          </div>
+                        ) : (
+                          <div className="mt-0.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] font-bold">
+                            Teacher Manual Tick
+                          </div>
+                        )}
                       </td>
                       <td className="py-2 px-3 whitespace-nowrap font-bold tabular-nums">
                         {item.status === 'CLEARED' && (

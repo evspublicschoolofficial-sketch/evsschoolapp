@@ -1,6 +1,13 @@
 import { ExamTermType, FeeCollectionRecord, HallPassCardLayout, HallPassConfig, HallPassDatesheetRow, Student } from '../types';
 import { getAppsScriptUrl } from './busTrackingService';
-import { calculateStudentSummary, isStudentFeeExempt, normalizeStudentId } from './feeCalculation';
+import {
+  calculateStudentSummary,
+  getStudentHeadPaymentStatus,
+  isExamFeeRecord,
+  isStudentFeeExempt,
+  normalizeStudentId,
+  reconcileFeeRecords,
+} from './feeCalculation';
 import { DEFAULT_FEE_CONFIG, getActiveFeeMasterConfig, normalizeClassKey } from './feeMaster';
 import { saveToPhoneMemory } from './phoneMemoryCache';
 import { directGetFromSheet, dualSyncWriteToSheet } from './sheetDirectSync';
@@ -339,6 +346,7 @@ export interface StudentHallPassEligibility {
   dueAmount: number;
   advanceAmount: number;
   examFee: number;
+  isExamFeePaid: boolean;
   statusLabel: string;
   overrideNote?: string;
 }
@@ -350,12 +358,42 @@ export function computeStudentHallPassEligibility(
 ): StudentHallPassEligibility {
   const normId = normalizeStudentId(student.Student_ID);
   const summary = calculateStudentSummary(student.Student_ID, feeRecords, student);
+  const headStatus = getStudentHeadPaymentStatus(student, feeRecords);
   const isFeeWaived = isStudentFeeExempt(student);
   const dueAmount = Math.max(0, Number(summary.currentDues || 0));
   const advanceAmount = Math.max(0, Number(summary.advanceAmount || 0));
   const examFee = getClassExamFee(student.Class);
   const overrideEntry = config?.allowedOverrides?.[normId];
   const isManagerAllowed = Boolean(overrideEntry?.allowed);
+
+  // Check if exam fee for the active Hall Pass exam term (e.g., Half-Yearly) is settled
+  const studentExamRecs = reconcileFeeRecords(
+    normId ? feeRecords.filter((r) => normalizeStudentId(r.Student_ID) === normId) : []
+  ).filter((r) => {
+    if (!isExamFeeRecord(r.Fee_Type)) return false;
+    const settled =
+      (Number(r.Amount_Paid) || 0) +
+      (Number((r as any).Discount_Amount || (r as any).Discount || 0) || 0);
+    return settled > 0;
+  });
+
+  const activeExamType = config?.examType || 'Half-Yearly';
+  let isExamFeePaid = false;
+
+  if (headStatus.exam.isFullYearPaid) {
+    isExamFeePaid = true;
+  } else if (activeExamType === 'Quarterly') {
+    isExamFeePaid = headStatus.exam.term1Paid;
+  } else if (activeExamType === 'Annual') {
+    isExamFeePaid = headStatus.exam.term3Paid;
+  } else {
+    // Half-Yearly: true if 2nd Term / Half-Yearly paid OR legacy Nov/Dec/Q3 exam receipt paid
+    const hasExplicitHalfYearlyReceipt = studentExamRecs.some((r) => {
+      const txt = `${r.Month || ''} ${r.Notes || ''} ${r.Fee_Type || ''}`.toLowerCase();
+      return /(half[\s-]*year|2nd\s*term|term\s*2|second\s*term|छमाही|अर्धवार्षिक|november|nov|december|dec|quarter\s*3|q3)/i.test(txt);
+    });
+    isExamFeePaid = headStatus.exam.term2Paid || hasExplicitHalfYearlyReceipt;
+  }
 
   let status: HallPassEligibilityStatus = 'FEE_HOLD';
   let statusLabel = `Due ₹${dueAmount.toLocaleString('en-IN')}`;
@@ -382,6 +420,7 @@ export function computeStudentHallPassEligibility(
     dueAmount,
     advanceAmount,
     examFee,
+    isExamFeePaid,
     statusLabel,
     overrideNote: overrideEntry?.note,
   };

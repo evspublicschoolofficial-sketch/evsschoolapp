@@ -52,6 +52,7 @@ export const HallPassCard: React.FC<HallPassCardProps> = ({
     typeof item.examFee === 'number' && !isNaN(item.examFee)
       ? item.examFee
       : getClassExamFee(student.Class);
+  const isExamPaid = Boolean(item.isExamFeePaid);
 
   // HORIZONTAL / LANDSCAPE HALL PASS (fits 70×100mm horizontal lanyard polypack)
   if (isLandscape) {
@@ -298,25 +299,71 @@ export const HallPassCard: React.FC<HallPassCardProps> = ({
                   </span>
                 </div>
 
-                {/* Blank White Write-In Box for Teacher to mark Paid / Not Paid */}
-                <div
-                  className={`flex-1 bg-white flex items-center justify-between gap-2 ${
-                    isStandalone ? 'px-3 py-1' : 'px-2 py-0.5'
-                  }`}
-                >
-                  <span
-                    className={`font-extrabold text-slate-600 uppercase whitespace-nowrap ${
-                      isStandalone ? 'text-[10px]' : 'text-[6.8px]'
+                {/* Paid / Teacher Tick Box */}
+                {isExamPaid ? (
+                  <div
+                    className={`flex-1 bg-emerald-50 flex items-center justify-between gap-2 ${
+                      isStandalone ? 'px-3 py-1' : 'px-2 py-0.5'
                     }`}
                   >
-                    Paid / Status (Teacher):
-                  </span>
-                  <span
-                    className={`border-b border-dashed border-slate-400 flex-1 ${
-                      isStandalone ? 'min-w-[80px] h-4' : 'min-w-[16mm] h-3'
+                    <span
+                      className={`font-extrabold text-slate-700 uppercase whitespace-nowrap ${
+                        isStandalone ? 'text-[10px]' : 'text-[6.8px]'
+                      }`}
+                    >
+                      Paid / Status:
+                    </span>
+                    <div
+                      className={`inline-flex items-center gap-1 rounded-[2px] border-[1.2pt] border-emerald-800 bg-emerald-100 text-emerald-950 font-black uppercase tracking-wide ${
+                        isStandalone ? 'px-2.5 py-0.5 text-xs' : 'px-1.5 py-[1px] text-[8.5px]'
+                      }`}
+                    >
+                      <span
+                        className={`inline-flex items-center justify-center rounded-[1.5px] border-[1.2pt] border-emerald-900 bg-white text-emerald-800 ${
+                          isStandalone ? 'w-3.5 h-3.5' : 'w-2.5 h-2.5'
+                        }`}
+                      >
+                        <svg viewBox="0 0 12 12" className="w-full h-full p-[1px]" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M2 6.5 L4.8 9.2 L10 2.8" />
+                        </svg>
+                      </span>
+                      <span>PAID</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    className={`flex-1 bg-white flex items-center justify-between gap-1.5 ${
+                      isStandalone ? 'px-3 py-1' : 'px-2 py-0.5'
                     }`}
-                  />
-                </div>
+                  >
+                    <span
+                      className={`font-extrabold text-slate-600 uppercase whitespace-nowrap ${
+                        isStandalone ? 'text-[10px]' : 'text-[6.6px]'
+                      }`}
+                    >
+                      Paid (Teacher):
+                    </span>
+                    <div className="flex items-center gap-1 flex-1 min-w-0">
+                      <span
+                        className={`inline-block shrink-0 border-[1.2pt] border-[#0c2340] rounded-[1.5px] bg-white ${
+                          isStandalone ? 'w-3.5 h-3.5' : 'w-2.5 h-2.5'
+                        }`}
+                      />
+                      <span
+                        className={`font-bold text-slate-700 whitespace-nowrap ${
+                          isStandalone ? 'text-[10px]' : 'text-[7px]'
+                        }`}
+                      >
+                        Paid
+                      </span>
+                      <span
+                        className={`border-b border-dashed border-slate-400 flex-1 ${
+                          isStandalone ? 'min-w-[36px] h-3.5' : 'min-w-[8mm] h-2.5'
+                        }`}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -484,12 +531,48 @@ export const HallPassCard: React.FC<HallPassCardProps> = ({
                 </span>
               </div>
 
-              <div className={`flex-1 bg-white flex flex-col justify-between ${isStandalone ? 'px-3 py-1.5 min-h-[46px]' : 'px-2 py-1 min-h-[9.5mm]'}`}>
-                <span className={`font-extrabold text-slate-600 uppercase leading-none ${isStandalone ? 'text-[9px]' : 'text-[6.8px]'}`}>
-                  Paid / Status (Teacher):
-                </span>
-                <span className="border-b border-dashed border-slate-400 w-full mt-2" />
-              </div>
+              {isExamPaid ? (
+                <div className={`flex-1 bg-emerald-50 flex flex-col justify-between ${isStandalone ? 'px-3 py-1.5 min-h-[46px]' : 'px-2 py-1 min-h-[9.5mm]'}`}>
+                  <span className={`font-extrabold text-slate-700 uppercase leading-none ${isStandalone ? 'text-[9px]' : 'text-[6.8px]'}`}>
+                    Paid / Status:
+                  </span>
+                  <div className="flex items-center mt-1">
+                    <div
+                      className={`inline-flex items-center gap-1 rounded-[2px] border-[1.2pt] border-emerald-800 bg-emerald-100 text-emerald-950 font-black uppercase tracking-wide ${
+                        isStandalone ? 'px-2.5 py-0.5 text-xs' : 'px-1.5 py-[1px] text-[9px]'
+                      }`}
+                    >
+                      <span
+                        className={`inline-flex items-center justify-center rounded-[1.5px] border-[1.2pt] border-emerald-900 bg-white text-emerald-800 ${
+                          isStandalone ? 'w-3.5 h-3.5' : 'w-2.5 h-2.5'
+                        }`}
+                      >
+                        <svg viewBox="0 0 12 12" className="w-full h-full p-[1px]" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M2 6.5 L4.8 9.2 L10 2.8" />
+                        </svg>
+                      </span>
+                      <span>PAID</span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className={`flex-1 bg-white flex flex-col justify-between ${isStandalone ? 'px-3 py-1.5 min-h-[46px]' : 'px-2 py-1 min-h-[9.5mm]'}`}>
+                  <span className={`font-extrabold text-slate-600 uppercase leading-none ${isStandalone ? 'text-[9px]' : 'text-[6.8px]'}`}>
+                    Paid / Status (Teacher):
+                  </span>
+                  <div className="flex items-center gap-1.5 mt-1.5">
+                    <span
+                      className={`inline-block shrink-0 border-[1.2pt] border-[#0c2340] rounded-[1.5px] bg-white ${
+                        isStandalone ? 'w-3.5 h-3.5' : 'w-2.5 h-2.5'
+                      }`}
+                    />
+                    <span className={`font-bold text-slate-700 leading-none whitespace-nowrap ${isStandalone ? 'text-[10px]' : 'text-[7.5px]'}`}>
+                      Paid
+                    </span>
+                    <span className="border-b border-dashed border-slate-400 flex-1 h-2" />
+                  </div>
+                </div>
+              )}
             </div>
 
             <div

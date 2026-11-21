@@ -35,6 +35,8 @@ const SLATE_500: [number, number, number] = [100, 116, 139];
 const SLATE_700: [number, number, number] = [51, 65, 85];
 const BLACK: [number, number, number] = [0, 0, 0];
 const WHITE: [number, number, number] = [255, 255, 255];
+const EMERALD_BG: [number, number, number] = [220, 252, 231];
+const EMERALD_DARK: [number, number, number] = [6, 95, 70];
 
 const getInitials = (name?: string): string => {
   const parts = String(name || 'EVS').trim().split(/\s+/).filter(Boolean);
@@ -134,6 +136,73 @@ const loadPhotoAsJpegDataUrl = (url?: string): Promise<string | null> => {
     };
     img.src = clean;
   });
+};
+
+const drawExamPaidStatusBox = (
+  doc: jsPDF,
+  boxX: number,
+  boxY: number,
+  boxW: number,
+  boxH: number,
+  isPaid: boolean,
+  isCompact: boolean = false
+) => {
+  doc.setDrawColor(...NAVY);
+  doc.setLineWidth(0.45);
+  doc.setFillColor(...(isPaid ? EMERALD_BG : WHITE));
+  doc.rect(boxX, boxY, boxW, boxH, 'FD');
+
+  if (isPaid) {
+    doc.setTextColor(...SLATE_700);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(isCompact ? 5.0 : 5.5);
+    doc.text('Paid / Status:', boxX + 1.5, boxY + (isCompact ? 2.5 : 3.1));
+
+    const cbSize = isCompact ? 3.2 : 3.8;
+    const cbX = boxX + 1.6;
+    const cbY = boxY + boxH - cbSize - (isCompact ? 0.8 : 1.3);
+    doc.setFillColor(...WHITE);
+    doc.setDrawColor(...EMERALD_DARK);
+    doc.setLineWidth(0.4);
+    doc.rect(cbX, cbY, cbSize, cbSize, 'FD');
+
+    // Vector checkmark inside checkbox (avoids WinAnsi glyph loss)
+    doc.setDrawColor(...EMERALD_DARK);
+    doc.setLineWidth(0.55);
+    doc.line(cbX + cbSize * 0.2, cbY + cbSize * 0.54, cbX + cbSize * 0.43, cbY + cbSize * 0.78);
+    doc.line(cbX + cbSize * 0.43, cbY + cbSize * 0.78, cbX + cbSize * 0.82, cbY + cbSize * 0.22);
+
+    doc.setTextColor(...EMERALD_DARK);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(isCompact ? 7.6 : 8.8);
+    doc.text('PAID', cbX + cbSize + 1.6, cbY + cbSize - (isCompact ? 0.35 : 0.45));
+  } else {
+    doc.setTextColor(...SLATE_500);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(isCompact ? 5.0 : 5.5);
+    doc.text('Paid / Status (Teacher):', boxX + 1.5, boxY + (isCompact ? 2.5 : 3.1));
+
+    const cbSize = isCompact ? 2.9 : 3.4;
+    const cbX = boxX + 1.6;
+    const cbY = boxY + boxH - cbSize - (isCompact ? 0.8 : 1.3);
+    doc.setFillColor(...WHITE);
+    doc.setDrawColor(...NAVY);
+    doc.setLineWidth(0.35);
+    doc.rect(cbX, cbY, cbSize, cbSize, 'FD');
+
+    doc.setTextColor(...SLATE_700);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(isCompact ? 6.0 : 6.6);
+    doc.text('Paid', cbX + cbSize + 1.1, cbY + cbSize - (isCompact ? 0.4 : 0.5));
+
+    const lineStartX = cbX + cbSize + (isCompact ? 6.6 : 7.2);
+    const lineEndX = boxX + boxW - 1.5;
+    if (lineEndX > lineStartX + 3) {
+      doc.setDrawColor(...SLATE_500);
+      doc.setLineWidth(0.25);
+      doc.line(lineStartX, boxY + boxH - (isCompact ? 0.9 : 1.4), lineEndX, boxY + boxH - (isCompact ? 0.9 : 1.4));
+    }
+  }
 };
 
 const drawFrontSlot = (
@@ -325,9 +394,6 @@ const drawFrontSlot = (
   doc.setLineWidth(0.45);
   doc.rect(bodyX, nextY, feeLeftW, feeBoxH, 'FD');
 
-  doc.setFillColor(...WHITE);
-  doc.rect(bodyX + feeLeftW, nextY, bodyW - feeLeftW, feeBoxH, 'FD');
-
   doc.setTextColor(...NAVY);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(6.2);
@@ -337,14 +403,16 @@ const drawFrontSlot = (
   doc.setFontSize(10.0);
   doc.text(fitText(doc, examFeeText, feeLeftW - 2.6), bodyX + 1.5, nextY + 8.1);
 
-  // Right White Pen Box for Teacher Status
-  doc.setTextColor(...SLATE_500);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(5.5);
-  doc.text('Paid / Status (Teacher):', bodyX + feeLeftW + 1.5, nextY + 3.2);
-  doc.setDrawColor(...SLATE_300);
-  doc.setLineWidth(0.25);
-  doc.line(bodyX + feeLeftW + 1.5, nextY + 8.4, bodyX + bodyW - 1.5, nextY + 8.4);
+  // Right Box: Auto Paid Checkmark OR Empty Teacher Checkbox + Write-In Line
+  drawExamPaidStatusBox(
+    doc,
+    bodyX + feeLeftW,
+    nextY,
+    bodyW - feeLeftW,
+    feeBoxH,
+    Boolean(item.isExamFeePaid),
+    false
+  );
 
   // Exam Timing Schedule line
   const schedY = nextY + feeBoxH + 4.4;
@@ -668,9 +736,6 @@ const drawFrontLandscapeSlot = (
   doc.setLineWidth(0.45);
   doc.rect(bodyX, feeY, feeLeftW, feeH, 'FD');
 
-  doc.setFillColor(...WHITE);
-  doc.rect(bodyX + feeLeftW, feeY, bodyW - feeLeftW, feeH, 'FD');
-
   doc.setTextColor(...NAVY);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(6.2);
@@ -681,14 +746,16 @@ const drawFrontLandscapeSlot = (
     align: 'right',
   });
 
-  // Blank White Write-In Box for Teacher Paid/Unpaid mark
-  doc.setTextColor(...SLATE_500);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(5.8);
-  doc.text('Paid / Status (Teacher):', bodyX + feeLeftW + 1.8, feeY + 3.2);
-  doc.setDrawColor(...SLATE_300);
-  doc.setLineWidth(0.25);
-  doc.line(bodyX + feeLeftW + 1.8, feeY + feeH - 1.6, bodyX + bodyW - 1.8, feeY + feeH - 1.6);
+  // Right Box: Auto Paid Checkmark OR Empty Teacher Checkbox + Write-In Line
+  drawExamPaidStatusBox(
+    doc,
+    bodyX + feeLeftW,
+    feeY,
+    bodyW - feeLeftW,
+    feeH,
+    Boolean(item.isExamFeePaid),
+    isCompactH
+  );
 
   // TOP 3-COLUMN IDENTITY BODY (Balanced vertical fit from header to fee bar)
   const bodyTop = cy + headerH + 1.6;
