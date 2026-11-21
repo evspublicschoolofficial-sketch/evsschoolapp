@@ -100,6 +100,9 @@ export const getPeriodsForFeeType = (selectedFeeType: string): { defaultPeriod: 
         '1st Term Exam (प्रथम टर्म / तिमाही - 1×)',
         '2nd Term Exam (द्वितीय टर्म / छमाही - 1×)',
         '3rd / Annual Exam (वार्षिक परीक्षा - 1×)',
+        '2 Terms Exam: 1st + 2nd Term (दो टर्म एक साथ - 2×)',
+        '2 Terms Exam: 2nd + 3rd Term (दो टर्म एक साथ - 2×)',
+        '2 Terms Exam: 1st + 3rd Term (दो टर्म एक साथ - 2×)',
         'Full Year Exam (तीनों टर्म एक साथ / 3× All 3 Terms)',
         'Remaining Terms Exam (बचे हुए टर्म एक साथ)',
         'Half-Yearly Exam (छमाही परीक्षा)',
@@ -248,18 +251,19 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
   const isBooksMode = useMemo(() => isBooksFeeRecord(feeType), [feeType]);
   const isExamMode = useMemo(() => isExamFeeRecord(feeType), [feeType]);
 
-  // Exam Term Detection for Option A (1x Term vs 3x Full Year)
+  // Exam Term Detection for Option A (1x Term, 2x Two Terms, vs 3x Full Year)
   const examSelectionMeta = useMemo(() => {
     if (!isExamMode) return null;
     const mLow = String(month || '').toLowerCase();
     const isFullYear = /(3x|3×|all\s*3|three\s*term|तीनों\s*टर्म|full\s*year|full\s*session|पूरे\s*साल|remaining\s*terms|बचे\s*हुए)/i.test(mLow);
-    const isTerm1 = !isFullYear && /(1st|term\s*1|quarter\s*1|प्रथम|तिमाही)/i.test(mLow);
-    const isTerm2 = !isFullYear && /(2nd|term\s*2|half[\s-]*yearly|quarter\s*2|द्वितीय|अर्धवार्षिक|छमाही)/i.test(mLow);
-    const isTerm3 = !isFullYear && /(3rd|term\s*3|annual|तृतीय|वार्षिक)/i.test(mLow);
-    return { isFullYear, isTerm1, isTerm2, isTerm3 };
+    const isTwoTerms = !isFullYear && /(2x|2×|2\s*terms?|two\s*terms?|दो\s*टर्म|1st\s*[+&]\s*2nd|2nd\s*[+&]\s*3rd|1st\s*[+&]\s*3rd)/i.test(mLow);
+    const isTerm1 = !isFullYear && /(1st\s*term|1st\s*[+&]|term\s*1|quarter\s*1|प्रथम|तिमाही)/i.test(mLow);
+    const isTerm2 = !isFullYear && /(2nd\s*term|2nd\s*[+&]|[+&]\s*2nd|term\s*2|half[\s-]*yearly|quarter\s*2|द्वितीय|अर्धवार्षिक|छमाही)/i.test(mLow);
+    const isTerm3 = !isFullYear && /(3rd\s*term|[+&]\s*3rd|term\s*3|annual|तृतीय|वार्षिक)/i.test(mLow);
+    return { isFullYear, isTwoTerms, isTerm1, isTerm2, isTerm3 };
   }, [isExamMode, month]);
 
-  // Duplicate Payment Lock check (Admission, Books, Exam Term / 3x Full Year)
+  // Duplicate Payment Lock check (Admission, Books, Exam 1x / 2x / 3x Full Year)
   const duplicateLockInfo = useMemo(() => {
     if (!selectedStudent || !headStatus || isAdvanceMode || isMultiMonthMode) return null;
 
@@ -282,23 +286,45 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
           message: `इस छात्र की पूरे साल (सभी 3 टर्म) की परीक्षा शुल्क (₹${headStatus.exam.settled.toLocaleString('en-IN')}) पहले से जमा है — इस सत्र के लिए लॉक।`,
         };
       }
-      if (examSelectionMeta?.isTerm1 && headStatus.exam.term1Paid) {
-        return {
-          headLabel: '1st Term परीक्षा शुल्क',
-          message: 'इस छात्र की 1st Term की परीक्षा शुल्क पहले से जमा है। कृपया 2nd / 3rd Term चुनें।',
-        };
-      }
-      if (examSelectionMeta?.isTerm2 && headStatus.exam.term2Paid) {
-        return {
-          headLabel: '2nd Term परीक्षा शुल्क',
-          message: 'इस छात्र की 2nd Term की परीक्षा शुल्क पहले से जमा है। कृपया कोई शेष टर्म चुनें।',
-        };
-      }
-      if (examSelectionMeta?.isTerm3 && headStatus.exam.term3Paid) {
-        return {
-          headLabel: '3rd / Annual Term परीक्षा शुल्क',
-          message: 'इस छात्र की 3rd / Annual Term की परीक्षा शुल्क पहले से जमा है।',
-        };
+      if (examSelectionMeta?.isTwoTerms) {
+        const { isTerm1, isTerm2, isTerm3 } = examSelectionMeta;
+        const paidChosen: string[] = [];
+        const unpaidChosen: string[] = [];
+        if (isTerm1) (headStatus.exam.term1Paid ? paidChosen : unpaidChosen).push('1st Term');
+        if (isTerm2) (headStatus.exam.term2Paid ? paidChosen : unpaidChosen).push('2nd Term');
+        if (isTerm3) (headStatus.exam.term3Paid ? paidChosen : unpaidChosen).push('3rd Term');
+
+        if (paidChosen.length >= 2 || headStatus.exam.remainingTermsCount === 0) {
+          return {
+            headLabel: `${paidChosen.join(' + ')} (2×) परीक्षा शुल्क`,
+            message: `इस छात्र की ${paidChosen.join(' व ')} की परीक्षा शुल्क पहले से जमा है। कृपया केवल बचा हुआ टर्म (1×) चुनें।`,
+          };
+        }
+        if (paidChosen.length === 1 && unpaidChosen.length >= 1) {
+          return {
+            headLabel: `${paidChosen[0]} पहले से जमा है`,
+            message: `इस 2-टर्म पैक में से ${paidChosen[0]} पहले से जमा हो चुकी है। कृपया केवल ${unpaidChosen.join(' / ')} (1×) चुनें।`,
+          };
+        }
+      } else {
+        if (examSelectionMeta?.isTerm1 && headStatus.exam.term1Paid) {
+          return {
+            headLabel: '1st Term परीक्षा शुल्क',
+            message: 'इस छात्र की 1st Term की परीक्षा शुल्क पहले से जमा है। कृपया 2nd / 3rd Term चुनें।',
+          };
+        }
+        if (examSelectionMeta?.isTerm2 && headStatus.exam.term2Paid) {
+          return {
+            headLabel: '2nd Term परीक्षा शुल्क',
+            message: 'इस छात्र की 2nd Term की परीक्षा शुल्क पहले से जमा है। कृपया कोई शेष टर्म चुनें।',
+          };
+        }
+        if (examSelectionMeta?.isTerm3 && headStatus.exam.term3Paid) {
+          return {
+            headLabel: '3rd / Annual Term परीक्षा शुल्क',
+            message: 'इस छात्र की 3rd / Annual Term की परीक्षा शुल्क पहले से जमा है।',
+          };
+        }
       }
     }
     return null;
@@ -337,6 +363,9 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
         return headStatus.exam.remainingFullYearAmount > 0
           ? headStatus.exam.remainingFullYearAmount
           : headStatus.exam.fullYearFee;
+      }
+      if (examSelectionMeta?.isTwoTerms) {
+        return headStatus.exam.perTermFee * 2;
       }
       return headStatus.exam.perTermFee;
     }
@@ -1293,38 +1322,55 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
             </div>
           </div>
 
-          {/* Option A: Examination Fee Term Selector (1x Term vs 3x Full Year Lock) */}
+          {/* Option A: Examination Fee Term Selector (1x Term, 2x Two Terms, vs 3x Full Year Lock) */}
           {selectedStudent && isExamMode && headStatus && !isAdvanceMode && !isMultiMonthMode && (
             <div className="p-3 rounded-xl bg-indigo-50/80 border border-indigo-200 space-y-2">
               <div className="flex flex-wrap items-center justify-between gap-1.5 text-xs">
                 <span className="font-black text-indigo-950 flex items-center gap-1.5">
                   <i className="fa-solid fa-file-signature text-indigo-600"></i>
-                  <span>परीक्षा शुल्क टर्म चयन (1× टर्म या 3× पूरे साल)</span>
+                  <span>परीक्षा शुल्क टर्म चयन (1×, 2× दो टर्म, या 3× पूरे साल)</span>
                 </span>
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-white border border-indigo-200 text-indigo-900">
-                  1 टर्म = ₹{headStatus.exam.perTermFee.toLocaleString('en-IN')} • 3 टर्म (3×) = ₹{headStatus.exam.fullYearFee.toLocaleString('en-IN')}
+                  1× = ₹{headStatus.exam.perTermFee.toLocaleString('en-IN')} • 2× = ₹{(headStatus.exam.perTermFee * 2).toLocaleString('en-IN')} • 3× = ₹{headStatus.exam.fullYearFee.toLocaleString('en-IN')}
                 </span>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
                 {[
                   {
                     label: '1st Term (1×)',
                     period: '1st Term Exam (प्रथम टर्म / तिमाही - 1×)',
                     paid: headStatus.exam.term1Paid,
+                    partialPaid: false,
                     amt: headStatus.exam.perTermFee,
                   },
                   {
                     label: '2nd Term (1×)',
                     period: '2nd Term Exam (द्वितीय टर्म / छमाही - 1×)',
                     paid: headStatus.exam.term2Paid,
+                    partialPaid: false,
                     amt: headStatus.exam.perTermFee,
                   },
                   {
                     label: '3rd / Annual (1×)',
                     period: '3rd / Annual Exam (वार्षिक परीक्षा - 1×)',
                     paid: headStatus.exam.term3Paid,
+                    partialPaid: false,
                     amt: headStatus.exam.perTermFee,
+                  },
+                  {
+                    label: '1st + 2nd Term (2×)',
+                    period: '2 Terms Exam: 1st + 2nd Term (दो टर्म एक साथ - 2×)',
+                    paid: headStatus.exam.term1Paid && headStatus.exam.term2Paid,
+                    partialPaid: (headStatus.exam.term1Paid || headStatus.exam.term2Paid) && !(headStatus.exam.term1Paid && headStatus.exam.term2Paid),
+                    amt: headStatus.exam.perTermFee * 2,
+                  },
+                  {
+                    label: '2nd + 3rd Term (2×)',
+                    period: '2 Terms Exam: 2nd + 3rd Term (दो टर्म एक साथ - 2×)',
+                    paid: headStatus.exam.term2Paid && headStatus.exam.term3Paid,
+                    partialPaid: (headStatus.exam.term2Paid || headStatus.exam.term3Paid) && !(headStatus.exam.term2Paid && headStatus.exam.term3Paid),
+                    amt: headStatus.exam.perTermFee * 2,
                   },
                   {
                     label:
@@ -1333,6 +1379,7 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
                         : 'तीनों टर्म (3×)',
                     period: 'Full Year Exam (तीनों टर्म एक साथ / 3× All 3 Terms)',
                     paid: headStatus.exam.isFullYearPaid,
+                    partialPaid: false,
                     amt:
                       headStatus.exam.remainingFullYearAmount > 0
                         ? headStatus.exam.remainingFullYearAmount
@@ -1353,6 +1400,10 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
                           ? isActive
                             ? 'bg-emerald-100 border-emerald-500 text-emerald-950'
                             : 'bg-emerald-50/70 border-emerald-300 text-emerald-900 opacity-85'
+                          : opt.partialPaid
+                          ? isActive
+                            ? 'bg-amber-100 border-amber-500 text-amber-950'
+                            : 'bg-amber-50/70 border-amber-300 text-amber-900'
                           : isActive
                           ? 'bg-[#0c2340] border-[#0c2340] text-amber-300 shadow-xs'
                           : 'bg-white border-slate-200 text-slate-800 hover:border-indigo-400'
@@ -1361,8 +1412,11 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
                       <div className="text-[11px] font-black flex items-center justify-between gap-1">
                         <span>{opt.label}</span>
                         {opt.paid && <span className="text-[9px] text-emerald-700 font-bold">✓ जमा</span>}
+                        {!opt.paid && opt.partialPaid && (
+                          <span className="text-[9px] text-amber-800 font-bold">1 जमा</span>
+                        )}
                       </div>
-                      <div className={`text-[10px] font-bold mt-0.5 ${isActive && !opt.paid ? 'text-white' : 'text-slate-600'}`}>
+                      <div className={`text-[10px] font-bold mt-0.5 ${isActive && !opt.paid && !opt.partialPaid ? 'text-white' : 'text-slate-600'}`}>
                         {opt.paid ? 'जमा हो चुका ✓' : `₹${opt.amt.toLocaleString('en-IN')}`}
                       </div>
                     </button>
@@ -1676,7 +1730,7 @@ export const AddFeeModal: React.FC<AddFeeModalProps> = ({
                 >
                   ⚠️ सिर्फ बकाया दर्ज करें (₹0 जमा, शेष ₹{netPayable} Due)
                 </button>
-                {detectedStandardFee > 0 && (
+                {detectedStandardFee > 0 && !isExamMode && !isAdmissionMode && !isBooksMode && (
                   <>
                     <button
                       type="button"

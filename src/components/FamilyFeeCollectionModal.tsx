@@ -78,6 +78,9 @@ const EXAM_TERM_OPTIONS = [
   '1st Term Exam (प्रथम टर्म / तिमाही - 1×)',
   '2nd Term Exam (द्वितीय टर्म / छमाही - 1×)',
   '3rd / Annual Exam (वार्षिक परीक्षा - 1×)',
+  '2 Terms Exam: 1st + 2nd Term (दो टर्म एक साथ - 2×)',
+  '2 Terms Exam: 2nd + 3rd Term (दो टर्म एक साथ - 2×)',
+  '2 Terms Exam: 1st + 3rd Term (दो टर्म एक साथ - 2×)',
   'Full Year Exam (तीनों टर्म एक साथ / 3× All 3 Terms)',
 ];
 
@@ -229,10 +232,11 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
 
     if (isExamFeeRecord(feeTypeVal)) {
       const mLow = String(monthVal || '').toLowerCase();
-      const isFullYear = /(3x|3×|all\s*3|three\s*term|तीनों\s*टर्म|full\s*year|full\s*session|पूरे\s*साल)/i.test(mLow);
-      const isT1 = !isFullYear && /(1st|term\s*1|प्रथम|तिमाही)/i.test(mLow);
-      const isT2 = !isFullYear && /(2nd|term\s*2|half|द्वितीय|अर्धवार्षिक|छमाही)/i.test(mLow);
-      const isT3 = !isFullYear && /(3rd|term\s*3|annual|तृतीय|वार्षिक)/i.test(mLow);
+      const isFullYear = /(3x|3×|all\s*3|three\s*term|तीनों\s*टर्म|full\s*year|full\s*session|पूरे\s*साल|remaining\s*terms|बचे\s*हुए)/i.test(mLow);
+      const isTwoTerms = !isFullYear && /(2x|2×|2\s*terms?|two\s*terms?|दो\s*टर्म|1st\s*[+&]\s*2nd|2nd\s*[+&]\s*3rd|1st\s*[+&]\s*3rd)/i.test(mLow);
+      const isT1 = !isFullYear && /(1st\s*term|1st\s*[+&]|term\s*1|प्रथम|तिमाही)/i.test(mLow);
+      const isT2 = !isFullYear && /(2nd\s*term|2nd\s*[+&]|[+&]\s*2nd|term\s*2|half|द्वितीय|अर्धवार्षिक|छमाही)/i.test(mLow);
+      const isT3 = !isFullYear && /(3rd\s*term|[+&]\s*3rd|term\s*3|annual|तृतीय|वार्षिक)/i.test(mLow);
 
       if (status.exam.isFullYearPaid) {
         return {
@@ -244,6 +248,40 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
           partialNote: '',
         };
       }
+
+      if (isTwoTerms) {
+        const chosenPaidCount =
+          (isT1 && status.exam.term1Paid ? 1 : 0) +
+          (isT2 && status.exam.term2Paid ? 1 : 0) +
+          (isT3 && status.exam.term3Paid ? 1 : 0);
+        const totalChosen = (isT1 ? 1 : 0) + (isT2 ? 1 : 0) + (isT3 ? 1 : 0) || 2;
+
+        if (chosenPaidCount >= totalChosen || status.exam.remainingTermsCount === 0) {
+          return {
+            isLocked: true,
+            lockReason: 'ये दोनों टर्म पहले से जमा ✓',
+            suggestedTotal: 0,
+            suggestedDiscount: 0,
+            suggestedPaid: 0,
+            partialNote: '',
+          };
+        }
+
+        const payableTerms = Math.max(1, totalChosen - chosenPaidCount);
+        const amt = status.exam.perTermFee * payableTerms;
+        return {
+          isLocked: false,
+          lockReason: '',
+          suggestedTotal: amt,
+          suggestedDiscount: 0,
+          suggestedPaid: amt,
+          partialNote:
+            chosenPaidCount > 0
+              ? `1 टर्म पहले से जमा • केवल शेष ${payableTerms} टर्म (₹${amt.toLocaleString('en-IN')})`
+              : `2 टर्म एक साथ (2 × ₹${status.exam.perTermFee.toLocaleString('en-IN')})`,
+        };
+      }
+
       if (isT1 && status.exam.term1Paid) {
         return {
           isLocked: true,
@@ -453,6 +491,10 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
   };
 
   const handleApplyGlobalMonth = (newMonth: string) => {
+    if (isExamFeeRecord(globalFeeType) && EXAM_TERM_OPTIONS.includes(newMonth)) {
+      handleApplyGlobalExamTerm(newMonth);
+      return;
+    }
     setGlobalMonth(newMonth);
     setRowsState((prev) => {
       const next = { ...prev };
@@ -1097,18 +1139,20 @@ export const FamilyFeeCollectionModal: React.FC<FamilyFeeCollectionModalProps> =
                       <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                         <span className="font-black text-indigo-950 flex items-center gap-1.5">
                           <i className="fa-solid fa-file-signature text-indigo-600"></i>
-                          <span>सभी बच्चों के लिए परीक्षा टर्म चुनें (1× टर्म या 3× पूरे साल)</span>
+                          <span>सभी बच्चों के लिए परीक्षा टर्म चुनें (1×, 2× दो टर्म, या 3× पूरे साल)</span>
                         </span>
                         <span className="text-[10px] font-semibold text-indigo-800">
-                          जिन बच्चों की यह टर्म या 3× परीक्षा फीस पहले से जमा है वे अपने-आप लॉक हो जाएंगे ✓
+                          जिन बच्चों की यह टर्म या 3× परीक्षा फीस पहले से जमा है वे अपने-आप लॉक/समायोजित हो जाएंगे ✓
                         </span>
                       </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                         {[
                           { label: '1st Term (1×)', period: EXAM_TERM_OPTIONS[0] },
                           { label: '2nd Term (1×)', period: EXAM_TERM_OPTIONS[1] },
                           { label: '3rd / Annual (1×)', period: EXAM_TERM_OPTIONS[2] },
-                          { label: 'तीनों टर्म एक साथ (3×)', period: EXAM_TERM_OPTIONS[3] },
+                          { label: '1st + 2nd Term (2×)', period: EXAM_TERM_OPTIONS[3] },
+                          { label: '2nd + 3rd Term (2×)', period: EXAM_TERM_OPTIONS[4] },
+                          { label: 'तीनों टर्म एक साथ (3×)', period: EXAM_TERM_OPTIONS[6] },
                         ].map((opt) => (
                           <button
                             key={opt.period}

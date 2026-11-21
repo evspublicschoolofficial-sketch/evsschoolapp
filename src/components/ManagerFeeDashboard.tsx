@@ -2571,7 +2571,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                       <div>
                         <div className="text-[11px] font-bold text-purple-950 flex items-center gap-1.5">
                           <span className="w-2 h-2 rounded-full bg-purple-600"></span>
-                          <span>पुस्तकें / परीक्षा (1×/3×) / अन्य</span>
+                          <span>पुस्तकें / परीक्षा (1×/2×/3×) / अन्य</span>
                         </div>
                         <div className="text-xs text-purple-900 mt-0.5">
                           बिल: <strong>₹{studentFeeSummary.otherBilledFees.toLocaleString('en-IN')}</strong>

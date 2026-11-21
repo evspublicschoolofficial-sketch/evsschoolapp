@@ -859,7 +859,7 @@ export const getStudentHeadPaymentStatus = (
   const booksRemaining = Math.max(0, booksStandard - booksSettled);
   const booksIsPaid = booksStandard > 0 ? booksSettled >= booksStandard : booksSettled > 0;
 
-  // 3. Examination Fee (Option A: 1x Term-wise & 3x Full Year)
+  // 3. Examination Fee (Option A: 1x Term-wise, 2x Two Terms, & 3x Full Year)
   const examRecs = reconciled.filter((r) => isExamFeeRecord(r.Fee_Type));
   const examPaid = examRecs.reduce((s, r) => s + (Number(r.Amount_Paid) || 0), 0);
   const examDisc = examRecs.reduce(
@@ -872,6 +872,7 @@ export const getStudentHeadPaymentStatus = (
   let term2Paid = false;
   let term3Paid = false;
   let fullYearMarked = false;
+  let twoTermsMarked = false;
 
   examRecs.forEach((r) => {
     const recSettled =
@@ -886,13 +887,16 @@ export const getStudentHeadPaymentStatus = (
     ) {
       fullYearMarked = true;
     }
-    if (/(1st\s*term|term\s*1|first\s*term|quarter\s*1|q1|unit\s*test\s*1|प्रथम\s*टर्म|प्रथम\s*परीक्षा|तिमाही)/i.test(text)) {
+    if (/(2x|2×|2\s*terms?|two\s*terms?|दो\s*टर्म)/i.test(text)) {
+      twoTermsMarked = true;
+    }
+    if (/(1st\s*term|1st\s*[+&]|term\s*1|first\s*term|quarter\s*1|q1|unit\s*test\s*1|प्रथम\s*टर्म|प्रथम\s*परीक्षा|तिमाही)/i.test(text)) {
       term1Paid = true;
     }
-    if (/(2nd\s*term|term\s*2|second\s*term|half[\s-]*yearly|quarter\s*2|q2|unit\s*test\s*2|द्वितीय\s*टर्म|अर्धवार्षिक|छमाही)/i.test(text)) {
+    if (/(2nd\s*term|2nd\s*[+&]|[+&]\s*2nd|term\s*2|second\s*term|half[\s-]*yearly|quarter\s*2|q2|unit\s*test\s*2|द्वितीय\s*टर्म|अर्धवार्षिक|छमाही)/i.test(text)) {
       term2Paid = true;
     }
-    if (/(3rd\s*term|term\s*3|third\s*term|annual\s*exam|final\s*exam|तृतीय\s*टर्म|वार्षिक)/i.test(text)) {
+    if (/(3rd\s*term|[+&]\s*3rd|term\s*3|third\s*term|annual\s*exam|final\s*exam|तृतीय\s*टर्म|वार्षिक)/i.test(text)) {
       term3Paid = true;
     }
   });
@@ -902,8 +906,9 @@ export const getStudentHeadPaymentStatus = (
     term2Paid = true;
     term3Paid = true;
   } else if (examSettled > 0 && perTermExamFee > 0) {
-    // Reconcile legacy/unlabeled exam receipts by settled amount against per-term rate
-    const impliedTerms = Math.min(3, Math.floor((examSettled + 0.01) / perTermExamFee));
+    // Reconcile 2x / legacy / unlabeled exam receipts against per-term rate
+    const amountImpliedTerms = Math.min(3, Math.floor((examSettled + 0.01) / perTermExamFee));
+    const impliedTerms = Math.max(twoTermsMarked ? 2 : 0, amountImpliedTerms);
     let currentCount = (term1Paid ? 1 : 0) + (term2Paid ? 1 : 0) + (term3Paid ? 1 : 0);
     if (currentCount < impliedTerms) {
       if (!term1Paid && currentCount < impliedTerms) { term1Paid = true; currentCount++; }
