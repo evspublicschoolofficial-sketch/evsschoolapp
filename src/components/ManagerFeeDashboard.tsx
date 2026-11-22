@@ -16,6 +16,7 @@ import { FeeCollectionRecord } from './AddFeeModal';
 import { OfficialFeeReceiptModal } from './OfficialFeeReceiptModal';
 import { FeeMasterModal } from './FeeMasterModal';
 import { FamilyFeeCollectionModal } from './FamilyFeeCollectionModal';
+import { ClassFeeRegisterView } from './ClassFeeRegisterView';
 import { Student, UpiPaymentRequest, UpiSettings } from '../types';
 import {
   computeStudentFeeMetrics,
@@ -334,7 +335,7 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
       window.removeEventListener(FEE_MASTER_UPDATED_EVENT, handleWaiverChange);
     };
   }, []);
-  const [activeViewMode, setActiveViewMode] = useState<'trends' | 'student' | 'family' | 'allLedger' | 'upiQueue' | 'feeWaivers'>('trends');
+  const [activeViewMode, setActiveViewMode] = useState<'trends' | 'student' | 'family' | 'allLedger' | 'classRegister' | 'upiQueue' | 'feeWaivers'>('trends');
   const [waiverSearchQuery, setWaiverSearchQuery] = useState<string>('');
   const [customWaiverDiscMap, setCustomWaiverDiscMap] = useState<Record<string, string>>({});
   const [syncingWaiversSheet, setSyncingWaiversSheet] = useState<boolean>(false);
@@ -1517,6 +1518,18 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
             >
               <i className="fa-solid fa-book text-xs"></i>
               <span>समस्त स्कूल लेजर</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveViewMode('classRegister')}
+              className={`px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                activeViewMode === 'classRegister'
+                  ? 'bg-[#0c2340] text-amber-300 shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+              }`}
+            >
+              <i className="fa-solid fa-table-list text-xs"></i>
+              <span>📒 क्लास रजिस्टर (लेजर मिलान)</span>
             </button>
             <button
               type="button"
@@ -3072,6 +3085,22 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {/* 4B. VIEW MODE: CLASS-WISE FEE REGISTER & LEDGER RECONCILIATION */}
+      {activeViewMode === 'classRegister' && (
+        <div className="px-6 pb-6 animate-fadeIn">
+          <ClassFeeRegisterView
+            students={students as unknown as Student[]}
+            feeRecords={feeRecords}
+            getClassName={getClassName}
+            onOpenAddFeeModal={onOpenAddFeeModal}
+            onSelectStudentProfile={(st) => {
+              setSelectedStudent(st as unknown as StudentRecordForScan);
+              setActiveViewMode('student');
+            }}
+          />
         </div>
       )}
 

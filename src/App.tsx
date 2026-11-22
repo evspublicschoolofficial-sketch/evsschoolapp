@@ -19,7 +19,7 @@ import {
 import { FloatingSocialBar } from './components/FloatingSocialBar';
 import { fetchFeeMasterDirectGViz, FREE_STUDENTS_UPDATED_EVENT, FEE_MASTER_UPDATED_EVENT, syncFeeWaiversWithServer } from './utils/feeMaster';
 import { initGeolocationPrewarmer, syncSchoolLocationFromServer } from './utils/schoolLocationService';
-import { computeStudentFeeMetrics, computeSchoolFeeTotals, normalizeStudentId, reconcileFeeRecords, calculateStudentSummary, isStudentFeeExempt } from './utils/feeCalculation';
+import { computeStudentFeeMetrics, computeSchoolFeeTotals, getStudentHeadPaymentStatus, normalizeStudentId, reconcileFeeRecords, calculateStudentSummary, isStudentFeeExempt } from './utils/feeCalculation';
 import { computeFamilyFeeSummary, FamilyFeeSummary, findFamilyStudentsByMobile, findSiblingsForStudent } from './utils/familyFeeHelper';
 import { useFeeSettlementTransition, AnimatedSettledCurrency } from './components/FeeSettlementAnimator';
 import { realtimeSync } from './utils/realtimeSync';
@@ -1990,6 +1990,11 @@ export default function App() {
   const [isManagerMenuOpen, setIsManagerMenuOpen] = useState<boolean>(false);
   const [studentSearchTerm, setStudentSearchTerm] = useState<string>('');
   const [studentClassFilter, setStudentClassFilter] = useState<string>('all');
+  const [studentFeeFilter, setStudentFeeFilter] = useState<'all' | 'unpaid' | 'overdue_1' | 'overdue_2plus' | 'paid'>('all');
+  const [studentSortBy, setStudentSortBy] = useState<'default' | 'due_desc' | 'overdue_desc' | 'latest_paid' | 'name_asc' | 'roll_asc'>('default');
+  const [studentVillageFilter, setStudentVillageFilter] = useState<string>('all');
+  const [studentFeeHeadFilter, setStudentFeeHeadFilter] = useState<'all' | 'tuition' | 'exam' | 'transport' | 'admission' | 'books'>('all');
+  const [studentAmountBracketFilter, setStudentAmountBracketFilter] = useState<'all' | '1_1000' | '1001_3000' | '3000_plus'>('all');
   const [hwSearchTerm, setHwSearchTerm] = useState<string>('');
   const [hwClassFilter, setHwClassFilter] = useState<string>('all');
   const [hwDateSortOrder, setHwDateSortOrder] = useState<'asc' | 'desc'>('desc');
@@ -4959,6 +4964,224 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       return matchSearch && matchClass;
     });
   }, [students, studentSearchTerm, studentClassFilter, classMap]);
+
+  // Manager: Fee Status Color-Coding, Aging Alerts, Sorting & Smart Filters for Student List
+  const studentListFeeMonitoring = useMemo(() => {
+    const parseFeeTs = (raw?: string): number => {
+      const str = String(raw || '').trim();
+      if (!str) return 0;
+      const dmy = str.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+      if (dmy) {
+        const dt = new Date(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1]));
+        return isNaN(dt.getTime()) ? 0 : dt.getTime();
+      }
+      const parsed = Date.parse(str);
+      return isNaN(parsed) ? 0 : parsed;
+    };
+
+    // Single pass over feeRecords to find latest payment timestamp & transport receipts per student
+    const latestPaymentMap = new Map<string, { ts: number; dateStr: string }>();
+    const transportPaidIds = new Set<string>();
+    feeRecords.forEach((r) => {
+      const sid = normalizeStudentId(r.Student_ID);
+      if (!sid) return;
+      const paidAmt = Number(r.Amount_Paid) || 0;
+      if (paidAmt > 0) {
+        const ts = parseFeeTs(r.Date);
+        const existing = latestPaymentMap.get(sid);
+        if (!existing || ts >= existing.ts) {
+          latestPaymentMap.set(sid, { ts, dateStr: String(r.Date || '').trim() });
+        }
+        if (/transport|वाहन|bus|van|auto/i.test(String(r.Fee_Type || ''))) {
+          transportPaidIds.add(sid);
+        }
+      }
+    });
+
+    const autoCommuterIds = new Set<string>();
+    try {
+      const rawAutoMap = localStorage.getItem('evs_auto_students_map');
+      if (rawAutoMap) {
+        const parsedMap = JSON.parse(rawAutoMap);
+        if (parsedMap && typeof parsedMap === 'object') {
+          Object.entries(parsedMap).forEach(([k, v]) => {
+            if (v) autoCommuterIds.add(normalizeStudentId(k));
+          });
+        }
+      }
+    } catch {}
+
+    // Collect distinct villages/routes across filteredStudents for dropdown options
+    const villageCountMap = new Map<string, { label: string; count: number }>();
+    filteredStudents.forEach((s) => {
+      const rawV = String(s['Village/rRoute'] || s.Village || '').trim();
+      const key = rawV ? rawV.toLowerCase() : '__local__';
+      const label = rawV || 'स्थानीय / बिना रूट';
+      const prev = villageCountMap.get(key);
+      if (prev) {
+        prev.count += 1;
+      } else {
+        villageCountMap.set(key, { label, count: 1 });
+      }
+    });
+    const villageOptions = Array.from(villageCountMap.entries())
+      .map(([key, val]) => ({ key, label: val.label, count: val.count }))
+      .sort((a, b) => a.label.localeCompare(b.label, 'en', { sensitivity: 'base' }));
+
+    const baseItems = filteredStudents.map((s) => {
+      const normId = normalizeStudentId(s.Student_ID);
+      const metrics = computeStudentFeeMetrics(s, feeRecords);
+      const headStatus = getStudentHeadPaymentStatus(s, feeRecords);
+      const balance = metrics.dueBalance;
+      const isUnpaid = balance > 0;
+
+      const netMonthly = metrics.netMonthlyTuition || 0;
+      const exactOverdueMonths = !isUnpaid
+        ? 0
+        : netMonthly > 0
+        ? Math.max(0.1, ((metrics.tuitionDue ?? 0) > 0 ? (metrics.tuitionDue ?? 0) : balance) / netMonthly)
+        : balance >= 1500
+        ? 2
+        : 1;
+      const overdueMonthsCount = isUnpaid ? Math.max(1, Math.round(exactOverdueMonths)) : 0;
+      const isHeavyOverdue = isUnpaid && exactOverdueMonths >= 2;
+      const agingTier: 'paid' | 'overdue_1' | 'overdue_2plus' = !isUnpaid
+        ? 'paid'
+        : isHeavyOverdue
+        ? 'overdue_2plus'
+        : 'overdue_1';
+
+      const rawV = String(s['Village/rRoute'] || s.Village || '').trim();
+      const villageKey = rawV ? rawV.toLowerCase() : '__local__';
+
+      const otherFees = metrics.itemizedOtherFees || [];
+      const hasTuitionDue = (metrics.tuitionDue ?? 0) > 0;
+      const hasAdmissionDue = (metrics.admissionDue ?? 0) > 0;
+      const hasBooksDue =
+        headStatus.books.remaining > 0 ||
+        otherFees.some((f) => /book|पुस्तक|stationary/i.test(f.type) && f.balance > 0);
+      const hasExamDue =
+        !headStatus.exam.isFullYearPaid ||
+        otherFees.some((f) => /exam|परीक्षा/i.test(f.type) && f.balance > 0);
+      const hasTransportDue =
+        otherFees.some((f) => /transport|वाहन|bus|van|auto/i.test(f.type) && f.balance > 0) ||
+        (isUnpaid && normId !== '' && autoCommuterIds.has(normId) && !transportPaidIds.has(normId));
+
+      const latestPay = normId ? latestPaymentMap.get(normId) : undefined;
+
+      return {
+        student: s,
+        balance,
+        isUnpaid,
+        exactOverdueMonths,
+        overdueMonthsCount,
+        isHeavyOverdue,
+        agingTier,
+        villageKey,
+        hasTuitionDue,
+        hasAdmissionDue,
+        hasBooksDue,
+        hasExamDue,
+        hasTransportDue,
+        latestPayTs: latestPay?.ts || 0,
+        latestPayDate: latestPay?.dateStr || '',
+      };
+    });
+
+    // Apply Village, Fee Head, and Amount Bracket Smart Filters
+    const scopedItems = baseItems.filter((item) => {
+      if (studentVillageFilter !== 'all' && item.villageKey !== studentVillageFilter) {
+        return false;
+      }
+      if (studentFeeHeadFilter === 'tuition' && !item.hasTuitionDue) return false;
+      if (studentFeeHeadFilter === 'exam' && !item.hasExamDue) return false;
+      if (studentFeeHeadFilter === 'transport' && !item.hasTransportDue) return false;
+      if (studentFeeHeadFilter === 'admission' && !item.hasAdmissionDue) return false;
+      if (studentFeeHeadFilter === 'books' && !item.hasBooksDue) return false;
+
+      if (studentAmountBracketFilter === '1_1000' && !(item.balance >= 1 && item.balance <= 1000)) return false;
+      if (studentAmountBracketFilter === '1001_3000' && !(item.balance >= 1001 && item.balance <= 3000)) return false;
+      if (studentAmountBracketFilter === '3000_plus' && !(item.balance > 3000)) return false;
+
+      return true;
+    });
+
+    const unpaidCount = scopedItems.filter((item) => item.isUnpaid).length;
+    const overdue1Count = scopedItems.filter((item) => item.agingTier === 'overdue_1').length;
+    const overdue2PlusCount = scopedItems.filter((item) => item.agingTier === 'overdue_2plus').length;
+    const paidCount = scopedItems.filter((item) => !item.isUnpaid).length;
+    const totalDueAmount = scopedItems.reduce((sum, item) => sum + (item.isUnpaid ? item.balance : 0), 0);
+
+    // Apply status/aging pill filter
+    const statusFiltered =
+      studentFeeFilter === 'unpaid'
+        ? scopedItems.filter((item) => item.isUnpaid)
+        : studentFeeFilter === 'overdue_1'
+        ? scopedItems.filter((item) => item.agingTier === 'overdue_1')
+        : studentFeeFilter === 'overdue_2plus'
+        ? scopedItems.filter((item) => item.agingTier === 'overdue_2plus')
+        : studentFeeFilter === 'paid'
+        ? scopedItems.filter((item) => !item.isUnpaid)
+        : scopedItems;
+
+    // Apply Sorting
+    const displayed = [...statusFiltered];
+    if (studentSortBy === 'due_desc') {
+      displayed.sort((a, b) => b.balance - a.balance);
+    } else if (studentSortBy === 'overdue_desc') {
+      displayed.sort(
+        (a, b) =>
+          b.exactOverdueMonths - a.exactOverdueMonths || b.balance - a.balance
+      );
+    } else if (studentSortBy === 'latest_paid') {
+      displayed.sort(
+        (a, b) => b.latestPayTs - a.latestPayTs || a.balance - b.balance
+      );
+    } else if (studentSortBy === 'name_asc') {
+      displayed.sort((a, b) =>
+        String(a.student.Student_Name || '').localeCompare(
+          String(b.student.Student_Name || ''),
+          'en',
+          { sensitivity: 'base' }
+        )
+      );
+    } else if (studentSortBy === 'roll_asc') {
+      displayed.sort((a, b) =>
+        String(a.student.Roll_Number || a.student.Admission_Number || '').localeCompare(
+          String(b.student.Roll_Number || b.student.Admission_Number || ''),
+          undefined,
+          { numeric: true, sensitivity: 'base' }
+        )
+      );
+    }
+
+    const hasActiveSmartFilters =
+      studentFeeFilter !== 'all' ||
+      studentSortBy !== 'default' ||
+      studentVillageFilter !== 'all' ||
+      studentFeeHeadFilter !== 'all' ||
+      studentAmountBracketFilter !== 'all';
+
+    return {
+      items: scopedItems,
+      displayed,
+      unpaidCount,
+      overdue1Count,
+      overdue2PlusCount,
+      paidCount,
+      totalDueAmount,
+      villageOptions,
+      hasActiveSmartFilters,
+    };
+  }, [
+    filteredStudents,
+    feeRecords,
+    studentFeeFilter,
+    studentSortBy,
+    studentVillageFilter,
+    studentFeeHeadFilter,
+    studentAmountBracketFilter,
+  ]);
 
   // Manager: Filtered and Sorted Homework
   const filteredHomework = useMemo(() => {
@@ -13262,6 +13485,250 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   </div>
                 </div>
 
+                {/* Fee Status 3-Color Aging Alert Bar & Quick Monitor Filter */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2.5">
+                  <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-2.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-[11px] font-bold text-slate-600 flex items-center gap-1.5 mr-1">
+                        <i className="fa-solid fa-traffic-light text-slate-500"></i>
+                        <span>Fee Status:</span>
+                      </span>
+
+                      <button
+                        type="button"
+                        onClick={() => setStudentFeeFilter('all')}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
+                          studentFeeFilter === 'all'
+                            ? 'bg-[#0c2340] text-amber-300 border-[#0c2340] shadow-xs'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        <span>All</span>
+                        <span className="px-1.5 py-0.2 rounded bg-white/15 text-[10px] tabular-nums">
+                          {studentListFeeMonitoring.items.length}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setStudentFeeFilter('unpaid')}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
+                          studentFeeFilter === 'unpaid'
+                            ? 'bg-rose-700 text-white border-rose-700 shadow-xs'
+                            : 'bg-rose-50 text-rose-800 border-rose-200 hover:bg-rose-100'
+                        }`}
+                      >
+                        <span>All Unpaid</span>
+                        <span
+                          className={`px-1.5 py-0.2 rounded text-[10px] font-black tabular-nums ${
+                            studentFeeFilter === 'unpaid'
+                              ? 'bg-white/20 text-white'
+                              : 'bg-rose-200/70 text-rose-900'
+                          }`}
+                        >
+                          {studentListFeeMonitoring.unpaidCount}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setStudentFeeFilter('overdue_1')}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
+                          studentFeeFilter === 'overdue_1'
+                            ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                            : 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100'
+                        }`}
+                        title="1 माह या आंशिक बकाया (1 Month / Partial Due)"
+                      >
+                        <span
+                          className={`w-2 h-2 rounded-full ${
+                            studentFeeFilter === 'overdue_1' ? 'bg-white' : 'bg-amber-500'
+                          }`}
+                        ></span>
+                        <span>1 माह / आंशिक</span>
+                        <span
+                          className={`px-1.5 py-0.2 rounded text-[10px] font-black tabular-nums ${
+                            studentFeeFilter === 'overdue_1'
+                              ? 'bg-white/20 text-white'
+                              : 'bg-amber-200/80 text-amber-950'
+                          }`}
+                        >
+                          {studentListFeeMonitoring.overdue1Count}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setStudentFeeFilter('overdue_2plus')}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
+                          studentFeeFilter === 'overdue_2plus'
+                            ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                            : 'bg-rose-50 text-rose-800 border-rose-300 hover:bg-rose-100'
+                        }`}
+                        title="2 या अधिक महीनों से बकाया (2+ Months Overdue)"
+                      >
+                        <span
+                          className={`w-2 h-2 rounded-full ${
+                            studentFeeFilter === 'overdue_2plus' ? 'bg-white' : 'bg-rose-600'
+                          }`}
+                        ></span>
+                        <span>2+ माह बकाया</span>
+                        <span
+                          className={`px-1.5 py-0.2 rounded text-[10px] font-black tabular-nums ${
+                            studentFeeFilter === 'overdue_2plus'
+                              ? 'bg-white/20 text-white'
+                              : 'bg-rose-200/80 text-rose-950'
+                          }`}
+                        >
+                          {studentListFeeMonitoring.overdue2PlusCount}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setStudentFeeFilter('paid')}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
+                          studentFeeFilter === 'paid'
+                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                            : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                        }`}
+                      >
+                        <span
+                          className={`w-2 h-2 rounded-full ${
+                            studentFeeFilter === 'paid' ? 'bg-white' : 'bg-emerald-600'
+                          }`}
+                        ></span>
+                        <span>Paid (जमा)</span>
+                        <span
+                          className={`px-1.5 py-0.2 rounded text-[10px] font-black tabular-nums ${
+                            studentFeeFilter === 'paid'
+                              ? 'bg-white/20 text-white'
+                              : 'bg-emerald-200/70 text-emerald-900'
+                          }`}
+                        >
+                          {studentListFeeMonitoring.paidCount}
+                        </span>
+                      </button>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2.5 text-[11px]">
+                      <div className="flex items-center gap-2 text-slate-600 font-medium">
+                        <span className="inline-flex items-center gap-1">
+                          <span className="w-2.5 h-2.5 rounded-sm bg-emerald-500 inline-block"></span>
+                          <span>Paid</span>
+                        </span>
+                        <span className="text-slate-300">|</span>
+                        <span className="inline-flex items-center gap-1">
+                          <span className="w-2.5 h-2.5 rounded-sm bg-amber-500 inline-block"></span>
+                          <span>1 Mo/Partial</span>
+                        </span>
+                        <span className="text-slate-300">|</span>
+                        <span className="inline-flex items-center gap-1">
+                          <span className="w-2.5 h-2.5 rounded-sm bg-rose-600 inline-block"></span>
+                          <span>2+ Mo Overdue</span>
+                        </span>
+                      </div>
+                      {studentListFeeMonitoring.totalDueAmount > 0 && (
+                        <div className="px-2.5 py-1 rounded-lg bg-rose-100 text-rose-900 border border-rose-200 font-extrabold tabular-nums">
+                          कुल बकाया: ₹{studentListFeeMonitoring.totalDueAmount.toLocaleString('en-IN')}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Smart Sorting & Recovery Filters Row */}
+                  <div className="pt-2 border-t border-slate-200/80 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-2 items-center">
+                    <div className="flex items-center gap-1.5 bg-white border border-slate-300 rounded-lg px-2.5 py-1.5">
+                      <i className="fa-solid fa-arrow-down-wide-short text-blue-900 text-xs shrink-0"></i>
+                      <select
+                        value={studentSortBy}
+                        onChange={(e) => setStudentSortBy(e.target.value as any)}
+                        className="w-full text-xs font-bold text-slate-800 bg-transparent outline-none cursor-pointer"
+                        aria-label="Sort students by fee or details"
+                      >
+                        <option value="default">Sort: डिफ़ॉल्ट क्रम</option>
+                        <option value="due_desc">💰 सबसे ज़्यादा बकाया पहले (Highest Due)</option>
+                        <option value="overdue_desc">⏳ सबसे ज़्यादा माह बकाया (Most Overdue)</option>
+                        <option value="latest_paid">🕒 हाल ही में जमा रसीद (Latest Paid)</option>
+                        <option value="name_asc">🔤 नाम अनुसार (Name A–Z)</option>
+                        <option value="roll_asc">🔢 रोल नंबर (Roll No.)</option>
+                      </select>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 bg-white border border-slate-300 rounded-lg px-2.5 py-1.5">
+                      <i className="fa-solid fa-location-dot text-emerald-700 text-xs shrink-0"></i>
+                      <select
+                        value={studentVillageFilter}
+                        onChange={(e) => setStudentVillageFilter(e.target.value)}
+                        className="w-full text-xs font-semibold text-slate-800 bg-transparent outline-none cursor-pointer"
+                        aria-label="Filter by village or van route"
+                      >
+                        <option value="all">गाँव / रूट: सभी ({filteredStudents.length})</option>
+                        {studentListFeeMonitoring.villageOptions.map((v) => (
+                          <option key={v.key} value={v.key}>
+                            {v.label} ({v.count})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 bg-white border border-slate-300 rounded-lg px-2.5 py-1.5">
+                      <i className="fa-solid fa-layer-group text-indigo-700 text-xs shrink-0"></i>
+                      <select
+                        value={studentFeeHeadFilter}
+                        onChange={(e) => setStudentFeeHeadFilter(e.target.value as any)}
+                        className="w-full text-xs font-semibold text-slate-800 bg-transparent outline-none cursor-pointer"
+                        aria-label="Filter by unpaid fee head"
+                      >
+                        <option value="all">फीस टाइप: सभी हेड</option>
+                        <option value="tuition">📘 Monthly Tuition बकाया</option>
+                        <option value="exam">📝 Exam Fee बकाया / अपूर्ण</option>
+                        <option value="transport">🚐 Van / Transport बकाया</option>
+                        <option value="admission">🎓 Admission Fee बकाया</option>
+                        <option value="books">📚 Books / Stationery बकाया</option>
+                      </select>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 bg-white border border-slate-300 rounded-lg px-2.5 py-1.5">
+                      <i className="fa-solid fa-indian-rupee-sign text-rose-700 text-xs shrink-0"></i>
+                      <select
+                        value={studentAmountBracketFilter}
+                        onChange={(e) => setStudentAmountBracketFilter(e.target.value as any)}
+                        className="w-full text-xs font-semibold text-slate-800 bg-transparent outline-none cursor-pointer"
+                        aria-label="Filter by due amount range"
+                      >
+                        <option value="all">बकाया रेंज: सभी राशियाँ</option>
+                        <option value="1_1000">₹1 – ₹1,000 (कम बकाया)</option>
+                        <option value="1001_3000">₹1,001 – ₹3,000 (मध्यम)</option>
+                        <option value="3000_plus">₹3,000+ (अधिक / Priority)</option>
+                      </select>
+                    </div>
+
+                    <div className="flex items-center justify-between sm:justify-end gap-2">
+                      <span className="text-[11px] font-bold text-slate-500 tabular-nums">
+                        दिख रहे: <span className="text-slate-900">{studentListFeeMonitoring.displayed.length}</span>
+                      </span>
+                      {studentListFeeMonitoring.hasActiveSmartFilters && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setStudentFeeFilter('all');
+                            setStudentSortBy('default');
+                            setStudentVillageFilter('all');
+                            setStudentFeeHeadFilter('all');
+                            setStudentAmountBracketFilter('all');
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
+                          title="सभी सॉर्ट व फ़िल्टर रीसेट करें"
+                        >
+                          <i className="fa-solid fa-rotate-left text-[10px]"></i>
+                          <span>रीसेट</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
                 {/* Table */}
                 <div className="overflow-x-auto rounded-xl border border-slate-200">
                   <table className="w-full text-left text-xs text-slate-700">
@@ -13285,86 +13752,123 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             Loading student records...
                           </td>
                         </tr>
-                      ) : filteredStudents.length === 0 ? (
+                      ) : studentListFeeMonitoring.displayed.length === 0 ? (
                         <tr>
                           <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
                             No student records found matching your filters.
                           </td>
                         </tr>
                       ) : (
-                        filteredStudents.map((s, idx) => {
-                          const balance = getStudentBalance(s);
-                          const isDue = balance > 0;
-                          return (
-                            <tr key={s.Student_ID || idx} className="hover:bg-slate-50 transition-colors">
-                              <td className="px-4 py-3 font-mono font-bold text-slate-900">
-                                #{s.Admission_Number || idx + 1}
-                                <span className="text-[10px] text-slate-400 block font-normal">
-                                  Roll: {s.Roll_Number || '—'}
-                                </span>
-                              </td>
-                              <td className="px-4 py-3">
-                                <div className="font-bold text-blue-950 flex items-center gap-1.5 flex-wrap">
-                                  <span>{s.Student_Name || 'Unknown'}</span>
-                                  {(s as any)._isCustom && (
+                        studentListFeeMonitoring.displayed.map(
+                          ({ student: s, balance, isUnpaid: isDue, agingTier, overdueMonthsCount, latestPayDate }, idx) => {
+                            const isHeavyRed = agingTier === 'overdue_2plus';
+                            const isAmberPartial = agingTier === 'overdue_1';
+                            return (
+                              <tr
+                                key={s.Student_ID || idx}
+                                className={`border-l-4 transition-colors ${
+                                  isHeavyRed
+                                    ? 'bg-rose-50/85 hover:bg-rose-100/90 border-l-rose-600'
+                                    : isAmberPartial
+                                    ? 'bg-amber-50/75 hover:bg-amber-100/80 border-l-amber-500'
+                                    : 'bg-emerald-50/60 hover:bg-emerald-100/75 border-l-emerald-500'
+                                }`}
+                              >
+                                <td className="px-4 py-3 font-mono font-bold text-slate-900">
+                                  #{s.Admission_Number || idx + 1}
+                                  <span className="text-[10px] text-slate-400 block font-normal">
+                                    Roll: {s.Roll_Number || '—'}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="font-bold text-blue-950 flex items-center gap-1.5 flex-wrap">
                                     <span
-                                      className={`text-[9px] px-1.5 py-0.2 rounded-full font-bold uppercase tracking-wider ${
-                                        (s as any)._sheetSynced
-                                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                                          : 'bg-amber-100 text-amber-800 border border-amber-300'
+                                      className={`w-2 h-2 rounded-full shrink-0 ${
+                                        isHeavyRed
+                                          ? 'bg-rose-600'
+                                          : isAmberPartial
+                                          ? 'bg-amber-500'
+                                          : 'bg-emerald-600'
                                       }`}
-                                      title={(s as any)._sheetSynced ? 'Google Sheet में सिंक हो चुका है' : 'पोर्टल में सुरक्षित है - Google Sheet सिंक लंबित'}
+                                      title={
+                                        isHeavyRed
+                                          ? '2+ Months Overdue'
+                                          : isAmberPartial
+                                          ? '1 Month / Partial Due'
+                                          : 'Paid / Cleared'
+                                      }
+                                    ></span>
+                                    <span>{s.Student_Name || 'Unknown'}</span>
+                                    {(s as any)._isCustom && (
+                                      <span
+                                        className={`text-[9px] px-1.5 py-0.2 rounded-full font-bold uppercase tracking-wider ${
+                                          (s as any)._sheetSynced
+                                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                            : 'bg-amber-100 text-amber-800 border border-amber-300'
+                                        }`}
+                                        title={(s as any)._sheetSynced ? 'Google Sheet में सिंक हो चुका है' : 'पोर्टल में सुरक्षित है - Google Sheet सिंक लंबित'}
+                                      >
+                                        {(s as any)._sheetSynced ? '✓ Sheet Synced' : '⚡ Local Saved'}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-[10px] text-slate-400 font-mono pl-3.5">{s.Student_ID}</div>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <span className="px-2.5 py-1 bg-white/90 text-blue-950 rounded font-bold border border-blue-200 text-xs inline-flex items-center gap-1 shadow-2xs">
+                                    <i className="fa-solid fa-graduation-cap text-blue-700 text-[10px]"></i>
+                                    {getClassName(s.Class)}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3">{s.Father_Name || '—'}</td>
+                                <td className="px-4 py-3 font-mono">
+                                  <span className="flex items-center gap-1 text-slate-700">
+                                    <i className="fa-solid fa-phone text-[10px] text-slate-400"></i>
+                                    {s.Parent_Mobile || '—'}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3">{s['Village/rRoute'] || s.Village || '—'}</td>
+                                <td className="px-4 py-3 text-right">
+                                  <div className="inline-flex flex-col items-end gap-0.5">
+                                    <span
+                                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-extrabold text-xs border shadow-2xs ${
+                                        isHeavyRed
+                                          ? 'text-rose-900 bg-rose-100 border-rose-300'
+                                          : isAmberPartial
+                                          ? 'text-amber-900 bg-amber-100 border-amber-300'
+                                          : 'text-emerald-800 bg-emerald-100 border-emerald-300'
+                                      }`}
+                                      title={`Student ID: ${s.Student_ID} | Fee Collection Balance: ₹${balance}`}
                                     >
-                                      {(s as any)._sheetSynced ? '✓ Sheet Synced' : '⚡ Local Saved'}
+                                      <i
+                                        className={`fa-solid text-[11px] ${
+                                          isHeavyRed
+                                            ? 'fa-circle-exclamation text-rose-600'
+                                            : isAmberPartial
+                                            ? 'fa-clock text-amber-600'
+                                            : 'fa-circle-check text-emerald-600'
+                                        }`}
+                                      ></i>
+                                      <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.2 rounded bg-white/80">
+                                        {isHeavyRed
+                                          ? `${overdueMonthsCount}M Overdue`
+                                          : isAmberPartial
+                                          ? '1M / Partial'
+                                          : 'Paid'}
+                                      </span>
+                                      <span className="tabular-nums">
+                                        {balance < 0
+                                          ? `Adv ₹${Math.abs(balance).toLocaleString('en-IN')}`
+                                          : `₹${balance.toLocaleString('en-IN')}`}
+                                      </span>
                                     </span>
-                                  )}
-                                </div>
-                                <div className="text-[10px] text-slate-400 font-mono">{s.Student_ID}</div>
-                              </td>
-                              <td className="px-4 py-3">
-                                <span className="px-2.5 py-1 bg-blue-50 text-blue-950 rounded font-bold border border-blue-200 text-xs inline-flex items-center gap-1 shadow-2xs">
-                                  <i className="fa-solid fa-graduation-cap text-blue-700 text-[10px]"></i>
-                                  {getClassName(s.Class)}
-                                </span>
-                              </td>
-                              <td className="px-4 py-3">{s.Father_Name || '—'}</td>
-                              <td className="px-4 py-3 font-mono">
-                                <span className="flex items-center gap-1 text-slate-700">
-                                  <i className="fa-solid fa-phone text-[10px] text-slate-400"></i>
-                                  {s.Parent_Mobile || '—'}
-                                </span>
-                              </td>
-                              <td className="px-4 py-3">{s['Village/rRoute'] || s.Village || '—'}</td>
-                              <td className="px-4 py-3 text-right">
-                                <span
-                                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg font-bold text-xs border shadow-2xs ${
-                                    isDue
-                                      ? 'text-red-600 bg-red-50 border-red-200'
-                                      : balance < 0
-                                      ? 'text-purple-700 bg-purple-50 border-purple-200'
-                                      : 'text-emerald-700 bg-emerald-50 border-emerald-200'
-                                  }`}
-                                  title={`Student ID: ${s.Student_ID} | Fee Collection Balance: ₹${balance}`}
-                                >
-                                  <i
-                                    className={`fa-solid text-[10px] ${
-                                      isDue
-                                        ? 'fa-triangle-exclamation text-red-600'
-                                        : balance < 0
-                                        ? 'fa-hand-holding-dollar text-purple-600'
-                                        : 'fa-circle-check text-emerald-600'
-                                    }`}
-                                  ></i>
-                                  <span>
-                                    {balance < 0
-                                      ? `-₹${Math.abs(balance).toLocaleString('en-IN')}`
-                                      : `₹${balance.toLocaleString('en-IN')}`}
-                                  </span>
-                                  <span className="text-[9px] uppercase font-bold tracking-tight">
-                                    {isDue ? 'Due' : balance < 0 ? 'Advance' : 'Cleared'}
-                                  </span>
-                                </span>
-                              </td>
+                                    {latestPayDate && (
+                                      <span className="text-[10px] text-slate-500 font-medium">
+                                        Last Paid: {formatDate(latestPayDate)}
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
                               <td className="px-4 py-3 text-center">
                                 <div className="flex items-center justify-center gap-1.5">
                                   <button
