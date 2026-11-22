@@ -1,6 +1,7 @@
 import {
   ExamMarkRecord,
   ExamTermType,
+  ReportCardAccessConfig,
   ReportCardRemarkRecord,
   Student,
   StudentBehaviorRecord,
@@ -13,8 +14,20 @@ import { saveToPhoneMemory } from './phoneMemoryCache';
 
 export const EXAM_MARKS_STORAGE_KEY = 'evs_exam_marks_v1';
 export const REPORT_CARD_META_STORAGE_KEY = 'evs_report_card_meta_v1';
+export const REPORT_CARD_WORKFLOW_STORAGE_KEY = 'evs_report_card_workflow_v1';
 export const REPORT_CARD_UPDATED_EVENT = 'evs-report-card-updated';
 export const CURRENT_ACADEMIC_SESSION = '2026-27';
+
+export const DEFAULT_REPORT_CARD_ACCESS_CONFIG: ReportCardAccessConfig = {
+  allowTeacherPtmView: false,
+  allowParentView: false,
+};
+
+export interface ReportCardWorkflowSnapshot {
+  accessConfig: ReportCardAccessConfig;
+  pendingMarks: ExamMarkRecord[];
+  pendingMeta: Record<string, ReportCardRemarkRecord>;
+}
 
 export const REPORT_CARD_SUBJECTS = [
   'हिन्दी (Hindi)',
@@ -239,6 +252,7 @@ export interface ReportCardBackupRow {
   principalRemark: string;
   resultStatus: string;
   publishedToParent: boolean;
+  classRank?: string;
   updatedBy: string;
   updatedAt: string;
 }
@@ -263,10 +277,347 @@ export const syncAllReportCardsBackupToSheet = async (params: {
   };
 };
 
+export const loadLocalReportCardWorkflow = (): ReportCardWorkflowSnapshot => {
+  try {
+    const raw = localStorage.getItem(REPORT_CARD_WORKFLOW_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        return {
+          accessConfig: {
+            allowTeacherPtmView: Boolean(parsed.accessConfig?.allowTeacherPtmView),
+            allowParentView: Boolean(parsed.accessConfig?.allowParentView),
+            updatedBy: parsed.accessConfig?.updatedBy,
+            updatedAt: parsed.accessConfig?.updatedAt,
+          },
+          pendingMarks: Array.isArray(parsed.pendingMarks) ? parsed.pendingMarks : [],
+          pendingMeta: parsed.pendingMeta && typeof parsed.pendingMeta === 'object' ? parsed.pendingMeta : {},
+        };
+      }
+    }
+  } catch {}
+  return {
+    accessConfig: { ...DEFAULT_REPORT_CARD_ACCESS_CONFIG },
+    pendingMarks: [],
+    pendingMeta: {},
+  };
+};
+
+export const saveLocalReportCardWorkflow = (snap: ReportCardWorkflowSnapshot) => {
+  try {
+    saveToPhoneMemory(REPORT_CARD_WORKFLOW_STORAGE_KEY, snap);
+    window.dispatchEvent(new CustomEvent(REPORT_CARD_UPDATED_EVENT, { detail: { type: 'workflow', snap } }));
+  } catch {}
+};
+
+export const fetchReportCardWorkflowFromServer = async (
+  forceRefresh = false
+): Promise<ReportCardWorkflowSnapshot> => {
+  const activeUrl = getAppsScriptUrl();
+  const local = loadLocalReportCardWorkflow();
+  try {
+    const res = await fetch(`/api/report-cards-workflow${forceRefresh ? '?refresh=1&' : '?'}_t=${Date.now()}`, {
+      headers: { 'x-apps-script-url': activeUrl },
+      cache: 'no-store',
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && typeof data === 'object' && data.accessConfig) {
+        const snap: ReportCardWorkflowSnapshot = {
+          accessConfig: {
+            allowTeacherPtmView: Boolean(data.accessConfig.allowTeacherPtmView),
+            allowParentView: Boolean(data.accessConfig.allowParentView),
+            updatedBy: data.accessConfig.updatedBy,
+            updatedAt: data.accessConfig.updatedAt,
+          },
+          pendingMarks: Array.isArray(data.pendingMarks) ? data.pendingMarks : [],
+          pendingMeta: data.pendingMeta && typeof data.pendingMeta === 'object' ? data.pendingMeta : {},
+        };
+        saveLocalReportCardWorkflow(snap);
+        return snap;
+      }
+    }
+  } catch {}
+
+  try {
+    const direct = await directGetFromSheet('getReportCardWorkflow', activeUrl);
+    if (direct.ok && direct.json && direct.json.accessConfig) {
+      const snap: ReportCardWorkflowSnapshot = {
+        accessConfig: {
+          allowTeacherPtmView: Boolean(direct.json.accessConfig.allowTeacherPtmView),
+          allowParentView: Boolean(direct.json.accessConfig.allowParentView),
+          updatedBy: direct.json.accessConfig.updatedBy,
+          updatedAt: direct.json.accessConfig.updatedAt,
+        },
+        pendingMarks: Array.isArray(direct.json.pendingMarks) ? direct.json.pendingMarks : local.pendingMarks,
+        pendingMeta:
+          direct.json.pendingMeta && typeof direct.json.pendingMeta === 'object'
+            ? direct.json.pendingMeta
+            : local.pendingMeta,
+      };
+      saveLocalReportCardWorkflow(snap);
+      return snap;
+    }
+  } catch {}
+
+  return local;
+};
+
+/**
+ * TEACHER ONLY: Saves marks & teacher remark draft as Pending Manager Confirmation.
+ * Does NOT write permanently to Google Sheet tabs ("Exam_Marks" / "Report_Cards_Backup").
+ */
+export const submitTeacherReportCardDraftToServer = async (params: {
+  marks?: ExamMarkRecord[];
+  meta?: ReportCardRemarkRecord;
+  submittedBy: string;
+  submittedById?: string;
+}): Promise<{ snapshot: ReportCardWorkflowSnapshot; serverOk: boolean; sheetSynced: boolean }> => {
+  const local = loadLocalReportCardWorkflow();
+  const compKey = (m: ExamMarkRecord) =>
+    `${String(m.session || CURRENT_ACADEMIC_SESSION).toLowerCase()}::${String(m.exam_type || 'Quarterly').toLowerCase()}::${String(m.student_id || '').toLowerCase()}::${normalizeSubjectKey(m.subject) || String(m.subject || '').toLowerCase()}`;
+
+  const markMap = new Map<string, ExamMarkRecord>();
+  local.pendingMarks.forEach((m) => markMap.set(compKey(m), m));
+  const incomingMarks = (params.marks || []).map((m) => ({
+    ...m,
+    approval_status: 'pending_approval' as const,
+    submitted_at: getLocalTimestamp(),
+  }));
+  incomingMarks.forEach((m) => markMap.set(compKey(m), m));
+
+  const nextMetaMap = { ...local.pendingMeta };
+  if (params.meta) {
+    nextMetaMap[params.meta.reportKey] = {
+      ...params.meta,
+      principalRemark: '',
+      publishedToParent: false,
+      submittedBy: params.submittedBy,
+      submittedAt: getLocalTimestamp(),
+      approvalStatus: 'pending_approval',
+    };
+  }
+
+  const nextSnap: ReportCardWorkflowSnapshot = {
+    accessConfig: local.accessConfig,
+    pendingMarks: Array.from(markMap.values()),
+    pendingMeta: nextMetaMap,
+  };
+  saveLocalReportCardWorkflow(nextSnap);
+
+  const res = await dualSyncWriteToSheet({
+    apiPath: '/api/report-cards-workflow/teacher-submit',
+    apiBody: {
+      marks: incomingMarks,
+      meta: params.meta ? nextMetaMap[params.meta.reportKey] : undefined,
+      submittedBy: params.submittedBy,
+      submittedById: params.submittedById,
+    },
+    directPayload: {
+      action: 'saveReportCardDraft',
+      draft: JSON.stringify({
+        pendingMarks: nextSnap.pendingMarks,
+        pendingMeta: nextSnap.pendingMeta,
+      }),
+    },
+  });
+
+  if (res.data?.accessConfig) {
+    const serverSnap: ReportCardWorkflowSnapshot = {
+      accessConfig: res.data.accessConfig,
+      pendingMarks: Array.isArray(res.data.pendingMarks) ? res.data.pendingMarks : nextSnap.pendingMarks,
+      pendingMeta: res.data.pendingMeta || nextSnap.pendingMeta,
+    };
+    saveLocalReportCardWorkflow(serverSnap);
+    return { snapshot: serverSnap, serverOk: res.serverOk, sheetSynced: res.sheetSynced };
+  }
+
+  return { snapshot: nextSnap, serverOk: res.serverOk, sheetSynced: res.sheetSynced };
+};
+
+/**
+ * MANAGER ONLY: Toggle Teacher PTM View-Only permission & Global Parent View permission.
+ */
+export const updateReportCardAccessConfigOnServer = async (
+  accessConfig: ReportCardAccessConfig
+): Promise<{ snapshot: ReportCardWorkflowSnapshot; sheetSynced: boolean }> => {
+  const local = loadLocalReportCardWorkflow();
+  const stamped: ReportCardAccessConfig = {
+    ...accessConfig,
+    updatedAt: getLocalTimestamp(),
+  };
+  const nextSnap: ReportCardWorkflowSnapshot = {
+    ...local,
+    accessConfig: stamped,
+  };
+  saveLocalReportCardWorkflow(nextSnap);
+
+  const res = await dualSyncWriteToSheet({
+    apiPath: '/api/report-cards-workflow/access',
+    apiBody: { accessConfig: stamped },
+    directPayload: {
+      action: 'saveReportCardAccess',
+      accessConfig: JSON.stringify(stamped),
+    },
+  });
+
+  if (res.data?.accessConfig) {
+    const serverSnap: ReportCardWorkflowSnapshot = {
+      accessConfig: res.data.accessConfig,
+      pendingMarks: Array.isArray(res.data.pendingMarks) ? res.data.pendingMarks : nextSnap.pendingMarks,
+      pendingMeta: res.data.pendingMeta || nextSnap.pendingMeta,
+    };
+    saveLocalReportCardWorkflow(serverSnap);
+    return { snapshot: serverSnap, sheetSynced: res.sheetSynced };
+  }
+
+  return { snapshot: nextSnap, sheetSynced: res.sheetSynced };
+};
+
+/**
+ * MANAGER ONLY: Confirm Teacher-submitted marks & remarks and save permanently to Google Sheet.
+ */
+export const confirmPendingReportCardsToSheet = async (params: {
+  marks: ExamMarkRecord[];
+  metas: ReportCardRemarkRecord[];
+  backups: ReportCardBackupRow[];
+  confirmedBy: string;
+  removeMarkIds?: string[];
+  removeReportKeys?: string[];
+}): Promise<{
+  allMarks: ExamMarkRecord[];
+  metaMap: Record<string, ReportCardRemarkRecord>;
+  snapshot: ReportCardWorkflowSnapshot;
+  sheetSynced: boolean;
+  sheetError?: string;
+}> => {
+  const localMarks = loadLocalExamMarks();
+  const markMap = new Map<string, ExamMarkRecord>(localMarks.map((m) => [m.id, m]));
+  const approvedMarks = params.marks.map((m) => ({
+    ...m,
+    approval_status: 'approved' as const,
+    updated_at: getLocalTimestamp(),
+  }));
+  approvedMarks.forEach((m) => markMap.set(m.id, m));
+  const nextAllMarks = Array.from(markMap.values());
+  saveLocalExamMarks(nextAllMarks);
+
+  const localMeta = loadLocalReportCardMeta();
+  const nextMeta = { ...localMeta };
+  params.metas.forEach((m) => {
+    nextMeta[m.reportKey] = {
+      ...m,
+      approvalStatus: 'approved',
+      updatedBy: params.confirmedBy,
+      updatedAt: getLocalTimestamp(),
+    };
+  });
+  saveLocalReportCardMeta(nextMeta);
+
+  const localWf = loadLocalReportCardWorkflow();
+  const rmMarkSet = new Set(params.removeMarkIds || approvedMarks.map((m) => m.id));
+  const rmMetaSet = new Set(params.removeReportKeys || params.metas.map((m) => m.reportKey));
+  const nextWf: ReportCardWorkflowSnapshot = {
+    accessConfig: localWf.accessConfig,
+    pendingMarks: localWf.pendingMarks.filter((m) => !rmMarkSet.has(m.id)),
+    pendingMeta: Object.fromEntries(
+      Object.entries(localWf.pendingMeta).filter(([k]) => !rmMetaSet.has(k))
+    ),
+  };
+  saveLocalReportCardWorkflow(nextWf);
+
+  const res = await dualSyncWriteToSheet({
+    apiPath: '/api/report-cards-workflow/manager-confirm',
+    apiBody: {
+      marks: approvedMarks,
+      metas: params.metas.map((m) => nextMeta[m.reportKey]),
+      backups: params.backups,
+      confirmedBy: params.confirmedBy,
+      removeMarkIds: Array.from(rmMarkSet),
+      removeReportKeys: Array.from(rmMetaSet),
+    },
+    directPayload: {
+      action: 'syncReportCardsBatch',
+      backups: JSON.stringify(params.backups),
+      examMarks: JSON.stringify(nextAllMarks),
+    },
+  });
+
+  if (res.data?.allMarks && Array.isArray(res.data.allMarks)) {
+    saveLocalExamMarks(res.data.allMarks);
+  }
+  if (res.data?.meta && typeof res.data.meta === 'object') {
+    saveLocalReportCardMeta(res.data.meta);
+  }
+  if (res.data?.workflow) {
+    saveLocalReportCardWorkflow(res.data.workflow);
+  }
+
+  return {
+    allMarks: Array.isArray(res.data?.allMarks) ? res.data.allMarks : nextAllMarks,
+    metaMap: res.data?.meta && typeof res.data.meta === 'object' ? res.data.meta : nextMeta,
+    snapshot: res.data?.workflow || nextWf,
+    sheetSynced: res.sheetSynced,
+    sheetError: res.sheetError,
+  };
+};
+
+/**
+ * MANAGER ONLY: Return/Reject pending teacher marks or remarks draft so Teacher can edit again.
+ */
+export const rejectPendingReportCardsOnServer = async (params: {
+  markIds?: string[];
+  reportKeys?: string[];
+  clearAll?: boolean;
+}): Promise<ReportCardWorkflowSnapshot> => {
+  const localWf = loadLocalReportCardWorkflow();
+  const rmMarkSet = new Set(params.markIds || []);
+  const rmMetaSet = new Set(params.reportKeys || []);
+
+  const nextWf: ReportCardWorkflowSnapshot = params.clearAll
+    ? { accessConfig: localWf.accessConfig, pendingMarks: [], pendingMeta: {} }
+    : {
+        accessConfig: localWf.accessConfig,
+        pendingMarks: localWf.pendingMarks.filter((m) => !rmMarkSet.has(m.id)),
+        pendingMeta: Object.fromEntries(
+          Object.entries(localWf.pendingMeta).filter(([k]) => !rmMetaSet.has(k))
+        ),
+      };
+  saveLocalReportCardWorkflow(nextWf);
+
+  const res = await dualSyncWriteToSheet({
+    apiPath: '/api/report-cards-workflow/manager-reject',
+    apiBody: params,
+    directPayload: {
+      action: 'saveReportCardDraft',
+      draft: JSON.stringify({
+        pendingMarks: nextWf.pendingMarks,
+        pendingMeta: nextWf.pendingMeta,
+      }),
+    },
+  });
+
+  if (res.data?.accessConfig) {
+    const serverSnap: ReportCardWorkflowSnapshot = {
+      accessConfig: res.data.accessConfig,
+      pendingMarks: Array.isArray(res.data.pendingMarks) ? res.data.pendingMarks : nextWf.pendingMarks,
+      pendingMeta: res.data.pendingMeta || nextWf.pendingMeta,
+    };
+    saveLocalReportCardWorkflow(serverSnap);
+    return serverSnap;
+  }
+
+  return nextWf;
+};
+
 export const subscribeReportCardUpdates = (onUpdate: () => void): (() => void) => {
   const handleCustom = () => onUpdate();
   const handleStorage = (e: StorageEvent) => {
-    if (e.key === EXAM_MARKS_STORAGE_KEY || e.key === REPORT_CARD_META_STORAGE_KEY) {
+    if (
+      e.key === EXAM_MARKS_STORAGE_KEY ||
+      e.key === REPORT_CARD_META_STORAGE_KEY ||
+      e.key === REPORT_CARD_WORKFLOW_STORAGE_KEY
+    ) {
       onUpdate();
     }
   };
@@ -282,7 +633,10 @@ export const subscribeReportCardUpdates = (onUpdate: () => void): (() => void) =
         const msg = JSON.parse(evt.data);
         if (
           msg?.type === 'APP_DATA_UPDATED' &&
-          (msg.entity === 'exam_marks' || msg.entity === 'report_card_meta' || msg.entity === 'weekly_tests')
+          (msg.entity === 'exam_marks' ||
+            msg.entity === 'report_card_meta' ||
+            msg.entity === 'report_card_workflow' ||
+            msg.entity === 'weekly_tests')
         ) {
           onUpdate();
         }
@@ -683,3 +1037,237 @@ export const computeStudentReportCardData = (params: {
     autoPrincipalRemark,
   };
 };
+
+export interface ClassRankInfo {
+  rank: number;
+  total: number;
+  label: string;
+}
+
+const normalizeClassRankToken = (cls: string) =>
+  String(cls || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/^class-?/, '');
+
+export const computeClassRanksMap = (params: {
+  students: Student[];
+  weeklyTests: WeeklyTestRecord[];
+  examMarks: ExamMarkRecord[];
+  behaviorList: StudentBehaviorRecord[];
+  metaMap: Record<string, ReportCardRemarkRecord>;
+  session?: string;
+}): Record<string, ClassRankInfo> => {
+  const { students, weeklyTests, examMarks, behaviorList, metaMap, session = CURRENT_ACADEMIC_SESSION } = params;
+  const byClass = new Map<string, { studentId: string; pct: number; hasScore: boolean }[]>();
+
+  students.forEach((st) => {
+    const rc = computeStudentReportCardData({
+      student: st,
+      weeklyTests,
+      examMarks,
+      behaviorList,
+      metaMap,
+      session,
+    });
+    const clsTok = normalizeClassRankToken(st.Class) || '__unassigned__';
+    if (!byClass.has(clsTok)) byClass.set(clsTok, []);
+    byClass.get(clsTok)!.push({
+      studentId: st.Student_ID,
+      pct: rc.overall.pct,
+      hasScore: rc.overall.hasAnyScore,
+    });
+  });
+
+  const result: Record<string, ClassRankInfo> = {};
+  byClass.forEach((rows) => {
+    const total = rows.length;
+    const scored = rows.filter((r) => r.hasScore).sort((a, b) => b.pct - a.pct);
+    const unscored = rows.filter((r) => !r.hasScore);
+
+    let currentRank = 0;
+    let prevPct: number | null = null;
+    scored.forEach((item, idx) => {
+      if (prevPct === null || item.pct < prevPct) {
+        currentRank = idx + 1;
+        prevPct = item.pct;
+      }
+      result[item.studentId] = {
+        rank: currentRank,
+        total,
+        label: `${currentRank} / ${total}`,
+      };
+    });
+
+    unscored.forEach((item) => {
+      result[item.studentId] = {
+        rank: 0,
+        total,
+        label: `— / ${total}`,
+      };
+    });
+  });
+
+  return result;
+};
+
+export interface SubjectAssessmentBar {
+  key: 'WT' | 'QTR' | 'HY' | 'ANN';
+  label: string;
+  fullLabel: string;
+  obtained: number;
+  max: number;
+  pct: number;
+  isAbsent: boolean;
+}
+
+export interface SubjectComparisonAnalytics {
+  subjectKey: string;
+  subjectLabel: string;
+  bars: SubjectAssessmentBar[];
+  deltaPp: number | null;
+  fromLabel: string;
+  toLabel: string;
+  trend: 'improved' | 'declined' | 'neutral' | 'single';
+}
+
+export interface PerformanceAnalyticsSummary {
+  subjects: SubjectComparisonAnalytics[];
+  comparedCount: number;
+  improvedCount: number;
+  declinedCount: number;
+  unchangedCount: number;
+  averageChangePp: number | null;
+  firstExamLabel: string;
+  lastExamLabel: string;
+  wtAvg: number | null;
+  qtrAvg: number | null;
+  hyAvg: number | null;
+  annAvg: number | null;
+  classRank: ClassRankInfo;
+}
+
+export const computePerformanceAnalytics = (params: {
+  data: ComputedReportCardData;
+  classRankInfo?: ClassRankInfo;
+  includeWeekly?: boolean;
+}): PerformanceAnalyticsSummary => {
+  const { data, classRankInfo, includeWeekly = true } = params;
+
+  const subjects: SubjectComparisonAnalytics[] = [];
+  let improvedCount = 0;
+  let declinedCount = 0;
+  let unchangedCount = 0;
+  let deltaSum = 0;
+  let comparedCount = 0;
+
+  data.subjects.forEach((row) => {
+    const bars: SubjectAssessmentBar[] = [];
+    if (includeWeekly && row.weeklyMax > 0) {
+      bars.push({
+        key: 'WT',
+        label: 'WT Avg',
+        fullLabel: `Weekly Tests (${row.weeklyCount})`,
+        obtained: Math.round(row.weeklyObtained * 10) / 10,
+        max: Math.round(row.weeklyMax * 10) / 10,
+        pct: Math.round((row.weeklyObtained / row.weeklyMax) * 1000) / 10,
+        isAbsent: false,
+      });
+    }
+    if (row.quarterlyObtained !== null) {
+      bars.push({
+        key: 'QTR',
+        label: 'QTR',
+        fullLabel: 'Quarterly Exam',
+        obtained: row.quarterlyObtained,
+        max: row.quarterlyMax,
+        pct: row.quarterlyAbsent ? 0 : Math.round((row.quarterlyObtained / row.quarterlyMax) * 1000) / 10,
+        isAbsent: row.quarterlyAbsent,
+      });
+    }
+    if (row.halfYearlyObtained !== null) {
+      bars.push({
+        key: 'HY',
+        label: 'HY',
+        fullLabel: 'Half-Yearly Exam',
+        obtained: row.halfYearlyObtained,
+        max: row.halfYearlyMax,
+        pct: row.halfYearlyAbsent ? 0 : Math.round((row.halfYearlyObtained / row.halfYearlyMax) * 1000) / 10,
+        isAbsent: row.halfYearlyAbsent,
+      });
+    }
+    if (row.annualObtained !== null) {
+      bars.push({
+        key: 'ANN',
+        label: 'ANN',
+        fullLabel: 'Annual Exam',
+        obtained: row.annualObtained,
+        max: row.annualMax,
+        pct: row.annualAbsent ? 0 : Math.round((row.annualObtained / row.annualMax) * 1000) / 10,
+        isAbsent: row.annualAbsent,
+      });
+    }
+
+    if (bars.length === 0) return;
+
+    let deltaPp: number | null = null;
+    let fromLabel = '';
+    let toLabel = '';
+    let trend: 'improved' | 'declined' | 'neutral' | 'single' = 'single';
+
+    if (bars.length >= 2) {
+      const first = bars[0];
+      const last = bars[bars.length - 1];
+      deltaPp = Math.round((last.pct - first.pct) * 10) / 10;
+      fromLabel = first.label;
+      toLabel = last.label;
+      if (deltaPp > 0) {
+        trend = 'improved';
+        improvedCount++;
+      } else if (deltaPp < 0) {
+        trend = 'declined';
+        declinedCount++;
+      } else {
+        trend = 'neutral';
+        unchangedCount++;
+      }
+      deltaSum += deltaPp;
+      comparedCount++;
+    }
+
+    subjects.push({
+      subjectKey: row.subjectKey,
+      subjectLabel: row.subjectLabel,
+      bars,
+      deltaPp,
+      fromLabel,
+      toLabel,
+      trend,
+    });
+  });
+
+  const averageChangePp =
+    comparedCount > 0 ? Math.round((deltaSum / comparedCount) * 10) / 10 : null;
+
+  const presentKeys = new Set<string>();
+  subjects.forEach((s) => s.bars.forEach((b) => presentKeys.add(b.label)));
+  const orderedLabels = ['WT Avg', 'QTR', 'HY', 'ANN'].filter((k) => presentKeys.has(k));
+
+  return {
+    subjects,
+    comparedCount,
+    improvedCount,
+    declinedCount,
+    unchangedCount,
+    averageChangePp,
+    firstExamLabel: orderedLabels[0] || '',
+    lastExamLabel: orderedLabels[orderedLabels.length - 1] || '',
+    wtAvg: data.weeklySummary.testsCount > 0 && data.weeklySummary.max > 0 ? data.weeklySummary.pct : null,
+    qtrAvg: data.quarterlySummary.hasData ? data.quarterlySummary.pct : null,
+    hyAvg: data.halfYearlySummary.hasData ? data.halfYearlySummary.pct : null,
+    annAvg: data.annualSummary.hasData ? data.annualSummary.pct : null,
+    classRank: classRankInfo || { rank: 0, total: 0, label: '—' },
+  };
+};
+

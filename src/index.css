@@ -205,6 +205,11 @@
     border-radius: 16px;
   }
 
+  @page performance-landscape {
+    size: A4 landscape;
+    margin: 6mm;
+  }
+
   body.printing-report-card * {
     visibility: hidden !important;
   }
@@ -214,7 +219,17 @@
     visibility: visible !important;
   }
 
+  body.printing-performance-report * {
+    visibility: hidden !important;
+  }
+
+  body.printing-performance-report #printable-performance-report-sheet,
+  body.printing-performance-report #printable-performance-report-sheet * {
+    visibility: visible !important;
+  }
+
   body.printing-report-card #printable-report-card-sheet,
+  body.printing-performance-report #printable-performance-report-sheet,
   body.printing-family-receipt #printable-family-receipt-sheet {
     position: absolute;
     left: 0;
@@ -228,6 +243,10 @@
     background: #ffffff !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
+  }
+
+  body.printing-performance-report #printable-performance-report-sheet {
+    page: performance-landscape;
   }
 
   body.printing-family-receipt * {

@@ -1,18 +1,32 @@
-import React, { useEffect, useState } from 'react';
-import { ComputedReportCardData, getGradeFromPercentage } from '../utils/reportCardHelper';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  ClassRankInfo,
+  ComputedReportCardData,
+  computePerformanceAnalytics,
+  getGradeFromPercentage,
+} from '../utils/reportCardHelper';
 
 interface PrintableReportCardProps {
   data: ComputedReportCardData;
-  mode: 'staff_printable' | 'parent_view_only';
+  mode: 'staff_printable' | 'parent_view_only' | 'teacher_ptm_view_only';
   onPrintTriggered?: () => void;
+  ptmViewerName?: string;
+  allowParentGlobalView?: boolean;
+  classRankInfo?: ClassRankInfo;
 }
 
 export const PrintableReportCard: React.FC<PrintableReportCardProps> = ({
   data,
   mode,
   onPrintTriggered,
+  ptmViewerName = '',
+  allowParentGlobalView = true,
+  classRankInfo,
 }) => {
-  const isParentProtected = mode === 'parent_view_only';
+  const [reportVariant, setReportVariant] = useState<'classic' | 'performance'>('classic');
+  const [includeWeeklyInGraph, setIncludeWeeklyInGraph] = useState<boolean>(true);
+  const isTeacherPtmMode = mode === 'teacher_ptm_view_only';
+  const isParentProtected = mode === 'parent_view_only' || isTeacherPtmMode;
   const [imgError, setImgError] = useState(false);
   const [screenShieldActive, setScreenShieldActive] = useState(false);
   const [shieldReason, setShieldReason] = useState(
@@ -36,25 +50,35 @@ export const PrintableReportCard: React.FC<PrintableReportCardProps> = ({
       const keyLower = (e.key || '').toLowerCase();
       const isModifierPrintOrSave =
         (e.ctrlKey || e.metaKey) &&
-        (keyLower === 'p' || keyLower === 's' || keyLower === 'u' || (e.shiftKey && keyLower === 's'));
+        (keyLower === 'p' ||
+          keyLower === 's' ||
+          keyLower === 'u' ||
+          (e.shiftKey && (keyLower === 's' || keyLower === 'i' || keyLower === 'c' || keyLower === 'j')));
       const isMacScreenshotShortcut =
         e.metaKey && e.shiftKey && (keyLower === '3' || keyLower === '4' || keyLower === '5' || keyLower === 's');
       const isPrintScreenKey = keyLower === 'printscreen' || e.code === 'PrintScreen' || e.keyCode === 44;
+      const isDevToolsKey = e.key === 'F12';
 
-      if (isPrintScreenKey || isModifierPrintOrSave || isMacScreenshotShortcut) {
+      if (isPrintScreenKey || isModifierPrintOrSave || isMacScreenshotShortcut || isDevToolsKey) {
         e.preventDefault();
         e.stopPropagation();
         try {
           if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText('E.V.S. Public School — View-Only Marksheet Protected').catch(() => {});
+            navigator.clipboard
+              .writeText(
+                isTeacherPtmMode
+                  ? 'E.V.S. Public School — Teacher PTM View-Only Protected'
+                  : 'E.V.S. Public School — View-Only Marksheet Protected'
+              )
+              .catch(() => {});
           }
         } catch {}
-        triggerShield('प्रिंट या स्क्रीनशॉट शॉर्टकट प्रतिबंधित है। यह रिपोर्ट कार्ड केवल देखने के लिए है।');
+        triggerShield('प्रिंट, डाउनलोड या स्क्रीनशॉट शॉर्टकट प्रतिबंधित है। यह रिपोर्ट कार्ड केवल देखने के लिए है।');
       }
     };
 
     const handleBeforePrint = () => {
-      triggerShield('पेरेंट पोर्टल से रिपोर्ट कार्ड प्रिंट या PDF सेव करना बंद है।');
+      triggerShield('इस मोड से रिपोर्ट कार्ड प्रिंट या PDF सेव करना पूर्णतः प्रतिबंधित है।');
     };
 
     const handleVisibilityChange = () => {
@@ -64,7 +88,7 @@ export const PrintableReportCard: React.FC<PrintableReportCardProps> = ({
     };
 
     const handleWindowBlur = () => {
-      triggerShield('स्क्रीन फोकस हटने के कारण गोपनीयता शील्ड सक्रिय हो गई है।');
+      triggerShield('स्क्रीन फोकस हटने / स्क्रीनशॉट प्रयास के कारण गोपनीयता शील्ड सक्रिय हो गई है।');
     };
 
     window.addEventListener('keydown', handleKeyGuard, true);
@@ -80,13 +104,15 @@ export const PrintableReportCard: React.FC<PrintableReportCardProps> = ({
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('blur', handleWindowBlur);
     };
-  }, [isParentProtected]);
+  }, [isParentProtected, isTeacherPtmMode]);
 
   const handleStaffPrintPdf = () => {
     if (isParentProtected) return;
-    document.body.classList.add('printing-report-card');
+    const printClass =
+      reportVariant === 'performance' ? 'printing-performance-report' : 'printing-report-card';
+    document.body.classList.add(printClass);
     const cleanup = () => {
-      document.body.classList.remove('printing-report-card');
+      document.body.classList.remove('printing-report-card', 'printing-performance-report');
       window.removeEventListener('afterprint', cleanup);
     };
     window.addEventListener('afterprint', cleanup);
@@ -97,15 +123,25 @@ export const PrintableReportCard: React.FC<PrintableReportCardProps> = ({
     }, 60);
   };
 
-  if (isParentProtected && data.meta.publishedToParent === false) {
+  const performanceSummary = useMemo(
+    () =>
+      computePerformanceAnalytics({
+        data,
+        classRankInfo,
+        includeWeekly: includeWeeklyInGraph,
+      }),
+    [data, classRankInfo, includeWeeklyInGraph]
+  );
+
+  if (mode === 'parent_view_only' && (!allowParentGlobalView || data.meta.publishedToParent === false)) {
     return (
       <div className="bg-amber-50 border border-amber-200 rounded-2xl p-6 text-center space-y-2">
         <div className="w-12 h-12 mx-auto rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center text-xl">
           <i className="fa-solid fa-hourglass-half"></i>
         </div>
-        <h3 className="text-base font-black text-amber-950">Report Card Under Review</h3>
+        <h3 className="text-base font-black text-amber-950">Report Card Under Manager Review</h3>
         <p className="text-xs text-amber-800 font-medium max-w-md mx-auto">
-          Your child&apos;s digital report card will appear here in view-only mode once finalized by the Class Teacher &amp; Principal.
+          प्रधानाचार्य / प्रबंधक द्वारा रिपोर्ट कार्ड कन्फर्म व जारी करने के बाद यहाँ व्यू-ओनली मोड में दिखेगा।
         </p>
       </div>
     );
@@ -125,7 +161,9 @@ export const PrintableReportCard: React.FC<PrintableReportCardProps> = ({
   );
   const waShareHref = waPhone ? `https://wa.me/${waPhone}?text=${waSummaryText}` : `https://wa.me/?text=${waSummaryText}`;
 
-  const watermarkText = `VIEW ONLY • ${data.student.Student_Name} (${data.student.Student_ID}) • ${data.student.Parent_Mobile || 'EVS PUBLIC SCHOOL'}`;
+  const watermarkText = isTeacherPtmMode
+    ? `PTM VIEW ONLY • TEACHER: ${ptmViewerName || 'STAFF'} • ${data.student.Student_Name} (${data.student.Student_ID})`
+    : `VIEW ONLY • ${data.student.Student_Name} (${data.student.Student_ID}) • ${data.student.Parent_Mobile || 'EVS PUBLIC SCHOOL'}`;
 
   const renderMarkCell = (obtained: number | null, max: number, isAbsent: boolean) => {
     if (obtained === null) {
@@ -175,13 +213,57 @@ export const PrintableReportCard: React.FC<PrintableReportCardProps> = ({
               className="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-sm transition-colors"
             >
               <i className="fa-solid fa-print"></i>
-              <span>प्रिंट / PDF सेव करें</span>
+              <span>
+                {reportVariant === 'performance' ? 'प्रिंट / Save A4 Landscape PDF' : 'प्रिंट / PDF सेव करें'}
+              </span>
             </button>
           </div>
         </div>
       )}
 
-      {/* Parent View-Only Strict Security Banner */}
+      {/* Dual Report Switcher (Vikalp A: Classic Marksheet vs Visual Growth Comparison Report) */}
+      <div className="no-print flex flex-wrap items-center justify-between gap-2 bg-slate-100 border border-slate-200 px-3 py-2 rounded-2xl">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setReportVariant('classic')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
+              reportVariant === 'classic'
+                ? 'bg-blue-950 text-amber-300 shadow-xs'
+                : 'bg-white text-slate-700 hover:bg-slate-50 border border-slate-200'
+            }`}
+          >
+            <i className="fa-solid fa-table-list"></i>
+            <span>क्लासिक मार्कशीट (Portrait)</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setReportVariant('performance')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
+              reportVariant === 'performance'
+                ? 'bg-indigo-900 text-white shadow-xs'
+                : 'bg-white text-slate-700 hover:bg-slate-50 border border-slate-200'
+            }`}
+          >
+            <i className="fa-solid fa-chart-column text-sky-400"></i>
+            <span>ग्रोथ व तुलना रिपोर्ट (A4 Landscape)</span>
+          </button>
+        </div>
+
+        {reportVariant === 'performance' && data.weeklySummary.testsCount > 0 && (
+          <label className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-[11px] font-bold text-slate-700 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={includeWeeklyInGraph}
+              onChange={(e) => setIncludeWeeklyInGraph(e.target.checked)}
+              className="w-3.5 h-3.5 accent-indigo-700"
+            />
+            <span>साप्ताहिक टेस्ट (WT Avg) साथ दिखाएँ</span>
+          </label>
+        )}
+      </div>
+
+      {/* Parent / Teacher PTM View-Only Strict Security Banner */}
       {isParentProtected && (
         <div className="no-print bg-gradient-to-r from-rose-950 via-slate-900 to-indigo-950 text-white px-4 py-3 rounded-2xl border border-rose-500/40 flex flex-wrap items-center justify-between gap-2 shadow-sm">
           <div className="flex items-center gap-2.5">
@@ -190,34 +272,46 @@ export const PrintableReportCard: React.FC<PrintableReportCardProps> = ({
             </span>
             <div>
               <div className="text-xs font-black tracking-tight">
-                सुरक्षित व्यू-ओनली रिपोर्ट कार्ड (View-Only Protected Mode)
+                {isTeacherPtmMode
+                  ? `PTM सुरक्षित व्यू-ओनली मोड (Teacher: ${ptmViewerName || 'Staff'})`
+                  : 'सुरक्षित व्यू-ओनली रिपोर्ट कार्ड (View-Only Protected Mode)'}
               </div>
               <div className="text-[11px] text-slate-300">
-                इस पोर्टल पर मार्कशीट केवल देखी जा सकती है — डाउनलोड, प्रिंट व स्क्रीनशॉट बंद हैं।
+                {isTeacherPtmMode
+                  ? 'अभिभावकों को PTM में दिखाने के लिए — प्रिंट, डाउनलोड, कॉपी व स्क्रीनशॉट पूर्णतः बंद हैं।'
+                  : 'इस पोर्टल पर मार्कशीट केवल देखी जा सकती है — डाउनलोड, प्रिंट व स्क्रीनशॉट बंद हैं।'}
               </div>
             </div>
           </div>
           <span className="px-2.5 py-1 rounded-lg bg-rose-500/20 border border-rose-400/30 text-[10px] font-black text-rose-200 uppercase">
-            No Print • No Download
+            No Print • No Download • No Screenshot
           </span>
         </div>
       )}
 
-      {/* Shown ONLY if a parent attempts OS print despite protections */}
+      {/* Shown ONLY if a parent or teacher attempts OS print despite protections */}
       {isParentProtected && (
         <div className="parent-print-block-notice">
           <div>
             <p className="text-xl font-black mb-2">🔒 E.V.S. PUBLIC SCHOOL — प्रिंट व डाउनलोड प्रतिबंधित</p>
             <p className="text-sm font-semibold">
-              पेरेंट पोर्टल से डिजिटल रिपोर्ट कार्ड का प्रिंट या PDF बनाना सुरक्षा नीति के तहत बंद है। आधिकारिक प्रिंट कॉपी के लिए विद्यालय कार्यालय से संपर्क करें।
+              {isTeacherPtmMode
+                ? 'टीचर पोर्टल से मार्कशीट प्रिंट या PDF डाउनलोड करना प्रतिबंधित है। केवल मैनेजर पोर्टल से प्रिंट किया जा सकता है।'
+                : 'पेरेंट पोर्टल से डिजिटल रिपोर्ट कार्ड का प्रिंट या PDF बनाना सुरक्षा नीति के तहत बंद है। आधिकारिक प्रिंट कॉपी के लिए विद्यालय कार्यालय से संपर्क करें।'}
             </p>
           </div>
         </div>
       )}
 
-      {/* Main Marksheet Sheet */}
+      {/* Main Marksheet Sheet (Switches between Classic Portrait & A4 Landscape Growth Comparison) */}
       <div
-        id={!isParentProtected ? 'printable-report-card-sheet' : undefined}
+        id={
+          !isParentProtected
+            ? reportVariant === 'performance'
+              ? 'printable-performance-report-sheet'
+              : 'printable-report-card-sheet'
+            : undefined
+        }
         onContextMenu={isParentProtected ? (e) => e.preventDefault() : undefined}
         onCopy={
           isParentProtected
@@ -295,337 +389,679 @@ export const PrintableReportCard: React.FC<PrintableReportCardProps> = ({
         )}
 
         {/* Marksheet Inner Content */}
-        <div className={`relative z-10 p-4 sm:p-6 space-y-4 ${isParentProtected && screenShieldActive ? 'blur-lg' : ''}`}>
-          {/* Top School Header */}
-          <div className="bg-gradient-to-r from-blue-950 via-indigo-950 to-blue-900 text-white rounded-xl p-4 sm:p-5 border-b-4 border-amber-400 flex flex-col sm:flex-row items-center justify-between gap-3">
-            <div className="flex items-center gap-3 text-center sm:text-left">
-              <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center text-2xl font-black shrink-0 shadow">
-                <i className="fa-solid fa-graduation-cap"></i>
-              </div>
-              <div>
-                <h2 className="text-lg sm:text-xl font-black tracking-wider uppercase">
-                  E.V.S. PUBLIC SCHOOL
-                </h2>
-                <p className="text-[11px] sm:text-xs text-blue-100 font-semibold tracking-wide">
-                  Chilkana Sultanpur, Saharanpur (U.P.) • An English Medium Co-Educational Institution
-                </p>
-                <span className="inline-block mt-1 px-2.5 py-0.5 rounded bg-amber-400/20 border border-amber-300/40 text-[10px] font-extrabold tracking-widest uppercase text-amber-200">
-                  Official Academic Progress Report Card
-                </span>
-              </div>
-            </div>
-
-            <div className="text-center sm:text-right bg-white/10 px-4 py-2 rounded-xl border border-white/15 shrink-0">
-              <div className="text-[10px] uppercase tracking-wider text-amber-300 font-bold">
-                Academic Session
-              </div>
-              <div className="text-sm font-black tracking-wide">{data.session}</div>
-            </div>
-          </div>
-
-          {/* Student Profile Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3.5">
-            <div className="md:col-span-9 grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2.5 text-xs">
-              <div>
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                  Student Name
-                </span>
-                <span className="font-black text-slate-900 text-sm">{data.student.Student_Name}</span>
-              </div>
-              <div>
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                  Class
-                </span>
-                <span className="font-black text-blue-900">{data.student.Class}</span>
-              </div>
-              <div>
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                  Roll No. / Student ID
-                </span>
-                <span className="font-bold text-slate-800">
-                  #{data.student.Roll_Number || '—'} • {data.student.Student_ID}
-                </span>
-              </div>
-              <div>
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                  Father&apos;s Name
-                </span>
-                <span className="font-semibold text-slate-800">{data.student.Father_Name || '—'}</span>
-              </div>
-              <div>
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                  Mother&apos;s Name
-                </span>
-                <span className="font-semibold text-slate-800">{data.student.Mother_Name || '—'}</span>
-              </div>
-              <div>
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                  Result Status
-                </span>
-                <span className="inline-block px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-black text-[11px] uppercase tracking-wide">
-                  {data.meta.resultStatus || 'PROMOTED'}
-                </span>
-              </div>
-            </div>
-
-            <div className="md:col-span-3 flex items-center md:justify-end gap-3 border-t md:border-t-0 md:border-l border-slate-200 pt-2.5 md:pt-0 md:pl-3">
-              {data.student.Student_Photo && !imgError ? (
-                <img
-                  src={data.student.Student_Photo}
-                  alt={data.student.Student_Name}
-                  onError={() => setImgError(true)}
-                  className="w-16 h-16 rounded-xl object-cover border-2 border-blue-900/20"
-                  draggable={false}
-                />
-              ) : (
-                <div
-                  className="w-16 h-16 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-100 border border-blue-200 text-blue-900 flex flex-col items-center justify-center shrink-0"
-                  title="Student Portrait"
-                >
-                  <i className="fa-solid fa-user-graduate text-xl"></i>
-                  <span className="text-[8px] font-extrabold uppercase tracking-wider text-blue-700 mt-1">
-                    Student
+        {reportVariant === 'classic' ? (
+          <div className={`relative z-10 p-4 sm:p-6 space-y-4 ${isParentProtected && screenShieldActive ? 'blur-lg' : ''}`}>
+            {/* Top School Header */}
+            <div className="bg-gradient-to-r from-blue-950 via-indigo-950 to-blue-900 text-white rounded-xl p-4 sm:p-5 border-b-4 border-amber-400 flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="flex items-center gap-3 text-center sm:text-left">
+                <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center text-2xl font-black shrink-0 shadow">
+                  <i className="fa-solid fa-graduation-cap"></i>
+                </div>
+                <div>
+                  <h2 className="text-lg sm:text-xl font-black tracking-wider uppercase">
+                    E.V.S. PUBLIC SCHOOL
+                  </h2>
+                  <p className="text-[11px] sm:text-xs text-blue-100 font-semibold tracking-wide">
+                    Chilkana Sultanpur, Saharanpur (U.P.) • An English Medium Co-Educational Institution
+                  </p>
+                  <span className="inline-block mt-1 px-2.5 py-0.5 rounded bg-amber-400/20 border border-amber-300/40 text-[10px] font-extrabold tracking-widest uppercase text-amber-200">
+                    Official Academic Progress Report Card
                   </span>
                 </div>
-              )}
-              <div className={`px-3.5 py-2 rounded-xl border text-center min-w-[78px] ${gradeMeta.colorClass}`}>
-                <div className="text-[9px] font-extrabold uppercase tracking-wider">Grade</div>
-                <div className="text-xl font-black leading-none mt-0.5">{data.overall.grade}</div>
-                <div className="text-[10px] font-bold mt-0.5 tabular-nums">{data.overall.pct}%</div>
+              </div>
+
+              <div className="text-center sm:text-right bg-white/10 px-4 py-2 rounded-xl border border-white/15 shrink-0">
+                <div className="text-[10px] uppercase tracking-wider text-amber-300 font-bold">
+                  Academic Session
+                </div>
+                <div className="text-sm font-black tracking-wide">{data.session}</div>
               </div>
             </div>
-          </div>
 
-          {/* Academic Marks Table combining Weekly Tests + Quarterly + Half-Yearly + Annual */}
-          <div className="border border-slate-200 rounded-xl overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs min-w-[640px]">
-              <thead>
-                <tr className="bg-blue-950 text-white">
-                  <th className="py-2.5 px-3 font-black uppercase tracking-wide text-[11px]">Subject</th>
-                  <th className="py-2.5 px-2.5 text-center font-bold">
-                    Weekly Tests
-                    <span className="block text-[9px] font-normal text-blue-200">Continuous Eval.</span>
-                  </th>
-                  <th className="py-2.5 px-2.5 text-center font-bold">
-                    Quarterly Exam
-                    <span className="block text-[9px] font-normal text-blue-200">Term I</span>
-                  </th>
-                  <th className="py-2.5 px-2.5 text-center font-bold">
-                    Half-Yearly Exam
-                    <span className="block text-[9px] font-normal text-blue-200">Mid-Term</span>
-                  </th>
-                  <th className="py-2.5 px-2.5 text-center font-bold">
-                    Annual Exam
-                    <span className="block text-[9px] font-normal text-blue-200">Final Term</span>
-                  </th>
-                  <th className="py-2.5 px-2.5 text-center font-black bg-indigo-900">
-                    Grand Total
-                    <span className="block text-[9px] font-normal text-amber-300">Marks (%)</span>
-                  </th>
-                  <th className="py-2.5 px-2.5 text-center font-black bg-indigo-950 uppercase">Grade</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200">
-                {data.subjects.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} className="py-8 text-center text-slate-500 font-semibold">
-                      Assessment marks for Weekly Tests or Term Examinations have not been recorded yet.
-                    </td>
-                  </tr>
+            {/* Student Profile Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3.5">
+              <div className="md:col-span-9 grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2.5 text-xs">
+                <div>
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                    Student Name
+                  </span>
+                  <span className="font-black text-slate-900 text-sm">{data.student.Student_Name}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                    Class
+                  </span>
+                  <span className="font-black text-blue-900">{data.student.Class}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                    Roll No. / Student ID
+                  </span>
+                  <span className="font-bold text-slate-800">
+                    #{data.student.Roll_Number || '—'} • {data.student.Student_ID}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                    Father&apos;s Name
+                  </span>
+                  <span className="font-semibold text-slate-800">{data.student.Father_Name || '—'}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                    Mother&apos;s Name
+                  </span>
+                  <span className="font-semibold text-slate-800">{data.student.Mother_Name || '—'}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                    Result Status
+                  </span>
+                  <span className="inline-block px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-black text-[11px] uppercase tracking-wide">
+                    {data.meta.resultStatus || 'PROMOTED'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="md:col-span-3 flex items-center md:justify-end gap-3 border-t md:border-t-0 md:border-l border-slate-200 pt-2.5 md:pt-0 md:pl-3">
+                {data.student.Student_Photo && !imgError ? (
+                  <img
+                    src={data.student.Student_Photo}
+                    alt={data.student.Student_Name}
+                    onError={() => setImgError(true)}
+                    className="w-16 h-16 rounded-xl object-cover border-2 border-blue-900/20"
+                    draggable={false}
+                  />
                 ) : (
-                  data.subjects.map((row) => (
-                    <tr key={row.subjectKey} className="hover:bg-slate-50/70">
-                      <td className="py-2.5 px-3 font-bold text-slate-900">{row.subjectLabel}</td>
-                      <td className="py-2.5 px-2.5 text-center tabular-nums">
-                        {row.weeklyMax > 0 ? (
+                  <div
+                    className="w-16 h-16 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-100 border border-blue-200 text-blue-900 flex flex-col items-center justify-center shrink-0"
+                    title="Student Portrait"
+                  >
+                    <i className="fa-solid fa-user-graduate text-xl"></i>
+                    <span className="text-[8px] font-extrabold uppercase tracking-wider text-blue-700 mt-1">
+                      Student
+                    </span>
+                  </div>
+                )}
+                <div className={`px-3.5 py-2 rounded-xl border text-center min-w-[78px] ${gradeMeta.colorClass}`}>
+                  <div className="text-[9px] font-extrabold uppercase tracking-wider">Grade</div>
+                  <div className="text-xl font-black leading-none mt-0.5">{data.overall.grade}</div>
+                  <div className="text-[10px] font-bold mt-0.5 tabular-nums">{data.overall.pct}%</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Academic Marks Table combining Weekly Tests + Quarterly + Half-Yearly + Annual */}
+            <div className="border border-slate-200 rounded-xl overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs min-w-[640px]">
+                <thead>
+                  <tr className="bg-blue-950 text-white">
+                    <th className="py-2.5 px-3 font-black uppercase tracking-wide text-[11px]">Subject</th>
+                    <th className="py-2.5 px-2.5 text-center font-bold">
+                      Weekly Tests
+                      <span className="block text-[9px] font-normal text-blue-200">Continuous Eval.</span>
+                    </th>
+                    <th className="py-2.5 px-2.5 text-center font-bold">
+                      Quarterly Exam
+                      <span className="block text-[9px] font-normal text-blue-200">Term I</span>
+                    </th>
+                    <th className="py-2.5 px-2.5 text-center font-bold">
+                      Half-Yearly Exam
+                      <span className="block text-[9px] font-normal text-blue-200">Mid-Term</span>
+                    </th>
+                    <th className="py-2.5 px-2.5 text-center font-bold">
+                      Annual Exam
+                      <span className="block text-[9px] font-normal text-blue-200">Final Term</span>
+                    </th>
+                    <th className="py-2.5 px-2.5 text-center font-black bg-indigo-900">
+                      Grand Total
+                      <span className="block text-[9px] font-normal text-amber-300">Marks (%)</span>
+                    </th>
+                    <th className="py-2.5 px-2.5 text-center font-black bg-indigo-950 uppercase">Grade</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {data.subjects.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-8 text-center text-slate-500 font-semibold">
+                        Assessment marks for Weekly Tests or Term Examinations have not been recorded yet.
+                      </td>
+                    </tr>
+                  ) : (
+                    data.subjects.map((row) => (
+                      <tr key={row.subjectKey} className="hover:bg-slate-50/70">
+                        <td className="py-2.5 px-3 font-bold text-slate-900">{row.subjectLabel}</td>
+                        <td className="py-2.5 px-2.5 text-center tabular-nums">
+                          {row.weeklyMax > 0 ? (
+                            <div>
+                              <span className="font-bold text-slate-900">
+                                {row.weeklyObtained}
+                                <span className="text-slate-400 font-normal text-[10px]">/{row.weeklyMax}</span>
+                              </span>
+                              <span className="block text-[9px] text-slate-500">
+                                ({row.weeklyCount} {row.weeklyCount === 1 ? 'Test' : 'Tests'})
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-slate-400">—</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-2.5 text-center tabular-nums">
+                          {renderMarkCell(row.quarterlyObtained, row.quarterlyMax, row.quarterlyAbsent)}
+                        </td>
+                        <td className="py-2.5 px-2.5 text-center tabular-nums">
+                          {renderMarkCell(row.halfYearlyObtained, row.halfYearlyMax, row.halfYearlyAbsent)}
+                        </td>
+                        <td className="py-2.5 px-2.5 text-center tabular-nums">
+                          {renderMarkCell(row.annualObtained, row.annualMax, row.annualAbsent)}
+                        </td>
+                        <td className="py-2.5 px-2.5 text-center bg-indigo-50/50 font-black text-blue-950 tabular-nums">
+                          {row.combinedMax > 0 ? (
+                            <>
+                              {row.combinedObtained}/{row.combinedMax}{' '}
+                              <span className="text-[10px] text-indigo-700">({row.combinedPct}%)</span>
+                            </>
+                          ) : (
+                            '—'
+                          )}
+                        </td>
+                        <td className="py-2.5 px-2.5 text-center font-black text-slate-900 bg-slate-50">
+                          {row.grade}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+                {data.subjects.length > 0 && (
+                  <tfoot>
+                    <tr className="bg-blue-50 font-black text-blue-950 border-t-2 border-blue-900/30 tabular-nums">
+                      <td className="py-2.5 px-3 uppercase tracking-wide text-[11px]">
+                        Grand Total &amp; Percentage
+                      </td>
+                      <td className="py-2.5 px-2.5 text-center">
+                        {data.weeklySummary.max > 0 ? (
                           <div>
-                            <span className="font-bold text-slate-900">
-                              {row.weeklyObtained}
-                              <span className="text-slate-400 font-normal text-[10px]">/{row.weeklyMax}</span>
-                            </span>
-                            <span className="block text-[9px] text-slate-500">
-                              ({row.weeklyCount} {row.weeklyCount === 1 ? 'Test' : 'Tests'})
+                            <span>{data.weeklySummary.obtained}/{data.weeklySummary.max}</span>
+                            <span className="block text-[10px] text-indigo-700 font-bold">
+                              ({data.weeklySummary.pct}%)
                             </span>
                           </div>
                         ) : (
-                          <span className="text-slate-400">—</span>
+                          <span className="text-slate-400 font-normal">—</span>
                         )}
                       </td>
-                      <td className="py-2.5 px-2.5 text-center tabular-nums">
-                        {renderMarkCell(row.quarterlyObtained, row.quarterlyMax, row.quarterlyAbsent)}
-                      </td>
-                      <td className="py-2.5 px-2.5 text-center tabular-nums">
-                        {renderMarkCell(row.halfYearlyObtained, row.halfYearlyMax, row.halfYearlyAbsent)}
-                      </td>
-                      <td className="py-2.5 px-2.5 text-center tabular-nums">
-                        {renderMarkCell(row.annualObtained, row.annualMax, row.annualAbsent)}
-                      </td>
-                      <td className="py-2.5 px-2.5 text-center bg-indigo-50/50 font-black text-blue-950 tabular-nums">
-                        {row.combinedMax > 0 ? (
-                          <>
-                            {row.combinedObtained}/{row.combinedMax}{' '}
-                            <span className="text-[10px] text-indigo-700">({row.combinedPct}%)</span>
-                          </>
+                      <td className="py-2.5 px-2.5 text-center">
+                        {data.quarterlySummary.hasData ? (
+                          <div>
+                            <span>{data.quarterlySummary.obtained}/{data.quarterlySummary.max}</span>
+                            <span className="block text-[10px] text-indigo-700 font-bold">
+                              ({data.quarterlySummary.pct}%)
+                            </span>
+                          </div>
                         ) : (
-                          '—'
+                          <span className="text-slate-400 font-normal">—</span>
                         )}
                       </td>
-                      <td className="py-2.5 px-2.5 text-center font-black text-slate-900 bg-slate-50">
-                        {row.grade}
+                      <td className="py-2.5 px-2.5 text-center">
+                        {data.halfYearlySummary.hasData ? (
+                          <div>
+                            <span>{data.halfYearlySummary.obtained}/{data.halfYearlySummary.max}</span>
+                            <span className="block text-[10px] text-indigo-700 font-bold">
+                              ({data.halfYearlySummary.pct}%)
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400 font-normal">—</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-2.5 text-center">
+                        {data.annualSummary.hasData ? (
+                          <div>
+                            <span>{data.annualSummary.obtained}/{data.annualSummary.max}</span>
+                            <span className="block text-[10px] text-indigo-700 font-bold">
+                              ({data.annualSummary.pct}%)
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400 font-normal">—</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-2.5 text-center bg-indigo-100">
+                        <div>
+                          <span>{data.overall.obtained}/{data.overall.max}</span>
+                          <span className="block text-[10px] text-indigo-800 font-extrabold">
+                            ({data.overall.pct}%)
+                          </span>
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-2.5 text-center bg-amber-100 text-amber-950 text-sm">
+                        {data.overall.grade}
                       </td>
                     </tr>
-                  ))
+                  </tfoot>
                 )}
-              </tbody>
-              {data.subjects.length > 0 && (
-                <tfoot>
-                  <tr className="bg-blue-50 font-black text-blue-950 border-t-2 border-blue-900/30 tabular-nums">
-                    <td className="py-2.5 px-3 uppercase tracking-wide text-[11px]">
-                      Grand Total &amp; Percentage
-                    </td>
-                    <td className="py-2.5 px-2.5 text-center">
-                      {data.weeklySummary.max > 0 ? (
-                        <div>
-                          <span>{data.weeklySummary.obtained}/{data.weeklySummary.max}</span>
-                          <span className="block text-[10px] text-indigo-700 font-bold">
-                            ({data.weeklySummary.pct}%)
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="text-slate-400 font-normal">—</span>
-                      )}
-                    </td>
-                    <td className="py-2.5 px-2.5 text-center">
-                      {data.quarterlySummary.hasData ? (
-                        <div>
-                          <span>{data.quarterlySummary.obtained}/{data.quarterlySummary.max}</span>
-                          <span className="block text-[10px] text-indigo-700 font-bold">
-                            ({data.quarterlySummary.pct}%)
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="text-slate-400 font-normal">—</span>
-                      )}
-                    </td>
-                    <td className="py-2.5 px-2.5 text-center">
-                      {data.halfYearlySummary.hasData ? (
-                        <div>
-                          <span>{data.halfYearlySummary.obtained}/{data.halfYearlySummary.max}</span>
-                          <span className="block text-[10px] text-indigo-700 font-bold">
-                            ({data.halfYearlySummary.pct}%)
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="text-slate-400 font-normal">—</span>
-                      )}
-                    </td>
-                    <td className="py-2.5 px-2.5 text-center">
-                      {data.annualSummary.hasData ? (
-                        <div>
-                          <span>{data.annualSummary.obtained}/{data.annualSummary.max}</span>
-                          <span className="block text-[10px] text-indigo-700 font-bold">
-                            ({data.annualSummary.pct}%)
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="text-slate-400 font-normal">—</span>
-                      )}
-                    </td>
-                    <td className="py-2.5 px-2.5 text-center bg-indigo-100">
-                      <div>
-                        <span>{data.overall.obtained}/{data.overall.max}</span>
-                        <span className="block text-[10px] text-indigo-800 font-extrabold">
-                          ({data.overall.pct}%)
+              </table>
+            </div>
+
+            {/* Attendance, Discipline & Overall Performance Strip */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 tabular-nums">
+              <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200">
+                <div className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider">Attendance</div>
+                <div className="text-lg font-black text-emerald-950 mt-0.5">{data.attendance.attendancePct}%</div>
+                <div className="text-[10px] text-emerald-800">
+                  Present: {data.attendance.presentDays} / {data.attendance.totalDays} Days
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-blue-50 border border-blue-200">
+                <div className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">Weekly Tests Avg.</div>
+                <div className="text-lg font-black text-blue-950 mt-0.5">
+                  {data.weeklySummary.testsCount > 0 ? `${data.weeklySummary.pct}%` : '—'}
+                </div>
+                <div className="text-[10px] text-blue-800">
+                  {data.weeklySummary.testsCount > 0
+                    ? `${data.weeklySummary.testsCount} ${data.weeklySummary.testsCount === 1 ? 'Test' : 'Tests'} Conducted`
+                    : 'No Tests Yet'}
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-purple-50 border border-purple-200">
+                <div className="text-[10px] font-bold text-purple-700 uppercase tracking-wider">Conduct &amp; Hygiene</div>
+                <div className="text-lg font-black text-purple-950 mt-0.5">{data.attendance.cleanConductPct}%</div>
+                <div className="text-[10px] text-purple-800">Uniform, Discipline &amp; Neatness</div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-amber-50 border border-amber-200">
+                <div className="text-[10px] font-bold text-amber-800 uppercase tracking-wider">
+                  {performanceSummary.classRank.rank > 0 ? 'Class Rank & Grade' : 'Overall Evaluation'}
+                </div>
+                <div className="text-lg font-black text-amber-950 mt-0.5">
+                  {performanceSummary.classRank.rank > 0
+                    ? `${performanceSummary.classRank.label} (${data.overall.grade})`
+                    : data.overall.hasAnyScore
+                    ? `Grade ${data.overall.grade}`
+                    : 'Pending'}
+                </div>
+                <div className="text-[10px] text-amber-900 truncate font-semibold">{data.overall.gradeLabel}</div>
+              </div>
+            </div>
+
+            {/* Teacher & Principal Remarks + Signatures */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="p-3.5 rounded-xl bg-gradient-to-br from-slate-50 to-blue-50/40 border border-blue-200/70 space-y-1.5">
+                <div className="text-[11px] font-black text-blue-950 flex items-center gap-1.5 uppercase tracking-wide">
+                  <i className="fa-solid fa-chalkboard-user text-blue-700"></i>
+                  <span>Class Teacher&apos;s Remarks</span>
+                </div>
+                <p className="text-xs text-slate-800 font-medium leading-relaxed italic">
+                  &ldquo;{data.meta.teacherRemark || data.autoTeacherRemark}&rdquo;
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-gradient-to-br from-slate-50 to-amber-50/40 border border-amber-200/70 space-y-1.5">
+                <div className="text-[11px] font-black text-indigo-950 flex items-center gap-1.5 uppercase tracking-wide">
+                  <i className="fa-solid fa-user-tie text-indigo-700"></i>
+                  <span>Principal&apos;s Remarks</span>
+                </div>
+                <p className="text-xs text-slate-800 font-medium leading-relaxed italic">
+                  &ldquo;{data.meta.principalRemark || data.autoPrincipalRemark}&rdquo;
+                </p>
+              </div>
+            </div>
+
+            {/* Signatures Footer */}
+            <div className="pt-4 border-t border-dashed border-slate-300 grid grid-cols-3 gap-3 text-center text-[11px] text-slate-700">
+              <div>
+                <div className="h-7"></div>
+                <div className="border-t border-slate-300 pt-1 font-bold">Parent / Guardian&apos;s Signature</div>
+              </div>
+              <div>
+                <div className="h-7"></div>
+                <div className="border-t border-slate-300 pt-1 font-bold">Class Teacher&apos;s Signature</div>
+              </div>
+              <div>
+                <div className="h-7 font-black text-blue-900 text-[10px] tracking-wider flex items-end justify-center pb-0.5 uppercase">
+                  E.V.S. PUBLIC SCHOOL
+                </div>
+                <div className="border-t border-slate-300 pt-1 font-bold">Principal&apos;s Signature &amp; Seal</div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* VISUAL PERFORMANCE & GROWTH COMPARISON REPORT (A4 LANDSCAPE) */
+          <div className={`relative z-10 p-4 sm:p-5 space-y-3 bg-slate-50/70 ${isParentProtected && screenShieldActive ? 'blur-lg' : ''}`}>
+            {/* Top School & Report Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-2.5 border-b border-slate-200">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-950 to-indigo-900 text-amber-300 flex items-center justify-center text-lg shadow-xs shrink-0">
+                  <i className="fa-solid fa-graduation-cap"></i>
+                </div>
+                <div>
+                  <div className="text-sm sm:text-base font-black text-blue-950 tracking-wide uppercase leading-tight">
+                    E.V.S. PUBLIC SCHOOL
+                  </div>
+                  <div className="text-[10px] font-semibold text-slate-500">
+                    Chilkana Sultanpur, Saharanpur • Academic Session {data.session}
+                  </div>
+                </div>
+                <div className="hidden sm:block h-7 w-px bg-slate-300 mx-1"></div>
+                <div className="hidden sm:block">
+                  <div className="text-xs sm:text-sm font-black text-slate-900">Student Performance Report</div>
+                  <div className="text-[10px] font-semibold text-slate-500">
+                    A4 Landscape • Subject-wise Growth &amp; Comparison
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-1 rounded-lg bg-blue-950 text-amber-300 text-[10px] font-black uppercase tracking-wider">
+                  {data.meta.resultStatus || 'PROMOTED'}
+                </span>
+                <span className={`px-2.5 py-1 rounded-lg border text-xs font-black tabular-nums ${gradeMeta.colorClass}`}>
+                  {data.overall.pct}% ({data.overall.grade})
+                </span>
+              </div>
+            </div>
+
+            {/* Hero Strip: Student Identity + 3 KPI Growth Cards */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 bg-gradient-to-r from-white via-sky-50/50 to-blue-50/70 border border-blue-200/70 rounded-2xl p-3.5 shadow-2xs">
+              <div className="lg:col-span-6 flex items-center gap-3.5">
+                {data.student.Student_Photo && !imgError ? (
+                  <img
+                    src={data.student.Student_Photo}
+                    alt={data.student.Student_Name}
+                    onError={() => setImgError(true)}
+                    className="w-16 h-16 sm:w-18 sm:h-18 rounded-2xl object-cover border-2 border-white shadow-sm shrink-0"
+                    draggable={false}
+                  />
+                ) : (
+                  <div className="w-16 h-16 sm:w-18 sm:h-18 rounded-2xl bg-gradient-to-br from-blue-100 to-indigo-100 border border-blue-200 text-blue-900 flex flex-col items-center justify-center shrink-0">
+                    <i className="fa-solid fa-user-graduate text-xl"></i>
+                    <span className="text-[8px] font-black uppercase mt-0.5">Student</span>
+                  </div>
+                )}
+
+                <div className="min-w-0 space-y-1">
+                  <div className="flex items-center gap-1.5">
+                    <i className="fa-solid fa-graduation-cap text-blue-900 text-sm"></i>
+                    <h3 className="text-base sm:text-lg font-black text-slate-900 truncate">
+                      {data.student.Student_Name}
+                    </h3>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-slate-600 font-semibold">
+                    <span>
+                      Roll No: <strong className="text-slate-900">{data.student.Roll_Number || '—'}</strong>
+                    </span>
+                    <span>•</span>
+                    <span>
+                      Class: <strong className="text-blue-900">{data.student.Class}</strong>
+                    </span>
+                    <span>•</span>
+                    <span>
+                      ID: <strong className="text-slate-900">{data.student.Student_ID}</strong>
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-slate-600">
+                    <span>
+                      Admission No:{' '}
+                      <strong className="text-slate-800">{data.student.Admission_Number || '—'}</strong>
+                    </span>
+                    <span>•</span>
+                    <span>
+                      Father&apos;s Name:{' '}
+                      <strong className="text-slate-800">{data.student.Father_Name || '—'}</strong>
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="lg:col-span-6 grid grid-cols-3 gap-2.5">
+                {/* KPI 1: Average Change */}
+                <div className="rounded-xl bg-white border border-blue-200/80 p-2.5 text-center shadow-2xs flex flex-col justify-center">
+                  <div className="text-[10px] font-bold text-slate-600 flex items-center justify-center gap-1">
+                    <i className="fa-solid fa-chart-simple text-blue-600"></i>
+                    <span>Average Change</span>
+                  </div>
+                  <div
+                    className={`text-lg sm:text-xl font-black mt-1 tabular-nums ${
+                      performanceSummary.averageChangePp === null
+                        ? 'text-slate-500'
+                        : performanceSummary.averageChangePp >= 0
+                        ? 'text-blue-700'
+                        : 'text-rose-700'
+                    }`}
+                  >
+                    {performanceSummary.averageChangePp === null
+                      ? '—'
+                      : `${performanceSummary.averageChangePp > 0 ? '+' : ''}${performanceSummary.averageChangePp} pp ${
+                          performanceSummary.averageChangePp >= 0 ? '↗' : '↘'
+                        }`}
+                  </div>
+                </div>
+
+                {/* KPI 2: Subjects Improved */}
+                <div className="rounded-xl bg-emerald-50/90 border border-emerald-200 p-2.5 text-center shadow-2xs flex flex-col justify-center">
+                  <div className="text-[10px] font-bold text-emerald-900 flex items-center justify-center gap-1">
+                    <i className="fa-solid fa-circle-check text-emerald-600"></i>
+                    <span>Subjects Improved</span>
+                  </div>
+                  <div className="text-lg sm:text-xl font-black text-emerald-900 mt-1 tabular-nums">
+                    {performanceSummary.comparedCount > 0
+                      ? `${performanceSummary.improvedCount} / ${performanceSummary.comparedCount}`
+                      : '—'}
+                  </div>
+                </div>
+
+                {/* KPI 3: Subjects Declined */}
+                <div className="rounded-xl bg-rose-50/90 border border-rose-200 p-2.5 text-center shadow-2xs flex flex-col justify-center">
+                  <div className="text-[10px] font-bold text-rose-900 flex items-center justify-center gap-1">
+                    <i className="fa-solid fa-circle-arrow-down text-rose-600"></i>
+                    <span>Subjects Declined</span>
+                  </div>
+                  <div className="text-lg sm:text-xl font-black text-rose-900 mt-1 tabular-nums">
+                    {performanceSummary.comparedCount > 0
+                      ? `${performanceSummary.declinedCount} / ${performanceSummary.comparedCount}`
+                      : '—'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Subject-wise Header & Legend */}
+            <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+              <div>
+                <div className="text-xs sm:text-sm font-black text-slate-900 flex items-center gap-1.5">
+                  <i className="fa-solid fa-chart-column text-blue-700"></i>
+                  <span>Subject-wise Performance Comparison</span>
+                </div>
+                <p className="text-[10px] text-slate-500 font-medium">
+                  Marks are compared as percentages of each exam&apos;s actual maximum. Unavailable assessments are hidden.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3 text-[10px] font-extrabold text-slate-700">
+                {includeWeeklyInGraph && data.weeklySummary.testsCount > 0 && (
+                  <span className="flex items-center gap-1">
+                    <span className="w-2.5 h-2.5 rounded-xs bg-sky-500 inline-block"></span> WT Avg
+                  </span>
+                )}
+                <span className="flex items-center gap-1">
+                  <span className="w-2.5 h-2.5 rounded-xs bg-blue-600 inline-block"></span> QTR (Quarterly)
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-2.5 h-2.5 rounded-xs bg-emerald-500 inline-block"></span> HY (Half-Yearly)
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-2.5 h-2.5 rounded-xs bg-amber-500 inline-block"></span> ANN (Annual)
+                </span>
+              </div>
+            </div>
+
+            {/* Subject Comparison Cards Grid */}
+            {performanceSummary.subjects.length === 0 ? (
+              <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-xs font-bold text-slate-500">
+                ग्राफ़ तुलना दिखाने के लिए अभी किसी विषय के अंक दर्ज नहीं हैं।
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 print:grid-cols-4 gap-2.5">
+                {performanceSummary.subjects.map((subj) => {
+                  const iconMap: Record<string, string> = {
+                    english: 'fa-book text-blue-700',
+                    hindi: 'fa-language text-indigo-700',
+                    math: 'fa-calculator text-teal-700',
+                    science: 'fa-flask text-emerald-700',
+                    evs: 'fa-seedling text-green-700',
+                    social: 'fa-earth-asia text-sky-700',
+                    computer: 'fa-laptop-code text-slate-700',
+                    urdu: 'fa-font text-purple-700',
+                    gk: 'fa-lightbulb text-amber-600',
+                  };
+                  const barColorMap: Record<'WT' | 'QTR' | 'HY' | 'ANN', string> = {
+                    WT: 'bg-sky-500',
+                    QTR: 'bg-blue-600',
+                    HY: 'bg-emerald-500',
+                    ANN: 'bg-amber-500',
+                  };
+
+                  return (
+                    <div
+                      key={subj.subjectKey}
+                      className="bg-white border border-slate-200/90 rounded-xl p-2.5 shadow-2xs flex flex-col justify-between"
+                    >
+                      <div className="flex items-center gap-1.5 mb-1.5">
+                        <span className="w-6 h-6 rounded-lg bg-slate-100 flex items-center justify-center text-xs shrink-0">
+                          <i className={`fa-solid ${iconMap[subj.subjectKey] || 'fa-book-open text-blue-700'}`}></i>
                         </span>
+                        <span className="text-xs font-black text-slate-900 truncate">{subj.subjectLabel}</span>
                       </div>
-                    </td>
-                    <td className="py-2.5 px-2.5 text-center bg-amber-100 text-amber-950 text-sm">
-                      {data.overall.grade}
-                    </td>
-                  </tr>
-                </tfoot>
-              )}
-            </table>
+
+                      {/* Vertical Proportional Bars */}
+                      <div className="flex items-end justify-center gap-2.5 h-28 pt-3 pb-1 px-1">
+                        {subj.bars.map((bar) => {
+                          const clampedPct = Math.max(0, Math.min(100, bar.pct));
+                          const heightPct = bar.isAbsent ? 16 : Math.max(22, Math.round(clampedPct * 0.78));
+                          return (
+                            <div
+                              key={bar.key}
+                              className="flex flex-col items-center justify-end h-full flex-1 max-w-[54px]"
+                            >
+                              <div className="text-[9px] font-bold text-slate-700 mb-0.5 tabular-nums whitespace-nowrap">
+                                {bar.isAbsent ? 'AB' : `${bar.obtained}/${bar.max}`}
+                              </div>
+                              <div
+                                style={{ height: `${heightPct}%` }}
+                                className={`w-full rounded-t-md flex items-end justify-center pb-1 text-white text-[10px] font-black tabular-nums shadow-2xs ${
+                                  bar.isAbsent ? 'bg-rose-500' : barColorMap[bar.key]
+                                }`}
+                              >
+                                {bar.isAbsent ? 'AB' : `${bar.pct}%`}
+                              </div>
+                              <div className="text-[9px] font-bold text-slate-500 mt-0.5 whitespace-nowrap">
+                                {bar.label}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {/* Bottom Subject Delta Pill */}
+                      <div
+                        className={`mt-1.5 py-1 px-2 rounded-lg text-center text-[10px] font-black tabular-nums ${
+                          subj.trend === 'improved'
+                            ? 'bg-emerald-50 text-emerald-800 border border-emerald-200/80'
+                            : subj.trend === 'declined'
+                            ? 'bg-rose-50 text-rose-800 border border-rose-200/80'
+                            : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        {subj.trend === 'improved' && subj.deltaPp !== null && (
+                          <>▲ +{subj.deltaPp} pp ({subj.fromLabel} → {subj.toLabel})</>
+                        )}
+                        {subj.trend === 'declined' && subj.deltaPp !== null && (
+                          <>▼ {subj.deltaPp} pp ({subj.fromLabel} → {subj.toLabel})</>
+                        )}
+                        {subj.trend === 'neutral' && (
+                          <>• 0.0 pp ({subj.fromLabel} → {subj.toLabel})</>
+                        )}
+                        {subj.trend === 'single' && <>• {subj.bars[0]?.label}: {subj.bars[0]?.pct}%</>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Bottom Overall Performance Summary Footer Bar */}
+            <div className="bg-white border border-slate-200 rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 shadow-2xs tabular-nums">
+              <div className="flex items-center gap-2 text-xs font-black text-slate-900">
+                <span className="w-7 h-7 rounded-lg bg-amber-100 text-amber-600 flex items-center justify-center">
+                  <i className="fa-solid fa-trophy"></i>
+                </span>
+                <span>Overall Performance Summary</span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-4 text-xs">
+                {performanceSummary.wtAvg !== null && includeWeeklyInGraph && (
+                  <div>
+                    <span className="text-[10px] font-semibold text-slate-500 block">WT Average</span>
+                    <span className="font-black text-slate-900 text-sm">{performanceSummary.wtAvg}%</span>
+                  </div>
+                )}
+                {performanceSummary.qtrAvg !== null && (
+                  <div>
+                    <span className="text-[10px] font-semibold text-slate-500 block">Quarterly Avg</span>
+                    <span className="font-black text-slate-900 text-sm">{performanceSummary.qtrAvg}%</span>
+                  </div>
+                )}
+                {performanceSummary.hyAvg !== null && (
+                  <div>
+                    <span className="text-[10px] font-semibold text-slate-500 block">Half-Yearly Avg</span>
+                    <span className="font-black text-slate-900 text-sm">{performanceSummary.hyAvg}%</span>
+                  </div>
+                )}
+                {performanceSummary.annAvg !== null && (
+                  <div>
+                    <span className="text-[10px] font-semibold text-slate-500 block">Annual Avg</span>
+                    <span className="font-black text-slate-900 text-sm">{performanceSummary.annAvg}%</span>
+                  </div>
+                )}
+                <div>
+                  <span className="text-[10px] font-semibold text-slate-500 block">Attendance</span>
+                  <span className="font-black text-emerald-700 text-sm">{data.attendance.attendancePct}%</span>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] font-bold text-slate-500">Overall Trend</span>
+                  <span
+                    className={`px-2 py-0.5 rounded-lg text-xs font-black ${
+                      performanceSummary.averageChangePp === null
+                        ? 'bg-slate-100 text-slate-600'
+                        : performanceSummary.averageChangePp >= 0
+                        ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                        : 'bg-rose-50 text-rose-800 border border-rose-200'
+                    }`}
+                  >
+                    {performanceSummary.averageChangePp === null
+                      ? '—'
+                      : `${performanceSummary.averageChangePp >= 0 ? '▲ +' : '▼ '}${performanceSummary.averageChangePp} pp`}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-1.5 pl-2 border-l border-slate-200">
+                  <span className="w-7 h-7 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center text-xs">
+                    <i className="fa-solid fa-medal"></i>
+                  </span>
+                  <div>
+                    <span className="text-[10px] font-semibold text-slate-500 block leading-none">Class Rank</span>
+                    <span className="font-black text-slate-950 text-sm">{performanceSummary.classRank.label}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
-
-          {/* Attendance, Discipline & Overall Performance Strip */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 tabular-nums">
-            <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200">
-              <div className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider">Attendance</div>
-              <div className="text-lg font-black text-emerald-950 mt-0.5">{data.attendance.attendancePct}%</div>
-              <div className="text-[10px] text-emerald-800">
-                Present: {data.attendance.presentDays} / {data.attendance.totalDays} Days
-              </div>
-            </div>
-
-            <div className="p-3 rounded-xl bg-blue-50 border border-blue-200">
-              <div className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">Weekly Tests Avg.</div>
-              <div className="text-lg font-black text-blue-950 mt-0.5">
-                {data.weeklySummary.testsCount > 0 ? `${data.weeklySummary.pct}%` : '—'}
-              </div>
-              <div className="text-[10px] text-blue-800">
-                {data.weeklySummary.testsCount > 0
-                  ? `${data.weeklySummary.testsCount} ${data.weeklySummary.testsCount === 1 ? 'Test' : 'Tests'} Conducted`
-                  : 'No Tests Yet'}
-              </div>
-            </div>
-
-            <div className="p-3 rounded-xl bg-purple-50 border border-purple-200">
-              <div className="text-[10px] font-bold text-purple-700 uppercase tracking-wider">Conduct &amp; Hygiene</div>
-              <div className="text-lg font-black text-purple-950 mt-0.5">{data.attendance.cleanConductPct}%</div>
-              <div className="text-[10px] text-purple-800">Uniform, Discipline &amp; Neatness</div>
-            </div>
-
-            <div className="p-3 rounded-xl bg-amber-50 border border-amber-200">
-              <div className="text-[10px] font-bold text-amber-800 uppercase tracking-wider">Overall Evaluation</div>
-              <div className="text-lg font-black text-amber-950 mt-0.5">
-                {data.overall.hasAnyScore ? `Grade ${data.overall.grade}` : 'Pending'}
-              </div>
-              <div className="text-[10px] text-amber-900 truncate font-semibold">{data.overall.gradeLabel}</div>
-            </div>
-          </div>
-
-          {/* Teacher & Principal Remarks + Signatures */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="p-3.5 rounded-xl bg-gradient-to-br from-slate-50 to-blue-50/40 border border-blue-200/70 space-y-1.5">
-              <div className="text-[11px] font-black text-blue-950 flex items-center gap-1.5 uppercase tracking-wide">
-                <i className="fa-solid fa-chalkboard-user text-blue-700"></i>
-                <span>Class Teacher&apos;s Remarks</span>
-              </div>
-              <p className="text-xs text-slate-800 font-medium leading-relaxed italic">
-                &ldquo;{data.meta.teacherRemark || data.autoTeacherRemark}&rdquo;
-              </p>
-            </div>
-
-            <div className="p-3.5 rounded-xl bg-gradient-to-br from-slate-50 to-amber-50/40 border border-amber-200/70 space-y-1.5">
-              <div className="text-[11px] font-black text-indigo-950 flex items-center gap-1.5 uppercase tracking-wide">
-                <i className="fa-solid fa-user-tie text-indigo-700"></i>
-                <span>Principal&apos;s Remarks</span>
-              </div>
-              <p className="text-xs text-slate-800 font-medium leading-relaxed italic">
-                &ldquo;{data.meta.principalRemark || data.autoPrincipalRemark}&rdquo;
-              </p>
-            </div>
-          </div>
-
-          {/* Signatures Footer */}
-          <div className="pt-4 border-t border-dashed border-slate-300 grid grid-cols-3 gap-3 text-center text-[11px] text-slate-700">
-            <div>
-              <div className="h-7"></div>
-              <div className="border-t border-slate-300 pt-1 font-bold">Parent / Guardian&apos;s Signature</div>
-            </div>
-            <div>
-              <div className="h-7"></div>
-              <div className="border-t border-slate-300 pt-1 font-bold">Class Teacher&apos;s Signature</div>
-            </div>
-            <div>
-              <div className="h-7 font-black text-blue-900 text-[10px] tracking-wider flex items-end justify-center pb-0.5 uppercase">
-                E.V.S. PUBLIC SCHOOL
-              </div>
-              <div className="border-t border-slate-300 pt-1 font-bold">Principal&apos;s Signature &amp; Seal</div>
-            </div>
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );

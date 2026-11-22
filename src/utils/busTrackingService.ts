@@ -448,7 +448,7 @@ function ensureFeatureBackupTabs(ss) {
   ensureTabSafe_(ss, "UPI_Settings", ["UPI Settings"], ["Setting_Key", "UPI_ID", "Payee_Name", "Bank_Name", "Instructions", "Has_Static_QR", "Updated_At"], added);
   ensureTabSafe_(ss, "UPI_Payments", ["UPI Payments", "UPI_Payment_Logs"], ["Payment_ID", "Created_At", "Student_ID", "Student_Name", "Class", "Parent_Mobile", "Payer_Name", "Amount", "Fee_Type", "Month", "UTR_Number", "Payment_App", "Payment_Date", "Notes", "Status", "Receipt_Number", "Manager_Note", "Verified_By", "Verified_At", "Has_Screenshot"], added);
   ensureTabSafe_(ss, "Exam_Marks", ["Exam Marks", "ExamMarks"], ["Mark_ID", "Session", "Exam_Type", "Student_ID", "Student_Name", "Class", "Subject", "Max_Marks", "Marks_Obtained", "Attendance_Status", "Teacher_ID", "Teacher_Name", "Remarks", "Updated_At"], added);
-  ensureTabSafe_(ss, "Report_Cards_Backup", ["Report Cards Backup", "Report_Cards", "ReportCardsBackup"], ["Report_Key", "Session", "Student_ID", "Student_Name", "Class", "Roll_Number", "Weekly_Pct", "Quarterly_Pct", "HalfYearly_Pct", "Annual_Pct", "Overall_Pct", "Grade", "Attendance_Pct", "Present_Days", "Total_Days", "Teacher_Remark", "Principal_Remark", "Result_Status", "Published_For_Parent", "Updated_By", "Updated_At"], added);
+  ensureTabSafe_(ss, "Report_Cards_Backup", ["Report Cards Backup", "Report_Cards", "ReportCardsBackup"], ["Report_Key", "Session", "Student_ID", "Student_Name", "Class", "Roll_Number", "Weekly_Pct", "Quarterly_Pct", "HalfYearly_Pct", "Annual_Pct", "Overall_Pct", "Grade", "Attendance_Pct", "Present_Days", "Total_Days", "Teacher_Remark", "Principal_Remark", "Result_Status", "Published_For_Parent", "Updated_By", "Updated_At", "Class_Rank"], added);
   ensureTabSafe_(ss, "Weekly_Tests", ["Weekly Tests", "Weekly_Subject_Tests"], ["ID", "Session_ID", "Teacher_ID", "Teacher_Name", "Class", "Month", "Week_Number", "Test_Date", "Subject", "Topic", "Student_ID", "Student_Name", "Max_Marks", "Marks_Obtained", "Status", "Remarks", "Timestamp"], added);
   ensureTabSafe_(ss, "Teacher_Performance", ["Teacher Performance"], ["Record_ID", "Teacher_ID", "Teacher_Name", "Assigned_Class", "Month", "Academic_Year", "Syllabus_Score_30", "Test_Score_25", "Attendance_Score_15", "Homework_Score_15", "Punctuality_Score_15", "Total_Score_100", "Grade", "Evaluated_By", "Remarks", "Timestamp"], added);
   ensureTabSafe_(ss, "Syllabus_Tracker", ["Syllabus Tracker"], ["ID", "Teacher_ID", "Teacher_Name", "Class", "Subject", "Month", "Week_Number", "Week_Label", "Chapter_Title", "Topic_Description", "Planned_Date", "Target_Completion_Date", "Completed_Date", "Status", "Timestamp"], added);
@@ -718,6 +718,9 @@ function doGet(e) {
   if (action === "getReportCardMeta") {
     return handleGetReportCardMeta(ss);
   }
+  if (action === "getReportCardWorkflow") {
+    return handleGetReportCardWorkflow();
+  }
   if (action === "getWeeklyTests") {
     return handleGetWeeklyTests(ss);
   }
@@ -747,7 +750,7 @@ function doGet(e) {
   }
 
   // 10. GET FALLBACK: Delegate write actions when called via GET query parameters
-  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig" || action === "saveExamDatesheet" || action === "saveExamSeatingPlan" || action === "saveFeeWaiver" || action === "saveFeeWaiversBatch" || action === "saveParentReview" || action === "updateParentReviewStatus" || action === "deleteParentReview") {
+  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveReportCardDraft" || action === "saveReportCardAccess" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig" || action === "saveExamDatesheet" || action === "saveExamSeatingPlan" || action === "saveExamSeatingDraft" || action === "saveFeeWaiver" || action === "saveFeeWaiversBatch" || action === "saveParentReview" || action === "updateParentReviewStatus" || action === "deleteParentReview") {
     return doPost(e);
   }
 
@@ -1409,6 +1412,12 @@ function doPost(e) {
     if (action === "syncReportCardsBatch") {
       return handleSyncReportCardsBatch(ss, data);
     }
+    if (action === "saveReportCardDraft") {
+      return handleSaveReportCardDraft(data);
+    }
+    if (action === "saveReportCardAccess") {
+      return handleSaveReportCardAccess(data);
+    }
 
     // 13. DELETE HOMEWORK
     if (action === "deleteHomework") {
@@ -1449,6 +1458,9 @@ function doPost(e) {
     }
     if (action === "saveExamSeatingPlan") {
       return handleSaveExamSeatingPlan(ss, data);
+    }
+    if (action === "saveExamSeatingDraft") {
+      return handleSaveExamSeatingDraft(data);
     }
 
     // 17. FEE WAIVERS DIRECTORY (Fee_Waivers - Tuition-Only Waiver 2-Way Sync)
@@ -3229,7 +3241,10 @@ function handleGetReportCardMeta(ss) {
 }
 
 function handleSaveReportCardMeta(ss, data) {
-  var sheet = ensureTabSafe_(ss, "Report_Cards_Backup", ["Report Cards Backup", "Report_Cards", "ReportCardsBackup"], ["Report_Key", "Session", "Student_ID", "Student_Name", "Class", "Roll_Number", "Weekly_Pct", "Quarterly_Pct", "HalfYearly_Pct", "Annual_Pct", "Overall_Pct", "Grade", "Attendance_Pct", "Present_Days", "Total_Days", "Teacher_Remark", "Principal_Remark", "Result_Status", "Published_For_Parent", "Updated_By", "Updated_At"]);
+  var sheet = ensureTabSafe_(ss, "Report_Cards_Backup", ["Report Cards Backup", "Report_Cards", "ReportCardsBackup"], ["Report_Key", "Session", "Student_ID", "Student_Name", "Class", "Roll_Number", "Weekly_Pct", "Quarterly_Pct", "HalfYearly_Pct", "Annual_Pct", "Overall_Pct", "Grade", "Attendance_Pct", "Present_Days", "Total_Days", "Teacher_Remark", "Principal_Remark", "Result_Status", "Published_For_Parent", "Updated_By", "Updated_At", "Class_Rank"]);
+  if (sheet.getLastColumn() < 22 || !sheet.getRange(1, 22).getValue()) {
+    sheet.getRange(1, 22).setValue("Class_Rank");
+  }
   var m = data.meta || data;
   if (typeof m === "string") {
     try { m = JSON.parse(m); } catch(e) { m = data; }
@@ -3257,6 +3272,9 @@ function handleSaveReportCardMeta(ss, data) {
       String(m.updatedBy || "Staff"),
       formatToLocalIST_(m.updatedAt, nowStr)
     ]]);
+    if (m.classRank) {
+      sheet.getRange(tRow, 22).setValue(String(m.classRank));
+    }
   } else {
     sheet.appendRow([
       rKey,
@@ -3271,7 +3289,8 @@ function handleSaveReportCardMeta(ss, data) {
       String(m.resultStatus || "PROMOTED"),
       pubStr,
       String(m.updatedBy || "Staff"),
-      formatToLocalIST_(m.updatedAt, nowStr)
+      formatToLocalIST_(m.updatedAt, nowStr),
+      String(m.classRank || "")
     ]);
   }
   return ContentService.createTextOutput(JSON.stringify({
@@ -3283,7 +3302,10 @@ function handleSaveReportCardMeta(ss, data) {
 
 function handleSyncReportCardsBatch(ss, data) {
   var emSheet = ensureTabSafe_(ss, "Exam_Marks", ["Exam Marks", "ExamMarks"], ["Mark_ID", "Session", "Exam_Type", "Student_ID", "Student_Name", "Class", "Subject", "Max_Marks", "Marks_Obtained", "Attendance_Status", "Teacher_ID", "Teacher_Name", "Remarks", "Updated_At"]);
-  var rcSheet = ensureTabSafe_(ss, "Report_Cards_Backup", ["Report Cards Backup", "Report_Cards", "ReportCardsBackup"], ["Report_Key", "Session", "Student_ID", "Student_Name", "Class", "Roll_Number", "Weekly_Pct", "Quarterly_Pct", "HalfYearly_Pct", "Annual_Pct", "Overall_Pct", "Grade", "Attendance_Pct", "Present_Days", "Total_Days", "Teacher_Remark", "Principal_Remark", "Result_Status", "Published_For_Parent", "Updated_By", "Updated_At"]);
+  var rcSheet = ensureTabSafe_(ss, "Report_Cards_Backup", ["Report Cards Backup", "Report_Cards", "ReportCardsBackup"], ["Report_Key", "Session", "Student_ID", "Student_Name", "Class", "Roll_Number", "Weekly_Pct", "Quarterly_Pct", "HalfYearly_Pct", "Annual_Pct", "Overall_Pct", "Grade", "Attendance_Pct", "Present_Days", "Total_Days", "Teacher_Remark", "Principal_Remark", "Result_Status", "Published_For_Parent", "Updated_By", "Updated_At", "Class_Rank"]);
+  if (rcSheet.getLastColumn() < 22 || !rcSheet.getRange(1, 22).getValue()) {
+    rcSheet.getRange(1, 22).setValue("Class_Rank");
+  }
 
   var examMarks = data.examMarks;
   if (typeof examMarks === "string") {
@@ -3332,11 +3354,12 @@ function handleSyncReportCardsBatch(ss, data) {
       String(b.resultStatus || "PROMOTED"),
       (b.publishedToParent === false) ? "NO" : "YES",
       String(b.updatedBy || "Manager"),
-      formatToLocalIST_(b.updatedAt, nowStr)
+      formatToLocalIST_(b.updatedAt, nowStr),
+      String(b.classRank || "—")
     ];
     var tRow = keyMap[rKey.toLowerCase()];
     if (tRow) {
-      rcSheet.getRange(tRow, 1, 1, 21).setValues([rowArr]);
+      rcSheet.getRange(tRow, 1, 1, 22).setValues([rowArr]);
     } else {
       newRcRows.push(rowArr);
       keyMap[rKey.toLowerCase()] = rcSheet.getLastRow() + newRcRows.length;
@@ -3344,7 +3367,7 @@ function handleSyncReportCardsBatch(ss, data) {
     rcCount++;
   }
   if (newRcRows.length > 0) {
-    rcSheet.getRange(rcSheet.getLastRow() + 1, 1, newRcRows.length, 21).setValues(newRcRows);
+    rcSheet.getRange(rcSheet.getLastRow() + 1, 1, newRcRows.length, 22).setValues(newRcRows);
   }
 
   return ContentService.createTextOutput(JSON.stringify({
@@ -3956,9 +3979,27 @@ function handleSaveExamDatesheet(ss, data) {
 }
 
 function handleGetExamSeatingPlan(ss) {
+  var props = PropertiesService.getScriptProperties();
+  var draftConfig = null;
+  var approvedConfig = null;
+  try {
+    var rawDraft = props.getProperty("EVS_EXAM_SEATING_DRAFT");
+    if (rawDraft) draftConfig = JSON.parse(rawDraft);
+  } catch (eDraft) {}
+  try {
+    var rawApp = props.getProperty("EVS_EXAM_SEATING_APPROVED");
+    if (rawApp) approvedConfig = JSON.parse(rawApp);
+  } catch (eApp) {}
+
   var sheet = findExistingSheet_(ss, ["Exam_Seating_Plan", "Exam Seating Plan", "Seating_Plan", "Seating Plan"]);
   if (!sheet || sheet.getLastRow() < 2) {
-    return ContentService.createTextOutput(JSON.stringify({ status: "success", rows: [], roomMeta: {} })).setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      rows: [],
+      roomMeta: {},
+      draftConfig: draftConfig,
+      approvedConfig: approvedConfig
+    })).setMimeType(ContentService.MimeType.JSON);
   }
   var vals = sheet.getDataRange().getValues();
   var out = [];
@@ -3985,10 +4026,30 @@ function handleGetExamSeatingPlan(ss) {
       invigilator: invig,
       examType: String(r[10] || "").trim(),
       session: String(r[11] || "").trim(),
-      updatedAt: String(r[12] || "").trim()
+      updatedAt: String(r[12] || "").trim(),
+      confirmedBy: String(r[13] || "").trim(),
+      status: String(r[14] || "").trim()
     });
   }
-  return ContentService.createTextOutput(JSON.stringify({ status: "success", rows: out, roomMeta: roomMeta })).setMimeType(ContentService.MimeType.JSON);
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    rows: out,
+    roomMeta: roomMeta,
+    draftConfig: draftConfig,
+    approvedConfig: approvedConfig
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveExamSeatingDraft(data) {
+  var draftObj = data.draftConfig ? (typeof data.draftConfig === "string" ? JSON.parse(data.draftConfig) : data.draftConfig) : null;
+  if (!draftObj) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "Missing draftConfig" })).setMimeType(ContentService.MimeType.JSON);
+  }
+  PropertiesService.getScriptProperties().setProperty("EVS_EXAM_SEATING_DRAFT", JSON.stringify(draftObj));
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Teacher seating draft saved for Manager confirmation!"
+  })).setMimeType(ContentService.MimeType.JSON);
 }
 
 function handleSaveExamSeatingPlan(ss, data) {
@@ -3997,7 +4058,7 @@ function handleSaveExamSeatingPlan(ss, data) {
   if (!sheet) {
     return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "Exam_Seating_Plan tab not created" })).setMimeType(ContentService.MimeType.JSON);
   }
-  var headers = ["Slot_Key", "Room_No", "Wing", "Bench_No", "Seat_Position", "Student_ID", "Roll_Number", "Student_Name", "Class", "Invigilator", "Exam_Type", "Session", "Updated_At"];
+  var headers = ["Slot_Key", "Room_No", "Wing", "Bench_No", "Seat_Position", "Student_ID", "Roll_Number", "Student_Name", "Class", "Invigilator", "Exam_Type", "Session", "Updated_At", "Confirmed_By", "Status"];
   var hdrRange = sheet.getRange(1, 1, 1, headers.length);
   hdrRange.setValues([headers]);
   try {
@@ -4030,17 +4091,70 @@ function handleSaveExamSeatingPlan(ss, data) {
       String(item.invigilator || ""),
       String(item.examType || ""),
       String(item.session || ""),
-      nowIst
+      nowIst,
+      String(item.confirmedBy || ""),
+      String(item.status || "Approved")
     ]);
   }
   if (outValues.length > 0) {
     sheet.getRange(2, 1, outValues.length, headers.length).setValues(outValues);
   }
+  try {
+    if (data.approvedConfig) {
+      var appStr = typeof data.approvedConfig === "string" ? data.approvedConfig : JSON.stringify(data.approvedConfig);
+      var props = PropertiesService.getScriptProperties();
+      props.setProperty("EVS_EXAM_SEATING_APPROVED", appStr);
+      props.setProperty("EVS_EXAM_SEATING_DRAFT", appStr);
+    }
+  } catch (eProp) {}
   return ContentService.createTextOutput(JSON.stringify({
     status: "success",
     savedCount: outValues.length,
-    message: "Exam_Seating_Plan saved permanently to Google Sheet!"
+    message: "Exam_Seating_Plan confirmed & saved permanently to Google Sheet!"
   })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetReportCardWorkflow() {
+  var props = PropertiesService.getScriptProperties();
+  var accessConfig = { allowTeacherPtmView: false, allowParentView: false };
+  var pendingMarks = [];
+  var pendingMeta = {};
+  try {
+    var rawAcc = props.getProperty("EVS_RC_ACCESS_CONFIG");
+    if (rawAcc) accessConfig = JSON.parse(rawAcc);
+  } catch (eAcc) {}
+  try {
+    var rawDr = props.getProperty("EVS_RC_PENDING_DRAFT");
+    if (rawDr) {
+      var parsed = JSON.parse(rawDr);
+      if (parsed && Array.isArray(parsed.pendingMarks)) pendingMarks = parsed.pendingMarks;
+      if (parsed && parsed.pendingMeta && typeof parsed.pendingMeta === "object") pendingMeta = parsed.pendingMeta;
+    }
+  } catch (eDr) {}
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    accessConfig: accessConfig,
+    pendingMarks: pendingMarks,
+    pendingMeta: pendingMeta
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveReportCardAccess(data) {
+  var accObj = data.accessConfig ? (typeof data.accessConfig === "string" ? JSON.parse(data.accessConfig) : data.accessConfig) : null;
+  if (!accObj) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "Missing accessConfig" })).setMimeType(ContentService.MimeType.JSON);
+  }
+  PropertiesService.getScriptProperties().setProperty("EVS_RC_ACCESS_CONFIG", JSON.stringify(accObj));
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", accessConfig: accObj })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveReportCardDraft(data) {
+  var draftObj = data.draft ? (typeof data.draft === "string" ? JSON.parse(data.draft) : data.draft) : null;
+  if (!draftObj) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "Missing draft" })).setMimeType(ContentService.MimeType.JSON);
+  }
+  PropertiesService.getScriptProperties().setProperty("EVS_RC_PENDING_DRAFT", JSON.stringify(draftObj));
+  return ContentService.createTextOutput(JSON.stringify({ status: "success" })).setMimeType(ContentService.MimeType.JSON);
 }
 
 // =========================================================================

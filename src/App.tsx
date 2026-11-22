@@ -29,11 +29,18 @@ import { PWAHeaderUpdateButton, PWAUpdateBanner } from './components/PWAUpdateBa
 import { checkAndNotifyNewNotices } from './utils/notificationService';
 import {
   CURRENT_ACADEMIC_SESSION,
+  computeClassRanksMap,
   computeStudentReportCardData,
+  EXAM_MARKS_STORAGE_KEY,
   fetchExamMarksFromServer,
   fetchReportCardMetaFromServer,
+  fetchReportCardWorkflowFromServer,
   loadLocalExamMarks,
   loadLocalReportCardMeta,
+  loadLocalReportCardWorkflow,
+  REPORT_CARD_META_STORAGE_KEY,
+  REPORT_CARD_WORKFLOW_STORAGE_KEY,
+  ReportCardWorkflowSnapshot,
   subscribeReportCardUpdates,
 } from './utils/reportCardHelper';
 import { getLocalDateYMD, getLocalTimestamp } from './utils/localTime';
@@ -46,7 +53,6 @@ import {
   saveToPhoneMemory,
   setSyncedBuildSignature,
 } from './utils/phoneMemoryCache';
-import { EXAM_MARKS_STORAGE_KEY, REPORT_CARD_META_STORAGE_KEY } from './utils/reportCardHelper';
 
 // High-speed on-demand code splitting (React.lazy): Drops initial bundle size by ~85% for Parents on mobile!
 const StudentAttendanceChart = React.lazy(() => import('./components/StudentAttendanceChart'));
@@ -75,6 +81,7 @@ const ParentUpiFeeSection = React.lazy(() => import('./components/ParentUpiFeeSe
 const ReportCardManagerView = React.lazy(() => import('./components/ReportCardManagerView').then((m) => ({ default: m.ReportCardManagerView })));
 const PrintableReportCard = React.lazy(() => import('./components/PrintableReportCard').then((m) => ({ default: m.PrintableReportCard })));
 const HallPassManagerView = React.lazy(() => import('./components/HallPassManagerView').then((m) => ({ default: m.HallPassManagerView })));
+const ExamSeatingPlanView = React.lazy(() => import('./components/ExamSeatingPlanView').then((m) => ({ default: m.ExamSeatingPlanView })));
 const ParentHallPassView = React.lazy(() => import('./components/ParentHallPassView').then((m) => ({ default: m.ParentHallPassView })));
 const ParentReviewSection = React.lazy(() => import('./components/ParentReviewSection').then((m) => ({ default: m.ParentReviewSection })));
 const ManagerParentReviewsView = React.lazy(() => import('./components/ManagerParentReviewsView').then((m) => ({ default: m.ManagerParentReviewsView })));
@@ -1579,6 +1586,7 @@ export default function App() {
   });
   const [examMarksList, setExamMarksList] = useState<ExamMarkRecord[]>(() => loadLocalExamMarks());
   const [reportCardMetaMap, setReportCardMetaMap] = useState<Record<string, ReportCardRemarkRecord>>(() => loadLocalReportCardMeta());
+  const [reportCardWorkflow, setReportCardWorkflow] = useState<ReportCardWorkflowSnapshot>(() => loadLocalReportCardWorkflow());
   const [hallPassConfig, setHallPassConfig] = useState<HallPassConfig>(() => loadLocalHallPassConfig());
   const [parentReviewsList, setParentReviewsList] = useState<ParentReviewRecord[]>(() => loadLocalParentReviews());
 
@@ -1592,13 +1600,14 @@ export default function App() {
   const fetchReportCardAllData = async (forceRefresh = false) => {
     try {
       const activeUrl = getEffectiveApiUrl();
-      const [wtRes, emRes, rcRes, hpRes] = await Promise.allSettled([
+      const [wtRes, emRes, rcRes, wfRes, hpRes] = await Promise.allSettled([
         fetch(`/api/weekly-tests${forceRefresh ? '?refresh=1' : ''}`, {
           headers: { 'x-apps-script-url': activeUrl },
           cache: 'no-store',
         }).then((r) => (r.ok ? r.json() : null)),
         fetchExamMarksFromServer(forceRefresh),
         fetchReportCardMetaFromServer(forceRefresh),
+        fetchReportCardWorkflowFromServer(forceRefresh),
         fetchHallPassConfigFromServer(),
       ]);
 
@@ -1611,6 +1620,9 @@ export default function App() {
       }
       if (rcRes.status === 'fulfilled' && rcRes.value && typeof rcRes.value === 'object') {
         setReportCardMetaMap(rcRes.value);
+      }
+      if (wfRes.status === 'fulfilled' && wfRes.value && typeof wfRes.value === 'object') {
+        setReportCardWorkflow(wfRes.value);
       }
       if (hpRes.status === 'fulfilled' && hpRes.value && typeof hpRes.value === 'object') {
         setHallPassConfig(hpRes.value);
@@ -1629,6 +1641,7 @@ export default function App() {
       } catch {}
       setExamMarksList(loadLocalExamMarks());
       setReportCardMetaMap(loadLocalReportCardMeta());
+      setReportCardWorkflow(loadLocalReportCardWorkflow());
     });
     return () => {
       unsub();
@@ -1866,10 +1879,10 @@ export default function App() {
   const [teacherLoginError, setTeacherLoginError] = useState<string | null>(null);
   const [teacherLoginSubmitting, setTeacherLoginSubmitting] = useState<boolean>(false);
   const [showTeacherPassword, setShowTeacherPassword] = useState<boolean>(false);
-  const [teacherPortalTab, setTeacherPortalTab] = useState<'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior' | 'staff_attendance' | 'performance' | 'syllabus' | 'weekly_tests' | 'report_card'>(() => {
+  const [teacherPortalTab, setTeacherPortalTab] = useState<'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior' | 'staff_attendance' | 'performance' | 'syllabus' | 'weekly_tests' | 'report_card' | 'seating_plan'>(() => {
     try {
       const saved = localStorage.getItem('evs_teacher_portal_tab');
-      if (saved && ['upload', 'tracker', 'submissions', 'notices', 'behavior', 'staff_attendance', 'performance', 'syllabus', 'weekly_tests', 'report_card'].includes(saved)) {
+      if (saved && ['upload', 'tracker', 'submissions', 'notices', 'behavior', 'staff_attendance', 'performance', 'syllabus', 'weekly_tests', 'report_card', 'seating_plan'].includes(saved)) {
         return saved as any;
       }
     } catch {}
@@ -3396,7 +3409,7 @@ export default function App() {
   }, [staffAttendanceList, teacherUser, managerUser]);
 
   // Switch tabs in Teacher Portal with automatic tab-specific data refresh
-  const handleSelectTeacherTab = (tab: 'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior' | 'staff_attendance' | 'performance' | 'syllabus' | 'weekly_tests' | 'report_card') => {
+  const handleSelectTeacherTab = (tab: 'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior' | 'staff_attendance' | 'performance' | 'syllabus' | 'weekly_tests' | 'report_card' | 'seating_plan') => {
     setTeacherPortalTab(tab);
     if (tab === 'tracker') {
       fetchHomeworkTracker(false, true);
@@ -3941,6 +3954,7 @@ export default function App() {
         'evs_weekly_subject_tests_v1',
         EXAM_MARKS_STORAGE_KEY,
         REPORT_CARD_META_STORAGE_KEY,
+        REPORT_CARD_WORKFLOW_STORAGE_KEY,
         HALL_PASS_CONFIG_STORAGE_KEY,
         CACHE_KEY_TIMESTAMP,
       ]);
@@ -3986,6 +4000,9 @@ export default function App() {
       }
       if (Object.keys(reportCardMetaMap).length === 0 && hydrated[REPORT_CARD_META_STORAGE_KEY]) {
         setReportCardMetaMap(hydrated[REPORT_CARD_META_STORAGE_KEY]);
+      }
+      if (hydrated[REPORT_CARD_WORKFLOW_STORAGE_KEY]) {
+        setReportCardWorkflow((prev) => ({ ...prev, ...hydrated[REPORT_CARD_WORKFLOW_STORAGE_KEY] }));
       }
       if (hydrated[HALL_PASS_CONFIG_STORAGE_KEY]) {
         setHallPassConfig((prev) => ({ ...prev, ...hydrated[HALL_PASS_CONFIG_STORAGE_KEY] }));
@@ -8642,6 +8659,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         metaMap: reportCardMetaMap,
                         session: CURRENT_ACADEMIC_SESSION,
                       });
+                      const isParentAllowed =
+                        reportCardWorkflow.accessConfig.allowParentView &&
+                        rcPreview.meta.publishedToParent !== false;
                       return (
                         <button
                           id="parent-tab-report-card"
@@ -8663,20 +8683,28 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                   🎓 डिजिटल रिपोर्ट कार्ड व मार्कशीट ({CURRENT_ACADEMIC_SESSION})
                                 </span>
                                 <span className="px-2 py-0.5 rounded-full bg-rose-500/25 border border-rose-400/40 text-[10px] font-black text-rose-200">
-                                  🔒 केवल देखने योग्य (View-Only)
+                                  {isParentAllowed
+                                    ? '🔒 केवल देखने योग्य (View-Only)'
+                                    : '⏳ प्रबंधक अनुमति की प्रतीक्षा'}
                                 </span>
                               </div>
                               <p className="text-[11px] text-blue-100 mt-0.5">
-                                साप्ताहिक टेस्ट + तिमाही + छमाही + सालाना परीक्षा अंक, हाजिरी ({rcPreview.attendance.attendancePct}%) व टीचर रिमार्क
+                                {isParentAllowed
+                                  ? `साप्ताहिक टेस्ट + तिमाही + छमाही + सालाना परीक्षा अंक, हाजिरी (${rcPreview.attendance.attendancePct}%) व टीचर रिमार्क`
+                                  : 'जब विद्यालय प्रबंधक परिणाम लाइव करेंगे, तब आप यहाँ बच्चे की पूरी मार्कशीट देख सकेंगे।'}
                               </p>
                             </div>
                           </div>
                           <div className="flex items-center gap-2.5 self-end sm:self-center">
-                            {rcPreview.overall.hasAnyScore && (
+                            {isParentAllowed && rcPreview.overall.hasAnyScore ? (
                               <span className="px-3 py-1.5 rounded-xl bg-white/15 border border-white/20 text-xs font-black text-amber-300">
                                 {rcPreview.overall.pct}% ({rcPreview.overall.grade})
                               </span>
-                            )}
+                            ) : !isParentAllowed ? (
+                              <span className="px-3 py-1.5 rounded-xl bg-white/10 border border-white/15 text-[11px] font-black text-amber-200">
+                                🔒 लॉक (Under Review)
+                              </span>
+                            ) : null}
                             <span className="px-3.5 py-2 rounded-xl bg-amber-400 text-slate-950 text-xs font-black flex items-center gap-1.5">
                               <span>रिपोर्ट देखें</span>
                               <i className="fa-solid fa-chevron-right text-[10px]"></i>
@@ -10748,6 +10776,17 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     >
                       <PrintableReportCard
                         mode="parent_view_only"
+                        allowParentGlobalView={reportCardWorkflow.accessConfig.allowParentView}
+                        classRankInfo={
+                          computeClassRanksMap({
+                            students,
+                            weeklyTests: weeklyTestsList,
+                            examMarks: examMarksList,
+                            behaviorList,
+                            metaMap: reportCardMetaMap,
+                            session: CURRENT_ACADEMIC_SESSION,
+                          })[selectedStudent.Student_ID]
+                        }
                         data={computeStudentReportCardData({
                           student: selectedStudent,
                           weeklyTests: weeklyTestsList,
@@ -11228,8 +11267,23 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 }`}
               >
                 <i className="fa-solid fa-graduation-cap text-amber-400"></i>
-                <span>{currentLang === 'en' ? 'Report Cards (PDF)' : 'मार्कशीट व रिपोर्ट कार्ड'}</span>
-                <span className="px-1.5 py-0.5 text-[10px] bg-amber-400/20 text-amber-300 font-black rounded-md">PDF</span>
+                <span>{currentLang === 'en' ? 'Exam Marks & Report Draft' : 'परीक्षा अंक व रिपोर्ट कार्ड'}</span>
+                <span className="px-1.5 py-0.5 text-[10px] bg-amber-400/20 text-amber-300 font-black rounded-md">
+                  {reportCardWorkflow.accessConfig.allowTeacherPtmView ? 'PTM View' : 'Marks Only'}
+                </span>
+              </button>
+
+              <button
+                onClick={() => handleSelectTeacherTab('seating_plan')}
+                className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                  teacherPortalTab === 'seating_plan'
+                    ? 'bg-[#0c2340] text-amber-300 shadow-sm ring-2 ring-amber-400/50'
+                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                }`}
+              >
+                <i className="fa-solid fa-chair text-amber-400"></i>
+                <span>{currentLang === 'en' ? 'Exam Seating Plan' : 'परीक्षा सीटिंग प्लान'}</span>
+                <span className="px-1.5 py-0.5 text-[10px] bg-emerald-400/20 text-emerald-700 font-black rounded-md">Anti-Cheat</span>
               </button>
 
               {/* Universal Student Finder & QR Scanner button */}
@@ -12589,6 +12643,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   reportCardMeta={reportCardMetaMap}
                   onExamMarksUpdated={(marks) => setExamMarksList(marks)}
                   onReportCardMetaUpdated={(meta) => setReportCardMetaMap(meta)}
+                  accessConfig={reportCardWorkflow.accessConfig}
+                  pendingMarks={reportCardWorkflow.pendingMarks}
+                  pendingMeta={reportCardWorkflow.pendingMeta}
+                  onWorkflowUpdated={(snap) => setReportCardWorkflow(snap)}
                   currentUser={{
                     id: teacherUser.User_ID,
                     name: teacherUser.Name,
@@ -12596,6 +12654,26 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     assignedClass: activeTeacherAssignedClass || teacherUser.Assigned_Class || '',
                   }}
                   isManager={false}
+                />
+              </Suspense>
+            )}
+            {/* TAB 11: EXAM SEATING PLAN (TEACHER ALLOCATION -> MANAGER CONFIRMATION) */}
+            {teacherPortalTab === 'seating_plan' && (
+              <Suspense
+                fallback={
+                  <div className="bg-white rounded-3xl p-12 text-center text-slate-500 font-bold border border-slate-200">
+                    <i className="fa-solid fa-circle-notch fa-spin text-amber-500 mr-2 text-2xl"></i>
+                    <span>एग्जाम सीटिंग प्लान लोड हो रहा है...</span>
+                  </div>
+                }
+              >
+                <ExamSeatingPlanView
+                  students={students}
+                  config={hallPassConfig}
+                  getClassName={getClassName}
+                  userRole="teacher"
+                  currentUserName={teacherUser.Name}
+                  currentUserId={teacherUser.User_ID}
                 />
               </Suspense>
             )}
@@ -13028,7 +13106,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             </div>
                           </div>
                           <span className="px-2 py-0.5 rounded-lg text-xs font-black bg-indigo-900 text-amber-300 shrink-0">
-                            PDF
+                            {(reportCardWorkflow.pendingMarks.length + Object.keys(reportCardWorkflow.pendingMeta || {}).length) > 0
+                              ? `${reportCardWorkflow.pendingMarks.length + Object.keys(reportCardWorkflow.pendingMeta || {}).length} Pending`
+                              : 'PDF'}
                           </span>
                         </button>
 
@@ -15057,6 +15137,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   reportCardMeta={reportCardMetaMap}
                   onExamMarksUpdated={(marks) => setExamMarksList(marks)}
                   onReportCardMetaUpdated={(meta) => setReportCardMetaMap(meta)}
+                  accessConfig={reportCardWorkflow.accessConfig}
+                  pendingMarks={reportCardWorkflow.pendingMarks}
+                  pendingMeta={reportCardWorkflow.pendingMeta}
+                  onWorkflowUpdated={(snap) => setReportCardWorkflow(snap)}
                   currentUser={{
                     id: managerUser?.User_ID || 'MANAGER',
                     name: managerUser?.Name || 'प्रबंधक / प्रधानाचार्य',

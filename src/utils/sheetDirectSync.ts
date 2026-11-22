@@ -96,6 +96,25 @@ export async function directPostToSheet(
       const recStr = typeof payload.records === 'string' ? payload.records : JSON.stringify(payload.records || []);
       const candidate = `${targetUrl}?action=saveExamMarksBatch&records=${encodeURIComponent(recStr)}`;
       if (candidate.length < 7500) getUrl = candidate;
+    } else if (action === 'saveExamSeatingDraft') {
+      const draftStr =
+        typeof payload.draftConfig === 'string'
+          ? payload.draftConfig
+          : JSON.stringify(payload.draftConfig || {});
+      const candidate = `${targetUrl}?action=saveExamSeatingDraft&draftConfig=${encodeURIComponent(draftStr)}`;
+      if (candidate.length < 7500) getUrl = candidate;
+    } else if (action === 'saveReportCardAccess') {
+      const accStr =
+        typeof payload.accessConfig === 'string'
+          ? payload.accessConfig
+          : JSON.stringify(payload.accessConfig || {});
+      const candidate = `${targetUrl}?action=saveReportCardAccess&accessConfig=${encodeURIComponent(accStr)}`;
+      if (candidate.length < 7500) getUrl = candidate;
+    } else if (action === 'saveReportCardDraft') {
+      const drStr =
+        typeof payload.draft === 'string' ? payload.draft : JSON.stringify(payload.draft || {});
+      const candidate = `${targetUrl}?action=saveReportCardDraft&draft=${encodeURIComponent(drStr)}`;
+      if (candidate.length < 7500) getUrl = candidate;
     }
 
     if (getUrl) {

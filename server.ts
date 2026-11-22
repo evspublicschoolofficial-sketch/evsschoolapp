@@ -742,6 +742,48 @@ async function forwardToGoogleAppsScript(payload: any) {
           if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
         }
       } catch {}
+    } else if (formattedPayload.action === 'saveExamSeatingDraft') {
+      try {
+        const draftStr =
+          typeof formattedPayload.draftConfig === 'string'
+            ? formattedPayload.draftConfig
+            : JSON.stringify(formattedPayload.draftConfig || {});
+        const getUrl = `${targetUrl}?action=saveExamSeatingDraft&draftConfig=${encodeURIComponent(draftStr)}`;
+        if (getUrl.length < 7500) {
+          const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(15000) });
+          const gText = await gRes.text();
+          const gCheck = parseAppsScriptResponse(gText);
+          if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
+        }
+      } catch {}
+    } else if (formattedPayload.action === 'saveReportCardAccess') {
+      try {
+        const accStr =
+          typeof formattedPayload.accessConfig === 'string'
+            ? formattedPayload.accessConfig
+            : JSON.stringify(formattedPayload.accessConfig || {});
+        const getUrl = `${targetUrl}?action=saveReportCardAccess&accessConfig=${encodeURIComponent(accStr)}`;
+        if (getUrl.length < 7500) {
+          const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(15000) });
+          const gText = await gRes.text();
+          const gCheck = parseAppsScriptResponse(gText);
+          if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
+        }
+      } catch {}
+    } else if (formattedPayload.action === 'saveReportCardDraft') {
+      try {
+        const drStr =
+          typeof formattedPayload.draft === 'string'
+            ? formattedPayload.draft
+            : JSON.stringify(formattedPayload.draft || {});
+        const getUrl = `${targetUrl}?action=saveReportCardDraft&draft=${encodeURIComponent(drStr)}`;
+        if (getUrl.length < 7500) {
+          const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(15000) });
+          const gText = await gRes.text();
+          const gCheck = parseAppsScriptResponse(gText);
+          if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
+        }
+      } catch {}
     }
 
     return { ok: false, error: postCheck.error || `HTTP ${lastPostStatus || 500}`, response: lastPostText };
@@ -4726,6 +4768,317 @@ async function startServer() {
     }
   });
 
+  // REPORT CARD WORKFLOW: Teacher Draft -> Manager Confirm & Sheet Save + PTM/Parent Access Locks
+  const RC_WORKFLOW_CACHE_FILE = '/tmp/evs_report_card_workflow.json';
+  let reportCardWorkflowStore: {
+    accessConfig: {
+      allowTeacherPtmView: boolean;
+      allowParentView: boolean;
+      updatedBy?: string;
+      updatedAt?: string;
+    };
+    pendingMarks: any[];
+    pendingMeta: Record<string, any>;
+  } = {
+    accessConfig: {
+      allowTeacherPtmView: false,
+      allowParentView: false,
+    },
+    pendingMarks: [],
+    pendingMeta: {},
+  };
+
+  try {
+    if (fs.existsSync(RC_WORKFLOW_CACHE_FILE)) {
+      const rawWf = JSON.parse(fs.readFileSync(RC_WORKFLOW_CACHE_FILE, 'utf-8'));
+      if (rawWf && typeof rawWf === 'object') {
+        reportCardWorkflowStore = {
+          accessConfig: {
+            allowTeacherPtmView: Boolean(rawWf.accessConfig?.allowTeacherPtmView),
+            allowParentView: Boolean(rawWf.accessConfig?.allowParentView),
+            updatedBy: rawWf.accessConfig?.updatedBy,
+            updatedAt: rawWf.accessConfig?.updatedAt,
+          },
+          pendingMarks: Array.isArray(rawWf.pendingMarks) ? rawWf.pendingMarks : [],
+          pendingMeta: rawWf.pendingMeta && typeof rawWf.pendingMeta === 'object' ? rawWf.pendingMeta : {},
+        };
+      }
+    }
+  } catch {}
+
+  const saveReportCardWorkflowCache = () => {
+    try {
+      fs.writeFileSync(RC_WORKFLOW_CACHE_FILE, JSON.stringify(reportCardWorkflowStore, null, 2), 'utf-8');
+    } catch {}
+  };
+
+  const broadcastRcWorkflow = (action: string) => {
+    const msg = JSON.stringify({
+      type: 'APP_DATA_UPDATED',
+      entity: 'report_card_workflow',
+      action,
+      timestamp: Date.now(),
+    });
+    for (const client of clients) {
+      if (client.readyState === WebSocket.OPEN) client.send(msg);
+    }
+  };
+
+  app.get('/api/report-cards-workflow', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      if (req.query.refresh === '1' || !reportCardWorkflowStore.accessConfig.updatedAt) {
+        try {
+          const sRes = await fetch(`${targetUrl}?action=getReportCardWorkflow&_t=${Date.now()}`, {
+            redirect: 'follow',
+            signal: AbortSignal.timeout(7000),
+          });
+          const txt = await sRes.text();
+          if (sRes.ok && !txt.trim().startsWith('<')) {
+            const parsed: any = JSON.parse(txt);
+            if (parsed?.status === 'success') {
+              if (parsed.accessConfig && typeof parsed.accessConfig === 'object') {
+                reportCardWorkflowStore.accessConfig = {
+                  allowTeacherPtmView: Boolean(parsed.accessConfig.allowTeacherPtmView),
+                  allowParentView: Boolean(parsed.accessConfig.allowParentView),
+                  updatedBy: parsed.accessConfig.updatedBy,
+                  updatedAt: parsed.accessConfig.updatedAt,
+                };
+              }
+              if (Array.isArray(parsed.pendingMarks) && reportCardWorkflowStore.pendingMarks.length === 0) {
+                reportCardWorkflowStore.pendingMarks = parsed.pendingMarks;
+              }
+              if (
+                parsed.pendingMeta &&
+                typeof parsed.pendingMeta === 'object' &&
+                Object.keys(reportCardWorkflowStore.pendingMeta).length === 0
+              ) {
+                reportCardWorkflowStore.pendingMeta = parsed.pendingMeta;
+              }
+              saveReportCardWorkflowCache();
+            }
+          }
+        } catch {}
+      }
+      return res.json({ success: true, ...reportCardWorkflowStore });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Could not load report card workflow' });
+    }
+  });
+
+  app.post('/api/report-cards-workflow/teacher-submit', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const nowIso = getLocalTimestampIST();
+      const incomingMarks: any[] = Array.isArray(req.body?.marks) ? req.body.marks : [];
+      const incomingMeta: any = req.body?.meta && typeof req.body.meta === 'object' ? req.body.meta : null;
+      const submittedBy = String(req.body?.submittedBy || 'Teacher').trim();
+
+      const getCompKey = (m: any) =>
+        `${String(m.session || '2026-27').toLowerCase()}::${String(m.exam_type || 'Quarterly').toLowerCase()}::${String(m.student_id || '').toLowerCase()}::${String(m.subject || '').toLowerCase()}`;
+
+      const map = new Map<string, any>();
+      for (const cur of reportCardWorkflowStore.pendingMarks) {
+        if (cur?.student_id && cur?.subject) map.set(getCompKey(cur), cur);
+      }
+      for (const rec of incomingMarks) {
+        if (!rec?.student_id || !rec?.subject) continue;
+        const normalized = {
+          ...rec,
+          approval_status: 'pending_approval',
+          submitted_at: nowIso,
+          teacher_name: rec.teacher_name || submittedBy,
+        };
+        map.set(getCompKey(normalized), normalized);
+      }
+      reportCardWorkflowStore.pendingMarks = Array.from(map.values());
+
+      if (incomingMeta && incomingMeta.reportKey) {
+        reportCardWorkflowStore.pendingMeta[String(incomingMeta.reportKey)] = {
+          ...incomingMeta,
+          principalRemark: '',
+          publishedToParent: false,
+          submittedBy,
+          submittedAt: nowIso,
+          approvalStatus: 'pending_approval',
+        };
+      }
+
+      saveReportCardWorkflowCache();
+      broadcastRcWorkflow('teacher_submit');
+
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'saveReportCardDraft',
+        draft: JSON.stringify({
+          pendingMarks: reportCardWorkflowStore.pendingMarks,
+          pendingMeta: reportCardWorkflowStore.pendingMeta,
+        }),
+        appsScriptUrl: targetUrl,
+      });
+
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        ...reportCardWorkflowStore,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Error submitting draft' });
+    }
+  });
+
+  app.post('/api/report-cards-workflow/access', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const ac = req.body?.accessConfig || req.body || {};
+      reportCardWorkflowStore.accessConfig = {
+        allowTeacherPtmView: Boolean(ac.allowTeacherPtmView),
+        allowParentView: Boolean(ac.allowParentView),
+        updatedBy: String(ac.updatedBy || 'Manager'),
+        updatedAt: getLocalTimestampIST(),
+      };
+      saveReportCardWorkflowCache();
+      broadcastRcWorkflow('access_updated');
+
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'saveReportCardAccess',
+        accessConfig: JSON.stringify(reportCardWorkflowStore.accessConfig),
+        appsScriptUrl: targetUrl,
+      });
+
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        ...reportCardWorkflowStore,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Error updating permissions' });
+    }
+  });
+
+  app.post('/api/report-cards-workflow/manager-confirm', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const nowIso = getLocalTimestampIST();
+      const marks: any[] = Array.isArray(req.body?.marks) ? req.body.marks : [];
+      const metas: any[] = Array.isArray(req.body?.metas) ? req.body.metas : [];
+      const backups: any[] = Array.isArray(req.body?.backups) ? req.body.backups : [];
+      const confirmedBy = String(req.body?.confirmedBy || 'Manager');
+      const removeMarkIds = new Set<string>(Array.isArray(req.body?.removeMarkIds) ? req.body.removeMarkIds : []);
+      const removeReportKeys = new Set<string>(
+        Array.isArray(req.body?.removeReportKeys) ? req.body.removeReportKeys : []
+      );
+
+      const getCompKey = (m: any) =>
+        `${String(m.session || '2026-27').toLowerCase()}::${String(m.exam_type || 'Quarterly').toLowerCase()}::${String(m.student_id || '').toLowerCase()}::${String(m.subject || '').toLowerCase()}`;
+      const markMap = new Map<string, any>();
+      for (const cur of examMarksStore) {
+        if (cur?.student_id && cur?.subject) markMap.set(getCompKey(cur), cur);
+      }
+      for (const rec of marks) {
+        if (!rec?.student_id || !rec?.subject) continue;
+        const clean = {
+          ...rec,
+          approval_status: 'approved',
+          updated_at: nowIso,
+        };
+        markMap.set(getCompKey(clean), clean);
+        if (rec.id) removeMarkIds.add(String(rec.id));
+      }
+      examMarksStore = Array.from(markMap.values());
+      saveExamMarksCache();
+
+      for (const m of metas) {
+        if (m?.reportKey) {
+          reportCardMetaStore[m.reportKey] = {
+            ...m,
+            approvalStatus: 'approved',
+            updatedBy: confirmedBy,
+            updatedAt: nowIso,
+          };
+          removeReportKeys.add(String(m.reportKey));
+        }
+      }
+      saveReportCardMetaCache();
+
+      reportCardWorkflowStore.pendingMarks = reportCardWorkflowStore.pendingMarks.filter(
+        (m) => !removeMarkIds.has(String(m.id || ''))
+      );
+      for (const rk of removeReportKeys) {
+        delete reportCardWorkflowStore.pendingMeta[rk];
+      }
+      saveReportCardWorkflowCache();
+
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'syncReportCardsBatch',
+        backups: JSON.stringify(backups),
+        examMarks: JSON.stringify(examMarksStore),
+        appsScriptUrl: targetUrl,
+      });
+      await forwardToGoogleAppsScript({
+        action: 'saveReportCardDraft',
+        draft: JSON.stringify({
+          pendingMarks: reportCardWorkflowStore.pendingMarks,
+          pendingMeta: reportCardWorkflowStore.pendingMeta,
+        }),
+        appsScriptUrl: targetUrl,
+      });
+
+      for (const entity of ['exam_marks', 'report_card_meta', 'report_card_workflow']) {
+        const bMsg = JSON.stringify({ type: 'APP_DATA_UPDATED', entity, action: 'confirm', timestamp: Date.now() });
+        for (const client of clients) {
+          if (client.readyState === WebSocket.OPEN) client.send(bMsg);
+        }
+      }
+
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : gasResult.error,
+        allMarks: examMarksStore,
+        meta: reportCardMetaStore,
+        workflow: reportCardWorkflowStore,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Error confirming report cards' });
+    }
+  });
+
+  app.post('/api/report-cards-workflow/manager-reject', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const clearAll = Boolean(req.body?.clearAll);
+      const markIds = new Set<string>(Array.isArray(req.body?.markIds) ? req.body.markIds : []);
+      const reportKeys = new Set<string>(Array.isArray(req.body?.reportKeys) ? req.body.reportKeys : []);
+
+      if (clearAll) {
+        reportCardWorkflowStore.pendingMarks = [];
+        reportCardWorkflowStore.pendingMeta = {};
+      } else {
+        reportCardWorkflowStore.pendingMarks = reportCardWorkflowStore.pendingMarks.filter(
+          (m) => !markIds.has(String(m.id || ''))
+        );
+        for (const rk of reportKeys) {
+          delete reportCardWorkflowStore.pendingMeta[rk];
+        }
+      }
+      saveReportCardWorkflowCache();
+      broadcastRcWorkflow('manager_reject');
+
+      await forwardToGoogleAppsScript({
+        action: 'saveReportCardDraft',
+        draft: JSON.stringify({
+          pendingMarks: reportCardWorkflowStore.pendingMarks,
+          pendingMeta: reportCardWorkflowStore.pendingMeta,
+        }),
+        appsScriptUrl: targetUrl,
+      });
+
+      return res.json({ success: true, ...reportCardWorkflowStore });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Error rejecting draft' });
+    }
+  });
+
   app.get('/api/hall-pass-config', async (req, res) => {
     const force = req.query.fresh === '1' || req.query.refresh === '1';
     const targetUrl = resolveTargetAppsScriptUrl(req);
@@ -4785,9 +5138,17 @@ async function startServer() {
   });
 
   const EXAM_SEATING_CACHE_FILE = '/tmp/evs_exam_seating_plan.json';
-  let examSeatingStore: { rows: any[]; roomMeta: Record<string, any>; updatedAt: string } = {
+  let examSeatingStore: {
+    rows: any[];
+    roomMeta: Record<string, any>;
+    draftConfig: any | null;
+    approvedConfig: any | null;
+    updatedAt: string;
+  } = {
     rows: [],
     roomMeta: {},
+    draftConfig: null,
+    approvedConfig: null,
     updatedAt: '',
   };
   try {
@@ -4797,11 +5158,19 @@ async function startServer() {
         examSeatingStore = {
           rows: Array.isArray(rawSeat.rows) ? rawSeat.rows : [],
           roomMeta: rawSeat.roomMeta && typeof rawSeat.roomMeta === 'object' ? rawSeat.roomMeta : {},
+          draftConfig: rawSeat.draftConfig && typeof rawSeat.draftConfig === 'object' ? rawSeat.draftConfig : null,
+          approvedConfig: rawSeat.approvedConfig && typeof rawSeat.approvedConfig === 'object' ? rawSeat.approvedConfig : null,
           updatedAt: String(rawSeat.updatedAt || ''),
         };
       }
     }
   } catch {}
+
+  const persistExamSeatingStore = () => {
+    try {
+      fs.writeFileSync(EXAM_SEATING_CACHE_FILE, JSON.stringify(examSeatingStore, null, 2), 'utf-8');
+    } catch {}
+  };
 
   app.get('/api/exam-seating-plan', async (req, res) => {
     try {
@@ -4818,15 +5187,26 @@ async function startServer() {
             const parsed: any = JSON.parse(text);
             if (parsed?.status === 'success') {
               sheetSynced = true;
+              let changed = false;
               if (Array.isArray(parsed.rows) && parsed.rows.length > 0) {
-                examSeatingStore = {
-                  rows: parsed.rows,
-                  roomMeta: parsed.roomMeta && typeof parsed.roomMeta === 'object' ? parsed.roomMeta : examSeatingStore.roomMeta,
-                  updatedAt: getLocalTimestampIST(),
-                };
-                try {
-                  fs.writeFileSync(EXAM_SEATING_CACHE_FILE, JSON.stringify(examSeatingStore, null, 2), 'utf-8');
-                } catch {}
+                examSeatingStore.rows = parsed.rows;
+                changed = true;
+              }
+              if (parsed.roomMeta && typeof parsed.roomMeta === 'object' && Object.keys(parsed.roomMeta).length > 0) {
+                examSeatingStore.roomMeta = parsed.roomMeta;
+                changed = true;
+              }
+              if (parsed.draftConfig && typeof parsed.draftConfig === 'object' && Array.isArray(parsed.draftConfig.rooms)) {
+                examSeatingStore.draftConfig = parsed.draftConfig;
+                changed = true;
+              }
+              if (parsed.approvedConfig && typeof parsed.approvedConfig === 'object' && Array.isArray(parsed.approvedConfig.rooms)) {
+                examSeatingStore.approvedConfig = parsed.approvedConfig;
+                changed = true;
+              }
+              if (changed) {
+                examSeatingStore.updatedAt = getLocalTimestampIST();
+                persistExamSeatingStore();
               }
             }
           }
@@ -4838,23 +5218,55 @@ async function startServer() {
     }
   });
 
+  app.post('/api/exam-seating-plan/draft', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const draftConfig = req.body?.draftConfig && typeof req.body.draftConfig === 'object' ? req.body.draftConfig : null;
+      if (!draftConfig || !Array.isArray(draftConfig.rooms)) {
+        return res.status(400).json({ success: false, error: 'Invalid seating draft configuration' });
+      }
+      examSeatingStore.draftConfig = draftConfig;
+      examSeatingStore.updatedAt = getLocalTimestampIST();
+      persistExamSeatingStore();
+
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'saveExamSeatingDraft',
+        draftConfig,
+        appsScriptUrl: targetUrl,
+      });
+
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : gasResult.error,
+        ...examSeatingStore,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Could not save seating draft' });
+    }
+  });
+
   app.post('/api/exam-seating-plan', async (req, res) => {
     try {
       const targetUrl = resolveTargetAppsScriptUrl(req);
       const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
       const roomMeta = req.body?.roomMeta && typeof req.body.roomMeta === 'object' ? req.body.roomMeta : {};
+      const approvedConfig =
+        req.body?.approvedConfig && typeof req.body.approvedConfig === 'object' ? req.body.approvedConfig : null;
+
       examSeatingStore = {
         rows,
         roomMeta,
+        draftConfig: approvedConfig || examSeatingStore.draftConfig,
+        approvedConfig: approvedConfig || examSeatingStore.approvedConfig,
         updatedAt: getLocalTimestampIST(),
       };
-      try {
-        fs.writeFileSync(EXAM_SEATING_CACHE_FILE, JSON.stringify(examSeatingStore, null, 2), 'utf-8');
-      } catch {}
+      persistExamSeatingStore();
 
       const gasResult = await forwardToGoogleAppsScript({
         action: 'saveExamSeatingPlan',
         rows,
+        approvedConfig,
         appsScriptUrl: targetUrl,
       });
 

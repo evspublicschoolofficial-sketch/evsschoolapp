@@ -503,7 +503,7 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
             }`}
           >
             <i className="fa-solid fa-chair"></i>
-            <span>एग्जाम सीटिंग प्लान (6 कमरे · 3/बेंच)</span>
+            <span>एग्जाम सीटिंग प्लान (रूम-वाइज व एंटी-चीटिंग)</span>
           </button>
         </div>
         <span className="text-[11px] font-bold text-slate-500 px-2 tabular-nums">
@@ -517,6 +517,8 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
           config={config}
           getClassName={getClassName}
           onOpenSheetSetup={() => setShowSheetSetupModal(true)}
+          userRole="manager"
+          currentUserName={managerName}
         />
       ) : (
         <>

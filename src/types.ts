@@ -240,6 +240,8 @@ export interface ExamMarkRecord {
   teacher_name?: string;
   remarks?: string;
   updated_at?: string;
+  approval_status?: 'pending_approval' | 'approved';
+  submitted_at?: string;
 }
 
 export interface ReportCardRemarkRecord {
@@ -250,6 +252,16 @@ export interface ReportCardRemarkRecord {
   principalRemark: string;
   resultStatus?: 'PROMOTED' | 'PASSED' | 'NEEDS IMPROVEMENT' | 'DETAINED';
   publishedToParent?: boolean;
+  updatedBy?: string;
+  updatedAt?: string;
+  submittedBy?: string;
+  submittedAt?: string;
+  approvalStatus?: 'pending_approval' | 'approved' | 'rejected';
+}
+
+export interface ReportCardAccessConfig {
+  allowTeacherPtmView: boolean;
+  allowParentView: boolean;
   updatedBy?: string;
   updatedAt?: string;
 }
