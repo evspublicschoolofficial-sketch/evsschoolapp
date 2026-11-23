@@ -784,6 +784,27 @@ async function forwardToGoogleAppsScript(payload: any) {
           if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
         }
       } catch {}
+    } else if (formattedPayload.action === 'assignTeacherClass' || formattedPayload.action === 'updateUserClass') {
+      try {
+        const params = new URLSearchParams({
+          action: 'assignTeacherClass',
+          user_id: String(formattedPayload.user_id || formattedPayload.userId || ''),
+          assigned_class: String(formattedPayload.assigned_class ?? formattedPayload.assignedClass ?? ''),
+        });
+        if (formattedPayload.name || formattedPayload.user_name) {
+          params.set('name', String(formattedPayload.name || formattedPayload.user_name));
+        }
+        if (formattedPayload.username) {
+          params.set('username', String(formattedPayload.username));
+        }
+        const getUrl = `${targetUrl}?${params.toString()}`;
+        if (getUrl.length < 7500) {
+          const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(15000) });
+          const gText = await gRes.text();
+          const gCheck = parseAppsScriptResponse(gText);
+          if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
+        }
+      } catch {}
     }
 
     return { ok: false, error: postCheck.error || `HTTP ${lastPostStatus || 500}`, response: lastPostText };
@@ -2615,45 +2636,29 @@ async function startServer() {
     }
   });
 
+  let syncRcWorkflowHook: ((targetUrl: string, force?: boolean) => Promise<boolean>) | null = null;
+
   // Endpoints for Manager-controlled Teacher Instant QR Attendance Access (All Classes)
   app.get('/api/teacher-qr-attendance-access', async (req, res) => {
     const localAccess = getTeacherQrAttendanceAccess();
     const forceRefresh = req.query.refresh === '1' || req.query.fresh === '1';
-    if (forceRefresh || !localAccess.updatedAt) {
-      try {
-        const targetUrl = resolveTargetAppsScriptUrl(req);
-        const sRes = await fetch(`${targetUrl}?action=getReportCardWorkflow&_t=${Date.now()}`, {
-          redirect: 'follow',
-          signal: AbortSignal.timeout(7000),
-        });
-        const txt = await sRes.text();
-        if (sRes.ok && !txt.trim().startsWith('<')) {
-          const parsed: any = JSON.parse(txt);
-          if (parsed?.status === 'success' && parsed.accessConfig && typeof parsed.accessConfig === 'object') {
-            if (typeof parsed.accessConfig.allowTeacherQrAttendance === 'boolean') {
-              const synced = saveTeacherQrAttendanceAccess({
-                enabled: Boolean(parsed.accessConfig.allowTeacherQrAttendance),
-                updatedBy: String(parsed.accessConfig.updatedBy || 'Manager'),
-              });
-              reportCardWorkflowStore.accessConfig = {
-                ...reportCardWorkflowStore.accessConfig,
-                allowTeacherQrAttendance: synced.enabled,
-                updatedBy: parsed.accessConfig.updatedBy || reportCardWorkflowStore.accessConfig.updatedBy,
-                updatedAt: parsed.accessConfig.updatedAt || synced.updatedAt,
-              };
-              saveReportCardWorkflowCache();
-              return res.json({ success: true, sheetSynced: true, access: synced });
-            }
-          }
-        }
-      } catch {}
+    const targetUrl = resolveTargetAppsScriptUrl(req);
+    let sheetSynced = false;
+    if (syncRcWorkflowHook) {
+      sheetSynced = await syncRcWorkflowHook(targetUrl, forceRefresh || !localAccess.updatedAt);
     }
-    res.json({ success: true, access: localAccess });
+    const latestLocalAccess = getTeacherQrAttendanceAccess();
+    res.json({ success: true, sheetSynced, access: latestLocalAccess });
   });
 
   app.post('/api/teacher-qr-attendance-access', async (req, res) => {
     try {
       const targetUrl = resolveTargetAppsScriptUrl(req);
+      // Ensure sibling workflow permissions (allowTeacherPtmView / allowParentView) are hydrated from Sheet before saving
+      if (syncRcWorkflowHook && !reportCardWorkflowStore.accessConfig.updatedAt) {
+        await syncRcWorkflowHook(targetUrl, true);
+      }
+
       const updated = saveTeacherQrAttendanceAccess(req.body);
 
       reportCardWorkflowStore.accessConfig = {
@@ -2671,9 +2676,17 @@ async function startServer() {
         details: updated,
         timestamp: Date.now(),
       });
+      const wfBroadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'report_card_workflow',
+        action: 'access_updated',
+        details: updated,
+        timestamp: Date.now(),
+      });
       for (const client of clients) {
         if (client.readyState === WebSocket.OPEN) {
           client.send(broadcastMsg);
+          client.send(wfBroadcastMsg);
         }
       }
 
@@ -2683,7 +2696,12 @@ async function startServer() {
         appsScriptUrl: targetUrl,
       });
 
-      res.json({ success: true, sheetSynced: gasResult.ok, access: updated });
+      res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : gasResult.error,
+        access: updated,
+      });
     } catch (e: any) {
       res.status(500).json({ success: false, error: e?.message || 'Failed to update teacher QR attendance access' });
     }
@@ -4920,11 +4938,68 @@ async function startServer() {
     } catch {}
   };
 
-  const broadcastRcWorkflow = (action: string) => {
+  let lastRcWorkflowSheetSyncAt = 0;
+
+  const syncReportCardWorkflowFromSheet = async (targetUrl: string, force = false): Promise<boolean> => {
+    if (
+      !force &&
+      lastRcWorkflowSheetSyncAt > 0 &&
+      Date.now() - lastRcWorkflowSheetSyncAt < 8000 &&
+      reportCardWorkflowStore.accessConfig.updatedAt
+    ) {
+      return true;
+    }
+    try {
+      const sRes = await fetch(`${targetUrl}?action=getReportCardWorkflow&_t=${Date.now()}`, {
+        redirect: 'follow',
+        signal: AbortSignal.timeout(8000),
+      });
+      const txt = await sRes.text();
+      if (sRes.ok && txt && !txt.trim().startsWith('<')) {
+        const parsed: any = JSON.parse(txt);
+        if (parsed?.status === 'success') {
+          if (parsed.accessConfig && typeof parsed.accessConfig === 'object') {
+            const qrAllowed =
+              typeof parsed.accessConfig.allowTeacherQrAttendance === 'boolean'
+                ? Boolean(parsed.accessConfig.allowTeacherQrAttendance)
+                : Boolean(reportCardWorkflowStore.accessConfig.allowTeacherQrAttendance);
+            reportCardWorkflowStore.accessConfig = {
+              allowTeacherPtmView: Boolean(parsed.accessConfig.allowTeacherPtmView),
+              allowParentView: Boolean(parsed.accessConfig.allowParentView),
+              allowTeacherQrAttendance: qrAllowed,
+              updatedBy: parsed.accessConfig.updatedBy,
+              updatedAt: parsed.accessConfig.updatedAt,
+            };
+            if (typeof parsed.accessConfig.allowTeacherQrAttendance === 'boolean') {
+              saveTeacherQrAttendanceAccess({
+                enabled: qrAllowed,
+                updatedBy: String(parsed.accessConfig.updatedBy || 'Manager'),
+              });
+            }
+          }
+          if (Array.isArray(parsed.pendingMarks)) {
+            reportCardWorkflowStore.pendingMarks = parsed.pendingMarks;
+          }
+          if (parsed.pendingMeta && typeof parsed.pendingMeta === 'object') {
+            reportCardWorkflowStore.pendingMeta = parsed.pendingMeta;
+          }
+          lastRcWorkflowSheetSyncAt = Date.now();
+          saveReportCardWorkflowCache();
+          return true;
+        }
+      }
+    } catch {}
+    return false;
+  };
+
+  syncRcWorkflowHook = syncReportCardWorkflowFromSheet;
+
+  const broadcastRcWorkflow = (action: string, details?: any) => {
     const msg = JSON.stringify({
       type: 'APP_DATA_UPDATED',
       entity: 'report_card_workflow',
       action,
+      details,
       timestamp: Date.now(),
     });
     for (const client of clients) {
@@ -4935,51 +5010,9 @@ async function startServer() {
   app.get('/api/report-cards-workflow', async (req, res) => {
     try {
       const targetUrl = resolveTargetAppsScriptUrl(req);
-      if (req.query.refresh === '1' || !reportCardWorkflowStore.accessConfig.updatedAt) {
-        try {
-          const sRes = await fetch(`${targetUrl}?action=getReportCardWorkflow&_t=${Date.now()}`, {
-            redirect: 'follow',
-            signal: AbortSignal.timeout(7000),
-          });
-          const txt = await sRes.text();
-          if (sRes.ok && !txt.trim().startsWith('<')) {
-            const parsed: any = JSON.parse(txt);
-            if (parsed?.status === 'success') {
-              if (parsed.accessConfig && typeof parsed.accessConfig === 'object') {
-                const qrAllowed =
-                  typeof parsed.accessConfig.allowTeacherQrAttendance === 'boolean'
-                    ? parsed.accessConfig.allowTeacherQrAttendance
-                    : Boolean(reportCardWorkflowStore.accessConfig.allowTeacherQrAttendance);
-                reportCardWorkflowStore.accessConfig = {
-                  allowTeacherPtmView: Boolean(parsed.accessConfig.allowTeacherPtmView),
-                  allowParentView: Boolean(parsed.accessConfig.allowParentView),
-                  allowTeacherQrAttendance: qrAllowed,
-                  updatedBy: parsed.accessConfig.updatedBy,
-                  updatedAt: parsed.accessConfig.updatedAt,
-                };
-                if (typeof parsed.accessConfig.allowTeacherQrAttendance === 'boolean') {
-                  saveTeacherQrAttendanceAccess({
-                    enabled: qrAllowed,
-                    updatedBy: String(parsed.accessConfig.updatedBy || 'Manager'),
-                  });
-                }
-              }
-              if (Array.isArray(parsed.pendingMarks) && reportCardWorkflowStore.pendingMarks.length === 0) {
-                reportCardWorkflowStore.pendingMarks = parsed.pendingMarks;
-              }
-              if (
-                parsed.pendingMeta &&
-                typeof parsed.pendingMeta === 'object' &&
-                Object.keys(reportCardWorkflowStore.pendingMeta).length === 0
-              ) {
-                reportCardWorkflowStore.pendingMeta = parsed.pendingMeta;
-              }
-              saveReportCardWorkflowCache();
-            }
-          }
-        } catch {}
-      }
-      return res.json({ success: true, ...reportCardWorkflowStore });
+      const force = req.query.refresh === '1' || req.query.fresh === '1';
+      const sheetSynced = await syncReportCardWorkflowFromSheet(targetUrl, force);
+      return res.json({ success: true, sheetSynced, ...reportCardWorkflowStore });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err?.message || 'Could not load report card workflow' });
     }
@@ -4988,6 +5021,9 @@ async function startServer() {
   app.post('/api/report-cards-workflow/teacher-submit', async (req, res) => {
     try {
       const targetUrl = resolveTargetAppsScriptUrl(req);
+      // Sync existing pending drafts from Sheet FIRST so concurrent Teacher submissions never wipe each other
+      await syncReportCardWorkflowFromSheet(targetUrl, true);
+
       const nowIso = getLocalTimestampIST();
       const incomingMarks: any[] = Array.isArray(req.body?.marks) ? req.body.marks : [];
       const incomingMeta: any = req.body?.meta && typeof req.body.meta === 'object' ? req.body.meta : null;
@@ -5028,6 +5064,9 @@ async function startServer() {
 
       const gasResult = await forwardToGoogleAppsScript({
         action: 'saveReportCardDraft',
+        mode: 'merge',
+        marks: incomingMarks,
+        meta: incomingMeta && incomingMeta.reportKey ? { [String(incomingMeta.reportKey)]: reportCardWorkflowStore.pendingMeta[String(incomingMeta.reportKey)] } : undefined,
         draft: JSON.stringify({
           pendingMarks: reportCardWorkflowStore.pendingMarks,
           pendingMeta: reportCardWorkflowStore.pendingMeta,
@@ -5038,6 +5077,7 @@ async function startServer() {
       return res.json({
         success: true,
         sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : gasResult.error,
         ...reportCardWorkflowStore,
       });
     } catch (err: any) {
@@ -5048,26 +5088,50 @@ async function startServer() {
   app.post('/api/report-cards-workflow/access', async (req, res) => {
     try {
       const targetUrl = resolveTargetAppsScriptUrl(req);
+      if (!reportCardWorkflowStore.accessConfig.updatedAt) {
+        await syncReportCardWorkflowFromSheet(targetUrl, true);
+      }
       const ac = req.body?.accessConfig || req.body || {};
+      const nextPtmView =
+        typeof ac.allowTeacherPtmView === 'boolean'
+          ? Boolean(ac.allowTeacherPtmView)
+          : Boolean(reportCardWorkflowStore.accessConfig.allowTeacherPtmView);
+      const nextParentView =
+        typeof ac.allowParentView === 'boolean'
+          ? Boolean(ac.allowParentView)
+          : Boolean(reportCardWorkflowStore.accessConfig.allowParentView);
       const nextQrAllowed =
         typeof ac.allowTeacherQrAttendance === 'boolean'
           ? Boolean(ac.allowTeacherQrAttendance)
           : Boolean(reportCardWorkflowStore.accessConfig.allowTeacherQrAttendance);
+
       reportCardWorkflowStore.accessConfig = {
-        allowTeacherPtmView: Boolean(ac.allowTeacherPtmView),
-        allowParentView: Boolean(ac.allowParentView),
+        allowTeacherPtmView: nextPtmView,
+        allowParentView: nextParentView,
         allowTeacherQrAttendance: nextQrAllowed,
         updatedBy: String(ac.updatedBy || 'Manager'),
         updatedAt: getLocalTimestampIST(),
       };
       saveReportCardWorkflowCache();
+
+      const updatedQr = saveTeacherQrAttendanceAccess({
+        enabled: nextQrAllowed,
+        updatedBy: String(ac.updatedBy || 'Manager'),
+      });
+
+      broadcastRcWorkflow('access_updated', { enabled: nextQrAllowed });
       if (typeof ac.allowTeacherQrAttendance === 'boolean') {
-        saveTeacherQrAttendanceAccess({
-          enabled: nextQrAllowed,
-          updatedBy: String(ac.updatedBy || 'Manager'),
+        const qrMsg = JSON.stringify({
+          type: 'APP_DATA_UPDATED',
+          entity: 'teacher_qr_attendance_access',
+          action: 'update',
+          details: updatedQr,
+          timestamp: Date.now(),
         });
+        for (const client of clients) {
+          if (client.readyState === WebSocket.OPEN) client.send(qrMsg);
+        }
       }
-      broadcastRcWorkflow('access_updated');
 
       const gasResult = await forwardToGoogleAppsScript({
         action: 'saveReportCardAccess',
@@ -5078,6 +5142,7 @@ async function startServer() {
       return res.json({
         success: true,
         sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : gasResult.error,
         ...reportCardWorkflowStore,
       });
     } catch (err: any) {
@@ -5359,6 +5424,16 @@ async function startServer() {
       examSeatingStore.updatedAt = getLocalTimestampIST();
       persistExamSeatingStore();
 
+      const seatingBroadcast = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'exam_seating_plan',
+        action: 'draft_submitted',
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) client.send(seatingBroadcast);
+      }
+
       const gasResult = await forwardToGoogleAppsScript({
         action: 'saveExamSeatingDraft',
         draftConfig,
@@ -5392,6 +5467,16 @@ async function startServer() {
         updatedAt: getLocalTimestampIST(),
       };
       persistExamSeatingStore();
+
+      const seatingBroadcast = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'exam_seating_plan',
+        action: 'approved',
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) client.send(seatingBroadcast);
+      }
 
       const gasResult = await forwardToGoogleAppsScript({
         action: 'saveExamSeatingPlan',

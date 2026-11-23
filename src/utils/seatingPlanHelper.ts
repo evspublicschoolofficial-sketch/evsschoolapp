@@ -2,7 +2,7 @@ import jsPDF from 'jspdf';
 import { HallPassConfig, Student } from '../types';
 import { getAppsScriptUrl } from './busTrackingService';
 import { getExamDisplayTitle } from './hallPassHelper';
-import { dualSyncWriteToSheet } from './sheetDirectSync';
+import { directGetFromSheet, dualSyncWriteToSheet } from './sheetDirectSync';
 
 export interface RoomCustomMeta {
   roomNumber: string;
@@ -1088,46 +1088,79 @@ export interface ExamSeatingSnapshot {
   updatedAt?: string;
 }
 
-export async function fetchExamSeatingPlanSnapshot(): Promise<ExamSeatingSnapshot | null> {
+export async function fetchExamSeatingPlanSnapshot(forceRefresh = false): Promise<ExamSeatingSnapshot | null> {
+  const activeUrl = getAppsScriptUrl();
+  const buildSnapshot = (json: any): ExamSeatingSnapshot => {
+    const draftConfig = json?.draftConfig && Array.isArray(json.draftConfig.rooms) ? json.draftConfig : null;
+    const approvedConfig =
+      json?.approvedConfig && Array.isArray(json.approvedConfig.rooms) ? json.approvedConfig : null;
+    const roomMeta: Record<string, RoomCustomMeta> = { ...loadSavedRoomMeta() };
+    if (json?.roomMeta && typeof json.roomMeta === 'object') {
+      for (const [k, v] of Object.entries<any>(json.roomMeta)) {
+        if (v && typeof v === 'object') {
+          roomMeta[k] = {
+            roomNumber: String(v.roomNumber || k),
+            invigilator: String(v.invigilator || ''),
+          };
+        }
+      }
+      saveRoomMeta(roomMeta);
+    }
+    return {
+      rows: Array.isArray(json?.rows) ? json.rows : [],
+      roomMeta,
+      draftConfig,
+      approvedConfig,
+      updatedAt: json?.updatedAt,
+    };
+  };
+
+  let apiSnap: ExamSeatingSnapshot | null = null;
   try {
-    const res = await fetch(`/api/exam-seating-plan?_t=${Date.now()}`, {
-      headers: { 'x-apps-script-url': getAppsScriptUrl() },
+    const res = await fetch(`/api/exam-seating-plan${forceRefresh ? '?refresh=1&' : '?'}_t=${Date.now()}`, {
+      headers: { 'x-apps-script-url': activeUrl },
       cache: 'no-store',
       signal: AbortSignal.timeout(9000),
     });
-    if (res.ok) {
+    if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
       const json = await res.json();
-      const draftConfig = json?.draftConfig && Array.isArray(json.draftConfig.rooms) ? json.draftConfig : null;
-      const approvedConfig =
-        json?.approvedConfig && Array.isArray(json.approvedConfig.rooms) ? json.approvedConfig : null;
-      const roomMeta: Record<string, RoomCustomMeta> = { ...loadSavedRoomMeta() };
-      if (json?.roomMeta && typeof json.roomMeta === 'object') {
-        for (const [k, v] of Object.entries<any>(json.roomMeta)) {
-          if (v && typeof v === 'object') {
-            roomMeta[k] = {
-              roomNumber: String(v.roomNumber || k),
-              invigilator: String(v.invigilator || ''),
-            };
-          }
-        }
-        saveRoomMeta(roomMeta);
+      apiSnap = buildSnapshot(json);
+      if (json?.sheetSynced) {
+        return apiSnap;
       }
-      return {
-        rows: Array.isArray(json?.rows) ? json.rows : [],
-        roomMeta,
-        draftConfig,
-        approvedConfig,
-        updatedAt: json?.updatedAt,
-      };
     }
   } catch {}
-  return null;
+
+  // Direct Google Apps Script fallback (essential on Vercel / static hosting or when server cache is stale)
+  try {
+    const direct = await directGetFromSheet('getExamSeatingPlan', activeUrl);
+    if (direct.ok && direct.json) {
+      return buildSnapshot(direct.json);
+    }
+  } catch {}
+
+  return apiSnap;
 }
 
 export async function fetchExamSeatingPlanRoomMeta(): Promise<Record<string, RoomCustomMeta> | null> {
   const snap = await fetchExamSeatingPlanSnapshot();
   return snap ? snap.roomMeta : null;
 }
+
+const compactSeatingDraftPayload = (draft: SeatingPlanConfigPayload): SeatingPlanConfigPayload => ({
+  ...draft,
+  rooms: (draft.rooms || []).map((r) => {
+    const compactCounts: Record<string, number> = {};
+    for (const [cls, cnt] of Object.entries(r.classCounts || {})) {
+      const num = Number(cnt) || 0;
+      if (num > 0) compactCounts[cls] = num;
+    }
+    return {
+      ...r,
+      classCounts: compactCounts,
+    };
+  }),
+});
 
 /**
  * Teacher saves or submits Room x Class allocation draft for Manager confirmation.
@@ -1136,13 +1169,14 @@ export async function fetchExamSeatingPlanRoomMeta(): Promise<Record<string, Roo
 export async function saveTeacherSeatingDraft(
   draftConfig: SeatingPlanConfigPayload
 ): Promise<{ serverOk: boolean; sheetSynced: boolean; sheetError?: string }> {
-  saveLocalSeatingWorkflow(draftConfig);
+  const compacted = compactSeatingDraftPayload(draftConfig);
+  saveLocalSeatingWorkflow(compacted);
   const syncRes = await dualSyncWriteToSheet({
     apiPath: '/api/exam-seating-plan/draft',
-    apiBody: { draftConfig },
+    apiBody: { draftConfig: compacted },
     directPayload: {
       action: 'saveExamSeatingDraft',
-      draftConfig: JSON.stringify(draftConfig),
+      draftConfig: JSON.stringify(compacted),
     },
   });
   return {

@@ -115,6 +115,16 @@ export async function directPostToSheet(
         typeof payload.draft === 'string' ? payload.draft : JSON.stringify(payload.draft || {});
       const candidate = `${targetUrl}?action=saveReportCardDraft&draft=${encodeURIComponent(drStr)}`;
       if (candidate.length < 7500) getUrl = candidate;
+    } else if (action === 'assignTeacherClass' || action === 'updateUserClass') {
+      const params = new URLSearchParams({
+        action: 'assignTeacherClass',
+        user_id: String(payload.user_id || payload.userId || ''),
+        assigned_class: String(payload.assigned_class || payload.assignedClass || ''),
+      });
+      if (payload.name || payload.userName) params.set('name', String(payload.name || payload.userName));
+      if (payload.username) params.set('username', String(payload.username));
+      const candidate = `${targetUrl}?${params.toString()}`;
+      if (candidate.length < 7500) getUrl = candidate;
     }
 
     if (getUrl) {
@@ -131,6 +141,10 @@ export async function directPostToSheet(
     }
   } catch (err: any) {
     lastError = lastError || err?.message || 'Direct GET fallback error';
+  }
+
+  if (/argument too large|maximum size|exceeded/i.test(lastError)) {
+    lastError = 'डेटा आकार Apps Script की 9KB सीमा से अधिक है — कृपया Apps Script अपडेट करें या कम प्रविष्टियाँ एक साथ भेजें।';
   }
 
   return { ok: false, error: lastError || 'Google Sheet से कनेक्ट नहीं हो सका' };

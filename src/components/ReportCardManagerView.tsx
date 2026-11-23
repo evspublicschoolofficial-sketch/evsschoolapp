@@ -28,6 +28,7 @@ import {
   updateReportCardAccessConfigOnServer,
 } from '../utils/reportCardHelper';
 import { getLocalTimestamp } from '../utils/localTime';
+import { realtimeSync } from '../utils/realtimeSync';
 import { PrintableReportCard } from './PrintableReportCard';
 
 interface ReportCardManagerViewProps {
@@ -71,12 +72,28 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
   const pendingMetaList = useMemo(() => Object.values(pendingMeta || {}), [pendingMeta]);
   const totalPendingCount = pendingMarks.length + pendingMetaList.length;
 
+  const [hasManuallySwitchedTab, setHasManuallySwitchedTab] = useState(false);
+
   const [activeSubTab, setActiveSubTab] = useState<
     'pending_approvals' | 'report_card' | 'enter_marks' | 'merit_backup' | 'ptm_view'
   >(() => {
     if (!isManager) return 'enter_marks';
     return totalPendingCount > 0 ? 'pending_approvals' : 'report_card';
   });
+
+  // Automatically fetch latest workflow (permissions + teacher pending drafts) on mount
+  useEffect(() => {
+    fetchReportCardWorkflowFromServer(true)
+      .then((snap) => onWorkflowUpdated?.(snap))
+      .catch(() => {});
+  }, []);
+
+  // If async fetch finds pending teacher drafts for Manager who hasn't switched tabs yet, open Pending Approvals automatically
+  useEffect(() => {
+    if (isManager && !hasManuallySwitchedTab && totalPendingCount > 0 && activeSubTab === 'report_card') {
+      setActiveSubTab('pending_approvals');
+    }
+  }, [isManager, hasManuallySwitchedTab, totalPendingCount, activeSubTab]);
 
   // Strict guard: Teacher can NEVER stay on manager-only sub-tabs
   useEffect(() => {
@@ -173,26 +190,38 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
     setUpdatingAccess(true);
     setStatusBanner(null);
     try {
-      const nextConfig: ReportCardAccessConfig = {
-        ...accessConfig,
-        [field]: !accessConfig[field],
+      const nextVal = !accessConfig[field];
+      const res = await updateReportCardAccessConfigOnServer({
+        [field]: nextVal,
         updatedBy: currentUser.name || 'Manager',
-      };
-      const res = await updateReportCardAccessConfigOnServer(nextConfig);
+      });
       onWorkflowUpdated?.(res.snapshot);
+      realtimeSync.broadcastUpdate('report_card_workflow', 'access_updated', {
+        allowTeacherQrAttendance: res.snapshot.accessConfig.allowTeacherQrAttendance,
+      });
+
+      if (!res.serverOk && !res.sheetSynced) {
+        setStatusBanner({
+          type: 'error',
+          text: `⚠️ अनुमति क्लाउड/Google Sheet में सेव नहीं हो पाई: ${res.sheetError || 'इंटरनेट या Apps Script जांचें'}`,
+        });
+        return;
+      }
+
+      const syncSuffix = res.sheetSynced ? ' (क्लाउड व Google Sheet सिंक पूर्ण)' : ' (ऐप सर्वर पर सेव)';
       if (field === 'allowTeacherPtmView') {
         setStatusBanner({
-          type: 'success',
-          text: nextConfig.allowTeacherPtmView
-            ? '✅ टीचर PTM मार्कशीट व्यू अनुमति चालू कर दी गई है (टीचर केवल स्क्रीन पर View-Only देख सकेंगे, प्रिंट/डाउनलोड/स्क्रीनशॉट बंद रहेगा)।'
-            : '🔒 टीचर PTM मार्कशीट व्यू अनुमति बंद कर दी गई है। अब टीचर केवल परीक्षा के नंबर दर्ज कर सकते हैं।',
+          type: res.sheetSynced ? 'success' : 'warning',
+          text: res.snapshot.accessConfig.allowTeacherPtmView
+            ? `✅ टीचर PTM मार्कशीट व्यू अनुमति चालू कर दी गई है${syncSuffix}।`
+            : `🔒 टीचर PTM मार्कशीट व्यू अनुमति बंद कर दी गई है${syncSuffix}।`,
         });
       } else {
         setStatusBanner({
-          type: 'success',
-          text: nextConfig.allowParentView
-            ? '✅ अभिभावक/बच्चों के लिए रिपोर्ट कार्ड पोर्टल लाइव कर दिया गया है!'
-            : '🔒 अभिभावक/बच्चों के लिए रिपोर्ट कार्ड देखना अभी बंद कर दिया गया है।',
+          type: res.sheetSynced ? 'success' : 'warning',
+          text: res.snapshot.accessConfig.allowParentView
+            ? `✅ अभिभावक/बच्चों के लिए रिपोर्ट कार्ड पोर्टल लाइव कर दिया गया है${syncSuffix}!`
+            : `🔒 अभिभावक/बच्चों के लिए रिपोर्ट कार्ड देखना अभी बंद कर दिया गया है${syncSuffix}।`,
         });
       }
     } catch (e: any) {
@@ -203,19 +232,34 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
   };
 
   const [refreshingWorkflow, setRefreshingWorkflow] = useState(false);
-  const handleRefreshWorkflow = async () => {
+  const handleRefreshWorkflow = async (silent = false) => {
     setRefreshingWorkflow(true);
     try {
       const snap = await fetchReportCardWorkflowFromServer(true);
       onWorkflowUpdated?.(snap);
-      setStatusBanner({
-        type: snap.accessConfig.allowTeacherPtmView ? 'success' : 'warning',
-        text: snap.accessConfig.allowTeacherPtmView
-          ? 'अनुमति अपडेट: मैनेजर द्वारा PTM मार्कशीट व्यू अनुमति चालू है।'
-          : 'अनुमति स्थिति रीफ्रेश हो गई: अभी मैनेजर द्वारा मार्कशीट देखना बंद है।',
-      });
+      if (!silent) {
+        if (isManager) {
+          const pCount = (snap.pendingMarks?.length || 0) + Object.keys(snap.pendingMeta || {}).length;
+          setStatusBanner({
+            type: 'success',
+            text:
+              pCount > 0
+                ? `🔄 ताज़ा डेटा लोड: ${pCount} पेंडिंग टीचर ड्राफ्ट कन्फर्मेशन हेतु तैयार हैं।`
+                : '✅ ताज़ा स्थिति लोड हो गई — अभी कोई नया पेंडिंग ड्राफ्ट नहीं है।',
+          });
+        } else {
+          setStatusBanner({
+            type: snap.accessConfig.allowTeacherPtmView ? 'success' : 'warning',
+            text: snap.accessConfig.allowTeacherPtmView
+              ? 'अनुमति अपडेट: मैनेजर द्वारा PTM मार्कशीट व्यू अनुमति चालू है।'
+              : 'अनुमति स्थिति रीफ्रेश हो गई: अभी मैनेजर द्वारा मार्कशीट देखना बंद है।',
+          });
+        }
+      }
     } catch {
-      setStatusBanner({ type: 'error', text: 'अनुमति स्थिति जांचने में समस्या आई।' });
+      if (!silent) {
+        setStatusBanner({ type: 'error', text: 'अनुमति व ड्राफ्ट स्थिति जांचने में समस्या आई।' });
+      }
     } finally {
       setRefreshingWorkflow(false);
     }
@@ -312,10 +356,23 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
         submittedById: currentUser.id,
       });
       onWorkflowUpdated?.(res.snapshot);
-      setStatusBanner({
-        type: 'success',
-        text: `⏳ ${selectedReportData.student.Student_Name} का टीचर रिमार्क व परिणाम ड्राफ्ट मैनेजर कन्फर्मेशन के लिए भेज दिया गया है! मैनेजर द्वारा कन्फर्म करने के बाद ही यह Google Sheet में सेव होगा।`,
-      });
+      realtimeSync.broadcastUpdate('report_card_workflow', 'teacher_submit');
+      if (!res.serverOk && !res.sheetSynced) {
+        setStatusBanner({
+          type: 'error',
+          text: `❌ रिमार्क ड्राफ्ट मैनेजर तक नहीं पहुंच सका (${res.sheetError || 'सर्वर व Google Sheet सिंक विफल'})। कृपया इंटरनेट या Apps Script जांचकर दोबारा भेजें।`,
+        });
+      } else if (!res.sheetSynced) {
+        setStatusBanner({
+          type: 'warning',
+          text: `⚠️ रिमार्क ड्राफ्ट ऐप सर्वर पर भेजा गया है, लेकिन Google Sheet सिंक में समस्या आई: ${res.sheetError || 'Apps Script जांचें'}।`,
+        });
+      } else {
+        setStatusBanner({
+          type: 'success',
+          text: `✅ ${selectedReportData.student.Student_Name} का टीचर रिमार्क व परिणाम ड्राफ्ट क्लाउड में मैनेजर कन्फर्मेशन के लिए भेज दिया गया है!`,
+        });
+      }
     } catch (e: any) {
       setStatusBanner({ type: 'error', text: e?.message || 'ड्राफ्ट भेजने में त्रुटि हुई।' });
     } finally {
@@ -418,10 +475,23 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
           submittedById: currentUser.id,
         });
         onWorkflowUpdated?.(res.snapshot);
-        setStatusBanner({
-          type: 'success',
-          text: `⏳ ${EXAM_TERM_LABELS[examTerm]} (${effectiveSubject}) के ${recordsToSave.length} छात्रों के अंक मैनेजर कन्फर्मेशन के लिए भेज दिए गए हैं! जब मैनेजर कन्फर्म करेंगे, तभी ये Google Sheet में सेव होंगे।`,
-        });
+        realtimeSync.broadcastUpdate('report_card_workflow', 'teacher_submit');
+        if (!res.serverOk && !res.sheetSynced) {
+          setStatusBanner({
+            type: 'error',
+            text: `❌ अंक ड्राफ्ट मैनेजर तक नहीं पहुंच पाए: ${res.sheetError || 'सर्वर और Google Sheet सिंक विफल — कृपया इंटरनेट / Apps Script जांचें।'}`,
+          });
+        } else if (!res.sheetSynced) {
+          setStatusBanner({
+            type: 'warning',
+            text: `⚠️ ${recordsToSave.length} छात्रों के अंक स्थानीय सर्वर पर सेव हुए, पर Google Sheet क्लाउड सिंक नहीं हुआ: ${res.sheetError || 'Apps Script जांचें'}`,
+          });
+        } else {
+          setStatusBanner({
+            type: 'success',
+            text: `✅ ${EXAM_TERM_LABELS[examTerm]} (${effectiveSubject}) के ${recordsToSave.length} छात्रों के अंक क्लाउड में मैनेजर कन्फर्मेशन के लिए भेज दिए गए हैं!`,
+          });
+        }
       } else {
         // MANAGER: Save directly to Sheet
         const res = await saveExamMarksBatchToServer(recordsToSave);
@@ -858,7 +928,11 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
             <>
               <button
                 type="button"
-                onClick={() => setActiveSubTab('pending_approvals')}
+                onClick={() => {
+                  setHasManuallySwitchedTab(true);
+                  setActiveSubTab('pending_approvals');
+                  handleRefreshWorkflow(true);
+                }}
                 className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
                   activeSubTab === 'pending_approvals'
                     ? 'bg-amber-500 text-slate-950 shadow-xs'
@@ -878,7 +952,10 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
 
               <button
                 type="button"
-                onClick={() => setActiveSubTab('report_card')}
+                onClick={() => {
+                  setHasManuallySwitchedTab(true);
+                  setActiveSubTab('report_card');
+                }}
                 className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
                   activeSubTab === 'report_card'
                     ? 'bg-blue-950 text-white shadow-xs'
@@ -891,7 +968,10 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
 
               <button
                 type="button"
-                onClick={() => setActiveSubTab('enter_marks')}
+                onClick={() => {
+                  setHasManuallySwitchedTab(true);
+                  setActiveSubTab('enter_marks');
+                }}
                 className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
                   activeSubTab === 'enter_marks'
                     ? 'bg-indigo-900 text-white shadow-xs'
@@ -904,7 +984,10 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
 
               <button
                 type="button"
-                onClick={() => setActiveSubTab('merit_backup')}
+                onClick={() => {
+                  setHasManuallySwitchedTab(true);
+                  setActiveSubTab('merit_backup');
+                }}
                 className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
                   activeSubTab === 'merit_backup'
                     ? 'bg-emerald-800 text-white shadow-xs'
@@ -919,7 +1002,10 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
             <>
               <button
                 type="button"
-                onClick={() => setActiveSubTab('enter_marks')}
+                onClick={() => {
+                  setHasManuallySwitchedTab(true);
+                  setActiveSubTab('enter_marks');
+                }}
                 className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
                   activeSubTab === 'enter_marks'
                     ? 'bg-indigo-900 text-white shadow-xs'
@@ -932,7 +1018,11 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
 
               <button
                 type="button"
-                onClick={() => setActiveSubTab('ptm_view')}
+                onClick={() => {
+                  setHasManuallySwitchedTab(true);
+                  setActiveSubTab('ptm_view');
+                  handleRefreshWorkflow(true);
+                }}
                 className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
                   activeSubTab === 'ptm_view'
                     ? 'bg-blue-950 text-white shadow-xs'
@@ -984,32 +1074,43 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
                 जब तक आप कन्फर्म नहीं करेंगे, तब तक ये अंक Google Sheet ('Exam_Marks' / 'Report_Cards_Backup') में सेव नहीं होंगे।
               </p>
             </div>
-            {totalPendingCount > 0 && (
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  disabled={confirmingKey !== null}
-                  onClick={() => handleRejectSubset({ clearAll: true }, 'reject_all')}
-                  className="px-3 py-2 rounded-xl bg-white hover:bg-rose-50 border border-rose-300 text-rose-700 text-xs font-bold cursor-pointer disabled:opacity-50"
-                >
-                  <i className="fa-solid fa-trash-can mr-1"></i>
-                  सभी अस्वीकार करें
-                </button>
-                <button
-                  type="button"
-                  disabled={confirmingKey !== null}
-                  onClick={() => handleConfirmSubset(pendingMarks, pendingMetaList, 'confirm_all')}
-                  className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
-                >
-                  <i className={`fa-solid ${confirmingKey === 'confirm_all' ? 'fa-spinner fa-spin' : 'fa-check-double'}`}></i>
-                  <span>
-                    {confirmingKey === 'confirm_all'
-                      ? 'Sheet में सेव हो रहा है...'
-                      : `सभी कन्फर्म करें व Google Sheet में सेव करें (${totalPendingCount})`}
-                  </span>
-                </button>
-              </div>
-            )}
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={refreshingWorkflow}
+                onClick={() => handleRefreshWorkflow(false)}
+                className="px-3 py-2 rounded-xl bg-white hover:bg-slate-50 border border-amber-300 text-amber-950 text-xs font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+              >
+                <i className={`fa-solid ${refreshingWorkflow ? 'fa-spinner fa-spin' : 'fa-rotate'}`}></i>
+                <span>{refreshingWorkflow ? 'जाँच हो रही है...' : 'ताज़ा ड्राफ्ट लाएँ'}</span>
+              </button>
+              {totalPendingCount > 0 && (
+                <>
+                  <button
+                    type="button"
+                    disabled={confirmingKey !== null}
+                    onClick={() => handleRejectSubset({ clearAll: true }, 'reject_all')}
+                    className="px-3 py-2 rounded-xl bg-white hover:bg-rose-50 border border-rose-300 text-rose-700 text-xs font-bold cursor-pointer disabled:opacity-50"
+                  >
+                    <i className="fa-solid fa-trash-can mr-1"></i>
+                    सभी अस्वीकार करें
+                  </button>
+                  <button
+                    type="button"
+                    disabled={confirmingKey !== null}
+                    onClick={() => handleConfirmSubset(pendingMarks, pendingMetaList, 'confirm_all')}
+                    className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+                  >
+                    <i className={`fa-solid ${confirmingKey === 'confirm_all' ? 'fa-spinner fa-spin' : 'fa-check-double'}`}></i>
+                    <span>
+                      {confirmingKey === 'confirm_all'
+                        ? 'Sheet में सेव हो रहा है...'
+                        : `सभी कन्फर्म करें व Google Sheet में सेव करें (${totalPendingCount})`}
+                    </span>
+                  </button>
+                </>
+              )}
+            </div>
           </div>
 
           {totalPendingCount === 0 ? (

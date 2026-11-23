@@ -55,6 +55,7 @@ import {
   setSyncedBuildSignature,
 } from './utils/phoneMemoryCache';
 import { lazyWithRetry } from './utils/lazyRetry';
+import { dualSyncWriteToSheet } from './utils/sheetDirectSync';
 
 // High-speed on-demand code splitting (lazyWithRetry): Drops initial bundle size by ~85% and auto-recovers from stale deploy chunks!
 const StudentAttendanceChart = lazyWithRetry(() => import('./components/StudentAttendanceChart'));
@@ -1607,11 +1608,11 @@ export default function App() {
         fetch(`/api/weekly-tests${forceRefresh ? '?refresh=1' : ''}`, {
           headers: { 'x-apps-script-url': activeUrl },
           cache: 'no-store',
-        }).then((r) => (r.ok ? r.json() : null)),
+        }).then((r) => (r.ok && r.headers.get('content-type')?.includes('application/json') ? r.json() : null)),
         fetchExamMarksFromServer(forceRefresh),
         fetchReportCardMetaFromServer(forceRefresh),
         fetchReportCardWorkflowFromServer(forceRefresh),
-        fetchHallPassConfigFromServer(),
+        fetchHallPassConfigFromServer(forceRefresh),
       ]);
 
       if (wtRes.status === 'fulfilled' && Array.isArray(wtRes.value)) {
@@ -1626,6 +1627,13 @@ export default function App() {
       }
       if (wfRes.status === 'fulfilled' && wfRes.value && typeof wfRes.value === 'object') {
         setReportCardWorkflow(wfRes.value);
+        if (typeof wfRes.value.accessConfig?.allowTeacherQrAttendance === 'boolean') {
+          const qrAllowed = Boolean(wfRes.value.accessConfig.allowTeacherQrAttendance);
+          setTeacherQrAttendanceAllowed((prev) => (prev === qrAllowed ? prev : qrAllowed));
+          try {
+            localStorage.setItem('evs_teacher_qr_attendance_allowed', qrAllowed ? 'true' : 'false');
+          } catch {}
+        }
       }
       if (hpRes.status === 'fulfilled' && hpRes.value && typeof hpRes.value === 'object') {
         setHallPassConfig(hpRes.value);
@@ -1644,7 +1652,15 @@ export default function App() {
       } catch {}
       setExamMarksList(loadLocalExamMarks());
       setReportCardMetaMap(loadLocalReportCardMeta());
-      setReportCardWorkflow(loadLocalReportCardWorkflow());
+      const wf = loadLocalReportCardWorkflow();
+      setReportCardWorkflow(wf);
+      if (typeof wf?.accessConfig?.allowTeacherQrAttendance === 'boolean') {
+        const qrAllowed = Boolean(wf.accessConfig.allowTeacherQrAttendance);
+        setTeacherQrAttendanceAllowed((prev) => (prev === qrAllowed ? prev : qrAllowed));
+        try {
+          localStorage.setItem('evs_teacher_qr_attendance_allowed', qrAllowed ? 'true' : 'false');
+        } catch {}
+      }
     });
     return () => {
       unsub();
@@ -3106,10 +3122,13 @@ export default function App() {
         fetchHomeworkTracker(false, true),
         fetchStudentBehavior(false, true),
         fetchStudents(true),
+        fetchUsers(),
         fetchSchoolNotices(),
         fetchStaffAttendance(true),
+        syncTeacherQrAttendanceAccess(true, false),
+        fetchReportCardAllData(true),
       ]);
-      setSyncToastMessage('✅ टीचर पोर्टल (होमवर्क, ट्रैकर, आचरण, छात्र व उपस्थिति) ताज़ा हो गया!');
+      setSyncToastMessage('✅ टीचर पोर्टल (हाजिरी, अनुमतियाँ, रिपोर्ट कार्ड व छात्र डेटा) ताज़ा हो गया!');
       setTimeout(() => setSyncToastMessage(null), 3500);
     } catch (e) {
       console.warn('Teacher portal refresh note:', e);
@@ -3439,10 +3458,13 @@ export default function App() {
       fetchHomework(false, false);
     } else if (tab === 'behavior') {
       fetchStudentBehavior(false, true);
+      syncTeacherQrAttendanceAccess(true, false);
     } else if (tab === 'staff_attendance') {
       fetchStaffAttendance(true);
     } else if (tab === 'weekly_tests' || tab === 'report_card') {
       fetchReportCardAllData(true);
+    } else if (tab === 'seating_plan') {
+      fetchHallPassConfigFromServer(true).then(setHallPassConfig);
     }
   };
 
@@ -4132,13 +4154,15 @@ export default function App() {
       } else if (event.entity === 'users') {
         fetchUsers();
       } else if (event.entity === 'hall_pass_config') {
-        fetchHallPassConfigFromServer().then(setHallPassConfig);
+        fetchHallPassConfigFromServer(true).then(setHallPassConfig);
+      } else if (event.entity === 'exam_seating_plan') {
+        return;
       } else if (event.entity === 'fee_waivers') {
         syncFeeWaiversWithServer();
       } else if (event.entity === 'parent_reviews') {
         refreshParentReviews(false);
       } else if (event.entity === 'teacher_qr_attendance_access' || event.entity === 'report_card_workflow') {
-        if (Date.now() - lastQrAccessMutationAtRef.current < 3000) {
+        if (Date.now() - lastQrAccessMutationAtRef.current < 2500) {
           return;
         }
         if (event.details && typeof event.details.enabled === 'boolean') {
@@ -4147,9 +4171,21 @@ export default function App() {
           try {
             localStorage.setItem('evs_teacher_qr_attendance_allowed', nextEnabled ? 'true' : 'false');
           } catch {}
-          return;
         }
-        syncTeacherQrAttendanceAccess(false, false);
+        fetchReportCardWorkflowFromServer(true)
+          .then((wf) => {
+            if (wf) {
+              setReportCardWorkflow(wf);
+              if (typeof wf.accessConfig?.allowTeacherQrAttendance === 'boolean') {
+                const nextQr = Boolean(wf.accessConfig.allowTeacherQrAttendance);
+                setTeacherQrAttendanceAllowed((prev) => (prev === nextQr ? prev : nextQr));
+                try {
+                  localStorage.setItem('evs_teacher_qr_attendance_allowed', nextQr ? 'true' : 'false');
+                } catch {}
+              }
+            }
+          })
+          .catch(() => {});
         return;
       } else {
         syncAllData(false, false);
@@ -4160,7 +4196,7 @@ export default function App() {
     });
 
     // Fetch Manager-controlled Teacher QR Attendance permission once on initial app boot
-    syncTeacherQrAttendanceAccess(false, false);
+    syncTeacherQrAttendanceAccess(true, false);
 
     return () => {
       isMounted = false;
@@ -4170,13 +4206,41 @@ export default function App() {
     };
   }, []);
 
-  // Check Teacher QR permission once when a Teacher session opens (no repeated polling/focus reload)
+  // Sync Teacher permissions & assigned classes cleanly when Teacher Portal is active (plus quiet 45s diff-only check for cross-device Vercel changes without reloading UI)
   useEffect(() => {
     if (activeTab !== 'teacher' || !teacherUser) return;
-    const sessionKey = String(teacherUser.User_ID || teacherUser.Username || teacherUser.Name || 'teacher');
-    if (lastTeacherQrBootCheckRef.current === sessionKey) return;
-    lastTeacherQrBootCheckRef.current = sessionKey;
-    syncTeacherQrAttendanceAccess(false, false);
+    lastTeacherQrBootCheckRef.current = String(teacherUser.User_ID || teacherUser.Username || teacherUser.Name || 'teacher');
+    syncTeacherQrAttendanceAccess(true, false);
+    fetchHallPassConfigFromServer(true).then(setHallPassConfig).catch(() => {});
+
+    const timer = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      if (Date.now() - lastQrAccessMutationAtRef.current < 4000) return;
+      fetchReportCardWorkflowFromServer(true)
+        .then((wf) => {
+          if (!wf) return;
+          setReportCardWorkflow((prev) => {
+            if (
+              JSON.stringify(prev.accessConfig) === JSON.stringify(wf.accessConfig) &&
+              prev.pendingMarks.length === wf.pendingMarks.length &&
+              Object.keys(prev.pendingMeta || {}).length === Object.keys(wf.pendingMeta || {}).length
+            ) {
+              return prev;
+            }
+            return wf;
+          });
+          if (typeof wf.accessConfig?.allowTeacherQrAttendance === 'boolean') {
+            const nextQr = Boolean(wf.accessConfig.allowTeacherQrAttendance);
+            setTeacherQrAttendanceAllowed((prev) => (prev === nextQr ? prev : nextQr));
+            try {
+              localStorage.setItem('evs_teacher_qr_attendance_allowed', nextQr ? 'true' : 'false');
+            } catch {}
+          }
+        })
+        .catch(() => {});
+    }, 45000);
+
+    return () => window.clearInterval(timer);
   }, [activeTab, teacherUser]);
 
   // Auto-close Teacher's QR Attendance modal immediately if Manager disables permission live
@@ -5868,12 +5932,13 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     ]);
   };
 
-  // Sync Teacher QR Attendance permission reliably without redundant state/reload churn
+  // Sync Teacher QR Attendance & workflow permissions reliably across AI Studio & Vercel
   const syncTeacherQrAttendanceAccess = async (forceRefresh = false, showToast = false) => {
     if (showToast) setTeacherQrStatusChecking(true);
     try {
       const activeUrl = getEffectiveApiUrl();
       let resolvedEnabled: boolean | null = null;
+      let serverSheetSynced = false;
 
       try {
         const r = await fetch(`/api/teacher-qr-attendance-access${forceRefresh ? '?refresh=1&' : '?'}_t=${Date.now()}`, {
@@ -5882,17 +5947,20 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         });
         if (r.ok && r.headers.get('content-type')?.includes('application/json')) {
           const data = await r.json();
-          if (data?.access && typeof data.access.enabled === 'boolean' && (data.access.updatedAt || data.sheetSynced)) {
+          serverSheetSynced = Boolean(data?.sheetSynced);
+          if (data?.access && typeof data.access.enabled === 'boolean' && (serverSheetSynced || (!forceRefresh && data.access.updatedAt))) {
             resolvedEnabled = Boolean(data.access.enabled);
           }
         }
       } catch {}
 
-      if (resolvedEnabled === null || forceRefresh) {
+      // On Vercel (where /api/* returns HTML) OR whenever server didn't confirm Sheet sync, read directly from Google Apps Script workflow
+      if (resolvedEnabled === null || !serverSheetSynced || forceRefresh) {
         try {
-          const wf = await fetchReportCardWorkflowFromServer(forceRefresh);
-          if (wf?.accessConfig && typeof wf.accessConfig.allowTeacherQrAttendance === 'boolean') {
-            if (resolvedEnabled === null || wf.accessConfig.updatedAt) {
+          const wf = await fetchReportCardWorkflowFromServer(forceRefresh || !serverSheetSynced);
+          if (wf) {
+            setReportCardWorkflow(wf);
+            if (wf.accessConfig && typeof wf.accessConfig.allowTeacherQrAttendance === 'boolean') {
               resolvedEnabled = Boolean(wf.accessConfig.allowTeacherQrAttendance);
             }
           }
@@ -5902,6 +5970,17 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       if (resolvedEnabled !== null) {
         const finalVal = resolvedEnabled;
         setTeacherQrAttendanceAllowed((prev) => (prev === finalVal ? prev : finalVal));
+        setReportCardWorkflow((prev) =>
+          prev.accessConfig.allowTeacherQrAttendance === finalVal
+            ? prev
+            : {
+                ...prev,
+                accessConfig: {
+                  ...prev.accessConfig,
+                  allowTeacherQrAttendance: finalVal,
+                },
+              }
+        );
         try {
           localStorage.setItem('evs_teacher_qr_attendance_allowed', finalVal ? 'true' : 'false');
         } catch {}
@@ -5929,6 +6008,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     if (!managerUser) return;
     const targetEnabled = typeof nextVal === 'boolean' ? nextVal : !teacherQrAttendanceAllowed;
     const activeUrl = getEffectiveApiUrl();
+    const managerName = managerUser.Name || 'Manager';
     lastQrAccessMutationAtRef.current = Date.now();
     setTeacherQrAttendanceToggleBusy(true);
     setTeacherQrAttendanceAllowed(targetEnabled);
@@ -5936,55 +6016,50 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       localStorage.setItem('evs_teacher_qr_attendance_allowed', targetEnabled ? 'true' : 'false');
     } catch {}
     try {
-      const nextAccessConfig = {
-        ...reportCardWorkflow.accessConfig,
+      // Save partial patch via workflow helper so latest allowTeacherPtmView & allowParentView are preserved from Sheet
+      const wfRes = await updateReportCardAccessConfigOnServer({
         allowTeacherQrAttendance: targetEnabled,
-        updatedBy: managerUser.Name || 'Manager',
-      };
-      let sheetSynced = false;
-      try {
-        const r = await fetch('/api/teacher-qr-attendance-access', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-apps-script-url': activeUrl,
-          },
-          body: JSON.stringify({
-            enabled: targetEnabled,
-            updatedBy: managerUser.Name || 'Manager',
-            appsScriptUrl: activeUrl,
-          }),
-        });
-        if (r.ok && r.headers.get('content-type')?.includes('application/json')) {
-          const json = await r.json();
-          sheetSynced = Boolean(json?.sheetSynced);
-        }
-      } catch {}
+        updatedBy: managerName,
+      });
+      if (wfRes?.snapshot) {
+        setReportCardWorkflow(wfRes.snapshot);
+      }
 
-      if (!sheetSynced) {
-        const wfRes = await updateReportCardAccessConfigOnServer(nextAccessConfig);
-        if (wfRes?.snapshot) {
-          setReportCardWorkflow(wfRes.snapshot);
-        }
-        sheetSynced = Boolean(wfRes?.sheetSynced);
-      } else {
-        setReportCardWorkflow((prev) => ({
-          ...prev,
-          accessConfig: {
-            ...prev.accessConfig,
-            allowTeacherQrAttendance: targetEnabled,
-            updatedBy: managerUser.Name || 'Manager',
-          },
-        }));
+      let sheetSynced = Boolean(wfRes?.sheetSynced);
+      if (!wfRes?.serverOk || !sheetSynced) {
+        try {
+          const r = await fetch('/api/teacher-qr-attendance-access', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-apps-script-url': activeUrl,
+            },
+            body: JSON.stringify({
+              enabled: targetEnabled,
+              updatedBy: managerName,
+              appsScriptUrl: activeUrl,
+            }),
+          });
+          if (r.ok && r.headers.get('content-type')?.includes('application/json')) {
+            const json = await r.json();
+            if (json?.sheetSynced) sheetSynced = true;
+          }
+        } catch {}
       }
 
       realtimeSync.broadcastUpdate('teacher_qr_attendance_access', 'update', { enabled: targetEnabled });
-      setSyncToastMessage(
-        targetEnabled
-          ? `✅ टीचर्स के लिए तुरंत QR हाजिरी चालू हो गया${sheetSynced ? ' (क्लाउड सिंक पूर्ण)' : ''}!`
-          : `🔒 टीचर्स के लिए तुरंत QR हाजिरी बंद कर दिया गया${sheetSynced ? ' (क्लाउड सिंक पूर्ण)' : ''}!`
-      );
-      setTimeout(() => setSyncToastMessage(null), 4000);
+      realtimeSync.broadcastUpdate('report_card_workflow', 'access_updated', { enabled: targetEnabled });
+
+      if (!sheetSynced && !wfRes?.serverOk) {
+        setSyncToastMessage(`⚠️ अनुमति फोन में बदली गई, पर Google Sheet तक सेव नहीं हो सकी${wfRes?.sheetError ? `: ${wfRes.sheetError}` : '। कृपया Apps Script Sync जांचें।'}`);
+      } else {
+        setSyncToastMessage(
+          targetEnabled
+            ? `✅ टीचर्स के लिए तुरंत QR हाजिरी चालू हो गया${sheetSynced ? ' (Google Sheet क्लाउड सिंक पूर्ण)' : ''}!`
+            : `🔒 टीचर्स के लिए तुरंत QR हाजिरी बंद कर दिया गया${sheetSynced ? ' (Google Sheet क्लाउड सिंक पूर्ण)' : ''}!`
+        );
+      }
+      setTimeout(() => setSyncToastMessage(null), 4500);
     } catch {
       setSyncToastMessage('⚠️ अनुमति सेव करने में समस्या आई, कृपया पुनः प्रयास करें।');
       setTimeout(() => setSyncToastMessage(null), 3500);
@@ -6000,6 +6075,13 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       ? Array.from(new Set(newClass.map((s) => String(s || '').trim()).filter(Boolean)))
       : parseAssignedClasses(newClass);
     const cleanClass = classesArray.join(', ');
+    const matchedUser = usersList.find(
+      (u) =>
+        (u.User_ID && u.User_ID.toLowerCase() === cleanId.toLowerCase()) ||
+        (u.Username && u.Username.toLowerCase() === cleanId.toLowerCase()) ||
+        (userName && u.Name && u.Name.toLowerCase() === userName.toLowerCase())
+    );
+    const resolvedUsername = matchedUser?.Username || (!matchedUser?.User_ID ? cleanId : undefined);
 
     // 1. Update React state for usersList
     setUsersList((prev) => {
@@ -6023,6 +6105,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       const assignments = saved ? JSON.parse(saved) : {};
       assignments[cleanId] = cleanClass;
       assignments[cleanId.toLowerCase()] = cleanClass;
+      if (resolvedUsername) {
+        assignments[resolvedUsername] = cleanClass;
+        assignments[resolvedUsername.toLowerCase()] = cleanClass;
+      }
       if (userName) {
         assignments[userName] = cleanClass;
         assignments[userName.toLowerCase()] = cleanClass;
@@ -6054,21 +6140,26 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       return prev;
     });
 
-    // 4. Send to backend server
-    try {
-      await fetch('/api/assign-teacher-class', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: cleanId,
-          assignedClass: cleanClass,
-          userName: userName,
-          appsScriptUrl: getEffectiveApiUrl(),
-        }),
-      });
-    } catch (err) {
-      console.warn('Backend server assignment error:', err);
-    }
+    // 4. Dual-sync to backend server AND directly to Google Apps Script (so Vercel cross-device sync also succeeds!)
+    const activeUrl = getEffectiveApiUrl();
+    const syncRes = await dualSyncWriteToSheet({
+      apiPath: '/api/assign-teacher-class',
+      apiBody: {
+        userId: cleanId,
+        assignedClass: cleanClass,
+        userName: userName,
+        username: resolvedUsername,
+        appsScriptUrl: activeUrl,
+      },
+      directPayload: {
+        action: 'assignTeacherClass',
+        user_id: cleanId,
+        assigned_class: cleanClass,
+        name: userName || '',
+        username: resolvedUsername || '',
+      },
+      overrideUrl: activeUrl,
+    });
 
     // 5. Broadcast real-time update across all connected tabs and devices
     realtimeSync.broadcastUpdate('users', 'assignTeacherClass', {
@@ -6077,21 +6168,6 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       userName: userName,
     });
 
-    // 6. Forward to Google Apps Script
-    try {
-      fetch('/api/forward-apps-script', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'assignTeacherClass',
-          user_id: cleanId,
-          assigned_class: cleanClass,
-          name: userName,
-          appsScriptUrl: getEffectiveApiUrl(),
-        }),
-      }).catch(() => {});
-    } catch {}
-
     const classCount = classesArray.length;
     let clsTitle = 'हटा दी गई';
     if (classCount === 1) {
@@ -6099,7 +6175,11 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     } else if (classCount > 1) {
       clsTitle = `${classCount} कक्षाएं (${classesArray.map((c) => `Class ${getClassName(c)}`).join(', ')})`;
     }
-    setSyncToastMessage(`🎉 ${userName || 'अध्यापक'} को ${clsTitle} सफलतापूर्वक असाइन कर दी गई!`);
+    if (syncRes.sheetSynced || syncRes.serverOk) {
+      setSyncToastMessage(`🎉 ${userName || 'अध्यापक'} को ${clsTitle} सफलतापूर्वक असाइन कर दी गई${syncRes.sheetSynced ? ' (Google Sheet सेव पूर्ण)' : ''}!`);
+    } else {
+      setSyncToastMessage(`⚠️ कक्षा स्थानीय रूप से बदली गई, पर Google Sheet में सेव नहीं हो सकी: ${syncRes.sheetError || 'कनेक्शन जांचें'}`);
+    }
     setTimeout(() => setSyncToastMessage(null), 4000);
   };
 
@@ -13567,6 +13647,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         <button
                           type="button"
                           onClick={() => {
+                            syncTeacherQrAttendanceAccess(true, false);
                             setManagerTab('attendance');
                             setIsManagerMenuOpen(false);
                           }}

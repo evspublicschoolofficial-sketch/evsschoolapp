@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { HallPassConfig, Student } from '../types';
 import { getLocalTimestamp } from '../utils/localTime';
+import { realtimeSync } from '../utils/realtimeSync';
 import {
   buildAutoBalancedRoomConfigs,
   clearRoomAllocations,
@@ -112,7 +113,7 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
   const loadFromServer = async (showFeedback = false) => {
     setRefreshingSnapshot(true);
     try {
-      const snap = await fetchExamSeatingPlanSnapshot();
+      const snap = await fetchExamSeatingPlanSnapshot(true);
       setHasLoadedServerOnce(true);
       if (snap) {
         const chosen = snap.draftConfig || snap.approvedConfig;
@@ -140,6 +141,12 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
 
   useEffect(() => {
     loadFromServer(false);
+    const unsub = realtimeSync.subscribe((ev) => {
+      if (ev.entity === 'exam_seating_plan') {
+        loadFromServer(false);
+      }
+    });
+    return () => unsub();
   }, []);
 
   const seatingPlan = useMemo(
@@ -331,19 +338,29 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
       const nextStatus: SeatingPlanApprovalStatus = asDraftOnly ? 'draft' : 'pending_approval';
       const payload = buildCurrentPayload(nextStatus);
       const res = await saveTeacherSeatingDraft(payload);
+      if (!res.serverOk && !res.sheetSynced) {
+        setErrorMsg(
+          `ड्राफ्ट मैनेजर तक नहीं पहुँच सका (${res.sheetError || 'सर्वर व Google Sheet सिंक विफल'})। कृपया इंटरनेट और Apps Script URL जांचकर पुनः प्रयास करें।`
+        );
+        return;
+      }
+
       setWorkflowStatus(nextStatus);
       setSubmittedBy(payload.submittedBy || '');
       setSubmittedAt(payload.submittedAt || '');
+      realtimeSync.broadcastUpdate('exam_seating_plan', asDraftOnly ? 'draft_saved' : 'pending_approval');
 
       if (asDraftOnly) {
         setNotice(
-          res.serverOk || res.sheetSynced
-            ? '✓ ड्राफ्ट सुरक्षित सेव हो गया है।'
-            : '✓ ड्राफ्ट इस डिवाइस में सेव हो गया है।'
+          res.sheetSynced
+            ? '✓ ड्राफ्ट क्लाउड व Google Sheet में सुरक्षित सेव हो गया है।'
+            : '⚠️ ड्राफ्ट ऐप सर्वर पर सेव हुआ है (Google Sheet सिंक लंबित है)।'
         );
       } else {
         setNotice(
-          `✅ सीटिंग प्लान (${seatingPlan.allocatedStudentsCount} छात्र · ${seatingPlan.rooms.length} कमरे) मैनेजर की पुष्टि (Confirmation) के लिए भेज दिया गया है! मैनेजर कन्फर्म करते ही यह Google Sheet में सेव हो जाएगा।`
+          res.sheetSynced
+            ? `✅ सीटिंग प्लान (${seatingPlan.allocatedStudentsCount} छात्र · ${seatingPlan.rooms.length} कमरे) मैनेजर की पुष्टि के लिए क्लाउड में भेज दिया गया है! मैनेजर कन्फर्म करते ही यह Google Sheet में सेव हो जाएगा।`
+            : `⚠️ सीटिंग प्लान ऐप सर्वर पर भेजा गया है, लेकिन Google Sheet सिंक में समस्या आई: ${res.sheetError || 'Apps Script जांचें'}`
         );
       }
     } catch {
@@ -385,6 +402,7 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
       setWorkflowStatus('approved');
       setApprovedBy(approvedPayload.approvedBy || 'Manager');
       setApprovedAt(approvedPayload.approvedAt || getLocalTimestamp());
+      realtimeSync.broadcastUpdate('exam_seating_plan', 'approved');
 
       if (res.sheetSynced) {
         setNotice(
@@ -411,6 +429,7 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
       const payload = buildCurrentPayload('draft');
       await saveTeacherSeatingDraft(payload);
       setWorkflowStatus('draft');
+      realtimeSync.broadcastUpdate('exam_seating_plan', 'returned_to_draft');
       setNotice('↩️ प्लान ड्राफ्ट में वापस कर दिया गया है — टीचर या आप इसमें बदलाव कर सकते हैं।');
     } finally {
       setSubmittingDraft(false);

@@ -320,6 +320,9 @@ export const fetchReportCardWorkflowFromServer = async (
 ): Promise<ReportCardWorkflowSnapshot> => {
   const activeUrl = getAppsScriptUrl();
   const local = loadLocalReportCardWorkflow();
+  let apiSnap: ReportCardWorkflowSnapshot | null = null;
+  let apiSheetSynced = false;
+
   try {
     const res = await fetch(`/api/report-cards-workflow${forceRefresh ? '?refresh=1&' : '?'}_t=${Date.now()}`, {
       headers: { 'x-apps-script-url': activeUrl },
@@ -328,7 +331,8 @@ export const fetchReportCardWorkflowFromServer = async (
     if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
       const data = await res.json();
       if (data && typeof data === 'object' && data.accessConfig) {
-        const snap: ReportCardWorkflowSnapshot = {
+        apiSheetSynced = Boolean(data.sheetSynced);
+        apiSnap = {
           accessConfig: {
             allowTeacherPtmView: Boolean(data.accessConfig.allowTeacherPtmView),
             allowParentView: Boolean(data.accessConfig.allowParentView),
@@ -339,8 +343,10 @@ export const fetchReportCardWorkflowFromServer = async (
           pendingMarks: Array.isArray(data.pendingMarks) ? data.pendingMarks : [],
           pendingMeta: data.pendingMeta && typeof data.pendingMeta === 'object' ? data.pendingMeta : {},
         };
-        saveLocalReportCardWorkflow(snap);
-        return snap;
+        if (apiSheetSynced || (!forceRefresh && apiSnap.accessConfig.updatedAt)) {
+          saveLocalReportCardWorkflow(apiSnap);
+          return apiSnap;
+        }
       }
     }
   } catch {}
@@ -356,105 +362,178 @@ export const fetchReportCardWorkflowFromServer = async (
           updatedBy: direct.json.accessConfig.updatedBy,
           updatedAt: direct.json.accessConfig.updatedAt,
         },
-        pendingMarks: Array.isArray(direct.json.pendingMarks) ? direct.json.pendingMarks : local.pendingMarks,
+        pendingMarks: Array.isArray(direct.json.pendingMarks) ? direct.json.pendingMarks : (apiSnap?.pendingMarks || local.pendingMarks),
         pendingMeta:
           direct.json.pendingMeta && typeof direct.json.pendingMeta === 'object'
             ? direct.json.pendingMeta
-            : local.pendingMeta,
+            : (apiSnap?.pendingMeta || local.pendingMeta),
       };
       saveLocalReportCardWorkflow(snap);
       return snap;
     }
   } catch {}
 
+  if (apiSnap) {
+    saveLocalReportCardWorkflow(apiSnap);
+    return apiSnap;
+  }
+
   return local;
+};
+
+const compactMarkForDraft = (m: ExamMarkRecord): Record<string, any> => {
+  const out: Record<string, any> = {
+    id: m.id,
+    session: m.session || CURRENT_ACADEMIC_SESSION,
+    exam_type: m.exam_type,
+    student_id: m.student_id,
+    student_name: m.student_name,
+    class_name: m.class_name,
+    subject: m.subject,
+    max_marks: m.max_marks,
+    marks_obtained: m.marks_obtained,
+    attendance_status: m.attendance_status,
+    teacher_name: m.teacher_name,
+    approval_status: 'pending_approval',
+  };
+  if (m.teacher_id) out.teacher_id = m.teacher_id;
+  if (m.remarks) out.remarks = m.remarks;
+  if (m.submitted_at) out.submitted_at = m.submitted_at;
+  return out;
 };
 
 /**
  * TEACHER ONLY: Saves marks & teacher remark draft as Pending Manager Confirmation.
- * Does NOT write permanently to Google Sheet tabs ("Exam_Marks" / "Report_Cards_Backup").
+ * Always fetches latest server/Sheet drafts first so multiple teachers never overwrite each other.
  */
 export const submitTeacherReportCardDraftToServer = async (params: {
   marks?: ExamMarkRecord[];
   meta?: ReportCardRemarkRecord;
   submittedBy: string;
   submittedById?: string;
-}): Promise<{ snapshot: ReportCardWorkflowSnapshot; serverOk: boolean; sheetSynced: boolean }> => {
-  const local = loadLocalReportCardWorkflow();
+}): Promise<{ snapshot: ReportCardWorkflowSnapshot; serverOk: boolean; sheetSynced: boolean; sheetError?: string }> => {
+  let baseSnap = loadLocalReportCardWorkflow();
+  try {
+    baseSnap = await fetchReportCardWorkflowFromServer(true);
+  } catch {}
+
   const compKey = (m: ExamMarkRecord) =>
     `${String(m.session || CURRENT_ACADEMIC_SESSION).toLowerCase()}::${String(m.exam_type || 'Quarterly').toLowerCase()}::${String(m.student_id || '').toLowerCase()}::${normalizeSubjectKey(m.subject) || String(m.subject || '').toLowerCase()}`;
 
   const markMap = new Map<string, ExamMarkRecord>();
-  local.pendingMarks.forEach((m) => markMap.set(compKey(m), m));
+  (baseSnap.pendingMarks || []).forEach((m) => markMap.set(compKey(m), m));
+  const nowTs = getLocalTimestamp();
   const incomingMarks = (params.marks || []).map((m) => ({
     ...m,
     approval_status: 'pending_approval' as const,
-    submitted_at: getLocalTimestamp(),
+    submitted_at: m.submitted_at || nowTs,
   }));
   incomingMarks.forEach((m) => markMap.set(compKey(m), m));
 
-  const nextMetaMap = { ...local.pendingMeta };
-  if (params.meta) {
-    nextMetaMap[params.meta.reportKey] = {
-      ...params.meta,
-      principalRemark: '',
-      publishedToParent: false,
-      submittedBy: params.submittedBy,
-      submittedAt: getLocalTimestamp(),
-      approvalStatus: 'pending_approval',
-    };
+  const nextMetaMap = { ...(baseSnap.pendingMeta || {}) };
+  const submittedMeta = params.meta
+    ? {
+        ...params.meta,
+        principalRemark: '',
+        publishedToParent: false,
+        submittedBy: params.submittedBy,
+        submittedAt: nowTs,
+        approvalStatus: 'pending_approval' as const,
+      }
+    : undefined;
+  if (submittedMeta) {
+    nextMetaMap[submittedMeta.reportKey] = submittedMeta;
   }
 
   const nextSnap: ReportCardWorkflowSnapshot = {
-    accessConfig: local.accessConfig,
+    accessConfig: baseSnap.accessConfig,
     pendingMarks: Array.from(markMap.values()),
     pendingMeta: nextMetaMap,
   };
   saveLocalReportCardWorkflow(nextSnap);
 
+  const compactDraft = {
+    pendingMarks: nextSnap.pendingMarks.map(compactMarkForDraft),
+    pendingMeta: nextSnap.pendingMeta,
+  };
+
   const res = await dualSyncWriteToSheet({
     apiPath: '/api/report-cards-workflow/teacher-submit',
     apiBody: {
       marks: incomingMarks,
-      meta: params.meta ? nextMetaMap[params.meta.reportKey] : undefined,
+      meta: submittedMeta,
       submittedBy: params.submittedBy,
       submittedById: params.submittedById,
     },
     directPayload: {
       action: 'saveReportCardDraft',
-      draft: JSON.stringify({
-        pendingMarks: nextSnap.pendingMarks,
-        pendingMeta: nextSnap.pendingMeta,
-      }),
+      mode: 'merge',
+      marks: incomingMarks.map(compactMarkForDraft),
+      meta: submittedMeta || null,
+      draft: JSON.stringify(compactDraft),
     },
   });
 
   if (res.data?.accessConfig) {
     const serverSnap: ReportCardWorkflowSnapshot = {
-      accessConfig: res.data.accessConfig,
+      accessConfig: {
+        allowTeacherPtmView: Boolean(res.data.accessConfig.allowTeacherPtmView),
+        allowParentView: Boolean(res.data.accessConfig.allowParentView),
+        allowTeacherQrAttendance: Boolean(res.data.accessConfig.allowTeacherQrAttendance),
+        updatedBy: res.data.accessConfig.updatedBy,
+        updatedAt: res.data.accessConfig.updatedAt,
+      },
       pendingMarks: Array.isArray(res.data.pendingMarks) ? res.data.pendingMarks : nextSnap.pendingMarks,
       pendingMeta: res.data.pendingMeta || nextSnap.pendingMeta,
     };
     saveLocalReportCardWorkflow(serverSnap);
-    return { snapshot: serverSnap, serverOk: res.serverOk, sheetSynced: res.sheetSynced };
+    return {
+      snapshot: serverSnap,
+      serverOk: res.serverOk,
+      sheetSynced: res.sheetSynced,
+      sheetError: res.sheetError,
+    };
   }
 
-  return { snapshot: nextSnap, serverOk: res.serverOk, sheetSynced: res.sheetSynced };
+  return {
+    snapshot: nextSnap,
+    serverOk: res.serverOk,
+    sheetSynced: res.sheetSynced,
+    sheetError: res.sheetError,
+  };
 };
 
 /**
- * MANAGER ONLY: Toggle Teacher PTM View-Only permission & Global Parent View permission.
+ * MANAGER ONLY: Toggle Teacher PTM View-Only, Global Parent View, or Teacher QR Attendance permission.
+ * Merges with latest remote accessConfig so toggling one permission never resets another.
  */
 export const updateReportCardAccessConfigOnServer = async (
-  accessConfig: ReportCardAccessConfig
-): Promise<{ snapshot: ReportCardWorkflowSnapshot; sheetSynced: boolean }> => {
-  const local = loadLocalReportCardWorkflow();
+  accessPatch: Partial<ReportCardAccessConfig>
+): Promise<{ snapshot: ReportCardWorkflowSnapshot; serverOk: boolean; sheetSynced: boolean; sheetError?: string }> => {
+  let latestSnap = loadLocalReportCardWorkflow();
+  try {
+    latestSnap = await fetchReportCardWorkflowFromServer(true);
+  } catch {}
+
   const stamped: ReportCardAccessConfig = {
-    ...accessConfig,
+    allowTeacherPtmView:
+      typeof accessPatch.allowTeacherPtmView === 'boolean'
+        ? accessPatch.allowTeacherPtmView
+        : Boolean(latestSnap.accessConfig?.allowTeacherPtmView),
+    allowParentView:
+      typeof accessPatch.allowParentView === 'boolean'
+        ? accessPatch.allowParentView
+        : Boolean(latestSnap.accessConfig?.allowParentView),
+    allowTeacherQrAttendance:
+      typeof accessPatch.allowTeacherQrAttendance === 'boolean'
+        ? accessPatch.allowTeacherQrAttendance
+        : Boolean(latestSnap.accessConfig?.allowTeacherQrAttendance),
+    updatedBy: accessPatch.updatedBy || latestSnap.accessConfig?.updatedBy || 'Manager',
     updatedAt: getLocalTimestamp(),
   };
+
   const nextSnap: ReportCardWorkflowSnapshot = {
-    ...local,
+    ...latestSnap,
     accessConfig: stamped,
   };
   saveLocalReportCardWorkflow(nextSnap);
@@ -470,15 +549,31 @@ export const updateReportCardAccessConfigOnServer = async (
 
   if (res.data?.accessConfig) {
     const serverSnap: ReportCardWorkflowSnapshot = {
-      accessConfig: res.data.accessConfig,
+      accessConfig: {
+        allowTeacherPtmView: Boolean(res.data.accessConfig.allowTeacherPtmView),
+        allowParentView: Boolean(res.data.accessConfig.allowParentView),
+        allowTeacherQrAttendance: Boolean(res.data.accessConfig.allowTeacherQrAttendance),
+        updatedBy: res.data.accessConfig.updatedBy,
+        updatedAt: res.data.accessConfig.updatedAt,
+      },
       pendingMarks: Array.isArray(res.data.pendingMarks) ? res.data.pendingMarks : nextSnap.pendingMarks,
       pendingMeta: res.data.pendingMeta || nextSnap.pendingMeta,
     };
     saveLocalReportCardWorkflow(serverSnap);
-    return { snapshot: serverSnap, sheetSynced: res.sheetSynced };
+    return {
+      snapshot: serverSnap,
+      serverOk: res.serverOk,
+      sheetSynced: res.sheetSynced,
+      sheetError: res.sheetError,
+    };
   }
 
-  return { snapshot: nextSnap, sheetSynced: res.sheetSynced };
+  return {
+    snapshot: nextSnap,
+    serverOk: res.serverOk,
+    sheetSynced: res.sheetSynced,
+    sheetError: res.sheetError,
+  };
 };
 
 /**

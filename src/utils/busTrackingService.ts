@@ -719,7 +719,7 @@ function doGet(e) {
     return handleGetReportCardMeta(ss);
   }
   if (action === "getReportCardWorkflow") {
-    return handleGetReportCardWorkflow();
+    return handleGetReportCardWorkflow(ss);
   }
   if (action === "getWeeklyTests") {
     return handleGetWeeklyTests(ss);
@@ -1413,10 +1413,10 @@ function doPost(e) {
       return handleSyncReportCardsBatch(ss, data);
     }
     if (action === "saveReportCardDraft") {
-      return handleSaveReportCardDraft(data);
+      return handleSaveReportCardDraft(ss, data);
     }
     if (action === "saveReportCardAccess") {
-      return handleSaveReportCardAccess(data);
+      return handleSaveReportCardAccess(ss, data);
     }
 
     // 13. DELETE HOMEWORK
@@ -1460,7 +1460,7 @@ function doPost(e) {
       return handleSaveExamSeatingPlan(ss, data);
     }
     if (action === "saveExamSeatingDraft") {
-      return handleSaveExamSeatingDraft(data);
+      return handleSaveExamSeatingDraft(ss, data);
     }
 
     // 17. FEE WAIVERS DIRECTORY (Fee_Waivers - Tuition-Only Waiver 2-Way Sync)
@@ -3978,18 +3978,98 @@ function handleSaveExamDatesheet(ss, data) {
   })).setMimeType(ContentService.MimeType.JSON);
 }
 
+function getOrCreateWorkflowStoreSheet_(ss) {
+  if (!ss) return null;
+  var sheet = findExistingSheet_(ss, ["_App_Workflow_Store", "App_Workflow_Store"]);
+  if (!sheet) {
+    sheet = ss.insertSheet("_App_Workflow_Store");
+    sheet.appendRow(["Key", "Chunk_Index", "Payload_JSON", "Updated_At"]);
+    try {
+      sheet.getRange(1, 1, 1, 4).setBackground("#0c2340").setFontColor("#fde68a").setFontWeight("bold");
+      sheet.setFrozenRows(1);
+    } catch (eStyle) {}
+  } else if (sheet.getLastRow() === 0) {
+    sheet.appendRow(["Key", "Chunk_Index", "Payload_JSON", "Updated_At"]);
+  }
+  return sheet;
+}
+
+function getAppWorkflowJson_(ss, key) {
+  if (ss) {
+    try {
+      var sheet = findExistingSheet_(ss, ["_App_Workflow_Store", "App_Workflow_Store"]);
+      if (sheet && sheet.getLastRow() >= 2) {
+        var vals = sheet.getDataRange().getValues();
+        var chunks = [];
+        for (var i = 1; i < vals.length; i++) {
+          if (String(vals[i][0] || "").trim() === key) {
+            chunks.push({ idx: Number(vals[i][1]) || 0, txt: String(vals[i][2] || "") });
+          }
+        }
+        if (chunks.length > 0) {
+          chunks.sort(function(a, b) { return a.idx - b.idx; });
+          var combined = "";
+          for (var c = 0; c < chunks.length; c++) {
+            combined += chunks[c].txt;
+          }
+          if (combined) return JSON.parse(combined);
+        }
+      }
+    } catch (eSheet) {}
+  }
+  try {
+    var rawProp = PropertiesService.getScriptProperties().getProperty(key);
+    if (rawProp) return JSON.parse(rawProp);
+  } catch (eProp) {}
+  return null;
+}
+
+function saveAppWorkflowJson_(ss, key, obj) {
+  var jsonStr = JSON.stringify(obj);
+  var nowIst = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var savedToSheet = false;
+
+  if (ss) {
+    try {
+      var sheet = getOrCreateWorkflowStoreSheet_(ss);
+      if (sheet) {
+        var vals = sheet.getDataRange().getValues();
+        for (var i = vals.length - 1; i >= 1; i--) {
+          if (String(vals[i][0] || "").trim() === key) {
+            sheet.deleteRow(i + 1);
+          }
+        }
+        var chunkSize = 40000;
+        var idx = 0;
+        for (var pos = 0; pos < jsonStr.length; pos += chunkSize) {
+          sheet.appendRow([key, idx, jsonStr.slice(pos, pos + chunkSize), nowIst]);
+          idx++;
+        }
+        if (jsonStr.length === 0) {
+          sheet.appendRow([key, 0, "{}", nowIst]);
+        }
+        savedToSheet = true;
+      }
+    } catch (eWr) {}
+  }
+
+  try {
+    var props = PropertiesService.getScriptProperties();
+    if (jsonStr.length < 8500) {
+      props.setProperty(key, jsonStr);
+    } else if (savedToSheet) {
+      props.deleteProperty(key);
+    } else {
+      props.setProperty(key, jsonStr);
+    }
+  } catch (ePropWr) {
+    if (!savedToSheet) throw ePropWr;
+  }
+}
+
 function handleGetExamSeatingPlan(ss) {
-  var props = PropertiesService.getScriptProperties();
-  var draftConfig = null;
-  var approvedConfig = null;
-  try {
-    var rawDraft = props.getProperty("EVS_EXAM_SEATING_DRAFT");
-    if (rawDraft) draftConfig = JSON.parse(rawDraft);
-  } catch (eDraft) {}
-  try {
-    var rawApp = props.getProperty("EVS_EXAM_SEATING_APPROVED");
-    if (rawApp) approvedConfig = JSON.parse(rawApp);
-  } catch (eApp) {}
+  var draftConfig = getAppWorkflowJson_(ss, "EVS_EXAM_SEATING_DRAFT");
+  var approvedConfig = getAppWorkflowJson_(ss, "EVS_EXAM_SEATING_APPROVED");
 
   var sheet = findExistingSheet_(ss, ["Exam_Seating_Plan", "Exam Seating Plan", "Seating_Plan", "Seating Plan"]);
   if (!sheet || sheet.getLastRow() < 2) {
@@ -4040,12 +4120,12 @@ function handleGetExamSeatingPlan(ss) {
   })).setMimeType(ContentService.MimeType.JSON);
 }
 
-function handleSaveExamSeatingDraft(data) {
+function handleSaveExamSeatingDraft(ss, data) {
   var draftObj = data.draftConfig ? (typeof data.draftConfig === "string" ? JSON.parse(data.draftConfig) : data.draftConfig) : null;
   if (!draftObj) {
     return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "Missing draftConfig" })).setMimeType(ContentService.MimeType.JSON);
   }
-  PropertiesService.getScriptProperties().setProperty("EVS_EXAM_SEATING_DRAFT", JSON.stringify(draftObj));
+  saveAppWorkflowJson_(ss, "EVS_EXAM_SEATING_DRAFT", draftObj);
   return ContentService.createTextOutput(JSON.stringify({
     status: "success",
     message: "Teacher seating draft saved for Manager confirmation!"
@@ -4101,10 +4181,9 @@ function handleSaveExamSeatingPlan(ss, data) {
   }
   try {
     if (data.approvedConfig) {
-      var appStr = typeof data.approvedConfig === "string" ? data.approvedConfig : JSON.stringify(data.approvedConfig);
-      var props = PropertiesService.getScriptProperties();
-      props.setProperty("EVS_EXAM_SEATING_APPROVED", appStr);
-      props.setProperty("EVS_EXAM_SEATING_DRAFT", appStr);
+      var appObj = typeof data.approvedConfig === "string" ? JSON.parse(data.approvedConfig) : data.approvedConfig;
+      saveAppWorkflowJson_(ss, "EVS_EXAM_SEATING_APPROVED", appObj);
+      saveAppWorkflowJson_(ss, "EVS_EXAM_SEATING_DRAFT", appObj);
     }
   } catch (eProp) {}
   return ContentService.createTextOutput(JSON.stringify({
@@ -4114,23 +4193,18 @@ function handleSaveExamSeatingPlan(ss, data) {
   })).setMimeType(ContentService.MimeType.JSON);
 }
 
-function handleGetReportCardWorkflow() {
-  var props = PropertiesService.getScriptProperties();
-  var accessConfig = { allowTeacherPtmView: false, allowParentView: false };
-  var pendingMarks = [];
-  var pendingMeta = {};
-  try {
-    var rawAcc = props.getProperty("EVS_RC_ACCESS_CONFIG");
-    if (rawAcc) accessConfig = JSON.parse(rawAcc);
-  } catch (eAcc) {}
-  try {
-    var rawDr = props.getProperty("EVS_RC_PENDING_DRAFT");
-    if (rawDr) {
-      var parsed = JSON.parse(rawDr);
-      if (parsed && Array.isArray(parsed.pendingMarks)) pendingMarks = parsed.pendingMarks;
-      if (parsed && parsed.pendingMeta && typeof parsed.pendingMeta === "object") pendingMeta = parsed.pendingMeta;
-    }
-  } catch (eDr) {}
+function handleGetReportCardWorkflow(ss) {
+  var savedAcc = getAppWorkflowJson_(ss, "EVS_RC_ACCESS_CONFIG");
+  var accessConfig = {
+    allowTeacherPtmView: Boolean(savedAcc && savedAcc.allowTeacherPtmView),
+    allowParentView: Boolean(savedAcc && savedAcc.allowParentView),
+    allowTeacherQrAttendance: Boolean(savedAcc && savedAcc.allowTeacherQrAttendance),
+    updatedBy: savedAcc && savedAcc.updatedBy ? String(savedAcc.updatedBy) : "",
+    updatedAt: savedAcc && savedAcc.updatedAt ? String(savedAcc.updatedAt) : ""
+  };
+  var savedDraft = getAppWorkflowJson_(ss, "EVS_RC_PENDING_DRAFT");
+  var pendingMarks = (savedDraft && Array.isArray(savedDraft.pendingMarks)) ? savedDraft.pendingMarks : [];
+  var pendingMeta = (savedDraft && savedDraft.pendingMeta && typeof savedDraft.pendingMeta === "object") ? savedDraft.pendingMeta : {};
   return ContentService.createTextOutput(JSON.stringify({
     status: "success",
     accessConfig: accessConfig,
@@ -4139,21 +4213,69 @@ function handleGetReportCardWorkflow() {
   })).setMimeType(ContentService.MimeType.JSON);
 }
 
-function handleSaveReportCardAccess(data) {
+function handleSaveReportCardAccess(ss, data) {
   var accObj = data.accessConfig ? (typeof data.accessConfig === "string" ? JSON.parse(data.accessConfig) : data.accessConfig) : null;
   if (!accObj) {
     return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "Missing accessConfig" })).setMimeType(ContentService.MimeType.JSON);
   }
-  PropertiesService.getScriptProperties().setProperty("EVS_RC_ACCESS_CONFIG", JSON.stringify(accObj));
-  return ContentService.createTextOutput(JSON.stringify({ status: "success", accessConfig: accObj })).setMimeType(ContentService.MimeType.JSON);
+  var existingAcc = getAppWorkflowJson_(ss, "EVS_RC_ACCESS_CONFIG") || {};
+  var mergedAcc = {
+    allowTeacherPtmView: typeof accObj.allowTeacherPtmView === "boolean" ? Boolean(accObj.allowTeacherPtmView) : Boolean(existingAcc.allowTeacherPtmView),
+    allowParentView: typeof accObj.allowParentView === "boolean" ? Boolean(accObj.allowParentView) : Boolean(existingAcc.allowParentView),
+    allowTeacherQrAttendance: typeof accObj.allowTeacherQrAttendance === "boolean" ? Boolean(accObj.allowTeacherQrAttendance) : Boolean(existingAcc.allowTeacherQrAttendance),
+    updatedBy: String(accObj.updatedBy || existingAcc.updatedBy || "Manager"),
+    updatedAt: String(accObj.updatedAt || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss"))
+  };
+  saveAppWorkflowJson_(ss, "EVS_RC_ACCESS_CONFIG", mergedAcc);
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", accessConfig: mergedAcc })).setMimeType(ContentService.MimeType.JSON);
 }
 
-function handleSaveReportCardDraft(data) {
+function handleSaveReportCardDraft(ss, data) {
   var draftObj = data.draft ? (typeof data.draft === "string" ? JSON.parse(data.draft) : data.draft) : null;
+  var incMarks = data.marks ? (typeof data.marks === "string" ? JSON.parse(data.marks) : data.marks) : null;
+  var incMeta = data.meta ? (typeof data.meta === "string" ? JSON.parse(data.meta) : data.meta) : null;
+
+  if (data.mode === "merge" && (Array.isArray(incMarks) || (incMeta && typeof incMeta === "object"))) {
+    var cur = getAppWorkflowJson_(ss, "EVS_RC_PENDING_DRAFT") || { pendingMarks: [], pendingMeta: {} };
+    var curMarks = Array.isArray(cur.pendingMarks) ? cur.pendingMarks : [];
+    var curMeta = (cur.pendingMeta && typeof cur.pendingMeta === "object") ? cur.pendingMeta : {};
+    var markMap = {};
+    var order = [];
+    for (var i = 0; i < curMarks.length; i++) {
+      var m = curMarks[i];
+      if (!m || !m.student_id || !m.subject) continue;
+      var k = String(m.session || "2026-27").toLowerCase() + "::" + String(m.exam_type || "Quarterly").toLowerCase() + "::" + String(m.student_id).toLowerCase() + "::" + String(m.subject).toLowerCase();
+      if (!markMap[k]) order.push(k);
+      markMap[k] = m;
+    }
+    if (Array.isArray(incMarks)) {
+      for (var j = 0; j < incMarks.length; j++) {
+        var nm = incMarks[j];
+        if (!nm || !nm.student_id || !nm.subject) continue;
+        var nk = String(nm.session || "2026-27").toLowerCase() + "::" + String(nm.exam_type || "Quarterly").toLowerCase() + "::" + String(nm.student_id).toLowerCase() + "::" + String(nm.subject).toLowerCase();
+        if (!markMap[nk]) order.push(nk);
+        markMap[nk] = nm;
+      }
+    }
+    var mergedMarks = [];
+    for (var p = 0; p < order.length; p++) {
+      mergedMarks.push(markMap[order[p]]);
+    }
+    if (incMeta && typeof incMeta === "object") {
+      for (var mk in incMeta) {
+        if (Object.prototype.hasOwnProperty.call(incMeta, mk)) {
+          curMeta[mk] = incMeta[mk];
+        }
+      }
+    }
+    saveAppWorkflowJson_(ss, "EVS_RC_PENDING_DRAFT", { pendingMarks: mergedMarks, pendingMeta: curMeta });
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", merged: true })).setMimeType(ContentService.MimeType.JSON);
+  }
+
   if (!draftObj) {
     return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "Missing draft" })).setMimeType(ContentService.MimeType.JSON);
   }
-  PropertiesService.getScriptProperties().setProperty("EVS_RC_PENDING_DRAFT", JSON.stringify(draftObj));
+  saveAppWorkflowJson_(ss, "EVS_RC_PENDING_DRAFT", draftObj);
   return ContentService.createTextOutput(JSON.stringify({ status: "success" })).setMimeType(ContentService.MimeType.JSON);
 }
 
