@@ -21,6 +21,7 @@ export const CURRENT_ACADEMIC_SESSION = '2026-27';
 export const DEFAULT_REPORT_CARD_ACCESS_CONFIG: ReportCardAccessConfig = {
   allowTeacherPtmView: false,
   allowParentView: false,
+  allowTeacherQrAttendance: false,
 };
 
 export interface ReportCardWorkflowSnapshot {
@@ -287,6 +288,7 @@ export const loadLocalReportCardWorkflow = (): ReportCardWorkflowSnapshot => {
           accessConfig: {
             allowTeacherPtmView: Boolean(parsed.accessConfig?.allowTeacherPtmView),
             allowParentView: Boolean(parsed.accessConfig?.allowParentView),
+            allowTeacherQrAttendance: Boolean(parsed.accessConfig?.allowTeacherQrAttendance),
             updatedBy: parsed.accessConfig?.updatedBy,
             updatedAt: parsed.accessConfig?.updatedAt,
           },
@@ -320,13 +322,14 @@ export const fetchReportCardWorkflowFromServer = async (
       headers: { 'x-apps-script-url': activeUrl },
       cache: 'no-store',
     });
-    if (res.ok) {
+    if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
       const data = await res.json();
       if (data && typeof data === 'object' && data.accessConfig) {
         const snap: ReportCardWorkflowSnapshot = {
           accessConfig: {
             allowTeacherPtmView: Boolean(data.accessConfig.allowTeacherPtmView),
             allowParentView: Boolean(data.accessConfig.allowParentView),
+            allowTeacherQrAttendance: Boolean(data.accessConfig.allowTeacherQrAttendance),
             updatedBy: data.accessConfig.updatedBy,
             updatedAt: data.accessConfig.updatedAt,
           },
@@ -346,6 +349,7 @@ export const fetchReportCardWorkflowFromServer = async (
         accessConfig: {
           allowTeacherPtmView: Boolean(direct.json.accessConfig.allowTeacherPtmView),
           allowParentView: Boolean(direct.json.accessConfig.allowParentView),
+          allowTeacherQrAttendance: Boolean(direct.json.accessConfig.allowTeacherQrAttendance),
           updatedBy: direct.json.accessConfig.updatedBy,
           updatedAt: direct.json.accessConfig.updatedAt,
         },

@@ -2616,13 +2616,54 @@ async function startServer() {
   });
 
   // Endpoints for Manager-controlled Teacher Instant QR Attendance Access (All Classes)
-  app.get('/api/teacher-qr-attendance-access', (_req, res) => {
-    res.json({ success: true, access: getTeacherQrAttendanceAccess() });
+  app.get('/api/teacher-qr-attendance-access', async (req, res) => {
+    const localAccess = getTeacherQrAttendanceAccess();
+    const forceRefresh = req.query.refresh === '1' || req.query.fresh === '1';
+    if (forceRefresh || !localAccess.updatedAt) {
+      try {
+        const targetUrl = resolveTargetAppsScriptUrl(req);
+        const sRes = await fetch(`${targetUrl}?action=getReportCardWorkflow&_t=${Date.now()}`, {
+          redirect: 'follow',
+          signal: AbortSignal.timeout(7000),
+        });
+        const txt = await sRes.text();
+        if (sRes.ok && !txt.trim().startsWith('<')) {
+          const parsed: any = JSON.parse(txt);
+          if (parsed?.status === 'success' && parsed.accessConfig && typeof parsed.accessConfig === 'object') {
+            if (typeof parsed.accessConfig.allowTeacherQrAttendance === 'boolean') {
+              const synced = saveTeacherQrAttendanceAccess({
+                enabled: Boolean(parsed.accessConfig.allowTeacherQrAttendance),
+                updatedBy: String(parsed.accessConfig.updatedBy || 'Manager'),
+              });
+              reportCardWorkflowStore.accessConfig = {
+                ...reportCardWorkflowStore.accessConfig,
+                allowTeacherQrAttendance: synced.enabled,
+                updatedBy: parsed.accessConfig.updatedBy || reportCardWorkflowStore.accessConfig.updatedBy,
+                updatedAt: parsed.accessConfig.updatedAt || synced.updatedAt,
+              };
+              saveReportCardWorkflowCache();
+              return res.json({ success: true, sheetSynced: true, access: synced });
+            }
+          }
+        }
+      } catch {}
+    }
+    res.json({ success: true, access: localAccess });
   });
 
-  app.post('/api/teacher-qr-attendance-access', (req, res) => {
+  app.post('/api/teacher-qr-attendance-access', async (req, res) => {
     try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
       const updated = saveTeacherQrAttendanceAccess(req.body);
+
+      reportCardWorkflowStore.accessConfig = {
+        ...reportCardWorkflowStore.accessConfig,
+        allowTeacherQrAttendance: updated.enabled,
+        updatedBy: updated.updatedBy,
+        updatedAt: updated.updatedAt,
+      };
+      saveReportCardWorkflowCache();
+
       const broadcastMsg = JSON.stringify({
         type: 'APP_DATA_UPDATED',
         entity: 'teacher_qr_attendance_access',
@@ -2635,7 +2676,14 @@ async function startServer() {
           client.send(broadcastMsg);
         }
       }
-      res.json({ success: true, access: updated });
+
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'saveReportCardAccess',
+        accessConfig: JSON.stringify(reportCardWorkflowStore.accessConfig),
+        appsScriptUrl: targetUrl,
+      });
+
+      res.json({ success: true, sheetSynced: gasResult.ok, access: updated });
     } catch (e: any) {
       res.status(500).json({ success: false, error: e?.message || 'Failed to update teacher QR attendance access' });
     }
@@ -4831,6 +4879,7 @@ async function startServer() {
     accessConfig: {
       allowTeacherPtmView: boolean;
       allowParentView: boolean;
+      allowTeacherQrAttendance?: boolean;
       updatedBy?: string;
       updatedAt?: string;
     };
@@ -4840,6 +4889,7 @@ async function startServer() {
     accessConfig: {
       allowTeacherPtmView: false,
       allowParentView: false,
+      allowTeacherQrAttendance: false,
     },
     pendingMarks: [],
     pendingMeta: {},
@@ -4853,6 +4903,7 @@ async function startServer() {
           accessConfig: {
             allowTeacherPtmView: Boolean(rawWf.accessConfig?.allowTeacherPtmView),
             allowParentView: Boolean(rawWf.accessConfig?.allowParentView),
+            allowTeacherQrAttendance: Boolean(rawWf.accessConfig?.allowTeacherQrAttendance),
             updatedBy: rawWf.accessConfig?.updatedBy,
             updatedAt: rawWf.accessConfig?.updatedAt,
           },
@@ -4895,12 +4946,23 @@ async function startServer() {
             const parsed: any = JSON.parse(txt);
             if (parsed?.status === 'success') {
               if (parsed.accessConfig && typeof parsed.accessConfig === 'object') {
+                const qrAllowed =
+                  typeof parsed.accessConfig.allowTeacherQrAttendance === 'boolean'
+                    ? parsed.accessConfig.allowTeacherQrAttendance
+                    : Boolean(reportCardWorkflowStore.accessConfig.allowTeacherQrAttendance);
                 reportCardWorkflowStore.accessConfig = {
                   allowTeacherPtmView: Boolean(parsed.accessConfig.allowTeacherPtmView),
                   allowParentView: Boolean(parsed.accessConfig.allowParentView),
+                  allowTeacherQrAttendance: qrAllowed,
                   updatedBy: parsed.accessConfig.updatedBy,
                   updatedAt: parsed.accessConfig.updatedAt,
                 };
+                if (typeof parsed.accessConfig.allowTeacherQrAttendance === 'boolean') {
+                  saveTeacherQrAttendanceAccess({
+                    enabled: qrAllowed,
+                    updatedBy: String(parsed.accessConfig.updatedBy || 'Manager'),
+                  });
+                }
               }
               if (Array.isArray(parsed.pendingMarks) && reportCardWorkflowStore.pendingMarks.length === 0) {
                 reportCardWorkflowStore.pendingMarks = parsed.pendingMarks;
@@ -4987,13 +5049,24 @@ async function startServer() {
     try {
       const targetUrl = resolveTargetAppsScriptUrl(req);
       const ac = req.body?.accessConfig || req.body || {};
+      const nextQrAllowed =
+        typeof ac.allowTeacherQrAttendance === 'boolean'
+          ? Boolean(ac.allowTeacherQrAttendance)
+          : Boolean(reportCardWorkflowStore.accessConfig.allowTeacherQrAttendance);
       reportCardWorkflowStore.accessConfig = {
         allowTeacherPtmView: Boolean(ac.allowTeacherPtmView),
         allowParentView: Boolean(ac.allowParentView),
+        allowTeacherQrAttendance: nextQrAllowed,
         updatedBy: String(ac.updatedBy || 'Manager'),
         updatedAt: getLocalTimestampIST(),
       };
       saveReportCardWorkflowCache();
+      if (typeof ac.allowTeacherQrAttendance === 'boolean') {
+        saveTeacherQrAttendanceAccess({
+          enabled: nextQrAllowed,
+          updatedBy: String(ac.updatedBy || 'Manager'),
+        });
+      }
       broadcastRcWorkflow('access_updated');
 
       const gasResult = await forwardToGoogleAppsScript({

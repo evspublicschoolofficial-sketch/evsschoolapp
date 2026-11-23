@@ -42,6 +42,7 @@ import {
   REPORT_CARD_WORKFLOW_STORAGE_KEY,
   ReportCardWorkflowSnapshot,
   subscribeReportCardUpdates,
+  updateReportCardAccessConfigOnServer,
 } from './utils/reportCardHelper';
 import { getLocalDateYMD, getLocalTimestamp } from './utils/localTime';
 import {
@@ -1933,12 +1934,19 @@ export default function App() {
   const [quickQrAttendanceOpen, setQuickQrAttendanceOpen] = useState<boolean>(false);
   const [teacherQrAttendanceAllowed, setTeacherQrAttendanceAllowed] = useState<boolean>(() => {
     try {
-      return localStorage.getItem('evs_teacher_qr_attendance_allowed') === 'true';
+      const directFlag = localStorage.getItem('evs_teacher_qr_attendance_allowed');
+      if (directFlag === 'true') return true;
+      const wf = loadLocalReportCardWorkflow();
+      if (typeof wf?.accessConfig?.allowTeacherQrAttendance === 'boolean') {
+        return wf.accessConfig.allowTeacherQrAttendance;
+      }
+      return directFlag === 'true';
     } catch {
       return false;
     }
   });
   const [teacherQrAttendanceToggleBusy, setTeacherQrAttendanceToggleBusy] = useState<boolean>(false);
+  const [teacherQrStatusChecking, setTeacherQrStatusChecking] = useState<boolean>(false);
   const [behaviorSubTab, setBehaviorSubTab] = useState<'bulkRegister' | 'history'>('bulkRegister');
 
   // Add Fee Modal State (Manager & Principal fee collection)
@@ -4125,19 +4133,15 @@ export default function App() {
         syncFeeWaiversWithServer();
       } else if (event.entity === 'parent_reviews') {
         refreshParentReviews(false);
-      } else if (event.entity === 'teacher_qr_attendance_access') {
-        fetch('/api/teacher-qr-attendance-access', { cache: 'no-store' })
-          .then((r) => (r.ok ? r.json() : null))
-          .then((data) => {
-            if (data?.access && typeof data.access.enabled === 'boolean') {
-              const nextEnabled = Boolean(data.access.enabled);
-              setTeacherQrAttendanceAllowed(nextEnabled);
-              try {
-                localStorage.setItem('evs_teacher_qr_attendance_allowed', nextEnabled ? 'true' : 'false');
-              } catch {}
-            }
-          })
-          .catch(() => {});
+      } else if (event.entity === 'teacher_qr_attendance_access' || event.entity === 'report_card_workflow') {
+        if (event.details && typeof event.details.enabled === 'boolean') {
+          const nextEnabled = Boolean(event.details.enabled);
+          setTeacherQrAttendanceAllowed(nextEnabled);
+          try {
+            localStorage.setItem('evs_teacher_qr_attendance_allowed', nextEnabled ? 'true' : 'false');
+          } catch {}
+        }
+        syncTeacherQrAttendanceAccess(true, false);
       } else {
         syncAllData(false, false);
       }
@@ -4146,19 +4150,8 @@ export default function App() {
       setTimeout(() => setSyncToastMessage(null), 3000);
     });
 
-    // Fetch Manager-controlled Teacher QR Attendance permission immediately on load
-    fetch('/api/teacher-qr-attendance-access', { cache: 'no-store' })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (isMounted && data?.access && typeof data.access.enabled === 'boolean') {
-          const nextEnabled = Boolean(data.access.enabled);
-          setTeacherQrAttendanceAllowed(nextEnabled);
-          try {
-            localStorage.setItem('evs_teacher_qr_attendance_allowed', nextEnabled ? 'true' : 'false');
-          } catch {}
-        }
-      })
-      .catch(() => {});
+    // Fetch Manager-controlled Teacher QR Attendance permission immediately on load (Server + Google Apps Script)
+    syncTeacherQrAttendanceAccess(true, false);
 
     return () => {
       isMounted = false;
@@ -4167,6 +4160,29 @@ export default function App() {
       unsubscribe();
     };
   }, []);
+
+  // Keep Teacher Portal permission synced automatically on tab switch, focus, and light polling
+  useEffect(() => {
+    if (activeTab !== 'teacher' || !teacherUser) return;
+    syncTeacherQrAttendanceAccess(true, false);
+
+    const onFocusOrVisible = () => {
+      if (document.visibilityState === 'visible') {
+        syncTeacherQrAttendanceAccess(true, false);
+      }
+    };
+    window.addEventListener('focus', onFocusOrVisible);
+    document.addEventListener('visibilitychange', onFocusOrVisible);
+    const intervalId = window.setInterval(() => {
+      syncTeacherQrAttendanceAccess(true, false);
+    }, 15000);
+
+    return () => {
+      window.removeEventListener('focus', onFocusOrVisible);
+      document.removeEventListener('visibilitychange', onFocusOrVisible);
+      window.clearInterval(intervalId);
+    };
+  }, [activeTab, teacherUser, teacherPortalTab]);
 
   // Auto-close Teacher's QR Attendance modal immediately if Manager disables permission live
   useEffect(() => {
@@ -5854,29 +5870,135 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     ]);
   };
 
+  // Sync Teacher QR Attendance permission reliably across local server AND Google Apps Script cloud
+  const syncTeacherQrAttendanceAccess = async (forceRefresh = true, showToast = false) => {
+    if (showToast) setTeacherQrStatusChecking(true);
+    try {
+      const activeUrl = getEffectiveApiUrl();
+      const [apiRes, wfRes] = await Promise.allSettled([
+        fetch(`/api/teacher-qr-attendance-access${forceRefresh ? '?refresh=1&' : '?'}_t=${Date.now()}`, {
+          headers: { 'x-apps-script-url': activeUrl },
+          cache: 'no-store',
+        }).then(async (r) => {
+          if (!r.ok || !r.headers.get('content-type')?.includes('application/json')) return null;
+          return r.json();
+        }),
+        fetchReportCardWorkflowFromServer(forceRefresh),
+      ]);
+
+      let resolvedEnabled: boolean | null = null;
+      let apiEnabled: boolean | null = null;
+      let apiTs = '';
+      let wfEnabled: boolean | null = null;
+      let wfTs = '';
+
+      if (apiRes.status === 'fulfilled' && apiRes.value?.access && typeof apiRes.value.access.enabled === 'boolean') {
+        apiEnabled = Boolean(apiRes.value.access.enabled);
+        apiTs = String(apiRes.value.access.updatedAt || '');
+      }
+
+      if (wfRes.status === 'fulfilled' && wfRes.value?.accessConfig) {
+        setReportCardWorkflow(wfRes.value);
+        if (typeof wfRes.value.accessConfig.allowTeacherQrAttendance === 'boolean') {
+          wfEnabled = Boolean(wfRes.value.accessConfig.allowTeacherQrAttendance);
+          wfTs = String(wfRes.value.accessConfig.updatedAt || '');
+        }
+      }
+
+      if (apiEnabled !== null && wfEnabled !== null) {
+        if (wfTs && (!apiTs || wfTs >= apiTs)) {
+          resolvedEnabled = wfEnabled;
+        } else {
+          resolvedEnabled = apiEnabled;
+        }
+      } else if (wfEnabled !== null) {
+        resolvedEnabled = wfEnabled;
+      } else if (apiEnabled !== null) {
+        resolvedEnabled = apiEnabled;
+      }
+
+      if (resolvedEnabled !== null) {
+        setTeacherQrAttendanceAllowed(resolvedEnabled);
+        try {
+          localStorage.setItem('evs_teacher_qr_attendance_allowed', resolvedEnabled ? 'true' : 'false');
+        } catch {}
+        if (showToast) {
+          setSyncToastMessage(
+            resolvedEnabled
+              ? '✅ अनुमति चालू है! अब आप तुरंत QR हाजिरी स्कैनर खोल सकते हैं।'
+              : '🔒 अभी मैनेजर द्वारा टीचर QR हाजिरी अनुमति बंद रखी गई है।'
+          );
+          setTimeout(() => setSyncToastMessage(null), 3500);
+        }
+      }
+    } catch {
+      if (showToast) {
+        setSyncToastMessage('⚠️ अनुमति स्थिति जांचने में समस्या आई।');
+        setTimeout(() => setSyncToastMessage(null), 3000);
+      }
+    } finally {
+      if (showToast) setTeacherQrStatusChecking(false);
+    }
+  };
+
   // Manager-Only Toggle: Enable / Disable Instant QR Attendance for Teachers (All Classes)
   const handleToggleTeacherQrAttendance = async (nextVal?: boolean) => {
     if (!managerUser) return;
     const targetEnabled = typeof nextVal === 'boolean' ? nextVal : !teacherQrAttendanceAllowed;
+    const activeUrl = getEffectiveApiUrl();
     setTeacherQrAttendanceToggleBusy(true);
     setTeacherQrAttendanceAllowed(targetEnabled);
     try {
       localStorage.setItem('evs_teacher_qr_attendance_allowed', targetEnabled ? 'true' : 'false');
     } catch {}
     try {
-      await fetch('/api/teacher-qr-attendance-access', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          enabled: targetEnabled,
-          updatedBy: managerUser.Name || 'Manager',
-        }),
-      });
+      const nextAccessConfig = {
+        ...reportCardWorkflow.accessConfig,
+        allowTeacherQrAttendance: targetEnabled,
+        updatedBy: managerUser.Name || 'Manager',
+      };
+      let sheetSynced = false;
+      try {
+        const r = await fetch('/api/teacher-qr-attendance-access', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-apps-script-url': activeUrl,
+          },
+          body: JSON.stringify({
+            enabled: targetEnabled,
+            updatedBy: managerUser.Name || 'Manager',
+            appsScriptUrl: activeUrl,
+          }),
+        });
+        if (r.ok && r.headers.get('content-type')?.includes('application/json')) {
+          const json = await r.json();
+          sheetSynced = Boolean(json?.sheetSynced);
+        }
+      } catch {}
+
+      if (!sheetSynced) {
+        const wfRes = await updateReportCardAccessConfigOnServer(nextAccessConfig);
+        if (wfRes?.snapshot) {
+          setReportCardWorkflow(wfRes.snapshot);
+        }
+        sheetSynced = Boolean(wfRes?.sheetSynced);
+      } else {
+        setReportCardWorkflow((prev) => ({
+          ...prev,
+          accessConfig: {
+            ...prev.accessConfig,
+            allowTeacherQrAttendance: targetEnabled,
+            updatedBy: managerUser.Name || 'Manager',
+          },
+        }));
+      }
+
       realtimeSync.broadcastUpdate('teacher_qr_attendance_access', 'update', { enabled: targetEnabled });
       setSyncToastMessage(
         targetEnabled
-          ? '✅ टीचर्स के लिए तुरंत QR हाजिरी स्कैनर चालू हो गया (सभी कक्षाएँ खुली)!'
-          : '🔒 टीचर्स के लिए तुरंत QR हाजिरी स्कैनर बंद कर दिया गया!'
+          ? `✅ टीचर्स के लिए तुरंत QR हाजिरी चालू हो गया${sheetSynced ? ' (क्लाउड सिंक पूर्ण)' : ''}!`
+          : `🔒 टीचर्स के लिए तुरंत QR हाजिरी बंद कर दिया गया${sheetSynced ? ' (क्लाउड सिंक पूर्ण)' : ''}!`
       );
       setTimeout(() => setSyncToastMessage(null), 4000);
     } catch {
@@ -12312,13 +12434,25 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       </span>
                     </button>
                   ) : (
-                    <span
-                      className="px-3 py-1.5 rounded-xl bg-slate-100 text-slate-500 border border-slate-200 text-[11px] font-bold flex items-center gap-1.5"
-                      title="मैनेजर डैशबोर्ड से अनुमति चालू होने पर ही टीचर QR हाजिरी स्कैनर उपयोग कर सकते हैं"
-                    >
-                      <i className="fa-solid fa-lock text-slate-400"></i>
-                      <span>{currentLang === 'en' ? 'QR Attendance Locked (Manager Control)' : 'QR हाजिरी लॉक (मैनेजर अनुमति बंद)'}</span>
-                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span
+                        className="px-3 py-1.5 rounded-xl bg-slate-100 text-slate-600 border border-slate-200 text-[11px] font-bold flex items-center gap-1.5"
+                        title="मैनेजर डैशबोर्ड से अनुमति चालू होने पर ही टीचर QR हाजिरी स्कैनर उपयोग कर सकते हैं"
+                      >
+                        <i className="fa-solid fa-lock text-slate-400"></i>
+                        <span>{currentLang === 'en' ? 'QR Attendance Locked (Manager Control)' : 'QR हाजिरी लॉक (मैनेजर अनुमति बंद)'}</span>
+                      </span>
+                      <button
+                        type="button"
+                        disabled={teacherQrStatusChecking}
+                        onClick={() => syncTeacherQrAttendanceAccess(true, true)}
+                        className="px-2.5 py-1.5 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 text-[11px] font-black flex items-center gap-1 cursor-pointer transition-all active:scale-95 disabled:opacity-60"
+                        title="मैनेजर द्वारा दी गई अनुमति की ताज़ा स्थिति जांचें"
+                      >
+                        <i className={`fa-solid fa-rotate ${teacherQrStatusChecking ? 'animate-spin' : ''}`}></i>
+                        <span>{currentLang === 'en' ? 'Check Status' : 'स्थिति जांचें'}</span>
+                      </button>
+                    </div>
                   )}
                 </div>
 

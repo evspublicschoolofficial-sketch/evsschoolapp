@@ -262,6 +262,7 @@ export interface ReportCardRemarkRecord {
 export interface ReportCardAccessConfig {
   allowTeacherPtmView: boolean;
   allowParentView: boolean;
+  allowTeacherQrAttendance?: boolean;
   updatedBy?: string;
   updatedAt?: string;
 }
