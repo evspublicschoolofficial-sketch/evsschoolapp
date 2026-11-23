@@ -307,6 +307,8 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
   // By user request: Already recorded students are hidden for that day!
   // If user explicitly wants to view/edit them, they can toggle showRecorded.
   const [showRecorded, setShowRecorded] = useState<boolean>(false);
+  const [pendingModalOpen, setPendingModalOpen] = useState<boolean>(false);
+  const [pendingSearch, setPendingSearch] = useState<string>('');
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
 
@@ -531,6 +533,28 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
     });
   };
 
+  // Explicitly set a single student's presence (Present or Absent)
+  const handleSetStudentPresence = (studentId: string, nextPresent: boolean) => {
+    touchedStudentsRef.current.add(studentId);
+    setRowStates((prev) => {
+      const cur = prev[studentId] || {
+        studentId,
+        isPresent: nextPresent,
+        selectedFaults: new Set(),
+        customRemark: '',
+        showCustomNoteInput: false,
+      };
+      return {
+        ...prev,
+        [studentId]: {
+          ...cur,
+          isPresent: nextPresent,
+          selectedFaults: nextPresent ? cur.selectedFaults : new Set(),
+        },
+      };
+    });
+  };
+
   // Toggle specific fault tag for a student
   const handleToggleFault = (studentId: string, faultId: string) => {
     touchedStudentsRef.current.add(studentId);
@@ -592,9 +616,8 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
     });
   };
 
-  // Batch Save Handler (Saves displayed students and automatically hides them once saved)
-  const handleSaveAll = async () => {
-    const studentsToSave = displayedStudents;
+  // Reusable batch save handler for any subset of students (main list or Pending modal)
+  const saveStudentsSubset = async (studentsToSave: Student[], closePendingAfter = false) => {
     if (studentsToSave.length === 0) return;
     setIsSaving(true);
 
@@ -709,10 +732,15 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
 
       await onSaveBatch(recordsToSave);
 
-      touchedStudentsRef.current.clear();
+      studentsToSave.forEach((st) => {
+        touchedStudentsRef.current.delete(String(st.Student_ID || '').trim());
+      });
+      if (closePendingAfter) {
+        setPendingModalOpen(false);
+      }
       const msg = isEn
-        ? `🎉 Successfully saved attendance for ${recordsToSave.length} students of Class ${getClassName(selectedClass)}!`
-        : `🎉 क्लास ${getClassName(selectedClass)} के ${recordsToSave.length} छात्रों का डेटा सुरक्षित हो गया और वे सूची से हाइड हो गए!`;
+        ? `🎉 Successfully saved attendance for ${recordsToSave.length} student${recordsToSave.length === 1 ? '' : 's'} of Class ${getClassName(selectedClass)}!`
+        : `🎉 क्लास ${getClassName(selectedClass)} के ${recordsToSave.length} छात्र का डेटा सुरक्षित हो गया और सूची से अपडेट हो गया!`;
       setSaveSuccessMsg(msg);
       setTimeout(() => setSaveSuccessMsg(null), 6000);
     } catch (err: any) {
@@ -721,6 +749,29 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
       setIsSaving(false);
     }
   };
+
+  const handleSaveAll = async () => {
+    await saveStudentsSubset(displayedStudents, false);
+  };
+
+  // Filtered pending students for the dedicated Pending Students modal
+  const filteredPendingModalStudents = useMemo(() => {
+    if (!pendingSearch.trim()) return pendingStudents;
+    const q = pendingSearch.toLowerCase().trim();
+    return pendingStudents.filter((st) => {
+      const name = (st.Student_Name || '').toLowerCase();
+      const father = (st.Father_Name || '').toLowerCase();
+      const roll = String(st.Roll_Number || '').toLowerCase();
+      const adm = String(st.Admission_Number || '').toLowerCase();
+      const id = String(st.Student_ID || '').toLowerCase();
+      return name.includes(q) || father.includes(q) || roll.includes(q) || adm.includes(q) || id.includes(q);
+    });
+  }, [pendingStudents, pendingSearch]);
+
+  const pendingPresentCount = pendingStudents.filter(
+    (st) => rowStates[st.Student_ID]?.isPresent !== false
+  ).length;
+  const pendingAbsentCount = pendingStudents.length - pendingPresentCount;
 
   return (
     <div className={`space-y-4 ${isEmbedded ? '' : 'bg-white rounded-3xl p-4 sm:p-6 shadow-xl border border-slate-200'}`}>
@@ -897,17 +948,39 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
           </div>
         </div>
 
-        <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-between">
+        <button
+          type="button"
+          onClick={() => {
+            setPendingSearch('');
+            setPendingModalOpen(true);
+          }}
+          className="p-3 rounded-2xl bg-amber-50 hover:bg-amber-100/90 border-2 border-amber-300 hover:border-amber-500 flex items-center justify-between text-left cursor-pointer transition-all active:scale-[0.98] shadow-xs group"
+          title={isEn ? 'Click to open Pending Students list and mark Present/Absent' : 'बाकी (Pending) छात्रों की सूची खोलने और Present/Absent सेव करने के लिए क्लिक करें'}
+        >
           <div>
-            <div className="text-[11px] font-bold text-amber-800">{isEn ? 'Pending Students' : 'बाकी छात्र (Pending)'}</div>
-            <div className="text-xl font-black text-amber-900">{pendingCount}</div>
+            <div className="text-[11px] font-bold text-amber-800 flex items-center gap-1">
+              <span>{isEn ? 'Pending Students' : 'बाकी छात्र (Pending)'}</span>
+            </div>
+            <div className="flex items-baseline gap-2">
+              <span className="text-xl font-black text-amber-900">{pendingCount}</span>
+              <span className="text-[10px] font-extrabold text-amber-700 group-hover:underline">
+                {isEn ? 'Open list →' : 'लिस्ट खोलें →'}
+              </span>
+            </div>
           </div>
-          <div className="w-9 h-9 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center font-bold shadow-xs">
+          <div className="w-9 h-9 rounded-xl bg-amber-400 group-hover:bg-amber-500 text-slate-950 flex items-center justify-center font-bold shadow-xs shrink-0 transition-colors">
             <i className="fa-solid fa-clock"></i>
           </div>
-        </div>
+        </button>
 
-        <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-between">
+        <button
+          type="button"
+          onClick={() => {
+            if (savedCount > 0) setShowRecorded((v) => !v);
+          }}
+          className="p-3 rounded-2xl bg-emerald-50 hover:bg-emerald-100/70 border border-emerald-200 flex items-center justify-between text-left cursor-pointer transition-all"
+          title={isEn ? 'Toggle recorded students in list below' : 'आज दर्ज हो चुके छात्र नीचे देखें/छुपाएं'}
+        >
           <div>
             <div className="text-[11px] font-bold text-emerald-700">{isEn ? 'Recorded Today' : 'आज दर्ज (Recorded)'}</div>
             <div className="text-xl font-black text-emerald-900">{savedCount}</div>
@@ -915,7 +988,7 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
           <div className="w-9 h-9 rounded-xl bg-emerald-500 text-white flex items-center justify-center font-bold shadow-xs">
             <i className="fa-solid fa-check"></i>
           </div>
-        </div>
+        </button>
 
         <div className="p-3 rounded-2xl bg-rose-50 border border-rose-200 flex items-center justify-between">
           <div>
@@ -1286,6 +1359,233 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
               <i className={`fa-solid ${isSaving ? 'fa-spinner fa-spin' : 'fa-check-double'} text-base`}></i>
               <span>{isSaving ? (isEn ? 'Saving...' : 'सेव हो रहा है...') : (isEn ? '💾 Save Remaining Students' : '💾 बाकी छात्रों की हाजिरी सेव करें')}</span>
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* DEDICATED PENDING STUDENTS QUICK ATTENDANCE MODAL */}
+      {pendingModalOpen && (
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setPendingModalOpen(false);
+          }}
+          className="fixed inset-0 z-[130] bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4 animate-fadeIn"
+        >
+          <div className="bg-white rounded-3xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl border border-amber-200 overflow-hidden">
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-[#0c2340] via-[#10316b] to-[#0c2340] text-white px-4 sm:px-5 py-4 flex items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center text-lg font-black shrink-0 shadow-sm">
+                  <i className="fa-solid fa-clock"></i>
+                </div>
+                <div className="min-w-0">
+                  <h3 className="font-black text-sm sm:text-base text-white truncate">
+                    {isEn
+                      ? `Pending Students (${pendingStudents.length})`
+                      : `बाकी छात्र सूची — Pending (${pendingStudents.length})`}
+                  </h3>
+                  <p className="text-[11px] text-amber-200 truncate">
+                    {isEn ? 'Class' : 'कक्षा'} {getClassName(selectedClass)} • {selectedDate} — {isEn ? 'Tap Present or Absent & Save' : 'Present या Absent चुनकर सेव करें'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPendingModalOpen(false)}
+                className="w-8 h-8 rounded-xl bg-white/10 hover:bg-rose-600 text-white flex items-center justify-center cursor-pointer transition-colors shrink-0"
+                title={isEn ? 'Close' : 'बंद करें'}
+              >
+                <i className="fa-solid fa-xmark"></i>
+              </button>
+            </div>
+
+            {/* Quick Bulk Controls & Search */}
+            {pendingStudents.length > 0 && (
+              <div className="px-4 sm:px-5 py-3 bg-amber-50/70 border-b border-amber-200/80 flex flex-wrap items-center justify-between gap-2 shrink-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      pendingStudents.forEach((st) => handleSetStudentPresence(String(st.Student_ID || '').trim(), true));
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-2xs transition-all active:scale-95"
+                  >
+                    <i className="fa-solid fa-check-double text-amber-300"></i>
+                    <span>{isEn ? 'All Present' : 'सभी Present'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      pendingStudents.forEach((st) => handleSetStudentPresence(String(st.Student_ID || '').trim(), false));
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-white hover:bg-rose-50 text-rose-700 border border-rose-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-all active:scale-95"
+                  >
+                    <i className="fa-solid fa-xmark"></i>
+                    <span>{isEn ? 'All Absent' : 'सभी Absent'}</span>
+                  </button>
+                </div>
+
+                <div className="relative">
+                  <i className="fa-solid fa-magnifying-glass absolute left-2.5 top-2.5 text-slate-400 text-[11px]"></i>
+                  <input
+                    type="text"
+                    value={pendingSearch}
+                    onChange={(e) => setPendingSearch(e.target.value)}
+                    placeholder={isEn ? 'Search pending student...' : 'छात्र या रोल नं. खोजें...'}
+                    className="pl-7 pr-6 py-1.5 rounded-xl border border-slate-300 bg-white text-xs outline-none focus:border-blue-800 w-44 sm:w-52"
+                  />
+                  {pendingSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setPendingSearch('')}
+                      className="absolute right-2 top-1.5 text-slate-400 hover:text-slate-700 font-bold text-xs cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Scrollable Pending Students List */}
+            <div className="flex-1 overflow-y-auto p-3.5 sm:p-5 space-y-2.5 bg-slate-50/50">
+              {pendingStudents.length === 0 ? (
+                <div className="py-10 text-center">
+                  <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-3 text-3xl">
+                    <i className="fa-solid fa-circle-check"></i>
+                  </div>
+                  <h4 className="font-black text-base text-emerald-900">
+                    {isEn ? 'All students recorded for this date!' : 'इस तारीख के सभी छात्रों की हाजिरी दर्ज हो चुकी है!'}
+                  </h4>
+                  <p className="text-xs text-slate-500 mt-1">
+                    {isEn ? '0 pending students remaining.' : 'अब कोई भी छात्र Pending नहीं बचा है।'}
+                  </p>
+                </div>
+              ) : filteredPendingModalStudents.length === 0 ? (
+                <div className="py-8 text-center text-xs text-slate-500 font-bold">
+                  {isEn ? 'No matching pending student found.' : 'खोज से मेल खाने वाला कोई Pending छात्र नहीं मिला।'}
+                </div>
+              ) : (
+                filteredPendingModalStudents.map((st, i) => {
+                  const sId = String(st.Student_ID || '').trim();
+                  const isPres = rowStates[sId]?.isPresent !== false;
+
+                  return (
+                    <div
+                      key={sId || i}
+                      className={`p-3 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-all ${
+                        isPres
+                          ? 'bg-white border-emerald-200 shadow-2xs'
+                          : 'bg-rose-50/70 border-rose-200 shadow-2xs'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="relative shrink-0">
+                          <StudentAvatar student={st} photoUrl={getStudentPhoto(st)} size="md" />
+                          <span
+                            className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white flex items-center justify-center text-[9px] font-black ${
+                              isPres ? 'bg-emerald-500 text-white' : 'bg-rose-500 text-white'
+                            }`}
+                          >
+                            {isPres ? 'P' : 'A'}
+                          </span>
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-black text-sm text-slate-900 truncate">{st.Student_Name}</span>
+                            {st.Roll_Number && (
+                              <span className="px-1.5 py-0.2 rounded-md bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-bold">
+                                #{st.Roll_Number}
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-slate-500 truncate">
+                            ID: <strong className="text-slate-700">{sId}</strong> • {isEn ? 'Father:' : 'पिता:'} {st.Father_Name || 'N/A'}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-auto">
+                        <button
+                          type="button"
+                          onClick={() => handleSetStudentPresence(sId, true)}
+                          className={`px-3 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer transition-all active:scale-95 ${
+                            isPres
+                              ? 'bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-300'
+                              : 'bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-300'
+                          }`}
+                        >
+                          <i className="fa-solid fa-check"></i>
+                          <span>{isEn ? 'Present' : 'Present'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleSetStudentPresence(sId, false)}
+                          className={`px-3 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer transition-all active:scale-95 ${
+                            !isPres
+                              ? 'bg-rose-600 text-white shadow-sm ring-2 ring-rose-300'
+                              : 'bg-white hover:bg-rose-50 text-rose-700 border border-rose-300'
+                          }`}
+                        >
+                          <i className="fa-solid fa-xmark"></i>
+                          <span>{isEn ? 'Absent' : 'Absent'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={isSaving}
+                          onClick={() => saveStudentsSubset([st], pendingStudents.length <= 1)}
+                          className="px-2.5 py-2 rounded-xl bg-[#0c2340] hover:bg-[#10316b] text-amber-300 text-xs font-black flex items-center gap-1 cursor-pointer transition-all active:scale-95 disabled:opacity-50"
+                          title={isEn ? 'Save only this student now' : 'सिर्फ इस छात्र की हाजिरी अभी सेव करें'}
+                        >
+                          <i className="fa-solid fa-floppy-disk"></i>
+                          <span>{isEn ? 'Save' : 'सेव'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Modal Footer Save All */}
+            {pendingStudents.length > 0 && (
+              <div className="px-4 sm:px-5 py-3.5 bg-white border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-2.5 shrink-0">
+                <div className="text-xs font-bold text-slate-600">
+                  {isEn ? 'Pending:' : 'बाकी:'} <strong className="text-amber-700">{pendingStudents.length}</strong> |{' '}
+                  {isEn ? 'Present:' : 'उपस्थित:'} <strong className="text-emerald-700">{pendingPresentCount}</strong> |{' '}
+                  {isEn ? 'Absent:' : 'अनुपस्थित:'} <strong className="text-rose-700">{pendingAbsentCount}</strong>
+                </div>
+
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <button
+                    type="button"
+                    onClick={() => setPendingModalOpen(false)}
+                    className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
+                  >
+                    {isEn ? 'Close' : 'बंद करें'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isSaving}
+                    onClick={() => saveStudentsSubset(pendingStudents, true)}
+                    className="flex-1 sm:flex-none px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md cursor-pointer transition-all active:scale-95 disabled:opacity-50"
+                  >
+                    <i className={`fa-solid ${isSaving ? 'fa-spinner fa-spin' : 'fa-floppy-disk'} text-amber-300`}></i>
+                    <span>
+                      {isSaving
+                        ? isEn
+                          ? 'Saving...'
+                          : 'सेव हो रहा है...'
+                        : isEn
+                        ? `💾 Save All Pending (${pendingPresentCount}P, ${pendingAbsentCount}A)`
+                        : `💾 सभी Pending सेव करें (${pendingPresentCount} Present, ${pendingAbsentCount} Absent)`}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
