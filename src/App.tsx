@@ -64,6 +64,7 @@ const TeacherHomeworkChecker = React.lazy(() => import('./components/TeacherHome
 const StaffAttendanceView = React.lazy(() => import('./components/StaffAttendanceView').then((m) => ({ default: m.StaffAttendanceView })));
 const StaffAttendanceScannerModal = React.lazy(() => import('./components/StaffAttendanceScannerModal').then((m) => ({ default: m.StaffAttendanceScannerModal })));
 const StudentQRScannerModal = React.lazy(() => import('./components/StudentQRScannerModal').then((m) => ({ default: m.StudentQRScannerModal })));
+const QuickQrAttendanceModal = React.lazy(() => import('./components/QuickQrAttendanceModal').then((m) => ({ default: m.QuickQrAttendanceModal })));
 const StudentHomeworkQRTrackerModal = React.lazy(() => import('./components/StudentHomeworkQRTrackerModal').then((m) => ({ default: m.StudentHomeworkQRTrackerModal })));
 const GoogleSheetSyncModal = React.lazy(() => import('./components/GoogleSheetSyncModal').then((m) => ({ default: m.GoogleSheetSyncModal })));
 const VillageRouteAutoManager = React.lazy(() => import('./components/VillageRouteAutoManager').then((m) => ({ default: m.VillageRouteAutoManager })));
@@ -1929,6 +1930,15 @@ export default function App() {
   const [selectedBehaviorStudent, setSelectedBehaviorStudent] = useState<Student | null>(null);
   const [bulkAttendanceModalOpen, setBulkAttendanceModalOpen] = useState<boolean>(false);
   const [bulkAttendanceInitialClass, setBulkAttendanceInitialClass] = useState<string>('');
+  const [quickQrAttendanceOpen, setQuickQrAttendanceOpen] = useState<boolean>(false);
+  const [teacherQrAttendanceAllowed, setTeacherQrAttendanceAllowed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('evs_teacher_qr_attendance_allowed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [teacherQrAttendanceToggleBusy, setTeacherQrAttendanceToggleBusy] = useState<boolean>(false);
   const [behaviorSubTab, setBehaviorSubTab] = useState<'bulkRegister' | 'history'>('bulkRegister');
 
   // Add Fee Modal State (Manager & Principal fee collection)
@@ -4115,6 +4125,19 @@ export default function App() {
         syncFeeWaiversWithServer();
       } else if (event.entity === 'parent_reviews') {
         refreshParentReviews(false);
+      } else if (event.entity === 'teacher_qr_attendance_access') {
+        fetch('/api/teacher-qr-attendance-access', { cache: 'no-store' })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((data) => {
+            if (data?.access && typeof data.access.enabled === 'boolean') {
+              const nextEnabled = Boolean(data.access.enabled);
+              setTeacherQrAttendanceAllowed(nextEnabled);
+              try {
+                localStorage.setItem('evs_teacher_qr_attendance_allowed', nextEnabled ? 'true' : 'false');
+              } catch {}
+            }
+          })
+          .catch(() => {});
       } else {
         syncAllData(false, false);
       }
@@ -4123,6 +4146,20 @@ export default function App() {
       setTimeout(() => setSyncToastMessage(null), 3000);
     });
 
+    // Fetch Manager-controlled Teacher QR Attendance permission immediately on load
+    fetch('/api/teacher-qr-attendance-access', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (isMounted && data?.access && typeof data.access.enabled === 'boolean') {
+          const nextEnabled = Boolean(data.access.enabled);
+          setTeacherQrAttendanceAllowed(nextEnabled);
+          try {
+            localStorage.setItem('evs_teacher_qr_attendance_allowed', nextEnabled ? 'true' : 'false');
+          } catch {}
+        }
+      })
+      .catch(() => {});
+
     return () => {
       isMounted = false;
       if (cleanupDeferred) cleanupDeferred();
@@ -4130,6 +4167,13 @@ export default function App() {
       unsubscribe();
     };
   }, []);
+
+  // Auto-close Teacher's QR Attendance modal immediately if Manager disables permission live
+  useEffect(() => {
+    if (activeTab === 'teacher' && !teacherQrAttendanceAllowed && quickQrAttendanceOpen) {
+      setQuickQrAttendanceOpen(false);
+    }
+  }, [activeTab, teacherQrAttendanceAllowed, quickQrAttendanceOpen]);
 
   // Parse Date string into comparable timestamp at midnight (00:00:00)
   const parseDateToTimestamp = (dateStr: string | null | undefined): number => {
@@ -5773,6 +5817,74 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     const absCount = formattedRecords.length - presCount;
     setSyncToastMessage(`✅ ${formattedRecords.length} छात्रों की हाजिरी (${presCount} उपस्थित, ${absCount} अनुपस्थित) सुरक्षित हो गई!`);
     setTimeout(() => setSyncToastMessage(null), 4000);
+  };
+
+  // Manager & Permitted Teacher 1-Scan Instant QR Attendance Handler (All Classes)
+  const handleInstantQrAttendance = async (student: Student, dateISO: string) => {
+    const canManagerScan = Boolean(managerUser && activeTab === 'manager');
+    const canTeacherScan = Boolean(teacherUser && activeTab === 'teacher' && teacherQrAttendanceAllowed);
+    if (!canManagerScan && !canTeacherScan) return;
+
+    const dt = normalizeDateISO(dateISO || getLocalDateYMD());
+    const sId = String(student.Student_ID || '').trim();
+    if (!sId) return;
+    const scannerLabel = canManagerScan
+      ? `Manager: ${managerUser?.Name || 'Manager'}`
+      : `Teacher: ${teacherUser?.Name || 'Teacher'}`;
+
+    await handleSaveBatchBehavior([
+      {
+        Behavior_ID: `BEH-${sId}-${dt}`,
+        Student_ID: sId,
+        Date: dt,
+        Class: student.Class || '',
+        Is_Present: true,
+        is_present: 'Present',
+        Is_Bathed: true,
+        is_bathed: 'Yes',
+        Nails_Clean: true,
+        nails_clean: 'Yes',
+        Uniform_clean: true,
+        uniform_clean: 'Yes',
+        Good_Manners: 'उत्कृष्ट (Excellent)',
+        Discipline: true,
+        discipline: 'Good',
+        Remark: `QR स्कैन द्वारा तुरंत उपस्थिति दर्ज (${scannerLabel})`,
+      },
+    ]);
+  };
+
+  // Manager-Only Toggle: Enable / Disable Instant QR Attendance for Teachers (All Classes)
+  const handleToggleTeacherQrAttendance = async (nextVal?: boolean) => {
+    if (!managerUser) return;
+    const targetEnabled = typeof nextVal === 'boolean' ? nextVal : !teacherQrAttendanceAllowed;
+    setTeacherQrAttendanceToggleBusy(true);
+    setTeacherQrAttendanceAllowed(targetEnabled);
+    try {
+      localStorage.setItem('evs_teacher_qr_attendance_allowed', targetEnabled ? 'true' : 'false');
+    } catch {}
+    try {
+      await fetch('/api/teacher-qr-attendance-access', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          enabled: targetEnabled,
+          updatedBy: managerUser.Name || 'Manager',
+        }),
+      });
+      realtimeSync.broadcastUpdate('teacher_qr_attendance_access', 'update', { enabled: targetEnabled });
+      setSyncToastMessage(
+        targetEnabled
+          ? '✅ टीचर्स के लिए तुरंत QR हाजिरी स्कैनर चालू हो गया (सभी कक्षाएँ खुली)!'
+          : '🔒 टीचर्स के लिए तुरंत QR हाजिरी स्कैनर बंद कर दिया गया!'
+      );
+      setTimeout(() => setSyncToastMessage(null), 4000);
+    } catch {
+      setSyncToastMessage('⚠️ अनुमति सेव करने में समस्या आई, कृपया पुनः प्रयास करें।');
+      setTimeout(() => setSyncToastMessage(null), 3500);
+    } finally {
+      setTeacherQrAttendanceToggleBusy(false);
+    }
   };
 
   // Handler for Manager to Assign Class(es) to Teachers/Staff (Supports 1, 2, 3 or more classes)
@@ -11097,6 +11209,18 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   </button>
                 )}
 
+                {teacherQrAttendanceAllowed && (
+                  <button
+                    type="button"
+                    onClick={() => setQuickQrAttendanceOpen(true)}
+                    className="px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white text-xs font-black flex items-center gap-1.5 shadow-md active:scale-95 cursor-pointer border border-emerald-300/50"
+                    title={currentLang === 'en' ? "Scan any student's QR to mark attendance immediately (All Classes)" : "किसी भी छात्र का QR स्कैन करके तुरंत हाजिरी लगाएं (सभी कक्षाएँ)"}
+                  >
+                    <i className="fa-solid fa-qrcode text-amber-300"></i>
+                    <span>{currentLang === 'en' ? '📷 Student QR Attendance' : '📷 छात्र QR हाजिरी'}</span>
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={() => setIsSchoolQrModalOpen(true)}
@@ -12173,6 +12297,29 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       </span>
                     </button>
                   </div>
+
+                  {teacherQrAttendanceAllowed ? (
+                    <button
+                      type="button"
+                      onClick={() => setQuickQrAttendanceOpen(true)}
+                      className="px-3.5 sm:px-4 py-2 rounded-xl font-black text-xs sm:text-sm bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-800 hover:to-indigo-800 text-white flex items-center gap-2 shadow-sm cursor-pointer transition-all active:scale-95 ring-2 ring-blue-300/60"
+                      title={currentLang === 'en' ? 'Scan any student QR across all classes to mark Present immediately' : 'किसी भी कक्षा के छात्र का QR कोड स्कैन करके तुरंत हाजिरी लगाएं'}
+                    >
+                      <i className="fa-solid fa-qrcode text-amber-300"></i>
+                      <span>{currentLang === 'en' ? '📷 Instant QR Attendance (All Classes)' : '📷 तुरंत QR हाजिरी स्कैनर'}</span>
+                      <span className="px-1.5 py-0.5 rounded-full bg-emerald-400 text-slate-950 text-[10px] font-black">
+                        {currentLang === 'en' ? 'All Classes' : 'सभी कक्षाएँ'}
+                      </span>
+                    </button>
+                  ) : (
+                    <span
+                      className="px-3 py-1.5 rounded-xl bg-slate-100 text-slate-500 border border-slate-200 text-[11px] font-bold flex items-center gap-1.5"
+                      title="मैनेजर डैशबोर्ड से अनुमति चालू होने पर ही टीचर QR हाजिरी स्कैनर उपयोग कर सकते हैं"
+                    >
+                      <i className="fa-solid fa-lock text-slate-400"></i>
+                      <span>{currentLang === 'en' ? 'QR Attendance Locked (Manager Control)' : 'QR हाजिरी लॉक (मैनेजर अनुमति बंद)'}</span>
+                    </span>
+                  )}
                 </div>
 
                 {/* VIEW A: FAST CLASSROOM BULK ATTENDANCE REGISTER */}
@@ -12898,6 +13045,19 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 <button
                   type="button"
                   onClick={() => {
+                    setManagerTab('attendance');
+                    setQuickQrAttendanceOpen(true);
+                  }}
+                  className="px-2.5 sm:px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-xs transition-all cursor-pointer active:scale-95"
+                  title="QR कोड स्कैन करते ही तुरंत छात्र की हाजिरी दर्ज करें (केवल मैनेजर)"
+                >
+                  <i className="fa-solid fa-camera text-xs text-amber-300"></i>
+                  <span className="hidden sm:inline">QR हाजिरी</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
                     setQrScannerTarget('managerStudents');
                     setQrScannerSubtitle('प्रबंधक: छात्र खोजें (QR स्कैन, नाम, ID या मोबाइल द्वारा)');
                     setQrScannerOpen(true);
@@ -13306,11 +13466,11 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                               <h4 className="font-black text-xs sm:text-sm text-slate-900 truncate">
                                 उपस्थिति व अनुपस्थित अलर्ट (Attendance & Absent)
                               </h4>
-                              <p className="text-[11px] text-slate-500 truncate">मासिक उपस्थिति कैलेंडर, स्कूल अवकाश व 1-क्लिक WhatsApp अलर्ट</p>
+                              <p className="text-[11px] text-slate-500 truncate">तुरंत QR स्कैन हाजिरी, मासिक कैलेंडर, अवकाश व WhatsApp अलर्ट</p>
                             </div>
                           </div>
-                          <span className="px-2 py-0.5 rounded-lg text-xs font-black bg-slate-100 text-slate-700 shrink-0">
-                            कैलेंडर + WhatsApp
+                          <span className="px-2 py-0.5 rounded-lg text-xs font-black bg-emerald-100 text-emerald-800 shrink-0">
+                            QR हाजिरी + अलर्ट
                           </span>
                         </button>
                       </div>
@@ -15007,6 +15167,16 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   <div className="flex items-center gap-2 flex-wrap">
                     <button
                       type="button"
+                      onClick={() => setQuickQrAttendanceOpen(true)}
+                      className="px-3.5 py-2 rounded-xl text-xs font-black bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-800 hover:to-indigo-800 text-white flex items-center gap-1.5 shadow-sm cursor-pointer transition-all active:scale-95 ring-2 ring-blue-300/60"
+                      title="छात्र का QR कोड स्कैन करते ही तुरंत हाजिरी लगाएं (सिर्फ मैनेजर)"
+                    >
+                      <i className="fa-solid fa-qrcode text-amber-300"></i>
+                      <span>📷 तुरंत QR हाजिरी स्कैनर</span>
+                    </button>
+
+                    <button
+                      type="button"
                       onClick={() => {
                         setBulkAttendanceInitialClass('all');
                         setBulkAttendanceModalOpen(true);
@@ -15060,6 +15230,58 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       <span>फुल स्क्रीन (Full Screen)</span>
                     </button>
                   </div>
+                </div>
+
+                {/* Manager Permission Control: Enable/Disable Teacher QR Attendance (All Classes) */}
+                <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-start sm:items-center gap-3">
+                    <span
+                      className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg shrink-0 ${
+                        teacherQrAttendanceAllowed
+                          ? 'bg-emerald-100 text-emerald-700'
+                          : 'bg-slate-100 text-slate-500'
+                      }`}
+                    >
+                      <i className={`fa-solid ${teacherQrAttendanceAllowed ? 'fa-unlock-keyhole' : 'fa-lock'}`}></i>
+                    </span>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="font-black text-xs sm:text-sm text-slate-900">
+                          टीचर डैशबोर्ड QR हाजिरी अनुमति (सभी कक्षाओं के लिए खुला)
+                        </h4>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                            teacherQrAttendanceAllowed
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                              : 'bg-rose-50 text-rose-700 border border-rose-200'
+                          }`}
+                        >
+                          {teacherQrAttendanceAllowed ? '🟢 चालू (ON)' : '🔒 बंद (OFF)'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        {teacherQrAttendanceAllowed
+                          ? 'अभी सभी टीचर्स अपने पोर्टल से किसी भी कक्षा के छात्र का QR कोड स्कैन करके तुरंत हाजिरी लगा सकते हैं।'
+                          : 'अभी टीचर्स के लिए QR हाजिरी स्कैनर बंद है। चालू करते ही टीचर्स के पोर्टल पर लाइव दिखने लगेगा।'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={teacherQrAttendanceToggleBusy}
+                    onClick={() => handleToggleTeacherQrAttendance()}
+                    className={`px-4 py-2 rounded-xl text-xs font-black flex items-center justify-center gap-2 shrink-0 cursor-pointer transition-all shadow-xs active:scale-95 ${
+                      teacherQrAttendanceAllowed
+                        ? 'bg-rose-600 hover:bg-rose-700 text-white'
+                        : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                    } ${teacherQrAttendanceToggleBusy ? 'opacity-60 cursor-wait' : ''}`}
+                  >
+                    <i className={`fa-solid ${teacherQrAttendanceAllowed ? 'fa-toggle-on' : 'fa-toggle-off'} text-sm`}></i>
+                    <span>
+                      {teacherQrAttendanceAllowed ? 'टीचर QR हाजिरी बंद करें (Turn OFF)' : 'टीचर QR हाजिरी चालू करें (Turn ON)'}
+                    </span>
+                  </button>
                 </div>
 
                 {/* Directly Embedded Attendance & Absent Management Hub */}
@@ -15618,6 +15840,21 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
           </div>
         </div>
       )}
+
+      {/* Instant 1-Scan QR Attendance Modal (Manager Always + Teacher when Manager turns ON) */}
+      {quickQrAttendanceOpen &&
+        ((activeTab === 'manager' && managerUser) ||
+          (activeTab === 'teacher' && teacherUser && teacherQrAttendanceAllowed)) && (
+          <QuickQrAttendanceModal
+            isOpen={quickQrAttendanceOpen}
+            onClose={() => setQuickQrAttendanceOpen(false)}
+            students={students}
+            behaviorRecords={behaviorList}
+            getClassName={getClassName}
+            getStudentPhoto={getStudentPhoto}
+            onMarkPresent={handleInstantQrAttendance}
+          />
+        )}
 
       {/* ========================================================================= */}
       {/* ADD FEE COLLECTION MODAL (फ़ीस रसीद काटें व जमा करें)                         */}

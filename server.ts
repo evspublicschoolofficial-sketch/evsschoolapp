@@ -1866,6 +1866,7 @@ async function startServer() {
   const SCHOOL_LOCATION_FILE = '/tmp/evs_school_location.json';
   const SCHOOL_SHIFT_SETTINGS_FILE = '/tmp/evs_school_shift_settings.json';
   const TEACHER_ASSIGNMENTS_FILE = '/tmp/evs_teacher_class_assignments.json';
+  const TEACHER_QR_ATTENDANCE_ACCESS_FILE = '/tmp/evs_teacher_qr_attendance_access.json';
 
   const getTeacherClassAssignments = (): Record<string, string> => {
     try {
@@ -1960,6 +1961,36 @@ async function startServer() {
       fs.writeFileSync(SCHOOL_SHIFT_SETTINGS_FILE, JSON.stringify(updated, null, 2), 'utf-8');
     } catch (e) {
       console.warn('Error writing school shift settings file:', e);
+    }
+    return updated;
+  };
+
+  const getTeacherQrAttendanceAccess = () => {
+    try {
+      if (fs.existsSync(TEACHER_QR_ATTENDANCE_ACCESS_FILE)) {
+        const parsed = JSON.parse(fs.readFileSync(TEACHER_QR_ATTENDANCE_ACCESS_FILE, 'utf-8'));
+        return {
+          enabled: Boolean(parsed?.enabled),
+          updatedBy: String(parsed?.updatedBy || ''),
+          updatedAt: String(parsed?.updatedAt || ''),
+        };
+      }
+    } catch (e) {
+      console.warn('Error reading teacher QR attendance access file:', e);
+    }
+    return { enabled: false, updatedBy: '', updatedAt: '' };
+  };
+
+  const saveTeacherQrAttendanceAccess = (body: any) => {
+    const updated = {
+      enabled: Boolean(body?.enabled),
+      updatedBy: String(body?.updatedBy || 'Manager'),
+      updatedAt: getLocalTimestampIST(),
+    };
+    try {
+      fs.writeFileSync(TEACHER_QR_ATTENDANCE_ACCESS_FILE, JSON.stringify(updated, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Error writing teacher QR attendance access file:', e);
     }
     return updated;
   };
@@ -2581,6 +2612,32 @@ async function startServer() {
       res.json({ success: true, settings: updated });
     } catch (e: any) {
       res.status(500).json({ success: false, error: e?.message || 'Failed to update school shift settings' });
+    }
+  });
+
+  // Endpoints for Manager-controlled Teacher Instant QR Attendance Access (All Classes)
+  app.get('/api/teacher-qr-attendance-access', (_req, res) => {
+    res.json({ success: true, access: getTeacherQrAttendanceAccess() });
+  });
+
+  app.post('/api/teacher-qr-attendance-access', (req, res) => {
+    try {
+      const updated = saveTeacherQrAttendanceAccess(req.body);
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'teacher_qr_attendance_access',
+        action: 'update',
+        details: updated,
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(broadcastMsg);
+        }
+      }
+      res.json({ success: true, access: updated });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e?.message || 'Failed to update teacher QR attendance access' });
     }
   });
 
