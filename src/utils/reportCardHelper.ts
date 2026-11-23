@@ -307,6 +307,9 @@ export const loadLocalReportCardWorkflow = (): ReportCardWorkflowSnapshot => {
 
 export const saveLocalReportCardWorkflow = (snap: ReportCardWorkflowSnapshot) => {
   try {
+    const nextJson = JSON.stringify(snap);
+    const prevJson = localStorage.getItem(REPORT_CARD_WORKFLOW_STORAGE_KEY);
+    if (prevJson === nextJson) return;
     saveToPhoneMemory(REPORT_CARD_WORKFLOW_STORAGE_KEY, snap);
     window.dispatchEvent(new CustomEvent(REPORT_CARD_UPDATED_EVENT, { detail: { type: 'workflow', snap } }));
   } catch {}
