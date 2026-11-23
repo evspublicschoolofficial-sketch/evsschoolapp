@@ -54,39 +54,40 @@ import {
   saveToPhoneMemory,
   setSyncedBuildSignature,
 } from './utils/phoneMemoryCache';
+import { lazyWithRetry } from './utils/lazyRetry';
 
-// High-speed on-demand code splitting (React.lazy): Drops initial bundle size by ~85% for Parents on mobile!
-const StudentAttendanceChart = React.lazy(() => import('./components/StudentAttendanceChart'));
-const ManagerFeeDashboard = React.lazy(() => import('./components/ManagerFeeDashboard').then((m) => ({ default: m.ManagerFeeDashboard })));
-const ManagerVanTracker = React.lazy(() => import('./components/ManagerVanTracker').then((m) => ({ default: m.ManagerVanTracker })));
-const DriverPortal = React.lazy(() => import('./components/DriverPortal').then((m) => ({ default: m.DriverPortal })));
-const ClassroomBulkAttendanceRegister = React.lazy(() => import('./components/ClassroomBulkAttendanceRegister').then((m) => ({ default: m.ClassroomBulkAttendanceRegister })));
-const TeacherHomeworkChecker = React.lazy(() => import('./components/TeacherHomeworkChecker').then((m) => ({ default: m.TeacherHomeworkChecker })));
-const StaffAttendanceView = React.lazy(() => import('./components/StaffAttendanceView').then((m) => ({ default: m.StaffAttendanceView })));
-const StaffAttendanceScannerModal = React.lazy(() => import('./components/StaffAttendanceScannerModal').then((m) => ({ default: m.StaffAttendanceScannerModal })));
-const StudentQRScannerModal = React.lazy(() => import('./components/StudentQRScannerModal').then((m) => ({ default: m.StudentQRScannerModal })));
-const QuickQrAttendanceModal = React.lazy(() => import('./components/QuickQrAttendanceModal').then((m) => ({ default: m.QuickQrAttendanceModal })));
-const StudentHomeworkQRTrackerModal = React.lazy(() => import('./components/StudentHomeworkQRTrackerModal').then((m) => ({ default: m.StudentHomeworkQRTrackerModal })));
-const GoogleSheetSyncModal = React.lazy(() => import('./components/GoogleSheetSyncModal').then((m) => ({ default: m.GoogleSheetSyncModal })));
-const VillageRouteAutoManager = React.lazy(() => import('./components/VillageRouteAutoManager').then((m) => ({ default: m.VillageRouteAutoManager })));
-const OfficialFeeReceiptModal = React.lazy(() => import('./components/OfficialFeeReceiptModal').then((m) => ({ default: m.OfficialFeeReceiptModal })));
-const AttendanceCalendarModal = React.lazy(() => import('./components/AttendanceCalendarModal').then((m) => ({ default: m.AttendanceCalendarModal })));
-const AddFeeModal = React.lazy(() => import('./components/AddFeeModal').then((m) => ({ default: m.AddFeeModal })));
-const AddStudentModal = React.lazy(() => import('./components/AddStudentModal').then((m) => ({ default: m.AddStudentModal })));
-const StudentBehaviorModal = React.lazy(() => import('./components/StudentBehaviorModal').then((m) => ({ default: m.StudentBehaviorModal })));
-const SchoolQRCodeModal = React.lazy(() => import('./components/SchoolQRCodeModal').then((m) => ({ default: m.SchoolQRCodeModal })));
-const ManagerOverviewModals = React.lazy(() => import('./components/ManagerOverviewModals').then((m) => ({ default: m.ManagerOverviewModals })));
-const TeacherPerformanceDashboard = React.lazy(() => import('./components/TeacherPerformanceDashboard').then((m) => ({ default: m.TeacherPerformanceDashboard })));
-const TeacherSyllabusPlanner = React.lazy(() => import('./components/TeacherSyllabusPlanner').then((m) => ({ default: m.TeacherSyllabusPlanner })));
-const WeeklySubjectTestManager = React.lazy(() => import('./components/WeeklySubjectTestManager').then((m) => ({ default: m.WeeklySubjectTestManager })));
-const ParentUpiFeeSection = React.lazy(() => import('./components/ParentUpiFeeSection').then((m) => ({ default: m.ParentUpiFeeSection })));
-const ReportCardManagerView = React.lazy(() => import('./components/ReportCardManagerView').then((m) => ({ default: m.ReportCardManagerView })));
-const PrintableReportCard = React.lazy(() => import('./components/PrintableReportCard').then((m) => ({ default: m.PrintableReportCard })));
-const HallPassManagerView = React.lazy(() => import('./components/HallPassManagerView').then((m) => ({ default: m.HallPassManagerView })));
-const ExamSeatingPlanView = React.lazy(() => import('./components/ExamSeatingPlanView').then((m) => ({ default: m.ExamSeatingPlanView })));
-const ParentHallPassView = React.lazy(() => import('./components/ParentHallPassView').then((m) => ({ default: m.ParentHallPassView })));
-const ParentReviewSection = React.lazy(() => import('./components/ParentReviewSection').then((m) => ({ default: m.ParentReviewSection })));
-const ManagerParentReviewsView = React.lazy(() => import('./components/ManagerParentReviewsView').then((m) => ({ default: m.ManagerParentReviewsView })));
+// High-speed on-demand code splitting (lazyWithRetry): Drops initial bundle size by ~85% and auto-recovers from stale deploy chunks!
+const StudentAttendanceChart = lazyWithRetry(() => import('./components/StudentAttendanceChart'));
+const ManagerFeeDashboard = lazyWithRetry(() => import('./components/ManagerFeeDashboard').then((m) => ({ default: m.ManagerFeeDashboard })));
+const ManagerVanTracker = lazyWithRetry(() => import('./components/ManagerVanTracker').then((m) => ({ default: m.ManagerVanTracker })));
+const DriverPortal = lazyWithRetry(() => import('./components/DriverPortal').then((m) => ({ default: m.DriverPortal })));
+const ClassroomBulkAttendanceRegister = lazyWithRetry(() => import('./components/ClassroomBulkAttendanceRegister').then((m) => ({ default: m.ClassroomBulkAttendanceRegister })));
+const TeacherHomeworkChecker = lazyWithRetry(() => import('./components/TeacherHomeworkChecker').then((m) => ({ default: m.TeacherHomeworkChecker })));
+const StaffAttendanceView = lazyWithRetry(() => import('./components/StaffAttendanceView').then((m) => ({ default: m.StaffAttendanceView })));
+const StaffAttendanceScannerModal = lazyWithRetry(() => import('./components/StaffAttendanceScannerModal').then((m) => ({ default: m.StaffAttendanceScannerModal })));
+const StudentQRScannerModal = lazyWithRetry(() => import('./components/StudentQRScannerModal').then((m) => ({ default: m.StudentQRScannerModal })));
+const QuickQrAttendanceModal = lazyWithRetry(() => import('./components/QuickQrAttendanceModal').then((m) => ({ default: m.QuickQrAttendanceModal })));
+const StudentHomeworkQRTrackerModal = lazyWithRetry(() => import('./components/StudentHomeworkQRTrackerModal').then((m) => ({ default: m.StudentHomeworkQRTrackerModal })));
+const GoogleSheetSyncModal = lazyWithRetry(() => import('./components/GoogleSheetSyncModal').then((m) => ({ default: m.GoogleSheetSyncModal })));
+const VillageRouteAutoManager = lazyWithRetry(() => import('./components/VillageRouteAutoManager').then((m) => ({ default: m.VillageRouteAutoManager })));
+const OfficialFeeReceiptModal = lazyWithRetry(() => import('./components/OfficialFeeReceiptModal').then((m) => ({ default: m.OfficialFeeReceiptModal })));
+const AttendanceCalendarModal = lazyWithRetry(() => import('./components/AttendanceCalendarModal').then((m) => ({ default: m.AttendanceCalendarModal })));
+const AddFeeModal = lazyWithRetry(() => import('./components/AddFeeModal').then((m) => ({ default: m.AddFeeModal })));
+const AddStudentModal = lazyWithRetry(() => import('./components/AddStudentModal').then((m) => ({ default: m.AddStudentModal })));
+const StudentBehaviorModal = lazyWithRetry(() => import('./components/StudentBehaviorModal').then((m) => ({ default: m.StudentBehaviorModal })));
+const SchoolQRCodeModal = lazyWithRetry(() => import('./components/SchoolQRCodeModal').then((m) => ({ default: m.SchoolQRCodeModal })));
+const ManagerOverviewModals = lazyWithRetry(() => import('./components/ManagerOverviewModals').then((m) => ({ default: m.ManagerOverviewModals })));
+const TeacherPerformanceDashboard = lazyWithRetry(() => import('./components/TeacherPerformanceDashboard').then((m) => ({ default: m.TeacherPerformanceDashboard })));
+const TeacherSyllabusPlanner = lazyWithRetry(() => import('./components/TeacherSyllabusPlanner').then((m) => ({ default: m.TeacherSyllabusPlanner })));
+const WeeklySubjectTestManager = lazyWithRetry(() => import('./components/WeeklySubjectTestManager').then((m) => ({ default: m.WeeklySubjectTestManager })));
+const ParentUpiFeeSection = lazyWithRetry(() => import('./components/ParentUpiFeeSection').then((m) => ({ default: m.ParentUpiFeeSection })));
+const ReportCardManagerView = lazyWithRetry(() => import('./components/ReportCardManagerView').then((m) => ({ default: m.ReportCardManagerView })));
+const PrintableReportCard = lazyWithRetry(() => import('./components/PrintableReportCard').then((m) => ({ default: m.PrintableReportCard })));
+const HallPassManagerView = lazyWithRetry(() => import('./components/HallPassManagerView').then((m) => ({ default: m.HallPassManagerView })));
+const ExamSeatingPlanView = lazyWithRetry(() => import('./components/ExamSeatingPlanView').then((m) => ({ default: m.ExamSeatingPlanView })));
+const ParentHallPassView = lazyWithRetry(() => import('./components/ParentHallPassView').then((m) => ({ default: m.ParentHallPassView })));
+const ParentReviewSection = lazyWithRetry(() => import('./components/ParentReviewSection').then((m) => ({ default: m.ParentReviewSection })));
+const ManagerParentReviewsView = lazyWithRetry(() => import('./components/ManagerParentReviewsView').then((m) => ({ default: m.ManagerParentReviewsView })));
 
 // Non-inlined static asset paths (prevents 1.4 MB image bloat inside main JS bundle)
 const studentFarahPhoto = '/assets/student_farah_1789483069291.jpg';

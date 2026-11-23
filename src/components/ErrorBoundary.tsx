@@ -1,4 +1,4 @@
-import React, { Component, ErrorInfo, ReactNode } from 'react';
+import React, { ErrorInfo, ReactNode } from 'react';
 
 interface Props {
   children: ReactNode;
@@ -7,6 +7,42 @@ interface Props {
 interface State {
   hasError: boolean;
   errorMessage: string;
+}
+
+const CHUNK_RECOVERY_TS_KEY = 'evs_chunk_recovery_ts';
+
+const isDynamicChunkError = (msg: string): boolean => {
+  const m = String(msg || '').toLowerCase();
+  return (
+    m.includes('failed to fetch dynamically imported module') ||
+    m.includes('importing a module script failed') ||
+    m.includes('loading chunk') ||
+    m.includes('chunkloaderror') ||
+    m.includes('error loading dynamically imported module') ||
+    m.includes('unable to preload css')
+  );
+};
+
+async function clearCachesAndReload(hardResetUrl?: string) {
+  try {
+    if ('serviceWorker' in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map((r) => r.unregister().catch(() => {})));
+    }
+    if ('caches' in window) {
+      const keys = await window.caches.keys();
+      await Promise.all(keys.map((k) => window.caches.delete(k).catch(() => {})));
+    }
+    try {
+      await fetch('/index.html', { cache: 'reload' });
+    } catch {}
+  } catch {}
+
+  if (hardResetUrl) {
+    window.location.href = hardResetUrl;
+  } else {
+    window.location.reload();
+  }
 }
 
 export class ErrorBoundary extends React.Component<Props, State> {
@@ -28,11 +64,21 @@ export class ErrorBoundary extends React.Component<Props, State> {
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error('App Runtime Error:', error, errorInfo);
+    const msg = error?.message || '';
+    if (typeof window !== 'undefined' && isDynamicChunkError(msg)) {
+      try {
+        const lastAttempt = Number(sessionStorage.getItem(CHUNK_RECOVERY_TS_KEY) || '0');
+        if (!lastAttempt || Date.now() - lastAttempt > 15000) {
+          sessionStorage.setItem(CHUNK_RECOVERY_TS_KEY, String(Date.now()));
+          clearCachesAndReload();
+        }
+      } catch {}
+    }
   }
 
   private handleReload = () => {
     if (typeof window !== 'undefined') {
-      window.location.reload();
+      clearCachesAndReload();
     }
   };
 
@@ -40,14 +86,8 @@ export class ErrorBoundary extends React.Component<Props, State> {
     if (typeof window !== 'undefined') {
       try {
         sessionStorage.clear();
-        // Unregister service workers if broken
-        if ('serviceWorker' in navigator) {
-          navigator.serviceWorker.getRegistrations().then((registrations) => {
-            for (const r of registrations) r.unregister();
-          });
-        }
       } catch {}
-      window.location.href = '/';
+      clearCachesAndReload('/');
     }
   };
 

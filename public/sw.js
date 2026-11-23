@@ -1,7 +1,7 @@
 // EVS Public School - High-Performance PWA Service Worker with Live Update Support
 // Build version stamped automatically during production build
 
-const CACHE_NAME = 'evs-school-pwa-v9';
+const CACHE_NAME = 'evs-school-pwa-v10';
 
 // Static core assets to pre-cache on install (HTML is always fetched Network-First)
 const PRECACHE_ASSETS = [
@@ -168,38 +168,58 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // CASE 1: HTML Document Navigation (Instant Cache-First with Background Revalidation for 0.05s boot)
+  // CASE 1: Strict Network-First for HTML Document Navigation (prevents stale index.html chunk mismatches on Vercel)
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      caches.match('/index.html').then((cachedHtml) => {
-        const networkFetch = fetch(event.request, { cache: 'no-store' })
-          .then((networkResponse) => {
-            if (networkResponse && networkResponse.status === 200) {
-              const clone = networkResponse.clone();
-              caches.open(CACHE_NAME).then((cache) => cache.put('/index.html', clone));
-            }
-            return networkResponse;
-          })
-          .catch(() => cachedHtml);
-
-        return cachedHtml || networkFetch;
-      })
+      fetch(event.request, { cache: 'no-store' })
+        .then((networkResponse) => {
+          const contentType = networkResponse.headers.get('content-type') || '';
+          if (networkResponse && networkResponse.status === 200 && contentType.includes('text/html')) {
+            const clone = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put('/index.html', clone));
+          }
+          return networkResponse;
+        })
+        .catch(async () => {
+          const cachedHtml = await caches.match('/index.html');
+          return cachedHtml || Response.error();
+        })
     );
     return;
   }
 
-  // CASE 2: Hashed build assets (/assets/*) — Cache-first since filenames change on every build
+  const isScriptOrStyle =
+    url.pathname.endsWith('.js') ||
+    url.pathname.endsWith('.mjs') ||
+    url.pathname.endsWith('.css');
+
+  // CASE 2: Hashed build assets (/assets/*) — Cache-first since filenames change on every build,
+  // with strict MIME validation so Vercel SPA HTML fallbacks are never cached as JS/CSS.
   if (url.pathname.startsWith('/assets/')) {
     event.respondWith(
-      caches.match(event.request).then((cachedResponse) => {
-        if (cachedResponse) return cachedResponse;
-        return fetch(event.request).then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            const clone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+      caches.match(event.request).then(async (cachedResponse) => {
+        if (cachedResponse) {
+          const cachedType = cachedResponse.headers.get('content-type') || '';
+          if (!(isScriptOrStyle && cachedType.includes('text/html'))) {
+            return cachedResponse;
           }
-          return networkResponse;
-        });
+          caches.open(CACHE_NAME).then((cache) => cache.delete(event.request));
+        }
+        const networkResponse = await fetch(event.request, { cache: 'no-cache' });
+        const contentType = networkResponse.headers.get('content-type') || '';
+        if (isScriptOrStyle && contentType.includes('text/html')) {
+          caches.open(CACHE_NAME).then((cache) => cache.delete('/index.html'));
+          return new Response('Stale chunk not found', {
+            status: 404,
+            statusText: 'Not Found',
+            headers: { 'Content-Type': 'text/plain' },
+          });
+        }
+        if (networkResponse && networkResponse.status === 200) {
+          const clone = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+        }
+        return networkResponse;
       })
     );
     return;
@@ -207,8 +227,7 @@ self.addEventListener('fetch', (event) => {
 
   // CASE 3: Icons, Fonts, Manifest, External CDNs — Stale-While-Revalidate
   const isStaticAsset =
-    url.pathname.endsWith('.js') ||
-    url.pathname.endsWith('.css') ||
+    isScriptOrStyle ||
     url.pathname.endsWith('.woff2') ||
     url.pathname.endsWith('.png') ||
     url.pathname.endsWith('.jpg') ||
@@ -220,17 +239,31 @@ self.addEventListener('fetch', (event) => {
   if (isStaticAsset) {
     event.respondWith(
       caches.match(event.request).then((cachedResponse) => {
+        const validCached =
+          cachedResponse &&
+          !(isScriptOrStyle && (cachedResponse.headers.get('content-type') || '').includes('text/html'))
+            ? cachedResponse
+            : undefined;
+
         const networkFetch = fetch(event.request)
           .then((networkResponse) => {
+            const contentType = networkResponse.headers.get('content-type') || '';
+            if (isScriptOrStyle && contentType.includes('text/html')) {
+              return new Response('Invalid module response', {
+                status: 404,
+                statusText: 'Not Found',
+                headers: { 'Content-Type': 'text/plain' },
+              });
+            }
             if (networkResponse && networkResponse.status === 200) {
               const clone = networkResponse.clone();
               caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
             }
             return networkResponse;
           })
-          .catch(() => cachedResponse);
+          .catch(() => validCached);
 
-        return cachedResponse || networkFetch;
+        return validCached || networkFetch;
       })
     );
     return;
@@ -240,7 +273,8 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     fetch(event.request)
       .then((networkResponse) => {
-        if (networkResponse && networkResponse.status === 200) {
+        const contentType = networkResponse.headers.get('content-type') || '';
+        if (networkResponse && networkResponse.status === 200 && !(isScriptOrStyle && contentType.includes('text/html'))) {
           const clone = networkResponse.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
         }
