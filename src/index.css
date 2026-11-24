@@ -207,7 +207,7 @@
 
   @page performance-landscape {
     size: A4 landscape;
-    margin: 6mm;
+    margin: 5mm;
   }
 
   body.printing-report-card * {
@@ -219,17 +219,7 @@
     visibility: visible !important;
   }
 
-  body.printing-performance-report * {
-    visibility: hidden !important;
-  }
-
-  body.printing-performance-report #printable-performance-report-sheet,
-  body.printing-performance-report #printable-performance-report-sheet * {
-    visibility: visible !important;
-  }
-
   body.printing-report-card #printable-report-card-sheet,
-  body.printing-performance-report #printable-performance-report-sheet,
   body.printing-family-receipt #printable-family-receipt-sheet {
     position: absolute;
     left: 0;
@@ -245,8 +235,52 @@
     print-color-adjust: exact;
   }
 
+  body.printing-performance-report header,
+  body.printing-performance-report footer,
+  body.printing-performance-report .no-print,
+  body.printing-performance-report *:not(#printable-performance-report-sheet):not(:has(#printable-performance-report-sheet)):not(#printable-performance-report-sheet *) {
+    display: none !important;
+  }
+
+  body.printing-performance-report,
+  body.printing-performance-report #root,
+  body.printing-performance-report #root *,
+  body.printing-performance-report main,
+  body.printing-performance-report main * {
+    animation: none !important;
+    transform: none !important;
+  }
+
+  body.printing-performance-report,
+  body.printing-performance-report #root,
+  body.printing-performance-report #root > *,
+  body.printing-performance-report main,
+  body.printing-performance-report main > *,
+  body.printing-performance-report *:has(> #printable-performance-report-sheet),
+  body.printing-performance-report *:has(> * > #printable-performance-report-sheet) {
+    margin: 0 !important;
+    padding: 0 !important;
+    max-width: none !important;
+    width: 100% !important;
+    min-height: 0 !important;
+    background: #ffffff !important;
+    border: none !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+  }
+
   body.printing-performance-report #printable-performance-report-sheet {
     page: performance-landscape;
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 
   body.printing-family-receipt * {

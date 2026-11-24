@@ -90,7 +90,18 @@ export interface SchoolUser {
   Name: string;
   Designation: string;
   Assigned_Class?: string;
+  Assigned_Subjects?: string;
+  Department?: string;
+  Teacher_Photo?: string;
   Last_AI_Run?: string;
+}
+
+export interface TeacherProfileMeta {
+  assigned_subjects?: string;
+  department?: string;
+  teacher_photo?: string;
+  updated_at?: string;
+  updated_by?: string;
 }
 
 export interface SchoolNotice {

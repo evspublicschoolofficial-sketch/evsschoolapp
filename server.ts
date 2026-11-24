@@ -1887,7 +1887,64 @@ async function startServer() {
   const SCHOOL_LOCATION_FILE = '/tmp/evs_school_location.json';
   const SCHOOL_SHIFT_SETTINGS_FILE = '/tmp/evs_school_shift_settings.json';
   const TEACHER_ASSIGNMENTS_FILE = '/tmp/evs_teacher_class_assignments.json';
+  const TEACHER_PROFILES_FILE = '/tmp/evs_teacher_profiles.json';
   const TEACHER_QR_ATTENDANCE_ACCESS_FILE = '/tmp/evs_teacher_qr_attendance_access.json';
+
+  interface TeacherProfileEntry {
+    assigned_subjects?: string;
+    department?: string;
+    teacher_photo?: string;
+    updated_at?: string;
+    updated_by?: string;
+  }
+
+  const getTeacherProfilesStore = (): Record<string, TeacherProfileEntry> => {
+    try {
+      if (fs.existsSync(TEACHER_PROFILES_FILE)) {
+        const parsed = JSON.parse(fs.readFileSync(TEACHER_PROFILES_FILE, 'utf-8'));
+        if (parsed && typeof parsed === 'object') return parsed;
+      }
+    } catch (e) {
+      console.warn('Error reading teacher profiles file:', e);
+    }
+    return {};
+  };
+
+  const saveTeacherProfileStore = (
+    userId: string,
+    profile: TeacherProfileEntry,
+    userName?: string,
+    username?: string
+  ): Record<string, TeacherProfileEntry> => {
+    const profiles = getTeacherProfilesStore();
+    const cleanId = String(userId || '').trim();
+    const cleanName = String(userName || '').trim();
+    const cleanUser = String(username || '').trim();
+    const nextEntry: TeacherProfileEntry = {
+      assigned_subjects: String(profile.assigned_subjects ?? '').trim(),
+      department: String(profile.department ?? '').trim(),
+      teacher_photo: String(profile.teacher_photo ?? '').trim(),
+      updated_at: getLocalTimestampIST(),
+      updated_by: String(profile.updated_by || 'Manager'),
+    };
+    const keys = [
+      cleanId,
+      cleanId.toLowerCase(),
+      cleanUser,
+      cleanUser.toLowerCase(),
+      cleanName,
+      cleanName.toLowerCase(),
+    ].filter(Boolean);
+    for (const k of keys) {
+      profiles[k] = nextEntry;
+    }
+    try {
+      fs.writeFileSync(TEACHER_PROFILES_FILE, JSON.stringify(profiles, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Error saving teacher profiles file:', e);
+    }
+    return profiles;
+  };
 
   const getTeacherClassAssignments = (): Record<string, string> => {
     try {
@@ -2746,6 +2803,99 @@ async function startServer() {
     }).catch(() => {});
 
     res.json({ success: true, assignments: updated });
+  });
+
+  // Endpoints for Extended Teacher Profiles (Assigned_Subjects, Department, Teacher_Photo)
+  app.get('/api/teacher-profiles', async (req, res) => {
+    let localProfiles = getTeacherProfilesStore();
+    const forceRefresh = req.query.refresh === '1' || req.query.sync === '1' || Object.keys(localProfiles).length === 0;
+    const targetUrl = resolveTargetAppsScriptUrl(req);
+    if (forceRefresh && targetUrl) {
+      try {
+        const sep = targetUrl.includes('?') ? '&' : '?';
+        const gRes = await fetch(`${targetUrl}${sep}action=getTeacherProfiles`, {
+          redirect: 'follow',
+          signal: AbortSignal.timeout(8000),
+        });
+        if (gRes.ok) {
+          const gJson: any = await gRes.json().catch(() => null);
+          if (gJson && gJson.profiles && typeof gJson.profiles === 'object') {
+            localProfiles = { ...gJson.profiles, ...localProfiles };
+            if (req.query.refresh === '1') {
+              // Sheet wins on explicit refresh when entries are newer
+              for (const [k, v] of Object.entries(gJson.profiles as Record<string, TeacherProfileEntry>)) {
+                const existing = localProfiles[k];
+                if (!existing || String(v?.updated_at || '') >= String(existing?.updated_at || '')) {
+                  localProfiles[k] = v;
+                }
+              }
+            }
+            try {
+              fs.writeFileSync(TEACHER_PROFILES_FILE, JSON.stringify(localProfiles, null, 2), 'utf-8');
+            } catch {}
+          }
+        }
+      } catch {}
+    }
+    res.json({ profiles: localProfiles });
+  });
+
+  app.post('/api/teacher-profile', (req, res) => {
+    const {
+      userId,
+      user_id,
+      userName,
+      user_name,
+      username,
+      assigned_subjects,
+      department,
+      teacher_photo,
+      updated_by,
+      appsScriptUrl,
+    } = req.body || {};
+
+    const resolvedId = String(userId || user_id || '').trim();
+    const resolvedName = String(userName || user_name || '').trim();
+    const resolvedUsername = String(username || '').trim();
+
+    const updated = saveTeacherProfileStore(
+      resolvedId,
+      {
+        assigned_subjects: String(assigned_subjects ?? '').trim(),
+        department: String(department ?? '').trim(),
+        teacher_photo: String(teacher_photo ?? '').trim(),
+        updated_by: String(updated_by || 'Manager'),
+      },
+      resolvedName || undefined,
+      resolvedUsername || undefined
+    );
+
+    const updateBroadcast = JSON.stringify({
+      type: 'APP_DATA_UPDATED',
+      entity: 'users',
+      action: 'saveTeacherProfile',
+      details: { userId: resolvedId, userName: resolvedName, username: resolvedUsername },
+      timestamp: Date.now(),
+    });
+    for (const client of clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(updateBroadcast);
+      }
+    }
+
+    forwardToGoogleAppsScript({
+      action: 'saveTeacherProfile',
+      user_id: resolvedId,
+      user_name: resolvedName,
+      username: resolvedUsername,
+      assigned_subjects: String(assigned_subjects ?? '').trim(),
+      department: String(department ?? '').trim(),
+      teacher_photo: String(teacher_photo ?? '').trim(),
+      updated_by: String(updated_by || 'Manager'),
+      appsScriptUrl: appsScriptUrl || req.headers['x-apps-script-url'] || currentAppsScriptUrl,
+    }).catch(() => {});
+
+    res.json({ success: true, profiles: updated });
   });
 
   // Endpoints for Teacher Performance Tracking, Monthly Leaderboard & Teacher of the Year

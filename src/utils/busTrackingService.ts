@@ -748,9 +748,12 @@ function doGet(e) {
   if (action === "getParentReviews") {
     return handleGetParentReviews(ss);
   }
+  if (action === "getTeacherProfiles") {
+    return handleGetTeacherProfiles(ss);
+  }
 
   // 10. GET FALLBACK: Delegate write actions when called via GET query parameters
-  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveReportCardDraft" || action === "saveReportCardAccess" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig" || action === "saveExamDatesheet" || action === "saveExamSeatingPlan" || action === "saveExamSeatingDraft" || action === "saveFeeWaiver" || action === "saveFeeWaiversBatch" || action === "saveParentReview" || action === "updateParentReviewStatus" || action === "deleteParentReview") {
+  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "saveTeacherProfile" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveReportCardDraft" || action === "saveReportCardAccess" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig" || action === "saveExamDatesheet" || action === "saveExamSeatingPlan" || action === "saveExamSeatingDraft" || action === "saveFeeWaiver" || action === "saveFeeWaiversBatch" || action === "saveParentReview" || action === "updateParentReviewStatus" || action === "deleteParentReview") {
     return doPost(e);
   }
 
@@ -1012,6 +1015,11 @@ function doPost(e) {
           message: "Teacher class updated in Users sheet successfully"
         })).setMimeType(ContentService.MimeType.JSON);
       }
+    }
+
+    // 3I. SAVE EXTENDED TEACHER PROFILE (Assigned_Subjects, Department, Teacher_Photo)
+    if (action === "saveTeacherProfile") {
+      return handleSaveTeacherProfile(ss, data);
     }
 
     // 4. ADD / BATCH ADD BEHAVIOR & ATTENDANCE
@@ -4277,6 +4285,109 @@ function handleSaveReportCardDraft(ss, data) {
   }
   saveAppWorkflowJson_(ss, "EVS_RC_PENDING_DRAFT", draftObj);
   return ContentService.createTextOutput(JSON.stringify({ status: "success" })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetTeacherProfiles(ss) {
+  var profiles = getAppWorkflowJson_(ss, "EVS_TEACHER_PROFILES") || {};
+  // Also merge any Subjects/Department/Photo directly stored in Users sheet columns 9-11
+  try {
+    var userSheet = ss.getSheetByName("Users");
+    if (userSheet && userSheet.getLastRow() >= 2) {
+      var uData = userSheet.getDataRange().getValues();
+      for (var r = 1; r < uData.length; r++) {
+        var uid = String(uData[r][0] || "").trim();
+        var uname = String(uData[r][2] || "").trim();
+        var nm = String(uData[r][4] || "").trim();
+        var colSubj = String(uData[r][8] || "").trim();
+        var colDept = String(uData[r][9] || "").trim();
+        var colPhoto = String(uData[r][10] || "").trim();
+        if (colSubj || colDept || colPhoto) {
+          var existing = profiles[uid.toLowerCase()] || profiles[uname.toLowerCase()] || profiles[nm.toLowerCase()] || {};
+          var merged = {
+            assigned_subjects: existing.assigned_subjects || colSubj,
+            department: existing.department || colDept,
+            teacher_photo: existing.teacher_photo || colPhoto,
+            updated_at: existing.updated_at || ""
+          };
+          if (uid) profiles[uid.toLowerCase()] = merged;
+          if (uname) profiles[uname.toLowerCase()] = merged;
+          if (nm) profiles[nm.toLowerCase()] = merged;
+        }
+      }
+    }
+  } catch (eU) {}
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    profiles: profiles
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveTeacherProfile(ss, data) {
+  var profiles = getAppWorkflowJson_(ss, "EVS_TEACHER_PROFILES") || {};
+  var targetUid = String(data.user_id || data.userId || "").trim();
+  var targetUname = String(data.username || "").trim();
+  var targetName = String(data.user_name || data.userName || data.name || "").trim();
+  var subj = String(data.assigned_subjects || data.Assigned_Subjects || "").trim();
+  var dept = String(data.department || data.Department || "").trim();
+  var photo = String(data.teacher_photo || data.Teacher_Photo || "").trim();
+  var nowIst = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+
+  var entry = {
+    assigned_subjects: subj,
+    department: dept,
+    teacher_photo: photo,
+    updated_at: nowIst,
+    updated_by: String(data.updated_by || "Manager")
+  };
+
+  if (targetUid) {
+    profiles[targetUid] = entry;
+    profiles[targetUid.toLowerCase()] = entry;
+  }
+  if (targetUname) {
+    profiles[targetUname] = entry;
+    profiles[targetUname.toLowerCase()] = entry;
+  }
+  if (targetName) {
+    profiles[targetName] = entry;
+    profiles[targetName.toLowerCase()] = entry;
+  }
+
+  saveAppWorkflowJson_(ss, "EVS_TEACHER_PROFILES", profiles);
+
+  // Also mirror into Users sheet cols 9-11 when safe (< 40k chars per Google Sheets cell limit)
+  try {
+    var userSheet = ss.getSheetByName("Users");
+    if (userSheet && userSheet.getLastRow() >= 1) {
+      if (userSheet.getLastColumn() < 11) {
+        userSheet.getRange(1, 9).setValue("Assigned_Subjects");
+        userSheet.getRange(1, 10).setValue("Department");
+        userSheet.getRange(1, 11).setValue("Teacher_Photo");
+      }
+      var uData = userSheet.getDataRange().getValues();
+      var uidL = targetUid.toLowerCase();
+      var unL = targetUname.toLowerCase();
+      var nmL = targetName.toLowerCase();
+      for (var r = 1; r < uData.length; r++) {
+        var rUid = String(uData[r][0] || "").trim().toLowerCase();
+        var rUn = String(uData[r][2] || "").trim().toLowerCase();
+        var rNm = String(uData[r][4] || "").trim().toLowerCase();
+        if ((uidL && rUid === uidL) || (unL && rUn === unL) || (nmL && rNm === nmL)) {
+          userSheet.getRange(r + 1, 9).setValue(subj);
+          userSheet.getRange(r + 1, 10).setValue(dept);
+          if (photo.length <= 45000) {
+            userSheet.getRange(r + 1, 11).setValue(photo);
+          }
+          break;
+        }
+      }
+    }
+  } catch (eUWr) {}
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Teacher profile updated successfully!"
+  })).setMimeType(ContentService.MimeType.JSON);
 }
 
 // =========================================================================

@@ -56,6 +56,15 @@ import {
 } from './utils/phoneMemoryCache';
 import { lazyWithRetry } from './utils/lazyRetry';
 import { dualSyncWriteToSheet } from './utils/sheetDirectSync';
+import {
+  fetchTeacherProfilesFromServer,
+  findTeacherProfileInMap,
+  parseAssignedSubjects,
+  resizeTeacherPhotoToDataUrl,
+  saveTeacherProfileDualSync,
+  TEACHER_DEPARTMENT_OPTIONS,
+  TEACHER_SUBJECT_OPTIONS,
+} from './utils/teacherProfileHelper';
 
 // High-speed on-demand code splitting (lazyWithRetry): Drops initial bundle size by ~85% and auto-recovers from stale deploy chunks!
 const StudentAttendanceChart = lazyWithRetry(() => import('./components/StudentAttendanceChart'));
@@ -198,6 +207,9 @@ export interface SchoolUser {
   Name: string;
   Designation: string;
   Assigned_Class?: string;
+  Assigned_Subjects?: string;
+  Department?: string;
+  Teacher_Photo?: string;
   Last_AI_Run?: string;
 }
 
@@ -3494,6 +3506,11 @@ export default function App() {
         }
       } catch {}
 
+      let teacherProfilesMap: Record<string, any> = {};
+      try {
+        teacherProfilesMap = await fetchTeacherProfilesFromServer(getEffectiveApiUrl(), false);
+      } catch {}
+
       // 2. Fetch Users sheet from Google Sheets
       const encoded = encodeURIComponent('Users');
       const res = await fetch(
@@ -3520,6 +3537,9 @@ export default function App() {
         const designation = cells[5] ? String(cells[5]).trim() : '';
         let assignedClass = cells[6] ? String(cells[6]).trim() : '';
         const lastAiRun = cells[7] ? String(cells[7]).trim() : '';
+        let assignedSubjects = cells[8] ? String(cells[8]).trim() : '';
+        let department = cells[9] ? String(cells[9]).trim() : '';
+        let teacherPhoto = cells[10] ? String(cells[10]).trim() : '';
 
         // Check if override exists in assignedMap (case-insensitive keys for User_ID, Username, Name, Mobile)
         const keysToCheck = [
@@ -3538,6 +3558,23 @@ export default function App() {
           }
         }
 
+        const profOverride = findTeacherProfileInMap(teacherProfilesMap, {
+          userId: uId,
+          username,
+          name,
+        });
+        if (profOverride) {
+          if (profOverride.assigned_subjects !== undefined && profOverride.assigned_subjects !== '') {
+            assignedSubjects = String(profOverride.assigned_subjects).trim();
+          }
+          if (profOverride.department !== undefined && profOverride.department !== '') {
+            department = String(profOverride.department).trim();
+          }
+          if (profOverride.teacher_photo !== undefined && profOverride.teacher_photo !== '') {
+            teacherPhoto = String(profOverride.teacher_photo).trim();
+          }
+        }
+
         if (uId || username || mobile || name) {
           userRecords.push({
             User_ID: uId,
@@ -3547,6 +3584,9 @@ export default function App() {
             Name: name,
             Designation: designation,
             Assigned_Class: assignedClass,
+            Assigned_Subjects: assignedSubjects,
+            Department: department,
+            Teacher_Photo: teacherPhoto,
             Last_AI_Run: lastAiRun,
           });
         }
@@ -3554,7 +3594,7 @@ export default function App() {
       setUsersList(userRecords);
       saveToPhoneMemory(CACHE_KEY_USERS, userRecords);
 
-      // If active teacherUser is logged in, sync their Assigned_Class immediately!
+      // If active teacherUser is logged in, sync their Assigned_Class & profile metadata immediately!
       if (teacherUser) {
         const myUid = String(teacherUser.User_ID || '').toLowerCase();
         const myUname = String(teacherUser.Username || '').toLowerCase();
@@ -3565,10 +3605,16 @@ export default function App() {
             (myUname && String(u.Username || '').toLowerCase() === myUname) ||
             (myNm && String(u.Name || '').toLowerCase() === myNm)
         );
-        if (updatedMe && updatedMe.Assigned_Class) {
+        if (updatedMe) {
           setTeacherUser((prev) => {
             if (!prev) return prev;
-            const upd = { ...prev, Assigned_Class: updatedMe.Assigned_Class };
+            const upd = {
+              ...prev,
+              Assigned_Class: updatedMe.Assigned_Class || prev.Assigned_Class,
+              Assigned_Subjects: updatedMe.Assigned_Subjects ?? prev.Assigned_Subjects,
+              Department: updatedMe.Department ?? prev.Department,
+              Teacher_Photo: updatedMe.Teacher_Photo ?? prev.Teacher_Photo,
+            };
             try {
               localStorage.setItem('evs_teacher_user', JSON.stringify(upd));
             } catch {}
@@ -6181,6 +6227,73 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       setSyncToastMessage(`⚠️ कक्षा स्थानीय रूप से बदली गई, पर Google Sheet में सेव नहीं हो सकी: ${syncRes.sheetError || 'कनेक्शन जांचें'}`);
     }
     setTimeout(() => setSyncToastMessage(null), 4000);
+  };
+
+  // Handler for Manager to save Extended Teacher Profile (Assigned Subjects, Department, Teacher Photo)
+  const handleSaveTeacherProfile = async (
+    user: SchoolUser,
+    patch: { assigned_subjects?: string; department?: string; teacher_photo?: string }
+  ) => {
+    const cleanSubjects =
+      patch.assigned_subjects !== undefined ? patch.assigned_subjects : String(user.Assigned_Subjects || '');
+    const cleanDept =
+      patch.department !== undefined ? patch.department : String(user.Department || '');
+    const cleanPhoto =
+      patch.teacher_photo !== undefined ? patch.teacher_photo : String(user.Teacher_Photo || '');
+
+    const uidKey = String(user.User_ID || user.Username || user.Name || '').trim().toLowerCase();
+
+    setUsersList((prev) => {
+      const updated = prev.map((u) => {
+        const match =
+          (user.User_ID && u.User_ID && u.User_ID.toLowerCase() === user.User_ID.toLowerCase()) ||
+          (user.Username && u.Username && u.Username.toLowerCase() === user.Username.toLowerCase()) ||
+          (user.Name && u.Name && u.Name.toLowerCase() === user.Name.toLowerCase());
+        if (!match) return u;
+        return {
+          ...u,
+          Assigned_Subjects: cleanSubjects,
+          Department: cleanDept,
+          Teacher_Photo: cleanPhoto,
+        };
+      });
+      saveToPhoneMemory(CACHE_KEY_USERS, updated);
+      return updated;
+    });
+
+    setTeacherUser((prev) => {
+      if (!prev) return prev;
+      const pKey = String(prev.User_ID || prev.Username || prev.Name || '').trim().toLowerCase();
+      if (pKey !== uidKey) return prev;
+      const upd = {
+        ...prev,
+        Assigned_Subjects: cleanSubjects,
+        Department: cleanDept,
+        Teacher_Photo: cleanPhoto,
+      };
+      try {
+        localStorage.setItem('evs_teacher_user', JSON.stringify(upd));
+      } catch {}
+      return upd;
+    });
+
+    const res = await saveTeacherProfileDualSync({
+      userId: user.User_ID || user.Username,
+      username: user.Username,
+      userName: user.Name,
+      assigned_subjects: cleanSubjects,
+      department: cleanDept,
+      teacher_photo: cleanPhoto,
+      updated_by: managerUser?.Name || 'Manager',
+      overrideUrl: getEffectiveApiUrl(),
+    });
+
+    if (res.sheetSynced || res.serverOk) {
+      setSyncToastMessage(`✅ ${user.Name} की विषय/विभाग/फोटो प्रोफ़ाइल सेव हो गई!`);
+    } else {
+      setSyncToastMessage(`⚠️ प्रोफ़ाइल डिवाइस में सेव हुई, पर Google Sheet सिंक लंबित है।`);
+    }
+    setTimeout(() => setSyncToastMessage(null), 3500);
   };
 
   // Dedicated Handler for Student Homework QR Tracker Modal (Complete/Incomplete)
@@ -12921,11 +13034,15 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   users={usersList}
                   isTeacherView={true}
                   loggedTeacherId={teacherUser?.User_ID || teacherUser?.Username}
+                  loggedUser={teacherUser}
                   homeworkList={homeworkList}
                   homeworkTrackerList={hwTrackerList}
                   staffAttendanceList={staffAttendanceList}
                   behaviorList={behaviorList}
                   students={students}
+                  examMarks={examMarksList}
+                  reportCardMeta={reportCardMetaMap}
+                  pendingMarks={reportCardWorkflow.pendingMarks}
                   classMap={classMap}
                 />
               </Suspense>
@@ -15118,23 +15235,32 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         >
                           <div className="flex items-start justify-between gap-2 mb-3">
                             <div className="flex items-center gap-3">
-                              <div
-                                className={`w-11 h-11 rounded-xl flex items-center justify-center font-black text-sm shrink-0 shadow-xs ${
-                                  isManagerRole
-                                    ? 'bg-amber-400 text-slate-950 border border-amber-200'
-                                    : isTeacherRole
-                                    ? 'bg-blue-100 text-blue-900 border border-blue-200'
-                                    : 'bg-slate-100 text-slate-800 border border-slate-200'
-                                }`}
-                              >
-                                {isManagerRole ? (
-                                  <i className="fa-solid fa-user-tie"></i>
-                                ) : isTeacherRole ? (
-                                  <i className="fa-solid fa-chalkboard-user"></i>
-                                ) : (
-                                  <i className="fa-solid fa-user"></i>
-                                )}
-                              </div>
+                              {user.Teacher_Photo ? (
+                                <img
+                                  src={user.Teacher_Photo}
+                                  alt={user.Name}
+                                  referrerPolicy="no-referrer"
+                                  className="w-11 h-11 rounded-xl object-cover border border-slate-200 bg-slate-100 shrink-0"
+                                />
+                              ) : (
+                                <div
+                                  className={`w-11 h-11 rounded-xl flex items-center justify-center font-black text-sm shrink-0 shadow-xs ${
+                                    isManagerRole
+                                      ? 'bg-amber-400 text-slate-950 border border-amber-200'
+                                      : isTeacherRole
+                                      ? 'bg-blue-100 text-blue-900 border border-blue-200'
+                                      : 'bg-slate-100 text-slate-800 border border-slate-200'
+                                  }`}
+                                >
+                                  {isManagerRole ? (
+                                    <i className="fa-solid fa-user-tie"></i>
+                                  ) : isTeacherRole ? (
+                                    <i className="fa-solid fa-chalkboard-user"></i>
+                                  ) : (
+                                    <i className="fa-solid fa-user"></i>
+                                  )}
+                                </div>
+                              )}
                               <div>
                                 <h4 className="font-bold text-slate-900 text-sm leading-tight">
                                   {user.Name || 'Unnamed Staff'}
@@ -15295,6 +15421,107 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                         </option>
                                       ))}
                                   </select>
+                                </div>
+                              );
+                            })()}
+
+                            {/* Manager Assigned Subjects, Department & Teacher Photo Controls */}
+                            {(() => {
+                              const userSubjects = parseAssignedSubjects(user.Assigned_Subjects);
+                              const handleToggleSubject = (subj: string) => {
+                                const exists = userSubjects.some((s) => s.toLowerCase() === subj.toLowerCase());
+                                const next = exists
+                                  ? userSubjects.filter((s) => s.toLowerCase() !== subj.toLowerCase())
+                                  : [...userSubjects, subj];
+                                handleSaveTeacherProfile(user, { assigned_subjects: next.join(', ') });
+                              };
+                              return (
+                                <div className="pt-2 border-t border-slate-100 flex flex-col gap-2">
+                                  <div className="flex items-center justify-between text-xs font-bold text-slate-700">
+                                    <span className="flex items-center gap-1.5">
+                                      <i className="fa-solid fa-book-open text-violet-600"></i>
+                                      <span>असाइन विषय ({userSubjects.length}):</span>
+                                    </span>
+                                    {userSubjects.length > 0 && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleSaveTeacherProfile(user, { assigned_subjects: '' })}
+                                        className="text-[10px] text-rose-600 hover:text-rose-800 font-semibold cursor-pointer underline"
+                                      >
+                                        सब हटाएं
+                                      </button>
+                                    )}
+                                  </div>
+
+                                  <div className="flex flex-wrap gap-1">
+                                    {TEACHER_SUBJECT_OPTIONS.map((subj) => {
+                                      const active = userSubjects.some((s) => s.toLowerCase() === subj.toLowerCase());
+                                      return (
+                                        <button
+                                          key={subj}
+                                          type="button"
+                                          onClick={() => handleToggleSubject(subj)}
+                                          className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all cursor-pointer ${
+                                            active
+                                              ? 'bg-violet-700 text-white'
+                                              : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200'
+                                          }`}
+                                        >
+                                          {active ? '✓ ' : '+ '}
+                                          {subj}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1">
+                                    <select
+                                      value={user.Department || ''}
+                                      onChange={(e) => handleSaveTeacherProfile(user, { department: e.target.value })}
+                                      className="px-2 py-1 rounded-lg border border-slate-300 text-[11px] font-medium bg-white text-slate-700 outline-none cursor-pointer"
+                                    >
+                                      <option value="">🏢 विभाग (Department) चुनें...</option>
+                                      {TEACHER_DEPARTMENT_OPTIONS.map((dept) => (
+                                        <option key={dept} value={dept}>
+                                          {dept}
+                                        </option>
+                                      ))}
+                                    </select>
+
+                                    <div className="flex items-center gap-1.5">
+                                      <label className="flex-1 px-2 py-1 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-900 text-[11px] font-bold text-center cursor-pointer transition-colors">
+                                        <i className="fa-solid fa-camera mr-1"></i>
+                                        {user.Teacher_Photo ? 'फोटो बदलें' : 'फोटो अपलोड'}
+                                        <input
+                                          type="file"
+                                          accept="image/*"
+                                          className="hidden"
+                                          onChange={async (e) => {
+                                            const f = e.target.files?.[0];
+                                            e.target.value = '';
+                                            if (!f) return;
+                                            try {
+                                              const compressed = await resizeTeacherPhotoToDataUrl(f);
+                                              await handleSaveTeacherProfile(user, { teacher_photo: compressed });
+                                            } catch {
+                                              setSyncToastMessage('⚠️ फोटो प्रोसेस करने में त्रुटि हुई');
+                                              setTimeout(() => setSyncToastMessage(null), 3000);
+                                            }
+                                          }}
+                                        />
+                                      </label>
+                                      {user.Teacher_Photo && (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleSaveTeacherProfile(user, { teacher_photo: '' })}
+                                          className="px-2 py-1 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-[11px] font-bold cursor-pointer"
+                                          title="फोटो हटाएं"
+                                        >
+                                          ✕
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
                                 </div>
                               );
                             })()}
@@ -15535,6 +15762,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   staffAttendanceList={staffAttendanceList}
                   behaviorList={behaviorList}
                   students={students}
+                  examMarks={examMarksList}
+                  reportCardMeta={reportCardMetaMap}
+                  pendingMarks={reportCardWorkflow.pendingMarks}
                   classMap={classMap}
                 />
               </Suspense>

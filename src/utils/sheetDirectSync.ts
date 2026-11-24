@@ -125,6 +125,25 @@ export async function directPostToSheet(
       if (payload.username) params.set('username', String(payload.username));
       const candidate = `${targetUrl}?${params.toString()}`;
       if (candidate.length < 7500) getUrl = candidate;
+    } else if (action === 'saveTeacherProfile') {
+      const params = new URLSearchParams({
+        action: 'saveTeacherProfile',
+        user_id: String(payload.user_id || payload.userId || ''),
+        assigned_subjects: String(payload.assigned_subjects || ''),
+        department: String(payload.department || ''),
+      });
+      const photoVal = String(payload.teacher_photo || '');
+      if (!photoVal || (!photoVal.startsWith('data:') && photoVal.length < 1500)) {
+        params.set('teacher_photo', photoVal);
+      }
+      if (payload.user_name || payload.userName || payload.name) {
+        params.set('user_name', String(payload.user_name || payload.userName || payload.name));
+      }
+      if (payload.username) params.set('username', String(payload.username));
+      const candidate = `${targetUrl}?${params.toString()}`;
+      if (candidate.length < 7500 && !photoVal.startsWith('data:')) {
+        getUrl = candidate;
+      }
     }
 
     if (getUrl) {

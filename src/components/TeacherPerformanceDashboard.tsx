@@ -1,6 +1,8 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { getLocalDateYMD, getLocalTimestamp } from '../utils/localTime';
 import {
+  ExamMarkRecord,
+  ReportCardRemarkRecord,
   SchoolUser,
   Homework,
   HomeworkTrackerRecord,
@@ -9,6 +11,7 @@ import {
   Student,
   SyllabusTopicRecord,
   WeeklyTestRecord,
+  TeacherProfileMeta,
 } from '../types';
 import {
   TeacherPerformanceRecord,
@@ -31,18 +34,33 @@ import {
   autoEvaluateAllTeachersForMonth,
   AutoCalculationBreakdown,
 } from '../utils/teacherPerformanceEngine';
+import {
+  fetchExamMarksFromServer,
+  fetchReportCardMetaFromServer,
+  fetchReportCardWorkflowFromServer,
+  loadLocalExamMarks,
+  loadLocalReportCardMeta,
+  loadLocalReportCardWorkflow,
+} from '../utils/reportCardHelper';
+import {
+  fetchTeacherProfilesFromServer,
+  findTeacherProfileInMap,
+  loadLocalTeacherProfiles,
+} from '../utils/teacherProfileHelper';
 import { getAppsScriptUrl } from '../utils/busTrackingService';
 import { directGetFromSheet, dualSyncWriteToSheet } from '../utils/sheetDirectSync';
 import { TeacherSyllabusPlanner } from './TeacherSyllabusPlanner';
 import { WeeklySubjectTestManager, loadLocalWeeklyTests } from './WeeklySubjectTestManager';
+import { TeacherPerformanceReportView } from './TeacherPerformanceReportView';
 
 interface TeacherPerformanceDashboardProps {
   users?: SchoolUser[];
   managerName?: string;
   onClose?: () => void;
-  initialTab?: 'leaderboard' | 'annual' | 'records' | 'setup' | 'syllabus' | 'weekly_tests';
+  initialTab?: 'leaderboard' | 'annual' | 'records' | 'setup' | 'syllabus' | 'weekly_tests' | 'report';
   isTeacherView?: boolean;
   loggedTeacherId?: string;
+  loggedUser?: SchoolUser | null;
   homeworkList?: Homework[];
   homeworkTrackerList?: HomeworkTrackerRecord[];
   staffAttendanceList?: StaffAttendanceRecord[];
@@ -50,6 +68,9 @@ interface TeacherPerformanceDashboardProps {
   students?: Student[];
   syllabusTopics?: SyllabusTopicRecord[];
   weeklyTests?: WeeklyTestRecord[];
+  examMarks?: ExamMarkRecord[];
+  reportCardMeta?: Record<string, ReportCardRemarkRecord>;
+  pendingMarks?: ExamMarkRecord[];
   classMap?: Record<string, string>;
 }
 
@@ -60,6 +81,7 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
   initialTab = 'leaderboard',
   isTeacherView = false,
   loggedTeacherId,
+  loggedUser = null,
   homeworkList = [],
   homeworkTrackerList = [],
   staffAttendanceList = [],
@@ -67,31 +89,66 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
   students = [],
   syllabusTopics = [],
   weeklyTests = [],
+  examMarks = [],
+  reportCardMeta,
+  pendingMarks = [],
   classMap,
 }) => {
+  const [loadedTeacherProfiles, setLoadedTeacherProfiles] = useState<Record<string, TeacherProfileMeta>>(() =>
+    loadLocalTeacherProfiles()
+  );
+
   // Filter active teachers from users list (exclude drivers/parents/non-teaching transport staff)
   const teachers = useMemo(() => {
-    return users.filter((u) => {
-      const desig = String(u.Designation || '').toLowerCase();
-      if (/driver|van|bus|conductor|guard|peon|parent|student/i.test(desig)) return false;
-      return (
-        !desig ||
-        desig.includes('teacher') ||
-        desig.includes('शिक्षक') ||
-        desig.includes('faculty') ||
-        desig.includes('instructor') ||
-        desig.includes('principal') ||
-        desig.includes('staff')
-      );
-    });
-  }, [users]);
+    const baseUsers = users.length > 0 ? users : loggedUser ? [loggedUser] : [];
+    return baseUsers
+      .filter((u) => {
+        const desig = String(u.Designation || '').toLowerCase();
+        if (/driver|van|bus|conductor|guard|peon|parent|student/i.test(desig)) return false;
+        return (
+          !desig ||
+          desig.includes('teacher') ||
+          desig.includes('शिक्षक') ||
+          desig.includes('faculty') ||
+          desig.includes('instructor') ||
+          desig.includes('principal') ||
+          desig.includes('staff')
+        );
+      })
+      .map((u) => {
+        const prof = findTeacherProfileInMap(loadedTeacherProfiles, {
+          userId: u.User_ID,
+          username: u.Username,
+          name: u.Name,
+        });
+        if (!prof) return u;
+        return {
+          ...u,
+          Assigned_Subjects: u.Assigned_Subjects || prof.assigned_subjects || '',
+          Department: u.Department || prof.department || '',
+          Teacher_Photo: u.Teacher_Photo || prof.teacher_photo || '',
+        };
+      });
+  }, [users, loggedUser, loadedTeacherProfiles]);
 
   const [records, setRecords] = useState<TeacherPerformanceRecord[]>(() => loadLocalPerformanceRecords());
   const [loadedSyllabusTopics, setLoadedSyllabusTopics] = useState<SyllabusTopicRecord[]>(syllabusTopics);
   const [loadedWeeklyTests, setLoadedWeeklyTests] = useState<WeeklyTestRecord[]>(() =>
     weeklyTests.length > 0 ? weeklyTests : loadLocalWeeklyTests()
   );
-  const [activeTab, setActiveTab] = useState<'leaderboard' | 'annual' | 'records' | 'setup' | 'syllabus' | 'weekly_tests'>(initialTab);
+  const [loadedExamMarks, setLoadedExamMarks] = useState<ExamMarkRecord[]>(() =>
+    examMarks.length > 0 ? examMarks : loadLocalExamMarks()
+  );
+  const [loadedReportCardMeta, setLoadedReportCardMeta] = useState<Record<string, ReportCardRemarkRecord>>(() =>
+    reportCardMeta && Object.keys(reportCardMeta).length > 0 ? reportCardMeta : loadLocalReportCardMeta()
+  );
+  const [loadedPendingMarks, setLoadedPendingMarks] = useState<ExamMarkRecord[]>(() =>
+    pendingMarks.length > 0 ? pendingMarks : loadLocalReportCardWorkflow().pendingMarks || []
+  );
+  const [activeTab, setActiveTab] = useState<'leaderboard' | 'annual' | 'records' | 'setup' | 'syllabus' | 'weekly_tests' | 'report'>(initialTab);
+  const [selectedReportTeacherId, setSelectedReportTeacherId] = useState<string>(() =>
+    String(loggedTeacherId || loggedUser?.User_ID || loggedUser?.Username || '')
+  );
   const [selectedMonth, setSelectedMonth] = useState<string>(() => getDefaultAcademicMonth());
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [editingRecord, setEditingRecord] = useState<TeacherPerformanceRecord | null>(null);
@@ -116,6 +173,18 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
 
   const effectiveSyllabusTopics = syllabusTopics.length > 0 ? syllabusTopics : loadedSyllabusTopics;
   const effectiveWeeklyTests = weeklyTests.length > 0 ? weeklyTests : loadedWeeklyTests;
+  const effectiveExamMarks = examMarks.length > 0 ? examMarks : loadedExamMarks;
+  const effectiveReportCardMeta =
+    reportCardMeta && Object.keys(reportCardMeta).length > 0 ? reportCardMeta : loadedReportCardMeta;
+  const effectivePendingMarks = pendingMarks.length > 0 ? pendingMarks : loadedPendingMarks;
+
+  useEffect(() => {
+    if (!selectedReportTeacherId && teachers.length > 0) {
+      setSelectedReportTeacherId(
+        String(loggedTeacherId || teachers[0].User_ID || teachers[0].Username || '')
+      );
+    }
+  }, [teachers, loggedTeacherId, selectedReportTeacherId]);
 
   const handleSyncPerformanceFromSheet = async () => {
     setIsRefreshingSheet(true);
@@ -210,6 +279,24 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
       fetchPerformanceRecordsFromApi(true).then((fresh) => {
         if (fresh && fresh.length > 0) setRecords(fresh);
       });
+      fetchTeacherProfilesFromServer(activeUrl, false).then((profs) => {
+        if (profs && Object.keys(profs).length > 0) setLoadedTeacherProfiles(profs);
+      });
+      if (examMarks.length === 0) {
+        fetchExamMarksFromServer(false).then((marks) => {
+          if (Array.isArray(marks) && marks.length > 0) setLoadedExamMarks(marks);
+        });
+      }
+      if (!reportCardMeta || Object.keys(reportCardMeta).length === 0) {
+        fetchReportCardMetaFromServer(false).then((meta) => {
+          if (meta && Object.keys(meta).length > 0) setLoadedReportCardMeta(meta);
+        });
+      }
+      if (pendingMarks.length === 0) {
+        fetchReportCardWorkflowFromServer(false).then((wf) => {
+          if (wf && Array.isArray(wf.pendingMarks)) setLoadedPendingMarks(wf.pendingMarks);
+        });
+      }
       if (syllabusTopics.length === 0) {
         fetch('/api/syllabus-tracker?refresh=1', {
           headers: { 'x-apps-script-url': activeUrl },
@@ -249,7 +336,10 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
       if (
         ev.key === 'evs_teacher_performance_records_v1' ||
         ev.key === 'evs_syllabus_planner_records_v1' ||
-        ev.key === 'evs_weekly_subject_tests_v1'
+        ev.key === 'evs_weekly_subject_tests_v1' ||
+        ev.key === 'evs_exam_marks_v1' ||
+        ev.key === 'evs_report_card_meta_v1' ||
+        ev.key === 'evs_teacher_profiles_v1'
       ) {
         loadFresh();
       }
@@ -265,7 +355,11 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
           const msg = JSON.parse(evt.data);
           if (
             msg?.type === 'APP_DATA_UPDATED' &&
-            (msg.entity === 'teacher_performance' || msg.entity === 'syllabus_tracker' || msg.entity === 'weekly_tests')
+            (msg.entity === 'teacher_performance' ||
+              msg.entity === 'syllabus_tracker' ||
+              msg.entity === 'weekly_tests' ||
+              msg.entity === 'report_cards' ||
+              msg.entity === 'users')
           ) {
             loadFresh();
           }
@@ -279,7 +373,7 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
         try { ws.close(); } catch {}
       }
     };
-  }, [syllabusTopics.length, weeklyTests.length]);
+  }, [syllabusTopics.length, weeklyTests.length, examMarks.length]);
 
   // Compute Live Calculated Monthly Score for Modal
   const liveScore = useMemo(() => {
@@ -702,7 +796,7 @@ function handleDeleteRowById(ss, sheetName, id) {
   return (
     <div className="space-y-6">
       {/* 1. TOP HEADER BANNER */}
-      <div className="bg-gradient-to-r from-[#0c2340] via-[#163a6f] to-[#0c2340] rounded-3xl p-6 sm:p-8 text-white shadow-xl border-2 border-amber-400/40 relative overflow-hidden">
+      <div className="no-print bg-gradient-to-r from-[#0c2340] via-[#163a6f] to-[#0c2340] rounded-3xl p-6 sm:p-8 text-white shadow-xl border-2 border-amber-400/40 relative overflow-hidden">
         {/* Background Decorative Crest */}
         <div className="absolute -right-8 -bottom-8 opacity-10 pointer-events-none text-9xl">
           <i className="fa-solid fa-trophy"></i>
@@ -805,7 +899,7 @@ function handleDeleteRowById(ss, sheetName, id) {
       </div>
 
       {/* 2. TAB CONTROLS & MONTH SELECTOR */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
+      <div className="no-print flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
         <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-100 rounded-xl">
           <button
             onClick={() => setActiveTab('leaderboard')}
@@ -817,6 +911,18 @@ function handleDeleteRowById(ss, sheetName, id) {
           >
             <i className="fa-solid fa-ranking-star"></i>
             <span>मासिक लीडरबोर्ड</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('report')}
+            className={`px-4 py-2 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center gap-2 ${
+              activeTab === 'report'
+                ? 'bg-[#0c2340] text-amber-400 shadow-sm ring-2 ring-amber-400/50'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <i className="fa-solid fa-file-chart-column text-sky-500"></i>
+            <span>📊 टीचर रिपोर्ट (A4 PDF)</span>
           </button>
 
           <button
@@ -1227,6 +1333,21 @@ function handleDeleteRowById(ss, sheetName, id) {
                           {/* Actions */}
                           <td className="py-3.5 px-4 text-right">
                             <div className="flex items-center justify-end gap-1.5">
+                              {(!isTeacherView ||
+                                String(rec.teacher_id || '').toLowerCase() === String(loggedTeacherId || '').toLowerCase()) && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedReportTeacherId(rec.teacher_id);
+                                    setActiveTab('report');
+                                  }}
+                                  className="px-2.5 py-1 bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-300 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                                  title="Teacher Performance Report व A4 PDF खोलें"
+                                >
+                                  📊 रिपोर्ट
+                                </button>
+                              )}
+
                               <button
                                 onClick={() => setCertificateRecord(rec)}
                                 className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg text-xs font-bold transition-all cursor-pointer"
@@ -1322,13 +1443,25 @@ function handleDeleteRowById(ss, sheetName, id) {
                     </div>
                   </div>
 
-                  <div className="mt-6 flex items-center justify-center gap-3">
+                  <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
                     <button
                       onClick={() => setCertificateRecord(annualSummary.winner!.records[0])}
                       className="px-5 py-2.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black text-xs rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-2"
                     >
                       <i className="fa-solid fa-award"></i>
                       <span>प्रशस्ति पत्र (Award Certificate) प्रिंट करें</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedReportTeacherId(annualSummary.winner!.teacher_id);
+                        setActiveTab('report');
+                      }}
+                      className="px-5 py-2.5 bg-[#0c2340] hover:bg-slate-800 text-amber-300 font-black text-xs rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-2"
+                    >
+                      <i className="fa-solid fa-file-chart-column"></i>
+                      <span>📊 Performance Report / A4 PDF</span>
                     </button>
                   </div>
                 </div>
@@ -1508,6 +1641,37 @@ function handleDeleteRowById(ss, sheetName, id) {
           )}
           isManager={!isTeacherView}
           onTestsUpdated={(updated) => setLoadedWeeklyTests(updated)}
+        />
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB 4C: TEACHER PERFORMANCE REPORT (A4 LANDSCAPE PRINT / PDF)            */}
+      {/* ========================================================================= */}
+      {activeTab === 'report' && (
+        <TeacherPerformanceReportView
+          teachers={
+            isTeacherView && loggedTeacherId
+              ? teachers.filter(
+                  (t) =>
+                    String(t.User_ID || '').toLowerCase() === String(loggedTeacherId).toLowerCase() ||
+                    String(t.Username || '').toLowerCase() === String(loggedTeacherId).toLowerCase() ||
+                    String(t.Name || '').toLowerCase() === String(loggedTeacherId).toLowerCase()
+                )
+              : teachers
+          }
+          selectedTeacherId={
+            isTeacherView && loggedTeacherId ? String(loggedTeacherId) : selectedReportTeacherId
+          }
+          onSelectTeacherId={(id) => setSelectedReportTeacherId(id)}
+          isTeacherView={isTeacherView}
+          students={students}
+          examMarks={effectiveExamMarks}
+          pendingMarks={effectivePendingMarks}
+          weeklyTests={effectiveWeeklyTests}
+          staffAttendance={staffAttendanceList}
+          behaviorList={behaviorList}
+          reportCardMeta={effectiveReportCardMeta}
+          classMap={classMap}
         />
       )}
 
