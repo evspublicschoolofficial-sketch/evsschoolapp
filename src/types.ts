@@ -79,6 +79,7 @@ export interface StudentBehaviorRecord {
   Is_Present: boolean;
   Remark: string;
   AI_Feedback?: string;
+  attendance_only?: boolean;
   [key: string]: any;
 }
 

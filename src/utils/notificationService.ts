@@ -1,5 +1,6 @@
 // Web Push & Device Notification Service
 // Allows notifications to appear on the phone status bar / lock screen like WhatsApp even when screen is sleeping
+import { playLoudChime } from './sirenAudio';
 
 export interface DeviceNotificationPayload {
   title: string;
@@ -41,30 +42,16 @@ export const requestDeviceNotificationPermission = async (): Promise<Notificatio
   }
 };
 
-// Play a pleasant chime tone to accompany the notification
+// Play a loud, pleasant chime tone to accompany the notification using shared AudioContext
 export const playNotificationChime = () => {
   try {
-    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
-    const now = ctx.currentTime;
-
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-
-    osc.type = 'sine';
-    // Two-tone bell chime: 880Hz -> 1320Hz
-    osc.frequency.setValueAtTime(880, now);
-    osc.frequency.exponentialRampToValueAtTime(1320, now + 0.12);
-
-    gain.gain.setValueAtTime(0.2, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
-
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-
-    osc.start(now);
-    osc.stop(now + 0.5);
+    playLoudChime(
+      [
+        { freq: 880, offset: 0.0, dur: 0.18, type: 'sine', level: 0.8 },
+        { freq: 1320, offset: 0.12, dur: 0.38, type: 'sine', level: 0.85 },
+      ],
+      0.95
+    );
   } catch {}
 };
 

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import jsQR from 'jsqr';
 import { StudentAvatar } from './StudentAvatar';
+import { playLoudChime, unlockAudioContext } from '../utils/sirenAudio';
 
 export interface StudentRecordForScan {
   Student_ID?: string;
@@ -86,20 +87,17 @@ export const StudentQRScannerModal: React.FC<StudentQRScannerModalProps> = ({
     }
   }, []);
 
-  // Play audio/vibrate feedback on successful scan
+  // Play loud crisp audio/vibrate feedback on successful scan using shared AudioContext
   const playBeep = () => {
     try {
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(880, audioCtx.currentTime);
-      gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.start();
-      osc.stop(audioCtx.currentTime + 0.15);
+      unlockAudioContext();
+      playLoudChime(
+        [
+          { freq: 880, offset: 0.0, dur: 0.12, type: 'triangle', level: 0.85 },
+          { freq: 1174.66, offset: 0.07, dur: 0.16, type: 'sine', level: 0.9 },
+        ],
+        1.1
+      );
     } catch {}
     try {
       if (navigator.vibrate) {

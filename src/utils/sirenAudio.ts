@@ -1,11 +1,18 @@
-// Web Audio API & Speech Synthesis based School Announcement & Chime Sound Generator
+// Web Audio API & Speech Synthesis based School Announcement, Loud QR Scanner & Chime Sound Generator
 // Fully optimized for iOS Safari (iPhone/iPad), Android Chrome, and Desktop browsers.
-// Resolves iOS Safari silent-mode, missing Hindi voice, garbage-collection, and user-gesture expiration bugs.
+// Uses a single shared AudioContext + DynamicsCompressorNode to prevent browser AudioContext exhaustion
+// and deliver loud, clear audio without clipping across unlimited scans.
 
 let activeAudioCtx: AudioContext | null = null;
+let sharedCompressor: DynamicsCompressorNode | null = null;
 let activeChimeGain: GainNode | null = null;
 let announcementIntervalTimer: any = null;
 let isPlaying = false;
+
+export type ScannerAudioMode = 'voice_and_chime' | 'chime_only' | 'mute';
+
+export const EVS_SEEN_ANNOUNCEMENTS_KEY = 'evs_seen_announcements_v1';
+export const EVS_ANNOUNCEMENT_SEEN_EVENT = 'evs_announcement_seen';
 
 // Global utterance tracker to permanently prevent iOS Safari WebKit Garbage Collection bug
 declare global {
@@ -56,7 +63,6 @@ if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
 
 /**
  * Check if the device has a native Hindi TTS voice installed
- * (Note: Most iPhones in default config only have English/system voices)
  */
 export const hasNativeHindiVoice = (): boolean => {
   const voices = getAvailableVoices();
@@ -69,18 +75,41 @@ export const hasNativeHindiVoice = (): boolean => {
 };
 
 /**
- * Create or resume AudioContext safely
+ * Create or resume single shared AudioContext safely
  */
 export const getAudioContext = (): AudioContext => {
   if (!activeAudioCtx || activeAudioCtx.state === 'closed') {
     const AudioCtxClass =
       window.AudioContext || (window as any).webkitAudioContext;
     activeAudioCtx = new AudioCtxClass();
+    sharedCompressor = null;
   }
   if (activeAudioCtx.state === 'suspended') {
     activeAudioCtx.resume().catch(() => {});
   }
   return activeAudioCtx;
+};
+
+/**
+ * Shared DynamicsCompressorNode connected to destination so loud multi-oscillator chimes
+ * punch cleanly at high speaker volume without clipping or distorting.
+ */
+const getLoudOutputNode = (ctx: AudioContext): AudioNode => {
+  try {
+    if (!sharedCompressor || sharedCompressor.context !== ctx) {
+      const comp = ctx.createDynamicsCompressor();
+      comp.threshold.setValueAtTime(-16, ctx.currentTime);
+      comp.knee.setValueAtTime(12, ctx.currentTime);
+      comp.ratio.setValueAtTime(10, ctx.currentTime);
+      comp.attack.setValueAtTime(0.002, ctx.currentTime);
+      comp.release.setValueAtTime(0.12, ctx.currentTime);
+      comp.connect(ctx.destination);
+      sharedCompressor = comp;
+    }
+    return sharedCompressor;
+  } catch {
+    return ctx.destination;
+  }
 };
 
 /**
@@ -107,7 +136,6 @@ export const unlockAudioContext = async (): Promise<boolean> => {
     try {
       if (!window.__evs_silent_audio) {
         const audio = document.createElement('audio');
-        // Tiny 1-sample silent WAV base64
         audio.src =
           'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAA==';
         audio.setAttribute('playsinline', 'true');
@@ -132,6 +160,65 @@ export const unlockAudioContext = async (): Promise<boolean> => {
   }
 };
 
+export interface LoudNoteSpec {
+  freq: number;
+  offset: number;
+  dur: number;
+  type?: OscillatorType;
+  level?: number;
+  harmonic?: boolean;
+}
+
+/**
+ * Shared high-volume chime/beep player using single AudioContext + Compressor
+ */
+export const playLoudChime = (notes: LoudNoteSpec[], masterLevel = 0.95): void => {
+  try {
+    const ctx = getAudioContext();
+    const outNode = getLoudOutputNode(ctx);
+    const now = ctx.currentTime;
+
+    const masterGain = ctx.createGain();
+    masterGain.gain.setValueAtTime(Math.max(0.05, Math.min(1.5, masterLevel)), now);
+    masterGain.connect(outNode);
+
+    notes.forEach((n) => {
+      const startTime = now + Math.max(0, n.offset);
+      const endTime = startTime + Math.max(0.04, n.dur);
+      const level = n.level ?? 0.72;
+
+      const osc = ctx.createOscillator();
+      osc.type = n.type || 'triangle';
+      osc.frequency.setValueAtTime(n.freq, startTime);
+
+      const noteGain = ctx.createGain();
+      noteGain.gain.setValueAtTime(0.0001, startTime);
+      noteGain.gain.linearRampToValueAtTime(level, startTime + 0.01);
+      noteGain.gain.exponentialRampToValueAtTime(0.0001, endTime);
+
+      osc.connect(noteGain);
+      noteGain.connect(masterGain);
+
+      osc.start(startTime);
+      osc.stop(endTime);
+
+      if (n.harmonic !== false) {
+        const oscHarm = ctx.createOscillator();
+        oscHarm.type = 'sine';
+        oscHarm.frequency.setValueAtTime(n.freq * 2, startTime);
+        const harmGain = ctx.createGain();
+        harmGain.gain.setValueAtTime(0.0001, startTime);
+        harmGain.gain.linearRampToValueAtTime(level * 0.42, startTime + 0.01);
+        harmGain.gain.exponentialRampToValueAtTime(0.0001, endTime);
+        oscHarm.connect(harmGain);
+        harmGain.connect(masterGain);
+        oscHarm.start(startTime);
+        oscHarm.stop(endTime);
+      }
+    });
+  } catch {}
+};
+
 /**
  * Native Text-To-Speech announcement for parents and school broadcast.
  * Specially adapted for iPhone/iOS Safari so it never remains silent!
@@ -139,8 +226,12 @@ export const unlockAudioContext = async (): Promise<boolean> => {
 export interface SpeakAnnouncementOptions {
   forceLanguage?: 'hi' | 'en';
   englishFallback?: string;
+  rate?: number;
+  pitch?: number;
+  volume?: number;
   onStart?: () => void;
   onEnd?: () => void;
+  onError?: () => void;
 }
 
 export const speakAnnouncement = (
@@ -150,7 +241,6 @@ export const speakAnnouncement = (
   if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
 
   try {
-    // Synchronously ensure speech synthesis is not frozen
     if (window.speechSynthesis.paused) {
       window.speechSynthesis.resume();
     }
@@ -158,7 +248,6 @@ export const speakAnnouncement = (
     const voices = getAvailableVoices();
     const isIOS = isIOSDevice();
 
-    // 1. Detect voices
     const hiVoice = voices.find(
       (v) =>
         v.lang.toLowerCase().startsWith('hi') ||
@@ -179,7 +268,6 @@ export const speakAnnouncement = (
       voices.find((v) => v.lang.toLowerCase().startsWith('en')) ||
       voices[0];
 
-    // Determine target voice and text
     let targetVoice: SpeechSynthesisVoice | undefined;
     let targetLang = 'hi-IN';
     let textToSpeak = '';
@@ -188,15 +276,12 @@ export const speakAnnouncement = (
     const hasHindi = !!hiVoice;
 
     if (wantsEnglish || (!hasHindi && isIOS)) {
-      // iPhone without Hindi voice: use English voice with polite English announcement
-      // This prevents iOS Safari from failing silently!
       targetVoice = inVoice || defaultVoice;
       targetLang = targetVoice ? targetVoice.lang : 'en-US';
 
       if (options.englishFallback) {
         textToSpeak = options.englishFallback;
       } else if (customText) {
-        // Strip emoji and format clean English announcement
         const cleanTitle = customText.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim();
         textToSpeak = `Attention please. Important school announcement from E.V.S. Public School: ${cleanTitle}`;
       } else {
@@ -204,7 +289,6 @@ export const speakAnnouncement = (
           'Attention please. Important school notice from E.V.S. Public School.';
       }
     } else {
-      // Hindi voice available (Android, Windows, Mac, or iPhone with Hindi installed)
       targetVoice = hiVoice || inVoice || defaultVoice;
       targetLang = hiVoice ? hiVoice.lang : inVoice ? inVoice.lang : 'hi-IN';
       textToSpeak =
@@ -212,8 +296,7 @@ export const speakAnnouncement = (
         'कृपया ध्यान दें, ई.वी.एस. पब्लिक स्कूल की ओर से महत्वपूर्ण सूचना।';
     }
 
-    // Cancel existing speech only if actively speaking
-    if (window.speechSynthesis.speaking) {
+    if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
       window.speechSynthesis.cancel();
     }
 
@@ -224,15 +307,14 @@ export const speakAnnouncement = (
     }
     utterance.lang = targetLang;
 
-    // Measured polite tone
-    utterance.rate = isIOS ? 0.95 : 0.92;
-    utterance.pitch = 1.05;
-    utterance.volume = 1.0;
+    utterance.rate = options.rate ?? (isIOS ? 0.95 : 0.92);
+    utterance.pitch = options.pitch ?? 1.05;
+    utterance.volume = options.volume ?? 1.0;
 
-    // Track utterance globally to prevent iOS Safari Garbage Collection bug
     window.__evs_utterances = window.__evs_utterances || [];
     window.__evs_utterances.push(utterance);
 
+    let started = false;
     const cleanup = () => {
       if (window.__evs_utterances) {
         const idx = window.__evs_utterances.indexOf(utterance);
@@ -243,21 +325,21 @@ export const speakAnnouncement = (
     };
 
     utterance.onstart = () => {
+      started = true;
       if (options.onStart) options.onStart();
     };
 
     utterance.onend = () => {
       cleanup();
-      if (options.onEnd) options.onEnd();
+      if (started && options.onEnd) options.onEnd();
     };
 
     utterance.onerror = (e) => {
       console.warn('SpeechSynthesis error:', e);
       cleanup();
-      if (options.onEnd) options.onEnd();
+      if (options.onError) options.onError();
     };
 
-    // Immediate synchronous speak call (critical for iOS)
     window.speechSynthesis.speak(utterance);
   } catch (e) {
     console.warn('Speech synthesis warning:', e);
@@ -275,28 +357,120 @@ export const stopSpeechAnnouncement = (): void => {
   }
 };
 
+let scannerSpeechTimer: any = null;
+
 /**
- * Plays a warm, sweet, 4-tone melodious public announcement chime (Ding-Dong / Airport Chime)
- * Notes: C5 (523.25Hz) -> E5 (659.25Hz) -> G5 (783.99Hz) -> C6 (1046.50Hz)
+ * Loud classroom/assembly-grade QR & Attendance scanner sound feedback.
+ * Uses shared compressor-boosted AudioContext (never leaks) + clear loud voice confirmation.
+ */
+export const playLoudScannerSound = (
+  kind: 'marked' | 'already_present' | 'unmatched',
+  options?: {
+    studentName?: string;
+    mode?: ScannerAudioMode;
+  }
+): void => {
+  const mode = options?.mode || 'voice_and_chime';
+  if (mode === 'mute') return;
+
+  unlockAudioContext();
+
+  if (kind === 'marked') {
+    playLoudChime(
+      [
+        { freq: 880, offset: 0.0, dur: 0.12, type: 'triangle', level: 0.85 },
+        { freq: 1174.66, offset: 0.07, dur: 0.14, type: 'triangle', level: 0.9 },
+        { freq: 1567.98, offset: 0.14, dur: 0.24, type: 'sine', level: 0.92 },
+      ],
+      1.15
+    );
+    try {
+      if (navigator.vibrate) navigator.vibrate([80, 35, 80]);
+    } catch {}
+
+    if (mode === 'voice_and_chime') {
+      const cleanName = String(options?.studentName || '').trim();
+      const hiText = cleanName ? `${cleanName}, उपस्थित` : 'उपस्थित दर्ज';
+      const enText = cleanName ? `${cleanName}, Present` : 'Marked Present';
+      if (scannerSpeechTimer) clearTimeout(scannerSpeechTimer);
+      scannerSpeechTimer = setTimeout(() => {
+        speakAnnouncement(hiText, {
+          englishFallback: enText,
+          rate: 1.04,
+          pitch: 1.06,
+          volume: 1.0,
+        });
+      }, isIOSDevice() ? 140 : 210);
+    }
+  } else if (kind === 'already_present') {
+    playLoudChime(
+      [
+        { freq: 659.25, offset: 0.0, dur: 0.11, type: 'triangle', level: 0.8 },
+        { freq: 659.25, offset: 0.13, dur: 0.14, type: 'triangle', level: 0.8 },
+      ],
+      1.05
+    );
+    try {
+      if (navigator.vibrate) navigator.vibrate([45, 30, 45]);
+    } catch {}
+
+    if (mode === 'voice_and_chime') {
+      const cleanName = String(options?.studentName || '').trim();
+      const hiText = cleanName ? `${cleanName}, पहले से उपस्थित` : 'पहले से उपस्थित';
+      const enText = cleanName ? `${cleanName}, already present` : 'Already marked present';
+      if (scannerSpeechTimer) clearTimeout(scannerSpeechTimer);
+      scannerSpeechTimer = setTimeout(() => {
+        speakAnnouncement(hiText, {
+          englishFallback: enText,
+          rate: 1.05,
+          pitch: 1.0,
+          volume: 1.0,
+        });
+      }, isIOSDevice() ? 140 : 210);
+    }
+  } else {
+    playLoudChime(
+      [
+        { freq: 260, offset: 0.0, dur: 0.14, type: 'sawtooth', level: 0.72, harmonic: false },
+        { freq: 195, offset: 0.13, dur: 0.22, type: 'sawtooth', level: 0.78, harmonic: false },
+      ],
+      1.0
+    );
+    try {
+      if (navigator.vibrate) navigator.vibrate([180, 60, 180]);
+    } catch {}
+
+    if (mode === 'voice_and_chime') {
+      if (scannerSpeechTimer) clearTimeout(scannerSpeechTimer);
+      scannerSpeechTimer = setTimeout(() => {
+        speakAnnouncement('अमान्य क्यूआर कोड', {
+          englishFallback: 'Invalid QR code',
+          rate: 1.02,
+          pitch: 0.95,
+          volume: 1.0,
+        });
+      }, isIOSDevice() ? 150 : 220);
+    }
+  }
+};
+
+/**
+ * Plays a warm, loud, 4-tone melodious public announcement chime (Ding-Dong / Airport Chime)
  */
 export const playAnnouncementChime = (): void => {
   try {
     const ctx = getAudioContext();
-    if (ctx.state === 'suspended') {
-      ctx.resume().catch(() => {});
-    }
+    const outNode = getLoudOutputNode(ctx);
     const now = ctx.currentTime;
 
-    // Master chime gain
     const masterGain = ctx.createGain();
-    masterGain.gain.setValueAtTime(0.35, now);
-    masterGain.connect(ctx.destination);
+    masterGain.gain.setValueAtTime(0.65, now);
+    masterGain.connect(outNode);
     activeChimeGain = masterGain;
 
-    // Low-pass filter for smooth acoustic bell tone
     const lowPass = ctx.createBiquadFilter();
     lowPass.type = 'lowpass';
-    lowPass.frequency.setValueAtTime(3200, now);
+    lowPass.frequency.setValueAtTime(3600, now);
     lowPass.connect(masterGain);
 
     const notes = [
@@ -324,14 +498,14 @@ export const playAnnouncementChime = (): void => {
 
       const noteGain = ctx.createGain();
       noteGain.gain.setValueAtTime(0.0001, startTime);
-      noteGain.gain.linearRampToValueAtTime(0.28, startTime + 0.015);
+      noteGain.gain.linearRampToValueAtTime(0.38, startTime + 0.015);
       noteGain.gain.exponentialRampToValueAtTime(0.0001, endTime);
 
       const harmonicGain = ctx.createGain();
-      harmonicGain.gain.setValueAtTime(0.08, startTime);
+      harmonicGain.gain.setValueAtTime(0.11, startTime);
 
       const triangleGain = ctx.createGain();
-      triangleGain.gain.setValueAtTime(0.05, startTime);
+      triangleGain.gain.setValueAtTime(0.08, startTime);
 
       osc1.connect(noteGain);
       osc2.connect(harmonicGain);
@@ -355,25 +529,26 @@ export const playAnnouncementChime = (): void => {
 };
 
 /**
- * Start periodic announcement alert:
- * Plays sweet melodic chime followed by pleasant voice broadcast, repeating gently.
+ * Start announcement alert:
+ * Plays chime followed by clear voice broadcast. Supports explicit language ('hi' | 'en')
+ * and invokes onCycleComplete once a full voice broadcast finishes so seen-once tracking works cleanly.
  */
 export const startAnnouncementAlert = (
   noticeTitle?: string,
-  includeVoice = true
+  includeVoice = true,
+  forceLanguage?: 'hi' | 'en',
+  onCycleComplete?: () => void
 ): (() => void) => {
   if (isPlaying) {
-    return stopAnnouncementAlert;
+    stopAnnouncementAlert();
   }
 
   isPlaying = true;
   unlockAudioContext();
 
   const runAnnouncementCycle = () => {
-    // 1. Play sweet melodic chime
     playAnnouncementChime();
 
-    // 2. Play polite voice announcement
     if (includeVoice) {
       const spokenText = noticeTitle
         ? `कृपया ध्यान दें। स्कूल आवश्यक सूचना: ${noticeTitle}`
@@ -382,28 +557,29 @@ export const startAnnouncementAlert = (
         ? `Attention please. Important school announcement: ${noticeTitle}`
         : 'Attention please. Important announcement from EVS Public School.';
 
-      // On iOS, invoke synchronously within the cycle or with short micro-delay
       const delayMs = isIOSDevice() ? 300 : 700;
       setTimeout(() => {
         if (isPlaying) {
           speakAnnouncement(spokenText, {
+            forceLanguage,
             englishFallback: englishText,
+            onEnd: () => {
+              if (onCycleComplete) onCycleComplete();
+            },
           });
         }
       }, delayMs);
     }
   };
 
-  // Immediate cycle
   runAnnouncementCycle();
 
-  // Gentle repeat every 18 seconds
   if (announcementIntervalTimer) clearInterval(announcementIntervalTimer);
   announcementIntervalTimer = setInterval(() => {
     if (isPlaying) {
       runAnnouncementCycle();
     }
-  }, 18000);
+  }, 22000);
 
   return stopAnnouncementAlert;
 };
@@ -426,23 +602,19 @@ export const stopAnnouncementAlert = (): void => {
       activeChimeGain.gain.setValueAtTime(activeChimeGain.gain.value, now);
       activeChimeGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.1);
     }
-  } catch (e) {}
+  } catch {}
 };
 
 /**
  * Play a quick one-shot announcement preview (chime + voice)
- * MUST be called directly in a user click/touch handler.
- * On iOS, synchronously unlocks audio and speaks within the user gesture.
  */
 export const playAnnouncementPreview = (
   title?: string,
   withVoice = true,
-  preferredLanguage?: 'hi' | 'en'
+  preferredLanguage?: 'hi' | 'en',
+  onComplete?: () => void
 ): void => {
-  // Synchronous unlock (not waiting for promise!)
   unlockAudioContext();
-
-  // Play chime
   playAnnouncementChime();
 
   if (withVoice) {
@@ -453,20 +625,90 @@ export const playAnnouncementPreview = (
       ? `Attention please. Important school notice: ${title}`
       : 'Attention please. Important school notice from EVS Public School.';
 
-    // On iOS Safari, we must queue or speak with minimal delay to keep user activation alive
     const delay = isIOSDevice() ? 350 : 650;
     setTimeout(() => {
       speakAnnouncement(hindiText, {
         forceLanguage: preferredLanguage,
         englishFallback: englishText,
+        onEnd: onComplete,
       });
     }, delay);
   }
 };
 
-// Aliases for full backwards-compatibility with previous siren function names
-export const startEmergencySiren = (noticeTitle?: string): (() => void) =>
-  startAnnouncementAlert(noticeTitle);
+// Persistent Seen-Once Helpers for Suchna Announcements (localStorage across reloads/sessions)
+export interface AnnouncementNoticeRef {
+  id?: string | number;
+  title?: string;
+  date?: string;
+  description?: string;
+}
+
+export const getAnnouncementSignature = (notice: AnnouncementNoticeRef | null | undefined): string => {
+  if (!notice) return '';
+  const idPart = String(notice.id ?? '').trim();
+  const titlePart = String(notice.title ?? '').trim();
+  const datePart = String(notice.date ?? '').trim();
+  const descPart = String(notice.description ?? '').trim().slice(0, 80);
+  return `${idPart}::${titlePart}::${datePart}::${descPart}`;
+};
+
+const readSeenMap = (): Record<string, string> => {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem(EVS_SEEN_ANNOUNCEMENTS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') return parsed;
+    }
+  } catch {}
+  return {};
+};
+
+export const isAnnouncementSeen = (notice: AnnouncementNoticeRef | null | undefined): boolean => {
+  if (!notice || !notice.id) return false;
+  const key = String(notice.id).trim();
+  const sig = getAnnouncementSignature(notice);
+  const map = readSeenMap();
+  return Boolean(map[key] && map[key] === sig);
+};
+
+export const markAnnouncementSeen = (
+  notice: AnnouncementNoticeRef | null | undefined,
+  options?: { dispatchEvent?: boolean }
+): void => {
+  if (typeof window === 'undefined' || !notice || !notice.id) return;
+  const key = String(notice.id).trim();
+  const sig = getAnnouncementSignature(notice);
+  try {
+    const map = readSeenMap();
+    map[key] = sig;
+    // Keep only last 60 seen notices to avoid bloating localStorage
+    const keys = Object.keys(map);
+    if (keys.length > 60) {
+      keys.slice(0, keys.length - 60).forEach((oldKey) => {
+        delete map[oldKey];
+      });
+    }
+    localStorage.setItem(EVS_SEEN_ANNOUNCEMENTS_KEY, JSON.stringify(map));
+  } catch {}
+
+  if (options?.dispatchEvent !== false) {
+    try {
+      window.dispatchEvent(
+        new CustomEvent(EVS_ANNOUNCEMENT_SEEN_EVENT, { detail: { id: key, sig } })
+      );
+    } catch {}
+  }
+};
+
+// Aliases for full backwards-compatibility
+export const startEmergencySiren = (
+  noticeTitle?: string,
+  includeVoice = true,
+  forceLanguage?: 'hi' | 'en',
+  onCycleComplete?: () => void
+): (() => void) => startAnnouncementAlert(noticeTitle, includeVoice, forceLanguage, onCycleComplete);
 
 export const stopEmergencySiren = (): void => stopAnnouncementAlert();
 

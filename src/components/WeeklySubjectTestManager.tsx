@@ -207,7 +207,7 @@ export const WeeklySubjectTestManager: React.FC<WeeklySubjectTestManagerProps> =
     let ws: WebSocket | null = null;
     try {
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      ws = new WebSocket(`${proto}//${window.location.host}`);
+      ws = new WebSocket(`${proto}//${window.location.host}/ws/location`);
       ws.onmessage = (evt) => {
         try {
           const msg = JSON.parse(evt.data);

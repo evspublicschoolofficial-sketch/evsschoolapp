@@ -367,17 +367,25 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
         const existing = savedRecordsMap.get(sIdLower);
 
         if (existing) {
-          const faults = new Set<string>();
-          if (!parseIsClean(existing.Is_Bathed)) faults.add('unbathed');
-          if (!parseIsClean(existing.Nails_Clean)) faults.add('nails');
-          if (!parseIsClean(existing.Uniform_clean)) faults.add('uniform');
-          if (!parseIsClean(existing.Discipline)) faults.add('late');
+          const isAttOnly =
+            existing.attendance_only === true ||
+            String(existing.Behavior_ID || '').trim().toUpperCase().startsWith('ATT-') ||
+            String(existing.Good_Manners || '').trim() === 'केवल उपस्थिति (QR)' ||
+            /QR स्कैन द्वारा केवल उपस्थिति/i.test(String(existing.Remark || ''));
 
-          const rem = existing.Remark || '';
-          if (/बाल/i.test(rem)) faults.add('hair');
-          if (/जूते|मोजे/i.test(rem)) faults.add('shoes');
-          if (/गृहकार्य|होमवर्क/i.test(rem)) faults.add('hw');
-          if (/उत्कृष्ट|शाबाश/i.test(rem)) faults.add('star');
+          const faults = new Set<string>();
+          if (!isAttOnly) {
+            if (!parseIsClean(existing.Is_Bathed)) faults.add('unbathed');
+            if (!parseIsClean(existing.Nails_Clean)) faults.add('nails');
+            if (!parseIsClean(existing.Uniform_clean)) faults.add('uniform');
+            if (!parseIsClean(existing.Discipline)) faults.add('late');
+
+            const rem = existing.Remark || '';
+            if (/बाल/i.test(rem)) faults.add('hair');
+            if (/जूते|मोजे/i.test(rem)) faults.add('shoes');
+            if (/गृहकार्य|होमवर्क/i.test(rem)) faults.add('hw');
+            if (/उत्कृष्ट|शाबाश/i.test(rem)) faults.add('star');
+          }
 
           const isPres = isRecordPresent(existing);
 
@@ -385,8 +393,8 @@ export const ClassroomBulkAttendanceRegister: React.FC<ClassroomBulkAttendancePr
             studentId: sId,
             isPresent: isPres,
             selectedFaults: isPres ? faults : new Set(),
-            customRemark: existing.Remark || '',
-            showCustomNoteInput: !!existing.Remark && !faults.has('star'),
+            customRemark: isAttOnly ? '' : (existing.Remark || ''),
+            showCustomNoteInput: isAttOnly ? false : (!!existing.Remark && !faults.has('star')),
           };
         } else {
           // If no existing saved record and not yet in state, default to Present with clean conduct

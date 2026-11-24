@@ -2330,23 +2330,61 @@ async function startServer() {
       const sId = String(it.student_id || it.Student_ID || '').trim();
       const dt = it.date || it.Date || getLocalDateIST();
       const bId = String(it.behavior_id || it.Behavior_ID || (sId ? `BEH-${sId}-${dt}` : `BEH-${Date.now()}`));
-      const normalized = {
-        Behavior_ID: bId,
-        Student_ID: sId,
-        Date: dt,
-        Class: it.class || it.Class || '',
-        Is_Bathed: it.is_bathed ?? it.Is_Bathed ?? true,
-        Nails_Clean: it.nails_clean ?? it.Nails_Clean ?? true,
-        Uniform_clean: it.uniform_clean ?? it.Uniform_clean ?? true,
-        Good_Manners: it.good_manners || it.Good_Manners || 'Good',
-        Discipline: it.discipline ?? it.Discipline ?? true,
-        Is_Present: it.is_present ?? it.Is_Present ?? true,
-        Remark: it.remark || it.Remark || '',
-        AI_Feedback: it.ai_feedback || it.AI_Feedback || '',
-      };
+      const isAttOnly =
+        it.attendance_only === true ||
+        it.Attendance_Only === true ||
+        bId.toUpperCase().startsWith('ATT-') ||
+        String(it.good_manners || it.Good_Manners || '').trim() === 'केवल उपस्थिति (QR)';
+
       const idx = list.findIndex(
-        (b) => b.Behavior_ID === bId || (sId && String(b.Student_ID || '').trim() === sId && b.Date === dt)
+        (b) => b.Behavior_ID === bId || (sId && String(b.Student_ID || '').trim().toLowerCase() === sId.toLowerCase() && b.Date === dt)
       );
+      const existing = idx >= 0 ? list[idx] : null;
+      const existingIsManual =
+        existing &&
+        existing.attendance_only !== true &&
+        !String(existing.Behavior_ID || '').toUpperCase().startsWith('ATT-') &&
+        String(existing.Good_Manners || '').trim() !== 'केवल उपस्थिति (QR)';
+
+      // If QR attendance-only scan arrives when teacher already saved manual behavior, only mark Present
+      const normalized =
+        isAttOnly && existingIsManual
+          ? {
+              ...existing,
+              Is_Present: it.is_present ?? it.Is_Present ?? true,
+            }
+          : isAttOnly
+          ? {
+              Behavior_ID: bId,
+              Student_ID: sId,
+              Date: dt,
+              Class: it.class || it.Class || '',
+              attendance_only: true,
+              Is_Bathed: false,
+              Nails_Clean: false,
+              Uniform_clean: false,
+              Good_Manners: it.good_manners || it.Good_Manners || 'केवल उपस्थिति (QR)',
+              Discipline: false,
+              Is_Present: it.is_present ?? it.Is_Present ?? true,
+              Remark: it.remark || it.Remark || 'QR स्कैन द्वारा केवल उपस्थिति दर्ज',
+              AI_Feedback: '',
+            }
+          : {
+              Behavior_ID: bId,
+              Student_ID: sId,
+              Date: dt,
+              Class: it.class || it.Class || '',
+              attendance_only: false,
+              Is_Bathed: it.is_bathed ?? it.Is_Bathed ?? true,
+              Nails_Clean: it.nails_clean ?? it.Nails_Clean ?? true,
+              Uniform_clean: it.uniform_clean ?? it.Uniform_clean ?? true,
+              Good_Manners: it.good_manners || it.Good_Manners || 'Good',
+              Discipline: it.discipline ?? it.Discipline ?? true,
+              Is_Present: it.is_present ?? it.Is_Present ?? true,
+              Remark: it.remark || it.Remark || '',
+              AI_Feedback: it.ai_feedback || it.AI_Feedback || '',
+            };
+
       if (idx >= 0) {
         list[idx] = normalized;
       } else {
@@ -2559,26 +2597,35 @@ async function startServer() {
           if (!rec) continue;
           const sid = rec.student_id || rec.Student_ID;
           if (!sid) continue;
+          const bIdStr = String(rec.behavior_id || rec.Behavior_ID || `BEH-${sid}-${rec.date || rec.Date}`);
+          const isAttOnly =
+            rec.attendance_only === true ||
+            rec.Attendance_Only === true ||
+            bIdStr.toUpperCase().startsWith('ATT-') ||
+            String(rec.good_manners || rec.Good_Manners || '').trim() === 'केवल उपस्थिति (QR)';
           const isPresStr = (rec.is_present === false || rec.Is_Present === false || String(rec.is_present || '').toLowerCase() === 'absent') ? 'Absent' : 'Present';
-          const isBathedStr = (rec.is_bathed === false || rec.Is_Bathed === false || String(rec.is_bathed || '').toLowerCase() === 'no') ? 'No' : 'Yes';
-          const nailsCleanStr = (rec.nails_clean === false || rec.Nails_Clean === false || String(rec.nails_clean || '').toLowerCase() === 'no') ? 'No' : 'Yes';
-          const uniformCleanStr = (rec.uniform_clean === false || rec.Uniform_clean === false || String(rec.uniform_clean || '').toLowerCase() === 'no') ? 'No' : 'Yes';
-          const disciplineStr = (rec.discipline === false || rec.Discipline === false || String(rec.discipline || '').toLowerCase() === 'needs improvement') ? 'Needs Improvement' : 'Good';
+          const isBathedStr = isAttOnly ? 'N/A' : (rec.is_bathed === false || rec.Is_Bathed === false || String(rec.is_bathed || '').toLowerCase() === 'no') ? 'No' : 'Yes';
+          const nailsCleanStr = isAttOnly ? 'N/A' : (rec.nails_clean === false || rec.Nails_Clean === false || String(rec.nails_clean || '').toLowerCase() === 'no') ? 'No' : 'Yes';
+          const uniformCleanStr = isAttOnly ? 'N/A' : (rec.uniform_clean === false || rec.Uniform_clean === false || String(rec.uniform_clean || '').toLowerCase() === 'no') ? 'No' : 'Yes';
+          const disciplineStr = isAttOnly ? 'N/A' : (rec.discipline === false || rec.Discipline === false || String(rec.discipline || '').toLowerCase() === 'needs improvement') ? 'Needs Improvement' : 'Good';
           try {
             await forwardToGoogleAppsScript({
               action: 'addBehavior',
-              behavior_id: rec.behavior_id || rec.Behavior_ID || `BEH-${sid}-${rec.date || rec.Date}`,
+              behavior_id: bIdStr,
               student_id: sid,
               date: rec.date || rec.Date,
               class: rec.class || rec.Class,
+              attendance_only: isAttOnly,
               is_bathed: isBathedStr,
               nails_clean: nailsCleanStr,
               uniform_clean: uniformCleanStr,
-              good_manners: rec.good_manners || rec.Good_Manners || (isPresStr === 'Absent' ? 'लागू नहीं (अनुपस्थित)' : 'उत्कृष्ट (Excellent)'),
+              good_manners: isAttOnly
+                ? (rec.good_manners || rec.Good_Manners || 'केवल उपस्थिति (QR)')
+                : (rec.good_manners || rec.Good_Manners || (isPresStr === 'Absent' ? 'लागू नहीं (अनुपस्थित)' : 'उत्कृष्ट (Excellent)')),
               discipline: disciplineStr,
               is_present: isPresStr,
               remark: rec.remark || rec.Remark || '',
-              ai_feedback: rec.ai_feedback || rec.AI_Feedback || '',
+              ai_feedback: isAttOnly ? '' : (rec.ai_feedback || rec.AI_Feedback || ''),
               appsScriptUrl: targetScriptUrl,
             });
             // Small delay to prevent Apps Script spreadsheet lock timeout

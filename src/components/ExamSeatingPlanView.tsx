@@ -675,7 +675,7 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
             </div>
             <div className="text-[11px] text-emerald-800 font-semibold mt-0.5">
               {mode === 'anti_cheating_mixed'
-                ? 'हर बेंच पर अलग-अलग कक्षा + आगे-पीछे बदलाव'
+                ? 'हर कक्षा अधिकतम दूरी पर (अगली-पिछली व अगल-बगल बेंच से दूर)'
                 : 'एक कक्षा के बच्चे क्रमवार साथ'}
             </div>
           </div>

@@ -3,6 +3,11 @@ import jsQR from 'jsqr';
 import { Student, StudentBehaviorRecord } from '../types';
 import { formatLocalTime, getLocalDateYMD } from '../utils/localTime';
 import { StudentAvatar } from './StudentAvatar';
+import {
+  playLoudScannerSound,
+  ScannerAudioMode,
+  unlockAudioContext,
+} from '../utils/sirenAudio';
 
 interface QuickQrAttendanceModalProps {
   isOpen: boolean;
@@ -75,6 +80,15 @@ export const QuickQrAttendanceModal: React.FC<QuickQrAttendanceModalProps> = ({
   const [flashStatus, setFlashStatus] = useState<FlashStatus | null>(null);
   const [sessionLogs, setSessionLogs] = useState<ScanLogItem[]>([]);
   const [manualQuery, setManualQuery] = useState<string>('');
+  const [soundMode, setSoundMode] = useState<ScannerAudioMode>(() => {
+    try {
+      const saved = localStorage.getItem('evs_qr_scanner_sound_mode');
+      if (saved === 'voice_and_chime' || saved === 'chime_only' || saved === 'mute') {
+        return saved;
+      }
+    } catch {}
+    return 'voice_and_chime';
+  });
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -118,46 +132,44 @@ export const QuickQrAttendanceModal: React.FC<QuickQrAttendanceModalProps> = ({
     return set;
   }, [behaviorRecords, selectedDate]);
 
-  const playFeedbackSound = (kind: 'success' | 'info' | 'error') => {
+  // Unlock audio immediately when modal opens or user interacts so first QR scan always plays loudly
+  useEffect(() => {
+    if (!isOpen) return;
+    unlockAudioContext();
+    const unlockOnTouch = () => {
+      unlockAudioContext();
+    };
+    window.addEventListener('touchstart', unlockOnTouch, { once: true });
+    window.addEventListener('click', unlockOnTouch, { once: true });
+    return () => {
+      window.removeEventListener('touchstart', unlockOnTouch);
+      window.removeEventListener('click', unlockOnTouch);
+    };
+  }, [isOpen]);
+
+  const cycleSoundMode = () => {
+    unlockAudioContext();
+    const order: ScannerAudioMode[] = ['voice_and_chime', 'chime_only', 'mute'];
+    const next = order[(order.indexOf(soundMode) + 1) % order.length];
+    setSoundMode(next);
     try {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      const ctx = new AudioCtx();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = kind === 'error' ? 'sawtooth' : 'sine';
-      const now = ctx.currentTime;
-      if (kind === 'success') {
-        osc.frequency.setValueAtTime(880, now);
-        osc.frequency.setValueAtTime(1174, now + 0.08);
-        gain.gain.setValueAtTime(0.22, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.22);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start(now);
-        osc.stop(now + 0.22);
-      } else if (kind === 'info') {
-        osc.frequency.setValueAtTime(660, now);
-        gain.gain.setValueAtTime(0.14, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.14);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start(now);
-        osc.stop(now + 0.14);
-      } else {
-        osc.frequency.setValueAtTime(280, now);
-        gain.gain.setValueAtTime(0.16, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start(now);
-        osc.stop(now + 0.2);
-      }
+      localStorage.setItem('evs_qr_scanner_sound_mode', next);
     } catch {}
-    try {
-      if (navigator.vibrate) {
-        navigator.vibrate(kind === 'success' ? [70, 30, 70] : 50);
-      }
-    } catch {}
+    if (next !== 'mute') {
+      playLoudScannerSound('marked', {
+        studentName: next === 'voice_and_chime' ? 'आवाज़ चालू' : undefined,
+        mode: next,
+      });
+    }
+  };
+
+  const playFeedbackSound = (kind: 'success' | 'info' | 'error', studentName?: string) => {
+    const mappedKind =
+      kind === 'success' ? 'marked' : kind === 'info' ? 'already_present' : 'unmatched';
+    playLoudScannerSound(mappedKind, {
+      studentName,
+      mode: soundMode,
+    });
   };
 
   const matchStudentFromCode = (text: string): Student | undefined => {
@@ -223,7 +235,7 @@ export const QuickQrAttendanceModal: React.FC<QuickQrAttendanceModalProps> = ({
     const alreadyPresent = alreadyPresentIds.has(sidNorm) || sessionMarkedIdsRef.current.has(sidNorm);
 
     if (alreadyPresent) {
-      playFeedbackSound('info');
+      playFeedbackSound('info', student.Student_Name);
       setFlashStatus({
         kind: 'already_present',
         student,
@@ -249,7 +261,7 @@ export const QuickQrAttendanceModal: React.FC<QuickQrAttendanceModalProps> = ({
     }
 
     sessionMarkedIdsRef.current.add(sidNorm);
-    playFeedbackSound('success');
+    playFeedbackSound('success', student.Student_Name);
     setFlashStatus({
       kind: 'marked',
       student,
@@ -529,15 +541,40 @@ export const QuickQrAttendanceModal: React.FC<QuickQrAttendanceModalProps> = ({
             </div>
             <div>
               <h3 className="text-sm sm:text-base font-black text-amber-300 leading-tight">
-                तुरंत QR हाजिरी स्कैनर (Manager Only)
+                तुरंत QR हाजिरी स्कैनर (1-Scan Instant)
               </h3>
               <p className="text-[11px] text-slate-200">
-                QR कोड स्कैन होते ही बिना किसी अतिरिक्त बटन के छात्र की उपस्थिति तुरंत लग जाएगी
+                QR स्कैन से केवल छात्र की हाज़िरी (Present) दर्ज होगी — बिहेवियर शिक्षक मैन्युअल जोड़ेंगे
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={cycleSoundMode}
+              className={`px-2.5 py-1 rounded-xl text-[11px] font-black border cursor-pointer flex items-center gap-1.5 transition-all ${
+                soundMode === 'voice_and_chime'
+                  ? 'bg-emerald-500 text-slate-950 border-emerald-300 shadow-xs'
+                  : soundMode === 'chime_only'
+                  ? 'bg-amber-400 text-slate-950 border-amber-300 shadow-xs'
+                  : 'bg-white/15 text-slate-300 border-white/25'
+              }`}
+              title="स्कैन ध्वनि मोड बदलें (तेज़ आवाज़ + नाम / केवल तेज़ बीप / म्यूट)"
+            >
+              <i
+                className={`fa-solid ${
+                  soundMode === 'mute' ? 'fa-volume-xmark' : 'fa-volume-high'
+                }`}
+              ></i>
+              <span>
+                {soundMode === 'voice_and_chime'
+                  ? 'तेज़ आवाज़ + नाम'
+                  : soundMode === 'chime_only'
+                  ? 'तेज़ बीप'
+                  : 'म्यूट'}
+              </span>
+            </button>
             <input
               type="date"
               value={selectedDate}

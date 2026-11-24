@@ -47,7 +47,7 @@ import {
   findTeacherProfileInMap,
   loadLocalTeacherProfiles,
 } from '../utils/teacherProfileHelper';
-import { getAppsScriptUrl } from '../utils/busTrackingService';
+import { getAppsScriptUrl, GOOGLE_APPS_SCRIPT_CODE } from '../utils/busTrackingService';
 import { directGetFromSheet, dualSyncWriteToSheet } from '../utils/sheetDirectSync';
 import { TeacherSyllabusPlanner } from './TeacherSyllabusPlanner';
 import { WeeklySubjectTestManager, loadLocalWeeklyTests } from './WeeklySubjectTestManager';
@@ -349,7 +349,7 @@ export const TeacherPerformanceDashboard: React.FC<TeacherPerformanceDashboardPr
     let ws: WebSocket | null = null;
     try {
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      ws = new WebSocket(`${proto}//${window.location.host}`);
+      ws = new WebSocket(`${proto}//${window.location.host}/ws/location`);
       ws.onmessage = (evt) => {
         try {
           const msg = JSON.parse(evt.data);
@@ -1698,7 +1698,7 @@ function handleDeleteRowById(ss, sheetName, id) {
                   ✅ 100% तैयार पूरा कोड (All Functions Safe)
                 </span>
                 <h4 className="text-base font-black text-emerald-950">
-                  आपका पूरा एडिटेड Code.gs (2,496 लाइनें — बिना किसी पुराने फंक्शन को छेड़े)
+                  आपका पूरा अपडेटेड Code.gs (सभी लेटेस्ट मॉड्यूल्स सहित — बिना किसी पुराने फंक्शन को छेड़े)
                 </h4>
                 <p className="text-xs text-emerald-900 mt-0.5">
                   इसे कॉपी करके Apps Script के <strong>Code.gs</strong> में पूरा बदल दें (<code>Ctrl+A</code> → <code>Ctrl+V</code> → <code>Ctrl+S</code>) और फिर <strong>Deploy → Manage deployments → Edit → New version → Deploy</strong> करें।
@@ -1711,9 +1711,7 @@ function handleDeleteRowById(ss, sheetName, id) {
                   onClick={async () => {
                     setFullCodeLoading(true);
                     try {
-                      const res = await fetch('/EVS_Complete_Code.gs.txt');
-                      const txt = await res.text();
-                      await navigator.clipboard.writeText(txt);
+                      await navigator.clipboard.writeText(GOOGLE_APPS_SCRIPT_CODE);
                       setCopiedFullCode(true);
                       setTimeout(() => setCopiedFullCode(false), 4000);
                     } catch {

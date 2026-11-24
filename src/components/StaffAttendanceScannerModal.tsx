@@ -3,7 +3,7 @@ import { getLocalDateYMD } from '../utils/localTime';
 import jsQR from 'jsqr';
 import { SchoolUser, StaffAttendanceRecord } from '../types';
 import { SCHOOL_CHECKIN_CODE } from './SchoolQRCodeModal';
-import { speakAnnouncement, unlockAudioContext } from '../utils/sirenAudio';
+import { playLoudChime, speakAnnouncement, unlockAudioContext } from '../utils/sirenAudio';
 import {
   getActiveSchoolLocation,
   updateSchoolLocation,
@@ -72,21 +72,17 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
   // Check if current user is manager / admin
   const isManagerRole = isManager || /manager|principal|admin/i.test(currentUser.Designation || '');
 
-  // Sound & speech synthesis feedback
+  // Sound & speech synthesis feedback using shared AudioContext + compressor
   const playBeep = () => {
     try {
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(659.25, audioCtx.currentTime); // E5
-      osc.frequency.setValueAtTime(880, audioCtx.currentTime + 0.08); // A5
-      gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.25);
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.start();
-      osc.stop(audioCtx.currentTime + 0.25);
+      unlockAudioContext();
+      playLoudChime(
+        [
+          { freq: 659.25, offset: 0.0, dur: 0.12, type: 'triangle', level: 0.85 },
+          { freq: 880, offset: 0.08, dur: 0.18, type: 'sine', level: 0.9 },
+        ],
+        1.1
+      );
     } catch {}
 
     if (navigator.vibrate) {
@@ -98,18 +94,14 @@ export const StaffAttendanceScannerModal: React.FC<StaffAttendanceScannerModalPr
 
   const playErrorBuzz = () => {
     try {
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(220, audioCtx.currentTime);
-      osc.frequency.setValueAtTime(160, audioCtx.currentTime + 0.15);
-      gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.35);
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.start();
-      osc.stop(audioCtx.currentTime + 0.35);
+      unlockAudioContext();
+      playLoudChime(
+        [
+          { freq: 220, offset: 0.0, dur: 0.16, type: 'sawtooth', level: 0.72, harmonic: false },
+          { freq: 160, offset: 0.15, dur: 0.22, type: 'sawtooth', level: 0.78, harmonic: false },
+        ],
+        1.0
+      );
     } catch {}
 
     if (navigator.vibrate) {

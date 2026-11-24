@@ -333,21 +333,79 @@ interface StudentPoolItem {
   classLabel: string;
 }
 
-function countAdjacentConflictsOnBench(seats: StudentPoolItem[]): number {
-  let c = 0;
-  for (let i = 0; i < seats.length - 1; i++) {
-    if (seats[i].classCode === seats[i + 1].classCode) c++;
+function getNormalizedSeatX(seatIdx: number, benchCap: number): number {
+  if (benchCap <= 1) return 0.5;
+  return seatIdx / (benchCap - 1);
+}
+
+function computeSameClassPairPenalty(opts: {
+  b1: number;
+  s1: number;
+  cap1: number;
+  b2: number;
+  s2: number;
+  cap2: number;
+  spreadWeight: number;
+}): number {
+  const { b1, s1, cap1, b2, s2, cap2, spreadWeight } = opts;
+  const db = Math.abs(b1 - b2);
+
+  if (db === 0) {
+    const ds = Math.abs(s1 - s2);
+    if (ds === 1) return 50_000_000; // Directly side-by-side on the same bench
+    if (ds === 2) return 5_000_000;  // Same bench with 1 seat between
+    return 2_500_000;                // Same bench with 2+ seats between
   }
-  return c;
+
+  const x1 = getNormalizedSeatX(s1, cap1);
+  const x2 = getNormalizedSeatX(s2, cap2);
+  const dx = Math.abs(x1 - x2);
+
+  // Strictly convex inverse-square vertical distance + strong front-to-back neighbor avoidance + opposite-side preference
+  const baseDbPenalty = 100_000 / (db * db);
+  const nearRowPenalty =
+    db === 1
+      ? 50_000 * (1.2 - 0.4 * dx)
+      : db === 2
+      ? 4_000 * (1.1 - 0.25 * dx)
+      : 0;
+  const colPenalty = (1 - dx) * (2_500 / (db + 0.5));
+
+  return spreadWeight * (baseDbPenalty + nearRowPenalty + colPenalty);
+}
+
+function computeSingleClassSpatialCost(
+  positions: Array<{ b: number; s: number }>,
+  benchCaps: number[],
+  spreadWeight: number
+): number {
+  let total = 0;
+  for (let i = 0; i < positions.length; i++) {
+    const p1 = positions[i];
+    for (let j = i + 1; j < positions.length; j++) {
+      const p2 = positions[j];
+      total += computeSameClassPairPenalty({
+        b1: p1.b,
+        s1: p1.s,
+        cap1: benchCaps[p1.b],
+        b2: p2.b,
+        s2: p2.s,
+        cap2: benchCaps[p2.b],
+        spreadWeight,
+      });
+    }
+  }
+  return total;
 }
 
 /**
  * Anti-cheating mixed bench allocator for a single room given its exact class pools:
- * 1. Spreads each class across benches using column-major pass (Left -> Right -> Middle)
- *    so students of the same class avoid sitting next to each other.
- * 2. Performs intra-bench reorder (places singleton different-class student in the Middle).
- * 3. Performs cross-bench conflict-reduction swaps if any adjacent pairs remain.
- * 4. Staggers benches with all-distinct classes front-to-back so the same class isn't stacked in one column.
+ * 1. Computes bench layout (B benches x seatsPerBench).
+ * 2. Places small classes (2 <= k <= B) first on maximally spaced anchor benches
+ *    (e.g., 2 students -> Bench 1 Left & Last Bench Right; 3 students -> Bench 1, Middle, Last Bench),
+ *    then spreads larger classes evenly across benches, then fills singletons.
+ * 3. Runs exhaustive best-improving 2-opt swaps across all (bench, seat) positions to eliminate
+ *    horizontal adjacency, avoid consecutive front-to-back stacking, and maximize inter-student distance.
  */
 function arrangeRoomStudentsIntoBenches(opts: {
   roomItemsByClass: Array<{ classCode: string; classLabel: string; items: StudentPoolItem[] }>;
@@ -377,7 +435,7 @@ function arrangeRoomStudentsIntoBenches(opts: {
     return benches;
   }
 
-  // Anti-cheating mixed allocation
+  // Anti-cheating mixed spatial allocation
   const B = Math.ceil(totalInRoom / seatsPerBench);
   const benchCaps: number[] = [];
   let rem = totalInRoom;
@@ -387,135 +445,195 @@ function arrangeRoomStudentsIntoBenches(opts: {
     rem -= cap;
   }
 
-  // Largest class pools first so they spread cleanly across the outer columns of all benches
-  const sortedPools = [...roomItemsByClass].sort((a, b) => b.items.length - a.items.length);
-  const flatItems: StudentPoolItem[] = [];
-  for (const pool of sortedPools) {
-    flatItems.push(...pool.items);
-  }
-
   const benchGrid: Array<Array<StudentPoolItem | null>> = benchCaps.map((cap) =>
     Array.from({ length: cap }, () => null)
   );
 
-  // Build non-adjacent column fill order:
-  // Seat 0 (Left) on all benches -> Last seat on benches with 3+ seats (Right) -> Inner/middle seats
-  const slotOrder: Array<{ b: number; s: number }> = [];
-  const usedSlot = new Set<string>();
-  const pushSlot = (b: number, s: number) => {
-    const key = `${b}:${s}`;
-    if (!usedSlot.has(key) && s >= 0 && s < benchCaps[b]) {
-      usedSlot.add(key);
-      slotOrder.push({ b, s });
-    }
-  };
-
-  for (let b = 0; b < B; b++) pushSlot(b, 0);
-  if (seatsPerBench >= 3) {
-    for (let b = 0; b < B; b++) {
-      if (benchCaps[b] >= 3) pushSlot(b, benchCaps[b] - 1);
-    }
-  }
-  for (let s = 1; s < seatsPerBench; s++) {
-    for (let b = 0; b < B; b++) {
-      pushSlot(b, s);
-    }
+  // Per-class spread weight (normalized by pair count k*(k-1)/2):
+  // - Small classes (2 <= k <= B) get priority proportional to 1 / (k * (k - 1)) so 2-student classes
+  //   reliably claim Bench 1 & Last Bench, and 3-4 student classes spread evenly without crowding them out.
+  // - Oversized classes (k > B) already occupy every bench, so their vertical tie-break weight is 0.02
+  //   while full Tier 1 (50M) and Tier 2 (5M) same-bench anti-adjacency penalties remain active.
+  const classCountMap = new Map<string, number>();
+  const classWeightMap = new Map<string, number>();
+  for (const pool of roomItemsByClass) {
+    const k = pool.items.length;
+    classCountMap.set(pool.classCode, k);
+    const weight =
+      k >= 2 && k <= B && B >= 2
+        ? Math.max(0.5, Math.min(20, (B * 3) / (k * (k - 1))))
+        : k > B
+        ? 0.02
+        : 1;
+    classWeightMap.set(pool.classCode, weight);
   }
 
-  flatItems.forEach((item, idx) => {
-    const slot = slotOrder[idx];
-    if (slot) benchGrid[slot.b][slot.s] = item;
-  });
+  // Order pools:
+  // 1) Small classes (2 <= k <= B) ascending by size (so 2-student classes claim Bench 1 & Bench B opposite corners)
+  // 2) Large classes (k > B) descending by size
+  // 3) Singletons (k === 1)
+  const smallPools = roomItemsByClass
+    .filter((p) => p.items.length >= 2 && p.items.length <= B)
+    .sort((a, b) => a.items.length - b.items.length);
+  const largePools = roomItemsByClass
+    .filter((p) => p.items.length > B)
+    .sort((a, b) => b.items.length - a.items.length);
+  const singletonPools = roomItemsByClass.filter((p) => p.items.length === 1);
+  const orderedPools = [...smallPools, ...largePools, ...singletonPools];
 
-  const concreteBenches: StudentPoolItem[][] = benchGrid.map((row) =>
-    row.filter((x): x is StudentPoolItem => x !== null)
-  );
+  const placedByClass = new Map<string, Array<{ b: number; s: number }>>();
 
-  // Step A: Reorder within each 3-seat or 4-seat bench to minimize adjacent same-class pairs
-  const optimizeBenchOrder = (row: StudentPoolItem[]) => {
-    if (row.length === 3) {
-      if (row[0].classCode === row[1].classCode && row[2].classCode !== row[0].classCode) {
-        [row[1], row[2]] = [row[2], row[1]];
-      } else if (row[1].classCode === row[2].classCode && row[0].classCode !== row[1].classCode) {
-        [row[0], row[1]] = [row[1], row[0]];
-      }
-    } else if (row.length === 4) {
-      // Try swapping inner seats if adjacent conflict exists
-      let best = [...row];
-      let bestScore = countAdjacentConflictsOnBench(best);
-      if (bestScore > 0) {
-        const perms = [
-          [0, 2, 1, 3],
-          [0, 3, 1, 2],
-          [1, 3, 0, 2],
-          [0, 1, 3, 2],
-        ];
-        for (const p of perms) {
-          const cand = p.map((i) => row[i]);
-          const sc = countAdjacentConflictsOnBench(cand);
-          if (sc < bestScore) {
-            best = cand;
-            bestScore = sc;
-            if (sc === 0) break;
+  for (let pIdx = 0; pIdx < orderedPools.length; pIdx++) {
+    const pool = orderedPools[pIdx];
+    const k = pool.items.length;
+    const weight = classWeightMap.get(pool.classCode) || 1;
+    const existing = placedByClass.get(pool.classCode) || [];
+    const flipSide = pIdx % 2 === 1;
+
+    for (let i = 0; i < k; i++) {
+      const targetB =
+        k === 1 || B <= 1
+          ? Math.floor((B - 1) / 2)
+          : Math.round(((i % B) * (B - 1)) / (Math.min(k, B) - 1));
+      const preferRight = flipSide ? i % 2 === 0 : i % 2 === 1;
+
+      let bestB = -1;
+      let bestS = -1;
+      let bestScore = Infinity;
+
+      for (let b = 0; b < B; b++) {
+        const cap = benchCaps[b];
+        for (let s = 0; s < cap; s++) {
+          if (benchGrid[b][s] !== null) continue;
+
+          let score = 0;
+          for (const prev of existing) {
+            score += computeSameClassPairPenalty({
+              b1: b,
+              s1: s,
+              cap1: cap,
+              b2: prev.b,
+              s2: prev.s,
+              cap2: benchCaps[prev.b],
+              spreadWeight: weight,
+            });
           }
-        }
-        for (let i = 0; i < 4; i++) row[i] = best[i];
-      }
-    }
-  };
 
-  concreteBenches.forEach(optimizeBenchOrder);
+          // Guide tie-breaker toward ideal evenly spaced anchor bench & alternating outer seat
+          score += Math.abs(b - targetB) * 60;
+          const x = getNormalizedSeatX(s, cap);
+          const targetX = k === 1 ? 0.5 : preferRight ? 1 : 0;
+          score += Math.abs(x - targetX) * 20;
 
-  // Step B: Cross-bench local swap pass to eliminate remaining adjacent conflicts if possible
-  for (let pass = 0; pass < 2; pass++) {
-    for (let b1 = 0; b1 < concreteBenches.length; b1++) {
-      const r1 = concreteBenches[b1];
-      if (countAdjacentConflictsOnBench(r1) === 0) continue;
-      for (let i = 0; i < r1.length; i++) {
-        const hasLocalConflict =
-          (i > 0 && r1[i].classCode === r1[i - 1].classCode) ||
-          (i < r1.length - 1 && r1[i].classCode === r1[i + 1].classCode);
-        if (!hasLocalConflict) continue;
-
-        let swapped = false;
-        for (let b2 = 0; b2 < concreteBenches.length && !swapped; b2++) {
-          if (b1 === b2) continue;
-          const r2 = concreteBenches[b2];
-          for (let j = 0; j < r2.length && !swapped; j++) {
-            if (r1[i].classCode === r2[j].classCode) continue;
-            const beforeTotal = countAdjacentConflictsOnBench(r1) + countAdjacentConflictsOnBench(r2);
-            const test1 = [...r1];
-            const test2 = [...r2];
-            [test1[i], test2[j]] = [test2[j], test1[i]];
-            optimizeBenchOrder(test1);
-            optimizeBenchOrder(test2);
-            const afterTotal = countAdjacentConflictsOnBench(test1) + countAdjacentConflictsOnBench(test2);
-            if (afterTotal < beforeTotal) {
-              concreteBenches[b1] = test1;
-              concreteBenches[b2] = test2;
-              swapped = true;
-            }
+          if (score < bestScore) {
+            bestScore = score;
+            bestB = b;
+            bestS = s;
           }
         }
       }
+
+      if (bestB !== -1 && bestS !== -1) {
+        benchGrid[bestB][bestS] = pool.items[i];
+        existing.push({ b: bestB, s: bestS });
+      }
+    }
+
+    placedByClass.set(pool.classCode, existing);
+  }
+
+  // Flatten occupied slots for 2-opt global spatial optimization
+  const slots: Array<{ b: number; s: number; item: StudentPoolItem }> = [];
+  for (let b = 0; b < B; b++) {
+    for (let s = 0; s < benchCaps[b]; s++) {
+      const item = benchGrid[b][s];
+      if (item) slots.push({ b, s, item });
     }
   }
 
-  // Step C: Stagger all-distinct benches front-to-back so the same class doesn't stack down the same column
-  concreteBenches.forEach((row, bIdx) => {
-    if (row.length >= 2) {
-      const distinctCount = new Set(row.map((s) => s.classCode)).size;
-      if (distinctCount === row.length) {
-        const shift = bIdx % row.length;
-        if (shift > 0) {
-          const rotated = [...row.slice(shift), ...row.slice(0, shift)];
-          concreteBenches[bIdx] = rotated;
+  // Build position index per class for fast exact delta evaluation
+  const classSlotIndices = new Map<string, number[]>();
+  slots.forEach((slot, idx) => {
+    const arr = classSlotIndices.get(slot.item.classCode) || [];
+    arr.push(idx);
+    classSlotIndices.set(slot.item.classCode, arr);
+  });
+
+  const getClassCost = (classCode: string): number => {
+    const indices = classSlotIndices.get(classCode);
+    if (!indices || indices.length <= 1) return 0;
+    const weight = classWeightMap.get(classCode) || 1;
+    const positions = indices.map((idx) => ({ b: slots[idx].b, s: slots[idx].s }));
+    return computeSingleClassSpatialCost(positions, benchCaps, weight);
+  };
+
+  // Exhaustive best-improving 2-opt swap pass (converges to global/near-global optimum in <2ms)
+  const MAX_SWAPS = 250;
+  for (let iter = 0; iter < MAX_SWAPS; iter++) {
+    let bestDelta = -1e-6;
+    let bestI = -1;
+    let bestJ = -1;
+
+    for (let i = 0; i < slots.length; i++) {
+      const codeA = slots[i].item.classCode;
+      for (let j = i + 1; j < slots.length; j++) {
+        const codeB = slots[j].item.classCode;
+        if (codeA === codeB) continue;
+
+        const beforeCost = getClassCost(codeA) + getClassCost(codeB);
+
+        // Temporarily swap items between slot i and slot j
+        const itemA = slots[i].item;
+        const itemB = slots[j].item;
+        slots[i].item = itemB;
+        slots[j].item = itemA;
+
+        const idxListA = classSlotIndices.get(codeA)!;
+        const idxListB = classSlotIndices.get(codeB)!;
+        const posInA = idxListA.indexOf(i);
+        const posInB = idxListB.indexOf(j);
+        idxListA[posInA] = j;
+        idxListB[posInB] = i;
+
+        const afterCost = getClassCost(codeA) + getClassCost(codeB);
+        const delta = afterCost - beforeCost;
+
+        // Revert temporary swap
+        slots[i].item = itemA;
+        slots[j].item = itemB;
+        idxListA[posInA] = i;
+        idxListB[posInB] = j;
+
+        if (delta < bestDelta) {
+          bestDelta = delta;
+          bestI = i;
+          bestJ = j;
         }
       }
     }
+
+    if (bestI === -1 || bestJ === -1) break;
+
+    // Commit the best swap
+    const itemA = slots[bestI].item;
+    const itemB = slots[bestJ].item;
+    const codeA = itemA.classCode;
+    const codeB = itemB.classCode;
+    slots[bestI].item = itemB;
+    slots[bestJ].item = itemA;
+    const idxListA = classSlotIndices.get(codeA)!;
+    const idxListB = classSlotIndices.get(codeB)!;
+    idxListA[idxListA.indexOf(bestI)] = bestJ;
+    idxListB[idxListB.indexOf(bestJ)] = bestI;
+  }
+
+  // Reconstruct concrete benches in exact (b, s) order
+  const finalGrid: StudentPoolItem[][] = benchCaps.map(() => []);
+  slots.forEach((slot) => {
+    finalGrid[slot.b][slot.s] = slot.item;
   });
 
-  return concreteBenches.map((row, bIdx) => ({
+  return finalGrid.map((row, bIdx) => ({
     benchNumber: bIdx + 1,
     seats: row.map((item, sIdx) => ({
       ...item,

@@ -18,6 +18,7 @@ import {
   updateSchoolLocation,
 } from '../utils/schoolLocationService';
 import { GoogleSheetSyncModal } from './GoogleSheetSyncModal';
+import { playLoudChime, unlockAudioContext } from '../utils/sirenAudio';
 import {
   RouteStoppage,
   RouteConfig,
@@ -135,16 +136,7 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
   useEffect(() => {
     const unlockAudio = () => {
       try {
-        if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-          window.speechSynthesis.resume();
-        }
-        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-        if (AudioCtx) {
-          const ctx = new AudioCtx();
-          if (ctx.state === 'suspended') {
-            ctx.resume().catch(() => {});
-          }
-        }
+        unlockAudioContext();
       } catch {}
     };
     window.addEventListener('click', unlockAudio, { once: true });
@@ -155,40 +147,16 @@ export const ManagerVanTracker: React.FC<ManagerVanTrackerProps> = ({
     };
   }, []);
 
-  // Play authentic 2-tone Delhi Metro arrival chime using Web Audio API
+  // Play authentic 2-tone Delhi Metro arrival chime using shared AudioContext + compressor
   const playMetroChime = useCallback(() => {
     try {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioCtx) return;
-      const ctx = new AudioCtx();
-      if (ctx.state === 'suspended') {
-        ctx.resume().catch(() => {});
-      }
-      const now = ctx.currentTime;
-
-      // Tone 1: E5 (659 Hz)
-      const osc1 = ctx.createOscillator();
-      const gain1 = ctx.createGain();
-      osc1.type = 'sine';
-      osc1.frequency.setValueAtTime(659.25, now);
-      gain1.gain.setValueAtTime(0.22, now);
-      gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.32);
-      osc1.connect(gain1);
-      gain1.connect(ctx.destination);
-      osc1.start(now);
-      osc1.stop(now + 0.32);
-
-      // Tone 2: C5 (523 Hz)
-      const osc2 = ctx.createOscillator();
-      const gain2 = ctx.createGain();
-      osc2.type = 'sine';
-      osc2.frequency.setValueAtTime(523.25, now + 0.24);
-      gain2.gain.setValueAtTime(0.25, now + 0.24);
-      gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.65);
-      osc2.connect(gain2);
-      gain2.connect(ctx.destination);
-      osc2.start(now + 0.24);
-      osc2.stop(now + 0.65);
+      playLoudChime(
+        [
+          { freq: 659.25, offset: 0.0, dur: 0.32, type: 'sine', level: 0.8 },
+          { freq: 523.25, offset: 0.24, dur: 0.42, type: 'sine', level: 0.85 },
+        ],
+        1.0
+      );
     } catch (e) {
       console.warn('Could not play metro chime:', e);
     }

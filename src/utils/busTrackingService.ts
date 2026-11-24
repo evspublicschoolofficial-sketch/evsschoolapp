@@ -1061,18 +1061,20 @@ function doPost(e) {
         var bId = String(it.behavior_id || it.Behavior_ID || ("BEH-" + sId + "-" + dt)).trim();
         var cls = String(it.class || it.Class || "").trim();
 
+        var isAttOnly = (it.attendance_only === true || String(it.attendance_only || "").toLowerCase() === "true" || bId.toUpperCase().indexOf("ATT-") === 0 || String(it.good_manners || it.Good_Manners || "").trim() === "केवल उपस्थिति (QR)");
+
         var isPresStr = "Present";
         if (it.is_present === false || String(it.is_present || "").toLowerCase() === "absent" || it.Is_Present === false) {
           isPresStr = "Absent";
         }
 
-        var isBathedStr = (it.is_bathed === false || String(it.is_bathed || "").toLowerCase() === "no") ? "No" : "Yes";
-        var nailsCleanStr = (it.nails_clean === false || String(it.nails_clean || "").toLowerCase() === "no") ? "No" : "Yes";
-        var uniformCleanStr = (it.uniform_clean === false || String(it.uniform_clean || "").toLowerCase() === "no") ? "No" : "Yes";
-        var disciplineStr = (it.discipline === false || String(it.discipline || "").toLowerCase() === "needs improvement") ? "Needs Improvement" : "Good";
-        var goodMannersStr = it.good_manners || it.Good_Manners || (isPresStr === "Absent" ? "लागू नहीं (अनुपस्थित)" : "उत्कृष्ट (Excellent)");
-        var remarkStr = String(it.remark || it.Remark || (isPresStr === "Absent" ? "आज छात्र विद्यालय में अनुपस्थित रहा।" : "कक्षा में उपस्थित, स्वच्छ व अनुशासित")).trim();
-        var feedbackStr = String(it.ai_feedback || it.AI_Feedback || "").trim();
+        var isBathedStr = isAttOnly ? "N/A" : (it.is_bathed === false || String(it.is_bathed || "").toLowerCase() === "no" || String(it.is_bathed || "").toLowerCase() === "n/a") ? (String(it.is_bathed || "").toLowerCase() === "n/a" ? "N/A" : "No") : "Yes";
+        var nailsCleanStr = isAttOnly ? "N/A" : (it.nails_clean === false || String(it.nails_clean || "").toLowerCase() === "no" || String(it.nails_clean || "").toLowerCase() === "n/a") ? (String(it.nails_clean || "").toLowerCase() === "n/a" ? "N/A" : "No") : "Yes";
+        var uniformCleanStr = isAttOnly ? "N/A" : (it.uniform_clean === false || String(it.uniform_clean || "").toLowerCase() === "no" || String(it.uniform_clean || "").toLowerCase() === "n/a") ? (String(it.uniform_clean || "").toLowerCase() === "n/a" ? "N/A" : "No") : "Yes";
+        var disciplineStr = isAttOnly ? "N/A" : (it.discipline === false || String(it.discipline || "").toLowerCase() === "needs improvement" || String(it.discipline || "").toLowerCase() === "n/a") ? (String(it.discipline || "").toLowerCase() === "n/a" ? "N/A" : "Needs Improvement") : "Good";
+        var goodMannersStr = isAttOnly ? "केवल उपस्थिति (QR)" : (it.good_manners || it.Good_Manners || (isPresStr === "Absent" ? "लागू नहीं (अनुपस्थित)" : "उत्कृष्ट (Excellent)"));
+        var remarkStr = String(it.remark || it.Remark || (isAttOnly ? "QR स्कैन द्वारा केवल उपस्थिति दर्ज" : (isPresStr === "Absent" ? "आज छात्र विद्यालय में अनुपस्थित रहा।" : "कक्षा में उपस्थित, स्वच्छ व अनुशासित"))).trim();
+        var feedbackStr = isAttOnly ? "" : String(it.ai_feedback || it.AI_Feedback || "").trim();
 
         var rowValues = [
           bId, sId, dt, cls,
@@ -1082,7 +1084,14 @@ function doPost(e) {
 
         var targetRow = keyMap[bId.toLowerCase()] || keyMap[sId.toLowerCase() + "_" + dt];
         if (targetRow) {
-          sheet.getRange(targetRow, 1, 1, 12).setValues([rowValues]);
+          var existingBId = String(sheet.getRange(targetRow, 1).getValue() || "").trim().toUpperCase();
+          var existingGm = String(sheet.getRange(targetRow, 8).getValue() || "").trim();
+          if (isAttOnly && existingBId.indexOf("ATT-") !== 0 && existingGm !== "केवल उपस्थिति (QR)") {
+            // Preserve existing manual behavior and only mark Present
+            sheet.getRange(targetRow, 10).setValue(isPresStr);
+          } else {
+            sheet.getRange(targetRow, 1, 1, 12).setValues([rowValues]);
+          }
         } else {
           sheet.appendRow(rowValues);
           keyMap[bId.toLowerCase()] = sheet.getLastRow();

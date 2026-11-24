@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { StudentRecordForScan } from './StudentQRScannerModal';
 import { Homework, HomeworkTrackerRecord } from '../App';
+import { playLoudChime, unlockAudioContext } from '../utils/sirenAudio';
 
 interface StudentHomeworkQRTrackerModalProps {
   isOpen: boolean;
@@ -82,26 +83,27 @@ export const StudentHomeworkQRTrackerModal: React.FC<StudentHomeworkQRTrackerMod
       .padStart(2, '0')}/${d.getFullYear()}`;
   };
 
-  // Play audio chime when marking
+  // Play loud audio chime when marking using shared AudioContext
   const playSound = (type: 'complete' | 'incomplete') => {
     try {
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.type = 'sine';
+      unlockAudioContext();
       if (type === 'complete') {
-        osc.frequency.setValueAtTime(659.25, audioCtx.currentTime); // E5
-        osc.frequency.setValueAtTime(880, audioCtx.currentTime + 0.08); // A5
+        playLoudChime(
+          [
+            { freq: 659.25, offset: 0.0, dur: 0.11, type: 'triangle', level: 0.85 },
+            { freq: 880, offset: 0.08, dur: 0.16, type: 'sine', level: 0.9 },
+          ],
+          1.1
+        );
       } else {
-        osc.frequency.setValueAtTime(392, audioCtx.currentTime); // G4
-        osc.frequency.setValueAtTime(329.63, audioCtx.currentTime + 0.08); // E4
+        playLoudChime(
+          [
+            { freq: 392, offset: 0.0, dur: 0.11, type: 'triangle', level: 0.8 },
+            { freq: 329.63, offset: 0.08, dur: 0.16, type: 'triangle', level: 0.85 },
+          ],
+          1.05
+        );
       }
-      gain.gain.setValueAtTime(0.18, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.start();
-      osc.stop(audioCtx.currentTime + 0.2);
     } catch {}
   };
 

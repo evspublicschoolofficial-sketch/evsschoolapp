@@ -3,7 +3,16 @@ import type { StudentBehaviorInput } from './components/StudentBehaviorModal';
 import { StudentAvatar } from './components/StudentAvatar';
 import { SchoolNoticeBoard, DEFAULT_SEED_NOTICES } from './components/SchoolNoticeBoard';
 import { EmergencyAlertBanner } from './components/EmergencyAlertBanner';
-import { playSirenPreview, playAnnouncementPreview, speakAnnouncement, unlockAudioContext } from './utils/sirenAudio';
+import {
+  playSirenPreview,
+  playAnnouncementPreview,
+  speakAnnouncement,
+  unlockAudioContext,
+  isAnnouncementSeen,
+  markAnnouncementSeen,
+  EVS_ANNOUNCEMENT_SEEN_EVENT,
+  EVS_SEEN_ANNOUNCEMENTS_KEY,
+} from './utils/sirenAudio';
 import { InstallAppModal } from './components/InstallAppModal';
 import { ExamMarkRecord, HallPassConfig, ReportCardRemarkRecord, SchoolNotice, StaffAttendanceRecord, WeeklyTestRecord } from './types';
 import {
@@ -195,6 +204,7 @@ export interface StudentBehaviorRecord {
   Is_Present: boolean;
   Remark: string;
   AI_Feedback?: string;
+  attendance_only?: boolean;
   [key: string]: any;
 }
 
@@ -283,6 +293,21 @@ export const isBehaviorPresent = (rec: any): boolean => {
   if (s === 'absent' || s === 'no' || s === 'false' || s === '0' || s === 'a' || s === 'anupasthit') return false;
   if (s === 'present' || s === 'yes' || s === 'true' || s === '1' || s === 'p' || s === 'upasthit') return true;
   return true;
+};
+
+// Helper to detect QR attendance-only records (where no manual behavior was entered by teacher)
+export const isAttendanceOnlyRecord = (rec: any): boolean => {
+  if (!rec) return false;
+  if (rec.attendance_only === true || rec.Attendance_Only === true) return true;
+  const bId = String(rec.Behavior_ID || rec.behavior_id || '').trim().toUpperCase();
+  if (bId.startsWith('ATT-')) return true;
+  const gm = String(rec.Good_Manners || rec.good_manners || '').trim();
+  if (gm === 'केवल उपस्थिति (QR)' || gm === 'Not Marked (QR Attendance)' || gm === 'N/A' || gm === '—') {
+    return true;
+  }
+  const rem = String(rec.Remark || rec.remark || '').trim();
+  if (/QR स्कैन द्वारा केवल उपस्थिति|Attendance Only/i.test(rem)) return true;
+  return false;
 };
 
 const SPREADSHEET_ID = '1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU';
@@ -2024,6 +2049,23 @@ export default function App() {
     saveToPhoneMemory('evs_school_notices', updatedNotices);
   };
 
+  const [seenAnnouncementTick, setSeenAnnouncementTick] = useState<number>(0);
+
+  useEffect(() => {
+    const onSeen = () => setSeenAnnouncementTick((t) => t + 1);
+    const onStorage = (ev: StorageEvent) => {
+      if (ev.key === EVS_SEEN_ANNOUNCEMENTS_KEY) {
+        setSeenAnnouncementTick((t) => t + 1);
+      }
+    };
+    window.addEventListener(EVS_ANNOUNCEMENT_SEEN_EVENT, onSeen);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener(EVS_ANNOUNCEMENT_SEEN_EVENT, onSeen);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
+
   // Background lock-screen / status-bar push notifications for parents & staff when school notices are published
   useEffect(() => {
     if (schoolNotices && schoolNotices.length > 0) {
@@ -3004,12 +3046,14 @@ export default function App() {
             const rows = data.table?.rows || [];
 
             const parseCleanlinessCell = (cell: any): boolean => {
-              if (!cell) return true;
+              if (!cell) return false;
               const val = cell.v !== undefined && cell.v !== null ? cell.v : cell.f;
               if (val === false || val === 0) return false;
               if (val === true || val === 1) return true;
               const s = String(val ?? '').trim().toLowerCase();
-              if (s === 'no' || s === 'false' || s === '0' || s === 'needs improvement') return false;
+              if (!s || s === 'no' || s === 'false' || s === '0' || s === 'needs improvement' || s === 'n/a' || s === 'na' || s === '—' || s === '-' || s === 'pending') {
+                return false;
+              }
               return true;
             };
 
@@ -3040,14 +3084,22 @@ export default function App() {
               const dateVal = cells[2]?.f || cells[2]?.v || '';
               const formattedDate = normalizeDateISO(dateVal);
               const cls = cells[3]?.v ? String(cells[3].v).trim() : '';
-              const isBathed = parseCleanlinessCell(cells[4]);
-              const nailsClean = parseCleanlinessCell(cells[5]);
-              const uniformClean = parseCleanlinessCell(cells[6]);
-              const goodManners = cells[7]?.v ? String(cells[7].v).trim() : 'Good';
-              const discipline = parseCleanlinessCell(cells[8]);
+              const goodManners = cells[7]?.v ? String(cells[7].v).trim() : '';
               const isPresent = parseIsPresentCell(cells[9]);
-              const remark = cells[10]?.v ? String(cells[10].v).trim() : 'OK';
+              const remark = cells[10]?.v ? String(cells[10].v).trim() : '';
               const aiFeedback = cells[11]?.v ? String(cells[11].v).trim() : '';
+
+              const isAttOnly =
+                bId.toUpperCase().startsWith('ATT-') ||
+                goodManners === 'केवल उपस्थिति (QR)' ||
+                goodManners === 'Not Marked (QR Attendance)' ||
+                goodManners === 'N/A' ||
+                /QR स्कैन द्वारा केवल उपस्थिति|Attendance Only/i.test(remark);
+
+              const isBathed = isAttOnly ? false : parseCleanlinessCell(cells[4]);
+              const nailsClean = isAttOnly ? false : parseCleanlinessCell(cells[5]);
+              const uniformClean = isAttOnly ? false : parseCleanlinessCell(cells[6]);
+              const discipline = isAttOnly ? false : parseCleanlinessCell(cells[8]);
 
               if (bId || sId) {
                 records.push({
@@ -3055,15 +3107,16 @@ export default function App() {
                   Student_ID: sId,
                   Date: formattedDate,
                   Class: cls,
+                  attendance_only: isAttOnly,
                   Is_Present: isPresent,
                   is_present: isPresent ? 'Present' : 'Absent',
                   Is_Bathed: isBathed,
                   Nails_Clean: nailsClean,
                   Uniform_clean: uniformClean,
-                  Good_Manners: goodManners,
+                  Good_Manners: isAttOnly ? 'केवल उपस्थिति (QR)' : (goodManners || 'Good'),
                   Discipline: discipline,
-                  Remark: remark,
-                  AI_Feedback: aiFeedback,
+                  Remark: remark || (isAttOnly ? 'QR स्कैन द्वारा केवल उपस्थिति दर्ज' : 'OK'),
+                  AI_Feedback: isAttOnly ? '' : aiFeedback,
                 });
               }
             }
@@ -4697,8 +4750,13 @@ export default function App() {
     if (isAbsent) {
       localGreeting = `अस्सलाम वालेकुम! आज ${sName} स्कूल में गैर-हाज़िर (अनुपस्थित) रहे। अल्लाह से दुआ है कि वे बाखैरियत व सेहतमंद हों। छूटे हुए सबक व गृहकार्य का विवरण नीचे गृहकार्य अनुभाग में देखें।`;
     } else if (latestBehaviorRecord) {
-      localGreeting = `अस्सलाम वालेकुम! हमें यह बताते हुए बेहद खुशी हो रही है कि आज ${sName} स्कूल में हाज़िर रहे और बड़े अदब व लगन के साथ तालीम हासिल की। ${
-        remark && !remark.toLowerCase().includes('fault') ? `उस्ताद (शिक्षक) की टिप्पणी: "${remark}"। ` : ''
+      const hasManualBehavior = !isAttendanceOnlyRecord(latestBehaviorRecord);
+      localGreeting = `अस्सलाम वालेकुम! हमें यह बताते हुए बेहद खुशी हो रही है कि आज ${sName} स्कूल में हाज़िर रहे${
+        hasManualBehavior ? ' और बड़े अदब व लगन के साथ तालीम हासिल की' : ''
+      }। ${
+        hasManualBehavior && remark && !remark.toLowerCase().includes('fault')
+          ? `उस्ताद (शिक्षक) की टिप्पणी: "${remark}"। `
+          : ''
       }${hwCount > 0 ? `आज ${hwSubjects || `${hwCount} विषयों`} का गृहकार्य दिया गया है, बराए मेहरबानी शाम को इसे पूरा करवाएं।` : 'दैनिक गृहकार्य व उपस्थिति नीचे उपलब्ध है।'} अल्लाह आपके बच्चे को इल्म व नेक तरबियत से नवाज़े।`;
     } else {
       localGreeting = `अस्सलाम वालेकुम! हमें यह बताते हुए खुशी हो रही है कि ${sName} की आज की दैनिक स्कूल गतिविधियां नीचे प्रस्तुत हैं। दैनिक उपस्थिति, गृहकार्य व शिक्षक की टिप्पणी नीचे काम की चीजों में देख सकते हैं।`;
@@ -4710,6 +4768,7 @@ export default function App() {
     // Call server Gemini API with fallback for personalized daily AI briefing
     const controller = new AbortController();
     setAiGreetingLoading(true);
+    const hasManualBeh = latestBehaviorRecord ? !isAttendanceOnlyRecord(latestBehaviorRecord) : false;
 
     fetch('/api/ai-student-greeting', {
       method: 'POST',
@@ -4720,8 +4779,10 @@ export default function App() {
         attendanceStatus: latestBehaviorRecord?.Is_Present ? 'उपस्थित (Present)' : 'उपस्थित',
         isAbsent,
         homeworkSummary: hwCount > 0 ? `${hwCount} विषयों (${hwSubjects}) का कार्य` : '',
-        behaviorSummary: latestBehaviorRecord?.Good_Manners || (latestBehaviorRecord?.Discipline ? 'उत्कृष्ट' : ''),
-        teacherRemark: remark,
+        behaviorSummary: hasManualBeh
+          ? (latestBehaviorRecord?.Good_Manners || (latestBehaviorRecord?.Discipline ? 'उत्कृष्ट' : ''))
+          : '',
+        teacherRemark: hasManualBeh ? remark : '',
         date: recordDate,
       }),
     })
@@ -4746,10 +4807,11 @@ export default function App() {
     return () => controller.abort();
   }, [selectedStudent?.Student_ID, selectedStudent?.Student_Name, parentLoggedIn, latestBehaviorRecord?.Date, latestBehaviorRecord?.Is_Present, latestBehaviorRecord?.Remark, parentHomework.length]);
 
-  // Filtered Behavior Records by date (STRICTLY for active student)
+  // Filtered Behavior Records by date (STRICTLY manual behavior entered by teacher for active student)
   const filteredBehaviorRecords = useMemo(() => {
     const list = studentBehaviorRecords;
     return list
+      .filter((rec) => !isAttendanceOnlyRecord(rec))
       .filter((rec) => {
         if (behaviorFilterDate === 'all') return true;
         return rec.Date === behaviorFilterDate;
@@ -4761,23 +4823,23 @@ export default function App() {
       });
   }, [studentBehaviorRecords, behaviorFilterDate]);
 
-  // Behavior summary metrics strictly for active student
+  // Attendance summary includes QR Attendance-Only scans; Behavior habits strictly evaluate manual behavior entries
   const behaviorStats = useMemo(() => {
     const list = studentBehaviorRecords;
     const total = list.length;
-    if (total === 0) {
-      return { total: 0, presentCount: 0, bathedCount: 0, nailsCount: 0, uniformCount: 0, disciplineCount: 0, avgScore: 0 };
-    }
     const presentCount = list.filter((b) => b.Is_Present).length;
-    const bathedCount = list.filter((b) => b.Is_Present && b.Is_Bathed).length;
-    const nailsCount = list.filter((b) => b.Is_Present && b.Nails_Clean).length;
-    const uniformCount = list.filter((b) => b.Is_Present && b.Uniform_clean).length;
-    const disciplineCount = list.filter((b) => b.Is_Present && b.Discipline).length;
 
-    const presentRecs = list.filter((b) => b.Is_Present);
+    const manualList = list.filter((b) => !isAttendanceOnlyRecord(b));
+    const behaviorEvaluatedCount = manualList.length;
+    const bathedCount = manualList.filter((b) => b.Is_Present && b.Is_Bathed).length;
+    const nailsCount = manualList.filter((b) => b.Is_Present && b.Nails_Clean).length;
+    const uniformCount = manualList.filter((b) => b.Is_Present && b.Uniform_clean).length;
+    const disciplineCount = manualList.filter((b) => b.Is_Present && b.Discipline).length;
+
+    const presentManualRecs = manualList.filter((b) => b.Is_Present);
     let avgScore = 0;
-    if (presentRecs.length > 0) {
-      const totalPoints = presentRecs.reduce((acc, b) => {
+    if (presentManualRecs.length > 0) {
+      const totalPoints = presentManualRecs.reduce((acc, b) => {
         let pts = 1; // 1 pt for being present
         if (b.Is_Bathed) pts++;
         if (b.Nails_Clean) pts++;
@@ -4785,10 +4847,19 @@ export default function App() {
         if (b.Discipline) pts++;
         return acc + pts;
       }, 0);
-      avgScore = Math.round((totalPoints / (presentRecs.length * 5)) * 100);
+      avgScore = Math.round((totalPoints / (presentManualRecs.length * 5)) * 100);
     }
 
-    return { total, presentCount, bathedCount, nailsCount, uniformCount, disciplineCount, avgScore };
+    return {
+      total,
+      presentCount,
+      behaviorEvaluatedCount,
+      bathedCount,
+      nailsCount,
+      uniformCount,
+      disciplineCount,
+      avgScore,
+    };
   }, [studentBehaviorRecords]);
 
   // Distinct dates available in active student's behavior records
@@ -5400,9 +5471,11 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     });
   }, [homeworkList, hwSearchTerm, hwClassFilter, hwDateSortOrder, classMap]);
 
-  // Manager: Filtered and Sorted Daily Behavior Records
+  // Manager: Filtered and Sorted Daily Behavior Records (excludes QR attendance-only scans)
   const filteredManagerBehavior = useMemo(() => {
     const filtered = behaviorList.filter((b) => {
+      if (isAttendanceOnlyRecord(b)) return false;
+
       const matchSearch =
         managerBehaviorSearch === '' ||
         String(b.Student_ID || '').toLowerCase().includes(managerBehaviorSearch.toLowerCase()) ||
@@ -5711,34 +5784,47 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     }
   };
 
-  // Dedicated Handler for Saving Student Daily Behavior & Conduct Record (आचरण वगैरह)
+  // Dedicated Handler for Saving Student Daily Behavior & Conduct Record (आचरण वगैरह — Teacher Manual Entry)
   const handleSaveStudentBehavior = (record: StudentBehaviorInput, sendWhatsApp: boolean) => {
     const isPres = Boolean(record.Is_Present);
+    const dt = normalizeDateISO(record.Date || getLocalDateYMD());
+    const sId = String(record.Student_ID || '').trim();
     const newRec: StudentBehaviorRecord = {
-      Behavior_ID: record.Behavior_ID || `BEH-${Date.now().toString().slice(-6)}`,
-      Student_ID: record.Student_ID,
-      Date: record.Date,
+      Behavior_ID: `BEH-${sId}-${dt}`,
+      Student_ID: sId,
+      Date: dt,
       Class: record.Class || '',
+      attendance_only: false,
       Is_Bathed: isPres ? Boolean(record.Is_Bathed) : false,
       Nails_Clean: isPres ? Boolean(record.Nails_Clean) : false,
       Uniform_clean: isPres ? Boolean(record.Uniform_clean) : false,
       Good_Manners: isPres ? (record.Good_Manners || 'उत्कृष्ट (Excellent)') : 'लागू नहीं (अनुपस्थित)',
       Discipline: isPres ? Boolean(record.Discipline) : false,
       Is_Present: isPres,
+      is_present: isPres ? 'Present' : 'Absent',
       Remark: record.Remark || (isPres ? '' : 'आज छात्र विद्यालय में अनुपस्थित रहा।'),
       AI_Feedback: isPres
         ? ''
         : 'आज छात्र विद्यालय में अनुपस्थित रहा। पढ़ाई और पाठ्यक्रम की निरंतरता के लिए दैनिक उपस्थिति अत्यंत आवश्यक है।',
     };
 
-    setBehaviorList((prev) => [newRec, ...prev]);
+    // Upsert by Student_ID + Date so manual behavior cleanly upgrades any earlier QR attendance-only row
+    setBehaviorList((prev) => {
+      const updated = prev.filter(
+        (b) => !(String(b.Student_ID || '').trim().toLowerCase() === sId.toLowerCase() && normalizeDateISO(b.Date) === dt)
+      );
+      return [newRec, ...updated];
+    });
 
-    // Save to localStorage for instant persistence
+    // Save to localStorage for instant persistence (upserting by Student_ID + Date)
     try {
       const existing = localStorage.getItem('evs_custom_behavior_records');
       const list: StudentBehaviorRecord[] = existing ? JSON.parse(existing) : [];
-      list.unshift(newRec);
-      localStorage.setItem('evs_custom_behavior_records', JSON.stringify(list));
+      const filtered = list.filter(
+        (b) => !(String(b.Student_ID || '').trim().toLowerCase() === sId.toLowerCase() && normalizeDateISO(b.Date) === dt)
+      );
+      filtered.unshift(newRec);
+      localStorage.setItem('evs_custom_behavior_records', JSON.stringify(filtered));
     } catch (e) {
       console.warn('localStorage error for behavior:', e);
     }
@@ -5750,6 +5836,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       student_id: newRec.Student_ID,
       date: newRec.Date,
       class: newRec.Class,
+      attendance_only: false,
       is_bathed: newRec.Is_Bathed,
       nails_clean: newRec.Nails_Clean,
       uniform_clean: newRec.Uniform_clean,
@@ -5809,8 +5896,31 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       const dt = normalizeDateISO(rawDt);
       const cls = rec.Class || (rec as any).class || '';
       const bId = rec.Behavior_ID || (rec as any).behavior_id || `BEH-${sId}-${dt}`;
-
       const isPres = isBehaviorPresent(rec);
+      const isAttOnly = isAttendanceOnlyRecord({ ...rec, Behavior_ID: bId });
+
+      if (isAttOnly) {
+        return {
+          Behavior_ID: bId,
+          Student_ID: sId,
+          Date: dt,
+          Class: cls,
+          attendance_only: true,
+          Is_Present: isPres,
+          is_present: isPres ? 'Present' : 'Absent',
+          Is_Bathed: false,
+          is_bathed: 'N/A',
+          Nails_Clean: false,
+          nails_clean: 'N/A',
+          Uniform_clean: false,
+          uniform_clean: 'N/A',
+          Good_Manners: rec.Good_Manners || 'केवल उपस्थिति (QR)',
+          Discipline: false,
+          discipline: 'N/A',
+          Remark: rec.Remark || 'QR स्कैन द्वारा केवल उपस्थिति दर्ज',
+          AI_Feedback: '',
+        } as StudentBehaviorRecord;
+      }
 
       const isBathed = isPres
         ? (rec.Is_Bathed === true || (rec as any).is_bathed === true || (rec.Is_Bathed !== false && (rec as any).is_bathed !== 'No'))
@@ -5833,6 +5943,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         Student_ID: sId,
         Date: dt,
         Class: cls,
+        attendance_only: false,
         Is_Present: isPres,
         is_present: isPres ? 'Present' : 'Absent',
         Is_Bathed: isBathed,
@@ -5939,11 +6050,16 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
     const presCount = formattedRecords.filter((r) => r.Is_Present).length;
     const absCount = formattedRecords.length - presCount;
-    setSyncToastMessage(`✅ ${formattedRecords.length} छात्रों की हाजिरी (${presCount} उपस्थित, ${absCount} अनुपस्थित) सुरक्षित हो गई!`);
+    const allAttOnly = formattedRecords.every((r) => isAttendanceOnlyRecord(r));
+    setSyncToastMessage(
+      allAttOnly
+        ? `✅ ${formattedRecords.length} छात्र की केवल QR हाजिरी (Present) सुरक्षित हो गई!`
+        : `✅ ${formattedRecords.length} छात्रों की हाजिरी (${presCount} उपस्थित, ${absCount} अनुपस्थित) सुरक्षित हो गई!`
+    );
     setTimeout(() => setSyncToastMessage(null), 3500);
   };
 
-  // Manager & Permitted Teacher 1-Scan Instant QR Attendance Handler (All Classes)
+  // Manager & Permitted Teacher 1-Scan Instant QR Attendance Handler (Strictly Attendance-Only — NEVER overwrites or adds Behavior!)
   const handleInstantQrAttendance = async (student: Student, dateISO: string) => {
     const canManagerScan = Boolean(managerUser && activeTab === 'manager');
     const canTeacherScan = Boolean(teacherUser && activeTab === 'teacher' && teacherQrAttendanceAllowed);
@@ -5956,24 +6072,45 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       ? `Manager: ${managerUser?.Name || 'Manager'}`
       : `Teacher: ${teacherUser?.Name || 'Teacher'}`;
 
+    // If teacher has already added manual behavior for this student today, keep all behavior fields intact & only mark Present
+    const existingManual = behaviorList.find(
+      (b) =>
+        String(b.Student_ID || '').trim().toLowerCase() === sId.toLowerCase() &&
+        normalizeDateISO(b.Date) === dt &&
+        !isAttendanceOnlyRecord(b)
+    );
+
+    if (existingManual) {
+      await handleSaveBatchBehavior([
+        {
+          ...existingManual,
+          Is_Present: true,
+          is_present: 'Present',
+        },
+      ]);
+      return;
+    }
+
     await handleSaveBatchBehavior([
       {
-        Behavior_ID: `BEH-${sId}-${dt}`,
+        Behavior_ID: `ATT-${sId}-${dt}`,
         Student_ID: sId,
         Date: dt,
         Class: student.Class || '',
+        attendance_only: true,
         Is_Present: true,
         is_present: 'Present',
-        Is_Bathed: true,
-        is_bathed: 'Yes',
-        Nails_Clean: true,
-        nails_clean: 'Yes',
-        Uniform_clean: true,
-        uniform_clean: 'Yes',
-        Good_Manners: 'उत्कृष्ट (Excellent)',
-        Discipline: true,
-        discipline: 'Good',
-        Remark: `QR स्कैन द्वारा तुरंत उपस्थिति दर्ज (${scannerLabel})`,
+        Is_Bathed: false,
+        is_bathed: 'N/A',
+        Nails_Clean: false,
+        nails_clean: 'N/A',
+        Uniform_clean: false,
+        uniform_clean: 'N/A',
+        Good_Manners: 'केवल उपस्थिति (QR)',
+        Discipline: false,
+        discipline: 'N/A',
+        Remark: `QR स्कैन द्वारा केवल उपस्थिति दर्ज (${scannerLabel})`,
+        AI_Feedback: '',
       },
     ]);
   };
@@ -8697,13 +8834,15 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           </span>
                         </span>
 
-                        {/* Behavior highlight if present */}
-                        {latestBehaviorRecord?.Is_Present && latestBehaviorRecord.Good_Manners && (
-                          <span className="px-2.5 py-1 rounded-lg bg-amber-400/20 text-amber-200 border border-amber-400/30 font-semibold flex items-center gap-1.5">
-                            <i className="fa-solid fa-star text-amber-400"></i>
-                            <span>आचरण: {latestBehaviorRecord.Good_Manners}</span>
-                          </span>
-                        )}
+                        {/* Behavior highlight ONLY if teacher manually added behavior (hidden for QR attendance-only) */}
+                        {latestBehaviorRecord?.Is_Present &&
+                          !isAttendanceOnlyRecord(latestBehaviorRecord) &&
+                          latestBehaviorRecord.Good_Manners && (
+                            <span className="px-2.5 py-1 rounded-lg bg-amber-400/20 text-amber-200 border border-amber-400/30 font-semibold flex items-center gap-1.5">
+                              <i className="fa-solid fa-star text-amber-400"></i>
+                              <span>आचरण: {latestBehaviorRecord.Good_Manners}</span>
+                            </span>
+                          )}
 
                         {/* Fee highlight */}
                         <span
@@ -8742,77 +8881,94 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 {/* WHEN ON OVERVIEW: SHOW THE 4 INTERACTIVE CARDS */}
                 {parentActiveSection === 'overview' ? (
                   <div className="space-y-4 animate-fadeIn">
-                    {/* School Announcement Banner Card in Parent Portal */}
-                    {schoolNotices.some((n) => n.isEmergency || n.category === 'emergency') && (() => {
-                      const emerg = schoolNotices.find((n) => n.isEmergency || n.category === 'emergency')!;
-                      return (
-                        <div className="p-4 sm:p-5 bg-gradient-to-r from-blue-800 via-indigo-700 to-blue-900 text-white rounded-2xl shadow-xl border-2 border-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-fadeIn">
-                          <div className="flex items-start gap-3.5">
-                            <div className="w-12 h-12 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center text-2xl font-black shrink-0 shadow-md animate-pulse">
-                              <i className="fa-solid fa-bullhorn text-blue-950"></i>
-                            </div>
-                            <div>
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 shadow-2xs">
-                                  📢 स्कूल उद्घोषणा प्रसारण
-                                </span>
-                                <span className="text-xs text-amber-200 font-bold">
-                                  दिनांक: {emerg.date}
-                                </span>
+                    {/* School Announcement Banner Card in Parent Portal (Hidden permanently once seen/heard) */}
+                    {seenAnnouncementTick >= 0 &&
+                      (() => {
+                        const emerg = schoolNotices.find(
+                          (n) => (n.isEmergency || n.category === 'emergency') && !isAnnouncementSeen(n)
+                        );
+                        if (!emerg) return null;
+                        return (
+                          <div className="p-4 sm:p-5 bg-gradient-to-r from-blue-800 via-indigo-700 to-blue-900 text-white rounded-2xl shadow-xl border-2 border-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-fadeIn">
+                            <div className="flex items-start gap-3.5">
+                              <div className="w-12 h-12 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center text-2xl font-black shrink-0 shadow-md">
+                                <i className="fa-solid fa-bullhorn text-blue-950"></i>
                               </div>
-                              <h4 className="text-sm sm:text-base font-black text-white mt-1 leading-snug">
-                                {emerg.title}
-                              </h4>
-                              <p className="text-xs text-blue-100 line-clamp-2 mt-1 font-medium">
-                                {emerg.description}
-                              </p>
+                              <div>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 shadow-2xs">
+                                    📢 स्कूल उद्घोषणा प्रसारण
+                                  </span>
+                                  <span className="text-xs text-amber-200 font-bold">
+                                    दिनांक: {emerg.date}
+                                  </span>
+                                </div>
+                                <h4 className="text-sm sm:text-base font-black text-white mt-1 leading-snug">
+                                  {emerg.title}
+                                </h4>
+                                <p className="text-xs text-blue-100 line-clamp-2 mt-1 font-medium">
+                                  {emerg.description}
+                                </p>
+                              </div>
                             </div>
-                          </div>
 
-                          <div className="flex flex-col sm:items-end gap-1.5 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-blue-500/50 justify-end">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  playAnnouncementPreview(emerg.title, true, 'hi');
-                                }}
-                                className="px-3 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black rounded-xl text-xs flex items-center gap-1.5 shadow-md cursor-pointer transition-transform active:scale-95"
-                                title="हिंदी में घोषणा सुनें"
-                              >
-                                <i className="fa-solid fa-volume-high text-blue-900 text-sm"></i>
-                                <span>📢 सुनें (Hindi)</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  playAnnouncementPreview(emerg.title, true, 'en');
-                                }}
-                                className="px-2.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl text-xs flex items-center gap-1 shadow-md cursor-pointer transition-transform active:scale-95"
-                                title="Listen announcement in English"
-                              >
-                                <i className="fa-solid fa-language text-xs"></i>
-                                <span>English</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setParentActiveSection('notices');
-                                  window.scrollTo({ top: 0, behavior: 'smooth' });
-                                }}
-                                className="px-3.5 py-2 bg-white hover:bg-amber-100 text-blue-950 font-black rounded-xl text-xs flex items-center gap-1 shadow-md cursor-pointer transition-transform active:scale-95"
-                              >
-                                <span>पूरी सूचना →</span>
-                              </button>
+                            <div className="flex flex-col sm:items-end gap-1.5 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-blue-500/50 justify-end">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    playAnnouncementPreview(emerg.title, true, 'hi', () => {
+                                      markAnnouncementSeen(emerg);
+                                    });
+                                  }}
+                                  className="px-3 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black rounded-xl text-xs flex items-center gap-1.5 shadow-md cursor-pointer transition-transform active:scale-95"
+                                  title="हिंदी में घोषणा सुनें"
+                                >
+                                  <i className="fa-solid fa-volume-high text-blue-900 text-sm"></i>
+                                  <span>📢 सुनें (Hindi)</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    playAnnouncementPreview(emerg.title, true, 'en', () => {
+                                      markAnnouncementSeen(emerg);
+                                    });
+                                  }}
+                                  className="px-2.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl text-xs flex items-center gap-1 shadow-md cursor-pointer transition-transform active:scale-95"
+                                  title="Listen announcement in English"
+                                >
+                                  <i className="fa-solid fa-language text-xs"></i>
+                                  <span>English</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    markAnnouncementSeen(emerg);
+                                    setParentActiveSection('notices');
+                                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                                  }}
+                                  className="px-3.5 py-2 bg-white hover:bg-amber-100 text-blue-950 font-black rounded-xl text-xs flex items-center gap-1 shadow-md cursor-pointer transition-transform active:scale-95"
+                                >
+                                  <span>पूरी सूचना →</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => markAnnouncementSeen(emerg)}
+                                  className="px-2.5 py-2 bg-emerald-500 hover:bg-emerald-600 text-white font-black rounded-xl text-xs flex items-center gap-1 shadow-md cursor-pointer transition-transform active:scale-95"
+                                  title="देख व सुन लिया — दोबारा न दिखाएं"
+                                >
+                                  <span>✓ देख लिया</span>
+                                </button>
+                              </div>
+                              {isIOSDevice && (
+                                <span className="text-[10px] text-amber-200 font-medium">
+                                  💡 iPhone: आवाज़ हेतु Silent Switch बंद रखें व Volume बढ़ाएं
+                                </span>
+                              )}
                             </div>
-                            {isIOSDevice && (
-                              <span className="text-[10px] text-amber-200 font-medium">
-                                💡 iPhone: आवाज़ हेतु Silent Switch बंद रखें व Volume बढ़ाएं
-                              </span>
-                            )}
                           </div>
-                        </div>
-                      );
-                    })()}
+                        );
+                      })()}
 
                     <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center justify-between gap-2 shadow-2xs">
                       <div className="flex items-center gap-2">
@@ -10065,7 +10221,11 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             </div>
                           </div>
                           <span className="text-xs font-black px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 shrink-0">
-                            {behaviorStats.avgScore >= 80 ? 'उत्कृष्ट' : 'संतोषजनक'}
+                            {behaviorStats.behaviorEvaluatedCount === 0
+                              ? 'अंक शेष'
+                              : behaviorStats.avgScore >= 80
+                              ? 'उत्कृष्ट'
+                              : 'संतोषजनक'}
                           </span>
                         </div>
 
@@ -10074,25 +10234,25 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           <div className="bg-white/80 border border-emerald-200 rounded-xl p-2">
                             <div className="text-[10px] text-slate-500 font-semibold">🚿 दैनिक स्नान</div>
                             <div className="text-xs font-black text-emerald-950 mt-0.5">
-                              {behaviorStats.bathedCount}/{behaviorStats.total} दिन
+                              {behaviorStats.bathedCount}/{behaviorStats.behaviorEvaluatedCount} दिन
                             </div>
                           </div>
                           <div className="bg-white/80 border border-emerald-200 rounded-xl p-2">
                             <div className="text-[10px] text-slate-500 font-semibold">👔 साफ़ वर्दी</div>
                             <div className="text-xs font-black text-emerald-950 mt-0.5">
-                              {behaviorStats.uniformCount}/{behaviorStats.total} दिन
+                              {behaviorStats.uniformCount}/{behaviorStats.behaviorEvaluatedCount} दिन
                             </div>
                           </div>
                           <div className="bg-white/80 border border-emerald-200 rounded-xl p-2">
                             <div className="text-[10px] text-slate-500 font-semibold">🤝 अनुशासन</div>
                             <div className="text-xs font-black text-emerald-950 mt-0.5">
-                              {behaviorStats.disciplineCount}/{behaviorStats.total} दिन
+                              {behaviorStats.disciplineCount}/{behaviorStats.behaviorEvaluatedCount} दिन
                             </div>
                           </div>
                         </div>
 
                         <div className="mt-2 text-[11px] text-emerald-800 text-center font-medium">
-                          नाखून साफ़ व कटे हुए: <strong>{behaviorStats.nailsCount}/{behaviorStats.total} दिन</strong>
+                          नाखून साफ़ व कटे हुए: <strong>{behaviorStats.nailsCount}/{behaviorStats.behaviorEvaluatedCount} दिन</strong>
                         </div>
                       </div>
                     </div>
@@ -12697,34 +12857,39 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 {behaviorSubTab === 'history' && (
                   <div className="space-y-4 animate-fadeIn">
 
-                {/* Behavior Stats Cards */}
+                {/* Behavior Stats Cards (Manual Behavior only) */}
+                {(() => {
+                  const manualBeh = behaviorList.filter((b) => !isAttendanceOnlyRecord(b));
+                  return (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
-                    <div className="text-[11px] text-slate-500 font-medium">कुल दर्ज रिकॉर्ड्स (Total Records)</div>
-                    <div className="text-lg font-bold text-slate-800 mt-0.5">{behaviorList.length}</div>
+                    <div className="text-[11px] text-slate-500 font-medium">कुल मैन्युअल आचरण रिकॉर्ड्स</div>
+                    <div className="text-lg font-bold text-slate-800 mt-0.5">{manualBeh.length}</div>
                   </div>
 
                   <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200">
-                    <div className="text-[11px] text-emerald-700 font-medium">उपस्थित छात्र (Present)</div>
+                    <div className="text-[11px] text-emerald-700 font-medium">उपस्थित (आचरण सहित)</div>
                     <div className="text-lg font-bold text-emerald-900 mt-0.5">
-                      {behaviorList.filter((b) => isBehaviorPresent(b)).length}
+                      {manualBeh.filter((b) => isBehaviorPresent(b)).length}
                     </div>
                   </div>
 
                   <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200">
                     <div className="text-[11px] text-rose-700 font-medium">अनुपस्थित छात्र (Absent)</div>
                     <div className="text-lg font-bold text-rose-900 mt-0.5">
-                      {behaviorList.filter((b) => !isBehaviorPresent(b)).length}
+                      {manualBeh.filter((b) => !isBehaviorPresent(b)).length}
                     </div>
                   </div>
 
                   <div className="p-3.5 rounded-xl bg-blue-50 border border-blue-200">
                     <div className="text-[11px] text-blue-700 font-medium">साफ ड्रेस व स्नान (Clean & Bathed)</div>
                     <div className="text-lg font-bold text-blue-900 mt-0.5">
-                      {behaviorList.filter((b) => isBehaviorPresent(b) && b.Is_Bathed && b.Uniform_clean).length}
+                      {manualBeh.filter((b) => isBehaviorPresent(b) && b.Is_Bathed && b.Uniform_clean).length}
                     </div>
                   </div>
                 </div>
+                  );
+                })()}
 
                 {/* Filter and Search Bar */}
                 <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
@@ -12823,6 +12988,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     <tbody className="divide-y divide-slate-200 bg-white">
                       {(() => {
                         const filtered = behaviorList.filter((b) => {
+                          if (isAttendanceOnlyRecord(b)) return false;
                           const matchedStudent = students.find(
                             (s) => String(s.Student_ID || '').toLowerCase() === String(b.Student_ID || '').toLowerCase()
                           );

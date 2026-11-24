@@ -75,7 +75,7 @@ function formatToLocalIST_(val, fallbackNowStr) {
   }
   var s = String(val).trim();
   if (!s) return fallback;
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s) && (s.endsWith("Z") || /[+-]\d{2}:?\d{2}$/.test(s))) {
+  if (/^d{4}-d{2}-d{2}Td{2}:d{2}/.test(s) && (s.endsWith("Z") || /[+-]d{2}:?d{2}$/.test(s))) {
     var dt = new Date(s);
     if (!isNaN(dt.getTime())) {
       return Utilities.formatDate(dt, "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
@@ -85,7 +85,7 @@ function formatToLocalIST_(val, fallbackNowStr) {
 }
 
 function normalizeSheetKey_(name) {
-  return String(name || "").toLowerCase().replace(/[\\s_\\-]+/g, "");
+  return String(name || "").toLowerCase().replace(/[\s_\-]+/g, "");
 }
 
 function findExistingSheet_(ss, namesList) {
@@ -133,7 +133,7 @@ function ensureFeatureBackupTabs(ss) {
   ensureTabSafe_(ss, "UPI_Settings", ["UPI Settings"], ["Setting_Key", "UPI_ID", "Payee_Name", "Bank_Name", "Instructions", "Has_Static_QR", "Updated_At"], added);
   ensureTabSafe_(ss, "UPI_Payments", ["UPI Payments", "UPI_Payment_Logs"], ["Payment_ID", "Created_At", "Student_ID", "Student_Name", "Class", "Parent_Mobile", "Payer_Name", "Amount", "Fee_Type", "Month", "UTR_Number", "Payment_App", "Payment_Date", "Notes", "Status", "Receipt_Number", "Manager_Note", "Verified_By", "Verified_At", "Has_Screenshot"], added);
   ensureTabSafe_(ss, "Exam_Marks", ["Exam Marks", "ExamMarks"], ["Mark_ID", "Session", "Exam_Type", "Student_ID", "Student_Name", "Class", "Subject", "Max_Marks", "Marks_Obtained", "Attendance_Status", "Teacher_ID", "Teacher_Name", "Remarks", "Updated_At"], added);
-  ensureTabSafe_(ss, "Report_Cards_Backup", ["Report Cards Backup", "Report_Cards", "ReportCardsBackup"], ["Report_Key", "Session", "Student_ID", "Student_Name", "Class", "Roll_Number", "Weekly_Pct", "Quarterly_Pct", "HalfYearly_Pct", "Annual_Pct", "Overall_Pct", "Grade", "Attendance_Pct", "Present_Days", "Total_Days", "Teacher_Remark", "Principal_Remark", "Result_Status", "Published_For_Parent", "Updated_By", "Updated_At"], added);
+  ensureTabSafe_(ss, "Report_Cards_Backup", ["Report Cards Backup", "Report_Cards", "ReportCardsBackup"], ["Report_Key", "Session", "Student_ID", "Student_Name", "Class", "Roll_Number", "Weekly_Pct", "Quarterly_Pct", "HalfYearly_Pct", "Annual_Pct", "Overall_Pct", "Grade", "Attendance_Pct", "Present_Days", "Total_Days", "Teacher_Remark", "Principal_Remark", "Result_Status", "Published_For_Parent", "Updated_By", "Updated_At", "Class_Rank"], added);
   ensureTabSafe_(ss, "Weekly_Tests", ["Weekly Tests", "Weekly_Subject_Tests"], ["ID", "Session_ID", "Teacher_ID", "Teacher_Name", "Class", "Month", "Week_Number", "Test_Date", "Subject", "Topic", "Student_ID", "Student_Name", "Max_Marks", "Marks_Obtained", "Status", "Remarks", "Timestamp"], added);
   ensureTabSafe_(ss, "Teacher_Performance", ["Teacher Performance"], ["Record_ID", "Teacher_ID", "Teacher_Name", "Assigned_Class", "Month", "Academic_Year", "Syllabus_Score_30", "Test_Score_25", "Attendance_Score_15", "Homework_Score_15", "Punctuality_Score_15", "Total_Score_100", "Grade", "Evaluated_By", "Remarks", "Timestamp"], added);
   ensureTabSafe_(ss, "Syllabus_Tracker", ["Syllabus Tracker"], ["ID", "Teacher_ID", "Teacher_Name", "Class", "Subject", "Month", "Week_Number", "Week_Label", "Chapter_Title", "Topic_Description", "Planned_Date", "Target_Completion_Date", "Completed_Date", "Status", "Timestamp"], added);
@@ -403,6 +403,9 @@ function doGet(e) {
   if (action === "getReportCardMeta") {
     return handleGetReportCardMeta(ss);
   }
+  if (action === "getReportCardWorkflow") {
+    return handleGetReportCardWorkflow(ss);
+  }
   if (action === "getWeeklyTests") {
     return handleGetWeeklyTests(ss);
   }
@@ -430,9 +433,12 @@ function doGet(e) {
   if (action === "getParentReviews") {
     return handleGetParentReviews(ss);
   }
+  if (action === "getTeacherProfiles") {
+    return handleGetTeacherProfiles(ss);
+  }
 
   // 10. GET FALLBACK: Delegate write actions when called via GET query parameters
-  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig" || action === "saveExamDatesheet" || action === "saveExamSeatingPlan" || action === "saveFeeWaiver" || action === "saveFeeWaiversBatch" || action === "saveParentReview" || action === "updateParentReviewStatus" || action === "deleteParentReview") {
+  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "saveTeacherProfile" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveReportCardDraft" || action === "saveReportCardAccess" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig" || action === "saveExamDatesheet" || action === "saveExamSeatingPlan" || action === "saveExamSeatingDraft" || action === "saveFeeWaiver" || action === "saveFeeWaiversBatch" || action === "saveParentReview" || action === "updateParentReviewStatus" || action === "deleteParentReview") {
     return doPost(e);
   }
 
@@ -696,6 +702,11 @@ function doPost(e) {
       }
     }
 
+    // 3I. SAVE EXTENDED TEACHER PROFILE (Assigned_Subjects, Department, Teacher_Photo)
+    if (action === "saveTeacherProfile") {
+      return handleSaveTeacherProfile(ss, data);
+    }
+
     // 4. ADD / BATCH ADD BEHAVIOR & ATTENDANCE
     if (action === "addBehavior" || action === "batchAddBehavior") {
       var sheet = ss.getSheetByName("Student_Behavior");
@@ -735,18 +746,20 @@ function doPost(e) {
         var bId = String(it.behavior_id || it.Behavior_ID || ("BEH-" + sId + "-" + dt)).trim();
         var cls = String(it.class || it.Class || "").trim();
 
+        var isAttOnly = (it.attendance_only === true || String(it.attendance_only || "").toLowerCase() === "true" || bId.toUpperCase().indexOf("ATT-") === 0 || String(it.good_manners || it.Good_Manners || "").trim() === "केवल उपस्थिति (QR)");
+
         var isPresStr = "Present";
         if (it.is_present === false || String(it.is_present || "").toLowerCase() === "absent" || it.Is_Present === false) {
           isPresStr = "Absent";
         }
 
-        var isBathedStr = (it.is_bathed === false || String(it.is_bathed || "").toLowerCase() === "no") ? "No" : "Yes";
-        var nailsCleanStr = (it.nails_clean === false || String(it.nails_clean || "").toLowerCase() === "no") ? "No" : "Yes";
-        var uniformCleanStr = (it.uniform_clean === false || String(it.uniform_clean || "").toLowerCase() === "no") ? "No" : "Yes";
-        var disciplineStr = (it.discipline === false || String(it.discipline || "").toLowerCase() === "needs improvement") ? "Needs Improvement" : "Good";
-        var goodMannersStr = it.good_manners || it.Good_Manners || (isPresStr === "Absent" ? "लागू नहीं (अनुपस्थित)" : "उत्कृष्ट (Excellent)");
-        var remarkStr = String(it.remark || it.Remark || (isPresStr === "Absent" ? "आज छात्र विद्यालय में अनुपस्थित रहा।" : "कक्षा में उपस्थित, स्वच्छ व अनुशासित")).trim();
-        var feedbackStr = String(it.ai_feedback || it.AI_Feedback || "").trim();
+        var isBathedStr = isAttOnly ? "N/A" : (it.is_bathed === false || String(it.is_bathed || "").toLowerCase() === "no" || String(it.is_bathed || "").toLowerCase() === "n/a") ? (String(it.is_bathed || "").toLowerCase() === "n/a" ? "N/A" : "No") : "Yes";
+        var nailsCleanStr = isAttOnly ? "N/A" : (it.nails_clean === false || String(it.nails_clean || "").toLowerCase() === "no" || String(it.nails_clean || "").toLowerCase() === "n/a") ? (String(it.nails_clean || "").toLowerCase() === "n/a" ? "N/A" : "No") : "Yes";
+        var uniformCleanStr = isAttOnly ? "N/A" : (it.uniform_clean === false || String(it.uniform_clean || "").toLowerCase() === "no" || String(it.uniform_clean || "").toLowerCase() === "n/a") ? (String(it.uniform_clean || "").toLowerCase() === "n/a" ? "N/A" : "No") : "Yes";
+        var disciplineStr = isAttOnly ? "N/A" : (it.discipline === false || String(it.discipline || "").toLowerCase() === "needs improvement" || String(it.discipline || "").toLowerCase() === "n/a") ? (String(it.discipline || "").toLowerCase() === "n/a" ? "N/A" : "Needs Improvement") : "Good";
+        var goodMannersStr = isAttOnly ? "केवल उपस्थिति (QR)" : (it.good_manners || it.Good_Manners || (isPresStr === "Absent" ? "लागू नहीं (अनुपस्थित)" : "उत्कृष्ट (Excellent)"));
+        var remarkStr = String(it.remark || it.Remark || (isAttOnly ? "QR स्कैन द्वारा केवल उपस्थिति दर्ज" : (isPresStr === "Absent" ? "आज छात्र विद्यालय में अनुपस्थित रहा।" : "कक्षा में उपस्थित, स्वच्छ व अनुशासित"))).trim();
+        var feedbackStr = isAttOnly ? "" : String(it.ai_feedback || it.AI_Feedback || "").trim();
 
         var rowValues = [
           bId, sId, dt, cls,
@@ -756,7 +769,14 @@ function doPost(e) {
 
         var targetRow = keyMap[bId.toLowerCase()] || keyMap[sId.toLowerCase() + "_" + dt];
         if (targetRow) {
-          sheet.getRange(targetRow, 1, 1, 12).setValues([rowValues]);
+          var existingBId = String(sheet.getRange(targetRow, 1).getValue() || "").trim().toUpperCase();
+          var existingGm = String(sheet.getRange(targetRow, 8).getValue() || "").trim();
+          if (isAttOnly && existingBId.indexOf("ATT-") !== 0 && existingGm !== "केवल उपस्थिति (QR)") {
+            // Preserve existing manual behavior and only mark Present
+            sheet.getRange(targetRow, 10).setValue(isPresStr);
+          } else {
+            sheet.getRange(targetRow, 1, 1, 12).setValues([rowValues]);
+          }
         } else {
           sheet.appendRow(rowValues);
           keyMap[bId.toLowerCase()] = sheet.getLastRow();
@@ -1094,6 +1114,12 @@ function doPost(e) {
     if (action === "syncReportCardsBatch") {
       return handleSyncReportCardsBatch(ss, data);
     }
+    if (action === "saveReportCardDraft") {
+      return handleSaveReportCardDraft(ss, data);
+    }
+    if (action === "saveReportCardAccess") {
+      return handleSaveReportCardAccess(ss, data);
+    }
 
     // 13. DELETE HOMEWORK
     if (action === "deleteHomework") {
@@ -1134,6 +1160,9 @@ function doPost(e) {
     }
     if (action === "saveExamSeatingPlan") {
       return handleSaveExamSeatingPlan(ss, data);
+    }
+    if (action === "saveExamSeatingDraft") {
+      return handleSaveExamSeatingDraft(ss, data);
     }
 
     // 17. FEE WAIVERS DIRECTORY (Fee_Waivers - Tuition-Only Waiver 2-Way Sync)
@@ -2914,7 +2943,10 @@ function handleGetReportCardMeta(ss) {
 }
 
 function handleSaveReportCardMeta(ss, data) {
-  var sheet = ensureTabSafe_(ss, "Report_Cards_Backup", ["Report Cards Backup", "Report_Cards", "ReportCardsBackup"], ["Report_Key", "Session", "Student_ID", "Student_Name", "Class", "Roll_Number", "Weekly_Pct", "Quarterly_Pct", "HalfYearly_Pct", "Annual_Pct", "Overall_Pct", "Grade", "Attendance_Pct", "Present_Days", "Total_Days", "Teacher_Remark", "Principal_Remark", "Result_Status", "Published_For_Parent", "Updated_By", "Updated_At"]);
+  var sheet = ensureTabSafe_(ss, "Report_Cards_Backup", ["Report Cards Backup", "Report_Cards", "ReportCardsBackup"], ["Report_Key", "Session", "Student_ID", "Student_Name", "Class", "Roll_Number", "Weekly_Pct", "Quarterly_Pct", "HalfYearly_Pct", "Annual_Pct", "Overall_Pct", "Grade", "Attendance_Pct", "Present_Days", "Total_Days", "Teacher_Remark", "Principal_Remark", "Result_Status", "Published_For_Parent", "Updated_By", "Updated_At", "Class_Rank"]);
+  if (sheet.getLastColumn() < 22 || !sheet.getRange(1, 22).getValue()) {
+    sheet.getRange(1, 22).setValue("Class_Rank");
+  }
   var m = data.meta || data;
   if (typeof m === "string") {
     try { m = JSON.parse(m); } catch(e) { m = data; }
@@ -2942,6 +2974,9 @@ function handleSaveReportCardMeta(ss, data) {
       String(m.updatedBy || "Staff"),
       formatToLocalIST_(m.updatedAt, nowStr)
     ]]);
+    if (m.classRank) {
+      sheet.getRange(tRow, 22).setValue(String(m.classRank));
+    }
   } else {
     sheet.appendRow([
       rKey,
@@ -2956,7 +2991,8 @@ function handleSaveReportCardMeta(ss, data) {
       String(m.resultStatus || "PROMOTED"),
       pubStr,
       String(m.updatedBy || "Staff"),
-      formatToLocalIST_(m.updatedAt, nowStr)
+      formatToLocalIST_(m.updatedAt, nowStr),
+      String(m.classRank || "")
     ]);
   }
   return ContentService.createTextOutput(JSON.stringify({
@@ -2968,7 +3004,10 @@ function handleSaveReportCardMeta(ss, data) {
 
 function handleSyncReportCardsBatch(ss, data) {
   var emSheet = ensureTabSafe_(ss, "Exam_Marks", ["Exam Marks", "ExamMarks"], ["Mark_ID", "Session", "Exam_Type", "Student_ID", "Student_Name", "Class", "Subject", "Max_Marks", "Marks_Obtained", "Attendance_Status", "Teacher_ID", "Teacher_Name", "Remarks", "Updated_At"]);
-  var rcSheet = ensureTabSafe_(ss, "Report_Cards_Backup", ["Report Cards Backup", "Report_Cards", "ReportCardsBackup"], ["Report_Key", "Session", "Student_ID", "Student_Name", "Class", "Roll_Number", "Weekly_Pct", "Quarterly_Pct", "HalfYearly_Pct", "Annual_Pct", "Overall_Pct", "Grade", "Attendance_Pct", "Present_Days", "Total_Days", "Teacher_Remark", "Principal_Remark", "Result_Status", "Published_For_Parent", "Updated_By", "Updated_At"]);
+  var rcSheet = ensureTabSafe_(ss, "Report_Cards_Backup", ["Report Cards Backup", "Report_Cards", "ReportCardsBackup"], ["Report_Key", "Session", "Student_ID", "Student_Name", "Class", "Roll_Number", "Weekly_Pct", "Quarterly_Pct", "HalfYearly_Pct", "Annual_Pct", "Overall_Pct", "Grade", "Attendance_Pct", "Present_Days", "Total_Days", "Teacher_Remark", "Principal_Remark", "Result_Status", "Published_For_Parent", "Updated_By", "Updated_At", "Class_Rank"]);
+  if (rcSheet.getLastColumn() < 22 || !rcSheet.getRange(1, 22).getValue()) {
+    rcSheet.getRange(1, 22).setValue("Class_Rank");
+  }
 
   var examMarks = data.examMarks;
   if (typeof examMarks === "string") {
@@ -3017,11 +3056,12 @@ function handleSyncReportCardsBatch(ss, data) {
       String(b.resultStatus || "PROMOTED"),
       (b.publishedToParent === false) ? "NO" : "YES",
       String(b.updatedBy || "Manager"),
-      formatToLocalIST_(b.updatedAt, nowStr)
+      formatToLocalIST_(b.updatedAt, nowStr),
+      String(b.classRank || "—")
     ];
     var tRow = keyMap[rKey.toLowerCase()];
     if (tRow) {
-      rcSheet.getRange(tRow, 1, 1, 21).setValues([rowArr]);
+      rcSheet.getRange(tRow, 1, 1, 22).setValues([rowArr]);
     } else {
       newRcRows.push(rowArr);
       keyMap[rKey.toLowerCase()] = rcSheet.getLastRow() + newRcRows.length;
@@ -3029,7 +3069,7 @@ function handleSyncReportCardsBatch(ss, data) {
     rcCount++;
   }
   if (newRcRows.length > 0) {
-    rcSheet.getRange(rcSheet.getLastRow() + 1, 1, newRcRows.length, 21).setValues(newRcRows);
+    rcSheet.getRange(rcSheet.getLastRow() + 1, 1, newRcRows.length, 22).setValues(newRcRows);
   }
 
   return ContentService.createTextOutput(JSON.stringify({
@@ -3402,7 +3442,7 @@ function readExamDatesheetTabRows_(ss) {
   var rawHeaders = vals[0];
   var colMap = {};
   for (var h = 0; h < rawHeaders.length; h++) {
-    var keyNorm = String(rawHeaders[h] || "").trim().toLowerCase().replace(/\s+/g, " ");
+    var keyNorm = String(rawHeaders[h] || "").trim().toLowerCase().replace(/s+/g, " ");
     if (keyNorm) colMap[keyNorm] = h;
   }
 
@@ -3640,10 +3680,108 @@ function handleSaveExamDatesheet(ss, data) {
   })).setMimeType(ContentService.MimeType.JSON);
 }
 
+function getOrCreateWorkflowStoreSheet_(ss) {
+  if (!ss) return null;
+  var sheet = findExistingSheet_(ss, ["_App_Workflow_Store", "App_Workflow_Store"]);
+  if (!sheet) {
+    sheet = ss.insertSheet("_App_Workflow_Store");
+    sheet.appendRow(["Key", "Chunk_Index", "Payload_JSON", "Updated_At"]);
+    try {
+      sheet.getRange(1, 1, 1, 4).setBackground("#0c2340").setFontColor("#fde68a").setFontWeight("bold");
+      sheet.setFrozenRows(1);
+    } catch (eStyle) {}
+  } else if (sheet.getLastRow() === 0) {
+    sheet.appendRow(["Key", "Chunk_Index", "Payload_JSON", "Updated_At"]);
+  }
+  return sheet;
+}
+
+function getAppWorkflowJson_(ss, key) {
+  if (ss) {
+    try {
+      var sheet = findExistingSheet_(ss, ["_App_Workflow_Store", "App_Workflow_Store"]);
+      if (sheet && sheet.getLastRow() >= 2) {
+        var vals = sheet.getDataRange().getValues();
+        var chunks = [];
+        for (var i = 1; i < vals.length; i++) {
+          if (String(vals[i][0] || "").trim() === key) {
+            chunks.push({ idx: Number(vals[i][1]) || 0, txt: String(vals[i][2] || "") });
+          }
+        }
+        if (chunks.length > 0) {
+          chunks.sort(function(a, b) { return a.idx - b.idx; });
+          var combined = "";
+          for (var c = 0; c < chunks.length; c++) {
+            combined += chunks[c].txt;
+          }
+          if (combined) return JSON.parse(combined);
+        }
+      }
+    } catch (eSheet) {}
+  }
+  try {
+    var rawProp = PropertiesService.getScriptProperties().getProperty(key);
+    if (rawProp) return JSON.parse(rawProp);
+  } catch (eProp) {}
+  return null;
+}
+
+function saveAppWorkflowJson_(ss, key, obj) {
+  var jsonStr = JSON.stringify(obj);
+  var nowIst = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var savedToSheet = false;
+
+  if (ss) {
+    try {
+      var sheet = getOrCreateWorkflowStoreSheet_(ss);
+      if (sheet) {
+        var vals = sheet.getDataRange().getValues();
+        for (var i = vals.length - 1; i >= 1; i--) {
+          if (String(vals[i][0] || "").trim() === key) {
+            sheet.deleteRow(i + 1);
+          }
+        }
+        var chunkSize = 40000;
+        var idx = 0;
+        for (var pos = 0; pos < jsonStr.length; pos += chunkSize) {
+          sheet.appendRow([key, idx, jsonStr.slice(pos, pos + chunkSize), nowIst]);
+          idx++;
+        }
+        if (jsonStr.length === 0) {
+          sheet.appendRow([key, 0, "{}", nowIst]);
+        }
+        savedToSheet = true;
+      }
+    } catch (eWr) {}
+  }
+
+  try {
+    var props = PropertiesService.getScriptProperties();
+    if (jsonStr.length < 8500) {
+      props.setProperty(key, jsonStr);
+    } else if (savedToSheet) {
+      props.deleteProperty(key);
+    } else {
+      props.setProperty(key, jsonStr);
+    }
+  } catch (ePropWr) {
+    if (!savedToSheet) throw ePropWr;
+  }
+}
+
 function handleGetExamSeatingPlan(ss) {
+  var draftConfig = getAppWorkflowJson_(ss, "EVS_EXAM_SEATING_DRAFT");
+  var approvedConfig = getAppWorkflowJson_(ss, "EVS_EXAM_SEATING_APPROVED");
+
   var sheet = findExistingSheet_(ss, ["Exam_Seating_Plan", "Exam Seating Plan", "Seating_Plan", "Seating Plan"]);
   if (!sheet || sheet.getLastRow() < 2) {
-    return ContentService.createTextOutput(JSON.stringify({ status: "success", rows: [], roomMeta: {} })).setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      rows: [],
+      roomMeta: {},
+      draftConfig: draftConfig,
+      approvedConfig: approvedConfig
+    })).setMimeType(ContentService.MimeType.JSON);
   }
   var vals = sheet.getDataRange().getValues();
   var out = [];
@@ -3670,10 +3808,30 @@ function handleGetExamSeatingPlan(ss) {
       invigilator: invig,
       examType: String(r[10] || "").trim(),
       session: String(r[11] || "").trim(),
-      updatedAt: String(r[12] || "").trim()
+      updatedAt: String(r[12] || "").trim(),
+      confirmedBy: String(r[13] || "").trim(),
+      status: String(r[14] || "").trim()
     });
   }
-  return ContentService.createTextOutput(JSON.stringify({ status: "success", rows: out, roomMeta: roomMeta })).setMimeType(ContentService.MimeType.JSON);
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    rows: out,
+    roomMeta: roomMeta,
+    draftConfig: draftConfig,
+    approvedConfig: approvedConfig
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveExamSeatingDraft(ss, data) {
+  var draftObj = data.draftConfig ? (typeof data.draftConfig === "string" ? JSON.parse(data.draftConfig) : data.draftConfig) : null;
+  if (!draftObj) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "Missing draftConfig" })).setMimeType(ContentService.MimeType.JSON);
+  }
+  saveAppWorkflowJson_(ss, "EVS_EXAM_SEATING_DRAFT", draftObj);
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Teacher seating draft saved for Manager confirmation!"
+  })).setMimeType(ContentService.MimeType.JSON);
 }
 
 function handleSaveExamSeatingPlan(ss, data) {
@@ -3682,7 +3840,7 @@ function handleSaveExamSeatingPlan(ss, data) {
   if (!sheet) {
     return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "Exam_Seating_Plan tab not created" })).setMimeType(ContentService.MimeType.JSON);
   }
-  var headers = ["Slot_Key", "Room_No", "Wing", "Bench_No", "Seat_Position", "Student_ID", "Roll_Number", "Student_Name", "Class", "Invigilator", "Exam_Type", "Session", "Updated_At"];
+  var headers = ["Slot_Key", "Room_No", "Wing", "Bench_No", "Seat_Position", "Student_ID", "Roll_Number", "Student_Name", "Class", "Invigilator", "Exam_Type", "Session", "Updated_At", "Confirmed_By", "Status"];
   var hdrRange = sheet.getRange(1, 1, 1, headers.length);
   hdrRange.setValues([headers]);
   try {
@@ -3715,16 +3873,214 @@ function handleSaveExamSeatingPlan(ss, data) {
       String(item.invigilator || ""),
       String(item.examType || ""),
       String(item.session || ""),
-      nowIst
+      nowIst,
+      String(item.confirmedBy || ""),
+      String(item.status || "Approved")
     ]);
   }
   if (outValues.length > 0) {
     sheet.getRange(2, 1, outValues.length, headers.length).setValues(outValues);
   }
+  try {
+    if (data.approvedConfig) {
+      var appObj = typeof data.approvedConfig === "string" ? JSON.parse(data.approvedConfig) : data.approvedConfig;
+      saveAppWorkflowJson_(ss, "EVS_EXAM_SEATING_APPROVED", appObj);
+      saveAppWorkflowJson_(ss, "EVS_EXAM_SEATING_DRAFT", appObj);
+    }
+  } catch (eProp) {}
   return ContentService.createTextOutput(JSON.stringify({
     status: "success",
     savedCount: outValues.length,
-    message: "Exam_Seating_Plan saved permanently to Google Sheet!"
+    message: "Exam_Seating_Plan confirmed & saved permanently to Google Sheet!"
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetReportCardWorkflow(ss) {
+  var savedAcc = getAppWorkflowJson_(ss, "EVS_RC_ACCESS_CONFIG");
+  var accessConfig = {
+    allowTeacherPtmView: Boolean(savedAcc && savedAcc.allowTeacherPtmView),
+    allowParentView: Boolean(savedAcc && savedAcc.allowParentView),
+    allowTeacherQrAttendance: Boolean(savedAcc && savedAcc.allowTeacherQrAttendance),
+    updatedBy: savedAcc && savedAcc.updatedBy ? String(savedAcc.updatedBy) : "",
+    updatedAt: savedAcc && savedAcc.updatedAt ? String(savedAcc.updatedAt) : ""
+  };
+  var savedDraft = getAppWorkflowJson_(ss, "EVS_RC_PENDING_DRAFT");
+  var pendingMarks = (savedDraft && Array.isArray(savedDraft.pendingMarks)) ? savedDraft.pendingMarks : [];
+  var pendingMeta = (savedDraft && savedDraft.pendingMeta && typeof savedDraft.pendingMeta === "object") ? savedDraft.pendingMeta : {};
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    accessConfig: accessConfig,
+    pendingMarks: pendingMarks,
+    pendingMeta: pendingMeta
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveReportCardAccess(ss, data) {
+  var accObj = data.accessConfig ? (typeof data.accessConfig === "string" ? JSON.parse(data.accessConfig) : data.accessConfig) : null;
+  if (!accObj) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "Missing accessConfig" })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var existingAcc = getAppWorkflowJson_(ss, "EVS_RC_ACCESS_CONFIG") || {};
+  var mergedAcc = {
+    allowTeacherPtmView: typeof accObj.allowTeacherPtmView === "boolean" ? Boolean(accObj.allowTeacherPtmView) : Boolean(existingAcc.allowTeacherPtmView),
+    allowParentView: typeof accObj.allowParentView === "boolean" ? Boolean(accObj.allowParentView) : Boolean(existingAcc.allowParentView),
+    allowTeacherQrAttendance: typeof accObj.allowTeacherQrAttendance === "boolean" ? Boolean(accObj.allowTeacherQrAttendance) : Boolean(existingAcc.allowTeacherQrAttendance),
+    updatedBy: String(accObj.updatedBy || existingAcc.updatedBy || "Manager"),
+    updatedAt: String(accObj.updatedAt || Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss"))
+  };
+  saveAppWorkflowJson_(ss, "EVS_RC_ACCESS_CONFIG", mergedAcc);
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", accessConfig: mergedAcc })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveReportCardDraft(ss, data) {
+  var draftObj = data.draft ? (typeof data.draft === "string" ? JSON.parse(data.draft) : data.draft) : null;
+  var incMarks = data.marks ? (typeof data.marks === "string" ? JSON.parse(data.marks) : data.marks) : null;
+  var incMeta = data.meta ? (typeof data.meta === "string" ? JSON.parse(data.meta) : data.meta) : null;
+
+  if (data.mode === "merge" && (Array.isArray(incMarks) || (incMeta && typeof incMeta === "object"))) {
+    var cur = getAppWorkflowJson_(ss, "EVS_RC_PENDING_DRAFT") || { pendingMarks: [], pendingMeta: {} };
+    var curMarks = Array.isArray(cur.pendingMarks) ? cur.pendingMarks : [];
+    var curMeta = (cur.pendingMeta && typeof cur.pendingMeta === "object") ? cur.pendingMeta : {};
+    var markMap = {};
+    var order = [];
+    for (var i = 0; i < curMarks.length; i++) {
+      var m = curMarks[i];
+      if (!m || !m.student_id || !m.subject) continue;
+      var k = String(m.session || "2026-27").toLowerCase() + "::" + String(m.exam_type || "Quarterly").toLowerCase() + "::" + String(m.student_id).toLowerCase() + "::" + String(m.subject).toLowerCase();
+      if (!markMap[k]) order.push(k);
+      markMap[k] = m;
+    }
+    if (Array.isArray(incMarks)) {
+      for (var j = 0; j < incMarks.length; j++) {
+        var nm = incMarks[j];
+        if (!nm || !nm.student_id || !nm.subject) continue;
+        var nk = String(nm.session || "2026-27").toLowerCase() + "::" + String(nm.exam_type || "Quarterly").toLowerCase() + "::" + String(nm.student_id).toLowerCase() + "::" + String(nm.subject).toLowerCase();
+        if (!markMap[nk]) order.push(nk);
+        markMap[nk] = nm;
+      }
+    }
+    var mergedMarks = [];
+    for (var p = 0; p < order.length; p++) {
+      mergedMarks.push(markMap[order[p]]);
+    }
+    if (incMeta && typeof incMeta === "object") {
+      for (var mk in incMeta) {
+        if (Object.prototype.hasOwnProperty.call(incMeta, mk)) {
+          curMeta[mk] = incMeta[mk];
+        }
+      }
+    }
+    saveAppWorkflowJson_(ss, "EVS_RC_PENDING_DRAFT", { pendingMarks: mergedMarks, pendingMeta: curMeta });
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", merged: true })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (!draftObj) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "Missing draft" })).setMimeType(ContentService.MimeType.JSON);
+  }
+  saveAppWorkflowJson_(ss, "EVS_RC_PENDING_DRAFT", draftObj);
+  return ContentService.createTextOutput(JSON.stringify({ status: "success" })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetTeacherProfiles(ss) {
+  var profiles = getAppWorkflowJson_(ss, "EVS_TEACHER_PROFILES") || {};
+  // Also merge any Subjects/Department/Photo directly stored in Users sheet columns 9-11
+  try {
+    var userSheet = ss.getSheetByName("Users");
+    if (userSheet && userSheet.getLastRow() >= 2) {
+      var uData = userSheet.getDataRange().getValues();
+      for (var r = 1; r < uData.length; r++) {
+        var uid = String(uData[r][0] || "").trim();
+        var uname = String(uData[r][2] || "").trim();
+        var nm = String(uData[r][4] || "").trim();
+        var colSubj = String(uData[r][8] || "").trim();
+        var colDept = String(uData[r][9] || "").trim();
+        var colPhoto = String(uData[r][10] || "").trim();
+        if (colSubj || colDept || colPhoto) {
+          var existing = profiles[uid.toLowerCase()] || profiles[uname.toLowerCase()] || profiles[nm.toLowerCase()] || {};
+          var merged = {
+            assigned_subjects: existing.assigned_subjects || colSubj,
+            department: existing.department || colDept,
+            teacher_photo: existing.teacher_photo || colPhoto,
+            updated_at: existing.updated_at || ""
+          };
+          if (uid) profiles[uid.toLowerCase()] = merged;
+          if (uname) profiles[uname.toLowerCase()] = merged;
+          if (nm) profiles[nm.toLowerCase()] = merged;
+        }
+      }
+    }
+  } catch (eU) {}
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    profiles: profiles
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveTeacherProfile(ss, data) {
+  var profiles = getAppWorkflowJson_(ss, "EVS_TEACHER_PROFILES") || {};
+  var targetUid = String(data.user_id || data.userId || "").trim();
+  var targetUname = String(data.username || "").trim();
+  var targetName = String(data.user_name || data.userName || data.name || "").trim();
+  var subj = String(data.assigned_subjects || data.Assigned_Subjects || "").trim();
+  var dept = String(data.department || data.Department || "").trim();
+  var photo = String(data.teacher_photo || data.Teacher_Photo || "").trim();
+  var nowIst = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+
+  var entry = {
+    assigned_subjects: subj,
+    department: dept,
+    teacher_photo: photo,
+    updated_at: nowIst,
+    updated_by: String(data.updated_by || "Manager")
+  };
+
+  if (targetUid) {
+    profiles[targetUid] = entry;
+    profiles[targetUid.toLowerCase()] = entry;
+  }
+  if (targetUname) {
+    profiles[targetUname] = entry;
+    profiles[targetUname.toLowerCase()] = entry;
+  }
+  if (targetName) {
+    profiles[targetName] = entry;
+    profiles[targetName.toLowerCase()] = entry;
+  }
+
+  saveAppWorkflowJson_(ss, "EVS_TEACHER_PROFILES", profiles);
+
+  // Also mirror into Users sheet cols 9-11 when safe (< 40k chars per Google Sheets cell limit)
+  try {
+    var userSheet = ss.getSheetByName("Users");
+    if (userSheet && userSheet.getLastRow() >= 1) {
+      if (userSheet.getLastColumn() < 11) {
+        userSheet.getRange(1, 9).setValue("Assigned_Subjects");
+        userSheet.getRange(1, 10).setValue("Department");
+        userSheet.getRange(1, 11).setValue("Teacher_Photo");
+      }
+      var uData = userSheet.getDataRange().getValues();
+      var uidL = targetUid.toLowerCase();
+      var unL = targetUname.toLowerCase();
+      var nmL = targetName.toLowerCase();
+      for (var r = 1; r < uData.length; r++) {
+        var rUid = String(uData[r][0] || "").trim().toLowerCase();
+        var rUn = String(uData[r][2] || "").trim().toLowerCase();
+        var rNm = String(uData[r][4] || "").trim().toLowerCase();
+        if ((uidL && rUid === uidL) || (unL && rUn === unL) || (nmL && rNm === nmL)) {
+          userSheet.getRange(r + 1, 9).setValue(subj);
+          userSheet.getRange(r + 1, 10).setValue(dept);
+          if (photo.length <= 45000) {
+            userSheet.getRange(r + 1, 11).setValue(photo);
+          }
+          break;
+        }
+      }
+    }
+  } catch (eUWr) {}
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Teacher profile updated successfully!"
   })).setMimeType(ContentService.MimeType.JSON);
 }
 
