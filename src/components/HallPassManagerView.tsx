@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
-import { ExamTermType, FeeCollectionRecord, HallPassCardLayout, HallPassConfig, HallPassDatesheetRow, Student } from '../types';
+import { ExamTermType, FeeCollectionRecord, HallPassCardLayout, HallPassConfig, HallPassDatesheetRow, SchoolUser, Student } from '../types';
 import {
   chunkIntoPages,
   computeStudentHallPassEligibility,
@@ -32,6 +32,7 @@ interface HallPassManagerViewProps {
   getClassName: (cls?: string | null) => string;
   getStudentPhoto: (student: Student) => string;
   managerName: string;
+  users?: SchoolUser[];
 }
 
 const normalizeClassToken = (cls?: string | null) =>
@@ -49,6 +50,7 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
   getClassName,
   getStudentPhoto,
   managerName,
+  users = [],
 }) => {
   const [managerSection, setManagerSection] = useState<'hall_pass' | 'seating_plan'>('hall_pass');
   const [selectedClass, setSelectedClass] = useState<string>('ALL');
@@ -519,6 +521,7 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
           onOpenSheetSetup={() => setShowSheetSetupModal(true)}
           userRole="manager"
           currentUserName={managerName}
+          users={users}
         />
       ) : (
         <>

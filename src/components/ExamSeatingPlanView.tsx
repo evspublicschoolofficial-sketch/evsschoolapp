@@ -1,15 +1,18 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { HallPassConfig, Student } from '../types';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { HallPassConfig, SchoolUser, Student } from '../types';
 import { getLocalTimestamp } from '../utils/localTime';
 import { realtimeSync } from '../utils/realtimeSync';
 import {
   buildAutoBalancedRoomConfigs,
   buildExamSeatingPlanFromHistoryEntry,
+  buildSeatingArchiveKey,
   clearRoomAllocations,
   deleteExamSeatingHistoryEntry,
   ExamSeatingHistoryEntry,
+  ExamSeatingSnapshot,
   fetchExamSeatingHistory,
   fetchExamSeatingPlanSnapshot,
+  findTeacherAssignedRooms,
   formatExamDateDisplay,
   generateCustomSeatingPlan,
   generateExamSeatingPlanPdf,
@@ -17,13 +20,16 @@ import {
   loadLocalSeatingHistory,
   loadLocalSeatingWorkflow,
   normalizeExamDateKey,
+  RoomStudentCheckInStatus,
   saveExamSeatingPlanToSheet,
+  saveExamSeatingRoomDispatch,
   saveLocalSeatingWorkflow,
   saveTeacherSeatingDraft,
   SeatingDistributionMode,
   SeatingPlanApprovalStatus,
   SeatingPlanConfigPayload,
   SeatingRoomConfig,
+  TeacherAssignedRoomView,
 } from '../utils/seatingPlanHelper';
 
 interface ExamSeatingPlanViewProps {
@@ -34,6 +40,8 @@ interface ExamSeatingPlanViewProps {
   userRole?: 'teacher' | 'manager';
   currentUserName?: string;
   currentUserId?: string;
+  users?: SchoolUser[];
+  initialSubTab?: 'my_room' | 'planner' | 'history';
 }
 
 const CLASS_BADGE_COLORS: Record<string, string> = {
@@ -59,6 +67,8 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
   userRole = 'manager',
   currentUserName = '',
   currentUserId = '',
+  users = [],
+  initialSubTab,
 }) => {
   const [initialBoot] = useState(() => {
     const local = loadLocalSeatingWorkflow();
@@ -86,7 +96,12 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
   const [teacherNote, setTeacherNote] = useState<string>(() => initialBoot?.teacherNote ?? '');
   const [managerNote, setManagerNote] = useState<string>(() => initialBoot?.managerNote ?? '');
 
-  const [activeSubTab, setActiveSubTab] = useState<'planner' | 'history'>('planner');
+  const [serverSnapshot, setServerSnapshot] = useState<ExamSeatingSnapshot | null>(null);
+  const [activeSubTab, setActiveSubTab] = useState<'my_room' | 'planner' | 'history'>(() =>
+    initialSubTab || (userRole === 'teacher' ? 'my_room' : 'planner')
+  );
+  const userTouchedSubTabRef = useRef<boolean>(Boolean(initialSubTab));
+
   const [selectedRoomKey, setSelectedRoomKey] = useState<string>('ALL');
   const [showMatrixEditor, setShowMatrixEditor] = useState<boolean>(true);
   const [refreshingSnapshot, setRefreshingSnapshot] = useState<boolean>(false);
@@ -96,6 +111,16 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [sheetWarning, setSheetWarning] = useState<string | null>(null);
   const [hasLoadedServerOnce, setHasLoadedServerOnce] = useState<boolean>(false);
+  const [manualInvigSlots, setManualInvigSlots] = useState<Record<string, boolean>>({});
+
+  // Teacher My Exam Room Duty states
+  const [selectedMyRoomKey, setSelectedMyRoomKey] = useState<string>('');
+  const [roomStatusDrafts, setRoomStatusDrafts] = useState<Record<string, RoomStudentCheckInStatus>>({});
+  const [roomNoteDraft, setRoomNoteDraft] = useState<string>('');
+  const [roomStudentSearch, setRoomStudentSearch] = useState<string>('');
+  const [roomStatusFilter, setRoomStatusFilter] = useState<'ALL' | RoomStudentCheckInStatus>('ALL');
+  const [roomViewMode, setRoomViewMode] = useState<'list' | 'bench'>('list');
+  const [savingRoomDispatch, setSavingRoomDispatch] = useState<boolean>(false);
 
   // History Archive & Search state
   const [historyEntries, setHistoryEntries] = useState<ExamSeatingHistoryEntry[]>(() =>
@@ -145,6 +170,7 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
       const snap = await fetchExamSeatingPlanSnapshot(true);
       setHasLoadedServerOnce(true);
       if (snap) {
+        setServerSnapshot(snap);
         const chosen = snap.draftConfig || snap.approvedConfig;
         if (chosen && Array.isArray(chosen.rooms) && chosen.rooms.length > 0) {
           applyServerPayload(chosen);
@@ -219,6 +245,122 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
     [seatingPlan.classSummaries]
   );
 
+  // Sorted Teachers list for Invigilator dropdown
+  const teacherOptions = useMemo(() => {
+    const teachersOnly = users.filter((u) => {
+      const des = String(u.Designation || '').toLowerCase();
+      return !/driver|peon|helper|bus|van|guard/i.test(des);
+    });
+    return [...teachersOnly].sort((a, b) => {
+      const aIsTeacher = /teacher|faculty|instructor/i.test(String(a.Designation || '')) ? 0 : 1;
+      const bIsTeacher = /teacher|faculty|instructor/i.test(String(b.Designation || '')) ? 0 : 1;
+      if (aIsTeacher !== bIsTeacher) return aIsTeacher - bIsTeacher;
+      return String(a.Name || '').localeCompare(String(b.Name || ''));
+    });
+  }, [users]);
+
+  // Teacher Assigned Exam Rooms (morning duty & room check-in)
+  const myAssignedRooms = useMemo<TeacherAssignedRoomView[]>(() => {
+    if (userRole !== 'teacher' || (!currentUserId && !currentUserName)) return [];
+    const fallbackSnapshot: ExamSeatingSnapshot = serverSnapshot || {
+      rows: [],
+      roomMeta: {},
+      draftConfig: {
+        rooms: roomConfigs,
+        seatsPerBench,
+        mode,
+        status: workflowStatus,
+        examDate,
+        examShift,
+      },
+      approvedConfig:
+        workflowStatus === 'approved'
+          ? {
+              rooms: roomConfigs,
+              seatsPerBench,
+              mode,
+              status: 'approved',
+              examDate,
+              examShift,
+            }
+          : null,
+      roomDispatches: {},
+    };
+    return findTeacherAssignedRooms({
+      snapshot: fallbackSnapshot,
+      historyEntries,
+      students,
+      getClassName,
+      config,
+      teacherId: currentUserId,
+      teacherName: currentUserName,
+    });
+  }, [
+    userRole,
+    currentUserId,
+    currentUserName,
+    serverSnapshot,
+    roomConfigs,
+    seatsPerBench,
+    mode,
+    workflowStatus,
+    examDate,
+    examShift,
+    historyEntries,
+    students,
+    getClassName,
+    config,
+  ]);
+
+  // Keep selectedMyRoomKey synced cleanly & auto-select 'planner' if teacher has no assigned room after load
+  useEffect(() => {
+    if (userRole !== 'teacher') return;
+    if (myAssignedRooms.length > 0) {
+      const stillValid = myAssignedRooms.some(
+        (r) => `${r.archiveKey}::${r.slotKey}` === selectedMyRoomKey
+      );
+      if (!stillValid) {
+        const first = myAssignedRooms[0];
+        setSelectedMyRoomKey(`${first.archiveKey}::${first.slotKey}`);
+      }
+      if (!userTouchedSubTabRef.current && activeSubTab !== 'my_room') {
+        setActiveSubTab('my_room');
+      }
+    } else if (hasLoadedServerOnce && !userTouchedSubTabRef.current && activeSubTab === 'my_room') {
+      setActiveSubTab('planner');
+    }
+  }, [userRole, myAssignedRooms, hasLoadedServerOnce]);
+
+  const activeMyRoom = useMemo(() => {
+    if (myAssignedRooms.length === 0) return null;
+    return (
+      myAssignedRooms.find((r) => `${r.archiveKey}::${r.slotKey}` === selectedMyRoomKey) ||
+      myAssignedRooms[0]
+    );
+  }, [myAssignedRooms, selectedMyRoomKey]);
+
+  // Seed draft statuses & note whenever activeMyRoom changes or updates from server
+  useEffect(() => {
+    if (!activeMyRoom) return;
+    const nextMap: Record<string, RoomStudentCheckInStatus> = {};
+    activeMyRoom.studentsList.forEach((st) => {
+      nextMap[st.studentId] = st.roomCheckInStatus;
+    });
+    setRoomStatusDrafts(nextMap);
+    setRoomNoteDraft(activeMyRoom.note || '');
+  }, [
+    activeMyRoom?.archiveKey,
+    activeMyRoom?.slotKey,
+    activeMyRoom?.dispatchedAt,
+    activeMyRoom?.sentCount,
+    activeMyRoom?.absentCount,
+  ]);
+
+  const activeArchiveKey = useMemo(
+    () => buildSeatingArchiveKey(examDate, examShift),
+    [examDate, examShift]
+  );
+
   // History filter derived collections
   const historyClassOptions = useMemo(() => {
     const set = new Set<string>();
@@ -265,6 +407,7 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
       rollNumber: string;
       studentName: string;
       className: string;
+      roomCheckInStatus?: string;
     }> = [];
 
     for (const entry of historyEntries) {
@@ -289,6 +432,7 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
           rollNumber: r.rollNumber,
           studentName: r.studentName,
           className: r.className,
+          roomCheckInStatus: r.roomCheckInStatus,
         });
       }
     }
@@ -354,13 +498,92 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
     }
   };
 
-  const handleRoomFieldChange = (slotKey: string, field: 'roomNumber' | 'invigilator', value: string) => {
+  const handleRoomFieldChange = (
+    slotKey: string,
+    field: 'roomNumber' | 'invigilator',
+    value: string,
+    invigilatorId?: string
+  ) => {
     markModifiedIfApproved();
     setRoomConfigs((prev) => {
-      const next = prev.map((r) => (r.slotKey === slotKey ? { ...r, [field]: value } : r));
+      const next = prev.map((r) => {
+        if (r.slotKey !== slotKey) return r;
+        if (field === 'invigilator') {
+          return {
+            ...r,
+            invigilator: value,
+            invigilatorId: invigilatorId !== undefined ? invigilatorId : r.invigilatorId,
+          };
+        }
+        return { ...r, [field]: value };
+      });
       persistLocalSnapshot(next);
       return next;
     });
+  };
+
+  const handleToggleStudentRoomStatus = (studentId: string, targetStatus: RoomStudentCheckInStatus) => {
+    setRoomStatusDrafts((prev) => {
+      const current = prev[studentId] || 'Pending';
+      const nextStatus: RoomStudentCheckInStatus = current === targetStatus ? 'Pending' : targetStatus;
+      return {
+        ...prev,
+        [studentId]: nextStatus,
+      };
+    });
+  };
+
+  const handleSaveMyRoomDispatch = async (sendAllRemaining = false) => {
+    if (!activeMyRoom || savingRoomDispatch) return;
+    setErrorMsg(null);
+    setNotice(null);
+
+    const effectiveStatuses: Record<string, RoomStudentCheckInStatus> = {};
+    activeMyRoom.studentsList.forEach((st) => {
+      const cur = roomStatusDrafts[st.studentId] ?? st.roomCheckInStatus ?? 'Pending';
+      if (sendAllRemaining) {
+        effectiveStatuses[st.studentId] = cur === 'Absent' ? 'Absent' : 'Sent to Room';
+      } else {
+        effectiveStatuses[st.studentId] = cur;
+      }
+    });
+
+    if (sendAllRemaining) {
+      setRoomStatusDrafts(effectiveStatuses);
+    }
+
+    setSavingRoomDispatch(true);
+    try {
+      const res = await saveExamSeatingRoomDispatch({
+        room: activeMyRoom,
+        studentStatuses: effectiveStatuses,
+        dispatchedBy: currentUserName || activeMyRoom.invigilator || 'Teacher',
+        dispatchedById: currentUserId || activeMyRoom.invigilatorId,
+        dispatchedAt: getLocalTimestamp(),
+        note: roomNoteDraft,
+      });
+
+      if (!res.serverOk && !res.sheetSynced) {
+        setErrorMsg(
+          `रूम डेटा सेव करने में समस्या आई (${res.sheetError || 'नेटवर्क त्रुटि'})। कृपया पुनः प्रयास करें।`
+        );
+        return;
+      }
+
+      realtimeSync.broadcastUpdate('exam_seating_plan', 'room_dispatched');
+      await Promise.all([loadFromServer(false), loadHistoryFromServer(false)]);
+
+      setNotice(
+        `✅ ${activeMyRoom.roomNumber} की ड्यूटी सेव हो गई! ${res.sentCount}/${activeMyRoom.totalStudents} बच्चे रूम में भेजे गए${
+          res.absentCount > 0 ? ` (${res.absentCount} अनुपस्थित)` : ''
+        } — अब यह स्थायी रिकॉर्ड व हिस्ट्री में सुरक्षित है।`
+      );
+      setTimeout(() => setNotice(null), 6000);
+    } catch {
+      setErrorMsg('रूम ड्यूटी सेव करने में त्रुटि हुई।');
+    } finally {
+      setSavingRoomDispatch(false);
+    }
   };
 
   const handleClassCountChange = (slotKey: string, classCode: string, rawVal: string) => {
@@ -649,14 +872,75 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
       ? 'grid-cols-1 md:grid-cols-2 xl:grid-cols-4'
       : 'grid-cols-1 md:grid-cols-3';
 
+  const myRoomLiveStats = useMemo(() => {
+    if (!activeMyRoom) return { sent: 0, absent: 0, pending: 0 };
+    let sent = 0;
+    let absent = 0;
+    let pending = 0;
+    activeMyRoom.studentsList.forEach((st) => {
+      const status = roomStatusDrafts[st.studentId] ?? st.roomCheckInStatus ?? 'Pending';
+      if (status === 'Sent to Room') sent++;
+      else if (status === 'Absent') absent++;
+      else pending++;
+    });
+    return { sent, absent, pending };
+  }, [activeMyRoom, roomStatusDrafts]);
+
+  const filteredMyRoomStudents = useMemo(() => {
+    if (!activeMyRoom) return [];
+    const q = roomStudentSearch.trim().toLowerCase();
+    return activeMyRoom.studentsList.filter((st) => {
+      const status = roomStatusDrafts[st.studentId] ?? st.roomCheckInStatus ?? 'Pending';
+      if (roomStatusFilter !== 'ALL' && status !== roomStatusFilter) return false;
+      if (q) {
+        const hay = `${st.studentName} ${st.rollNumber} ${st.studentId} ${st.classLabel} bench ${st.benchNumber}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [activeMyRoom, roomStatusDrafts, roomStudentSearch, roomStatusFilter]);
+
   return (
     <div className="space-y-4">
-      {/* SUB-TAB SWITCHER: PLANNER vs DATE-WISE HISTORY & SEARCH */}
+      {/* SUB-TAB SWITCHER: MY EXAM ROOM (TEACHER) vs PLANNER vs DATE-WISE HISTORY & SEARCH */}
       <div className="no-print bg-white border border-slate-200 rounded-2xl p-2 flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
+          {userRole === 'teacher' && (
+            <button
+              type="button"
+              onClick={() => {
+                userTouchedSubTabRef.current = true;
+                setActiveSubTab('my_room');
+              }}
+              className={`px-3.5 py-2 rounded-xl text-xs font-black cursor-pointer inline-flex items-center gap-2 transition-colors ${
+                activeSubTab === 'my_room'
+                  ? 'bg-[#0c2340] text-amber-300 shadow-xs'
+                  : myAssignedRooms.length > 0
+                  ? 'bg-emerald-50 text-emerald-900 border border-emerald-300 hover:bg-emerald-100'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              <i className="fa-solid fa-door-open"></i>
+              <span>मेरा एग्जाम रूम व बच्चे भेजें</span>
+              {myAssignedRooms.length > 0 && (
+                <span
+                  className={`px-1.5 py-0.5 rounded-full text-[10px] font-black tabular-nums ${
+                    activeSubTab === 'my_room'
+                      ? 'bg-amber-400 text-slate-950'
+                      : 'bg-emerald-600 text-white'
+                  }`}
+                >
+                  {myAssignedRooms.map((r) => r.roomNumber).join(', ')}
+                </span>
+              )}
+            </button>
+          )}
           <button
             type="button"
-            onClick={() => setActiveSubTab('planner')}
+            onClick={() => {
+              userTouchedSubTabRef.current = true;
+              setActiveSubTab('planner');
+            }}
             className={`px-3.5 py-2 rounded-xl text-xs font-black cursor-pointer inline-flex items-center gap-2 transition-colors ${
               activeSubTab === 'planner'
                 ? 'bg-[#0c2340] text-amber-300 shadow-xs'
@@ -669,6 +953,7 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
           <button
             type="button"
             onClick={() => {
+              userTouchedSubTabRef.current = true;
               setActiveSubTab('history');
               loadHistoryFromServer(false);
             }}
@@ -691,13 +976,434 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
         </div>
 
         <div className="text-[11px] font-bold text-slate-600 px-2">
-          {activeSubTab === 'planner'
+          {activeSubTab === 'my_room'
+            ? activeMyRoom
+              ? `${activeMyRoom.roomNumber} · ${formatExamDateDisplay(activeMyRoom.examDate)}`
+              : 'मेरा परीक्षा रूम'
+            : activeSubTab === 'planner'
             ? `तारीख: ${formatExamDateDisplay(examDate)}${examShift ? ` · ${examShift}` : ''}`
             : `कुल सेव परीक्षा रिकॉर्ड: ${historyEntries.length}`}
         </div>
       </div>
 
-      {activeSubTab === 'history' ? (
+      {activeSubTab === 'my_room' ? (
+        <div className="space-y-4">
+          {myAssignedRooms.length === 0 || !activeMyRoom ? (
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 text-center space-y-3">
+              <div className="w-14 h-14 mx-auto rounded-2xl bg-blue-50 text-[#0c2340] flex items-center justify-center text-2xl">
+                <i className="fa-solid fa-door-closed"></i>
+              </div>
+              <h3 className="text-base font-black text-slate-900">
+                अभी आपको किसी एग्जाम रूम की ड्यूटी आवंटित नहीं हुई है
+              </h3>
+              <p className="text-xs text-slate-600 max-w-xl mx-auto leading-relaxed">
+                जैसे ही मैनेजर / प्लानर "चालू सिटिंग प्लान" में किसी कमरे (जैसे Room 1) में बच्चों को चुनकर निरीक्षक (टीचर) में आपका नाम ({currentUserName || 'Teacher'}) सेव करेंगे, सुबह से ही आपके ऐप में वह कमरा व उसके सभी बच्चे दिखने लगेंगे।
+              </p>
+              <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => loadFromServer(true)}
+                  disabled={refreshingSnapshot}
+                  className="px-4 py-2 rounded-xl bg-[#0c2340] hover:bg-blue-950 text-amber-300 text-xs font-black cursor-pointer inline-flex items-center gap-2"
+                >
+                  <i className={`fa-solid fa-rotate ${refreshingSnapshot ? 'fa-spin' : ''}`}></i>
+                  <span>ताज़ा ड्यूटी चेक करें</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    userTouchedSubTabRef.current = true;
+                    setActiveSubTab('planner');
+                  }}
+                  className="px-4 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold cursor-pointer"
+                >
+                  पूरा सिटिंग प्लान देखें
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {myAssignedRooms.length > 1 && (
+                <div className="bg-white border border-slate-200 rounded-2xl p-3 flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-black text-slate-700 mr-1">आपके आवंटित कमरे:</span>
+                  {myAssignedRooms.map((rm) => {
+                    const key = `${rm.archiveKey}::${rm.slotKey}`;
+                    const active = `${activeMyRoom.archiveKey}::${activeMyRoom.slotKey}` === key;
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => setSelectedMyRoomKey(key)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-black cursor-pointer transition-colors ${
+                          active
+                            ? 'bg-[#0c2340] text-amber-300'
+                            : 'bg-slate-100 text-slate-800 hover:bg-slate-200'
+                        }`}
+                      >
+                        {rm.roomNumber} ({rm.totalStudents} छात्र)
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* TEACHER MORNING EXAM ROOM DUTY HERO CARD */}
+              <div className="bg-gradient-to-r from-[#0c2340] via-[#133262] to-[#0c2340] text-white rounded-2xl p-4 sm:p-5 border-b-4 border-amber-400 shadow-sm space-y-4">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="px-2.5 py-1 rounded-lg bg-amber-400 text-slate-950 text-xs font-black">
+                        🏫 {activeMyRoom.roomNumber}
+                      </span>
+                      <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-200 text-[11px] font-bold">
+                        {formatExamDateDisplay(activeMyRoom.examDate)}
+                        {activeMyRoom.examShift ? ` · ${activeMyRoom.examShift}` : ''}
+                      </span>
+                      <span className="px-2.5 py-0.5 rounded-full bg-white/10 text-blue-100 text-[11px] font-bold">
+                        {activeMyRoom.examType} ({activeMyRoom.session})
+                      </span>
+                    </div>
+                    <h2 className="text-lg sm:text-xl font-black text-white mt-2">
+                      आज की परीक्षा ड्यूटी: आपको {activeMyRoom.roomNumber} मिला है
+                    </h2>
+                    <p className="text-xs text-blue-100 mt-0.5">
+                      निरीक्षक: <span className="font-black text-amber-300">{activeMyRoom.invigilator || currentUserName}</span> · आपके रूम में कुल{' '}
+                      <span className="font-black text-white">{activeMyRoom.totalStudents} बच्चे</span> ({activeMyRoom.benches.length} बेंच) हैं — कक्षाएं:{' '}
+                      {activeMyRoom.classBreakdown.map((c) => `${c.classLabel}: ${c.count}`).join(', ')}
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => handleSaveMyRoomDispatch(true)}
+                      disabled={savingRoomDispatch || activeMyRoom.totalStudents === 0}
+                      className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 text-xs sm:text-sm font-black cursor-pointer inline-flex items-center gap-2 shadow-md active:scale-95"
+                    >
+                      <i className={`fa-solid ${savingRoomDispatch ? 'fa-circle-notch fa-spin' : 'fa-paper-plane'}`}></i>
+                      <span>
+                        {savingRoomDispatch
+                          ? 'रूम में भेजा व सेव हो रहा है...'
+                          : myRoomLiveStats.pending > 0
+                          ? `🚀 सभी बाकी (${myRoomLiveStats.pending}) बच्चों को रूम में भेजें व सेव करें`
+                          : '✅ सभी बच्चों को रूम में कन्फर्म व सेव करें'}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const filename = generateExamSeatingPlanPdf({
+                          plan: activeMyRoom.plan,
+                          config: {
+                            ...config,
+                            examType: activeMyRoom.examType as any,
+                            session: activeMyRoom.session,
+                          },
+                          selectedRoomKey: activeMyRoom.slotKey,
+                          seatsPerBench: activeMyRoom.seatsPerBench,
+                          examDate: activeMyRoom.examDate,
+                          examShift: activeMyRoom.examShift,
+                        });
+                        setNotice(`✓ ${activeMyRoom.roomNumber} की PDF डाउनलोड हो गई: ${filename}`);
+                        setTimeout(() => setNotice(null), 4000);
+                      }}
+                      className="px-3.5 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black cursor-pointer inline-flex items-center gap-1.5"
+                    >
+                      <i className="fa-solid fa-file-pdf"></i>
+                      <span>रूम चार्ट PDF</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 4 KPI COUNTERS */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  <div className="rounded-xl bg-white/10 border border-white/15 px-3 py-2.5">
+                    <div className="text-[11px] font-bold text-blue-200">कुल आवंटित बच्चे</div>
+                    <div className="text-xl font-black text-white tabular-nums">{activeMyRoom.totalStudents}</div>
+                  </div>
+                  <div className="rounded-xl bg-emerald-500/20 border border-emerald-400/40 px-3 py-2.5">
+                    <div className="text-[11px] font-bold text-emerald-200">रूम में भेजे / बैठे</div>
+                    <div className="text-xl font-black text-emerald-300 tabular-nums">{myRoomLiveStats.sent}</div>
+                  </div>
+                  <div className="rounded-xl bg-amber-400/20 border border-amber-300/40 px-3 py-2.5">
+                    <div className="text-[11px] font-bold text-amber-200">भेजना बाकी (Pending)</div>
+                    <div className="text-xl font-black text-amber-300 tabular-nums">{myRoomLiveStats.pending}</div>
+                  </div>
+                  <div className="rounded-xl bg-rose-500/20 border border-rose-400/40 px-3 py-2.5">
+                    <div className="text-[11px] font-bold text-rose-200">अनुपस्थित (Absent)</div>
+                    <div className="text-xl font-black text-rose-300 tabular-nums">{myRoomLiveStats.absent}</div>
+                  </div>
+                </div>
+              </div>
+
+              {errorMsg && (
+                <div className="px-3.5 py-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold">
+                  {errorMsg}
+                </div>
+              )}
+              {notice && (
+                <div className="px-3.5 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold">
+                  {notice}
+                </div>
+              )}
+
+              {/* SEARCH, FILTER, NOTE & SAVE BAR */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5">
+                  <div className="relative flex-1">
+                    <i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                    <input
+                      type="text"
+                      value={roomStudentSearch}
+                      onChange={(e) => setRoomStudentSearch(e.target.value)}
+                      placeholder="अपने रूम के छात्र को नाम, रोल नंबर, कक्षा या बेंच से खोजें..."
+                      className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-900"
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {(
+                      [
+                        { id: 'ALL', label: `सभी (${activeMyRoom.totalStudents})` },
+                        { id: 'Pending', label: `बाकी (${myRoomLiveStats.pending})` },
+                        { id: 'Sent to Room', label: `रूम में (${myRoomLiveStats.sent})` },
+                        { id: 'Absent', label: `अनुपस्थित (${myRoomLiveStats.absent})` },
+                      ] as const
+                    ).map((f) => (
+                      <button
+                        key={f.id}
+                        type="button"
+                        onClick={() => setRoomStatusFilter(f.id)}
+                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-black cursor-pointer tabular-nums ${
+                          roomStatusFilter === f.id
+                            ? 'bg-[#0c2340] text-amber-300'
+                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        }`}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+
+                    <div className="inline-flex items-center p-0.5 bg-slate-100 rounded-lg ml-1">
+                      <button
+                        type="button"
+                        onClick={() => setRoomViewMode('list')}
+                        className={`px-2.5 py-1 rounded-md text-[11px] font-black cursor-pointer ${
+                          roomViewMode === 'list' ? 'bg-white text-[#0c2340] shadow-xs' : 'text-slate-600'
+                        }`}
+                      >
+                        लिस्ट
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRoomViewMode('bench')}
+                        className={`px-2.5 py-1 rounded-md text-[11px] font-black cursor-pointer ${
+                          roomViewMode === 'bench' ? 'bg-white text-[#0c2340] shadow-xs' : 'text-slate-600'
+                        }`}
+                      >
+                        बेंच नक्शा
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2 pt-1 border-t border-slate-100">
+                  <input
+                    type="text"
+                    value={roomNoteDraft}
+                    onChange={(e) => setRoomNoteDraft(e.target.value)}
+                    placeholder="रूम ड्यूटी नोट (वैकल्पिक, जैसे: सभी बच्चे शांति से बैठ गए व पेपर शुरू)..."
+                    className="flex-1 px-3 py-2 rounded-xl border border-slate-300 bg-slate-50 text-xs text-slate-900"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleSaveMyRoomDispatch(false)}
+                    disabled={savingRoomDispatch}
+                    className="px-4 py-2 rounded-xl bg-[#0c2340] hover:bg-blue-950 disabled:opacity-50 text-amber-300 text-xs font-black cursor-pointer inline-flex items-center justify-center gap-2 shrink-0"
+                  >
+                    <i className={`fa-solid ${savingRoomDispatch ? 'fa-circle-notch fa-spin' : 'fa-floppy-disk'}`}></i>
+                    <span>रूम ड्यूटी व बच्चों की स्थिति सेव करें</span>
+                  </button>
+                </div>
+
+                {activeMyRoom.dispatchedAt && (
+                  <div className="text-[11px] font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-1.5 flex flex-wrap items-center justify-between gap-2">
+                    <span>
+                      ✓ अंतिम सेव: <span className="font-black">{activeMyRoom.dispatchedBy || currentUserName}</span> · {activeMyRoom.dispatchedAt}
+                    </span>
+                    <span className="font-black tabular-nums">
+                      सेव रिकॉर्ड: {activeMyRoom.sentCount}/{activeMyRoom.totalStudents} रूम में · {activeMyRoom.absentCount} अनुपस्थित
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* STUDENT CHECK-IN LIST OR BENCH-BY-BENCH INTERACTIVE GRID */}
+              {roomViewMode === 'list' ? (
+                <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden divide-y divide-slate-200">
+                  {filteredMyRoomStudents.length === 0 ? (
+                    <div className="p-8 text-center text-xs font-bold text-slate-500">
+                      इस फ़िल्टर में कोई छात्र नहीं मिला।
+                    </div>
+                  ) : (
+                    filteredMyRoomStudents.map((st, idx) => {
+                      const status = roomStatusDrafts[st.studentId] ?? st.roomCheckInStatus ?? 'Pending';
+                      const badgeClass =
+                        CLASS_BADGE_COLORS[st.classCode] || 'bg-slate-100 text-slate-900 border-slate-300';
+                      return (
+                        <div
+                          key={`${st.studentId}-${idx}`}
+                          className={`p-3 sm:px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 transition-colors ${
+                            status === 'Sent to Room'
+                              ? 'bg-emerald-50/60'
+                              : status === 'Absent'
+                              ? 'bg-rose-50/60'
+                              : 'hover:bg-slate-50'
+                          }`}
+                        >
+                          <div className="flex items-start sm:items-center gap-3 min-w-0">
+                            <div className="px-2.5 py-1.5 rounded-xl bg-[#0c2340] text-amber-300 text-center shrink-0 tabular-nums">
+                              <div className="text-[10px] font-bold leading-none">बेंच</div>
+                              <div className="text-sm font-black leading-tight">#{st.benchNumber}</div>
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-sm font-black text-slate-900 truncate">
+                                  {st.studentName}
+                                </span>
+                                <span className={`px-2 py-0.5 rounded border text-[10px] font-black ${badgeClass}`}>
+                                  {st.classLabel}
+                                </span>
+                              </div>
+                              <div className="text-[11px] font-bold text-slate-600 tabular-nums mt-0.5">
+                                Roll: {st.rollNumber || '—'} · ID: {st.studentId} · सीट: {st.seatPosition}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                            <button
+                              type="button"
+                              onClick={() => handleToggleStudentRoomStatus(st.studentId, 'Sent to Room')}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-black cursor-pointer inline-flex items-center gap-1.5 border transition-all ${
+                                status === 'Sent to Room'
+                                  ? 'bg-emerald-600 border-emerald-700 text-white shadow-xs'
+                                  : 'bg-white border-emerald-300 text-emerald-800 hover:bg-emerald-50'
+                              }`}
+                            >
+                              <i className="fa-solid fa-check"></i>
+                              <span>{status === 'Sent to Room' ? 'रूम में भेजा ✓' : 'रूम में भेजें'}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleStudentRoomStatus(st.studentId, 'Absent')}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-black cursor-pointer inline-flex items-center gap-1.5 border transition-all ${
+                                status === 'Absent'
+                                  ? 'bg-rose-600 border-rose-700 text-white shadow-xs'
+                                  : 'bg-white border-rose-300 text-rose-800 hover:bg-rose-50'
+                              }`}
+                            >
+                              <i className="fa-solid fa-xmark"></i>
+                              <span>{status === 'Absent' ? 'अनुपस्थित ✓' : 'अनुपस्थित'}</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              ) : (
+                <div className="bg-white border-2 border-[#0c2340] rounded-2xl overflow-hidden p-3 sm:p-4 space-y-2.5">
+                  {activeMyRoom.benches.map((bench) => (
+                    <div
+                      key={`myroom-b-${bench.benchNumber}`}
+                      className="flex flex-col sm:flex-row border border-slate-300 rounded-xl overflow-hidden bg-slate-50/40"
+                    >
+                      <div className="sm:w-24 shrink-0 bg-slate-100 border-b sm:border-b-0 sm:border-r border-slate-300 px-3 py-2 flex sm:flex-col items-center justify-between sm:justify-center text-center">
+                        <span className="text-xs font-black text-[#0c2340] tabular-nums">
+                          Bench {bench.benchNumber}
+                        </span>
+                        <span className="text-[10px] font-bold text-slate-500 tabular-nums">
+                          {bench.seats.length} सीट
+                        </span>
+                      </div>
+                      <div
+                        className={`flex-1 grid ${
+                          activeMyRoom.seatsPerBench === 2
+                            ? 'grid-cols-1 md:grid-cols-2'
+                            : activeMyRoom.seatsPerBench === 4
+                            ? 'grid-cols-1 md:grid-cols-2 xl:grid-cols-4'
+                            : 'grid-cols-1 md:grid-cols-3'
+                        } divide-y sm:divide-y-0 sm:divide-x divide-slate-200 bg-white`}
+                      >
+                        {bench.seats.map((seat) => {
+                          const sId = String(seat.student.Student_ID || '');
+                          const status = roomStatusDrafts[sId] ?? 'Pending';
+                          const badgeClass =
+                            CLASS_BADGE_COLORS[seat.classCode] || 'bg-slate-100 text-slate-900 border-slate-300';
+                          return (
+                            <div
+                              key={sId}
+                              className={`p-2.5 space-y-2 ${
+                                status === 'Sent to Room'
+                                  ? 'bg-emerald-50/60'
+                                  : status === 'Absent'
+                                  ? 'bg-rose-50/60'
+                                  : ''
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <div className="text-[10px] font-extrabold uppercase text-slate-500">
+                                    {seat.seatPosition}
+                                  </div>
+                                  <div className="text-sm font-black text-slate-900 truncate">
+                                    {seat.student.Student_Name}
+                                  </div>
+                                  <div className="text-[11px] font-bold text-[#0c2340] tabular-nums">
+                                    Roll: {seat.student.Roll_Number || '—'} · ID: {sId}
+                                  </div>
+                                </div>
+                                <span className={`shrink-0 px-2 py-0.5 rounded border text-[11px] font-black ${badgeClass}`}>
+                                  {seat.classLabel}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleStudentRoomStatus(sId, 'Sent to Room')}
+                                  className={`flex-1 py-1 rounded-lg text-[11px] font-black cursor-pointer border ${
+                                    status === 'Sent to Room'
+                                      ? 'bg-emerald-600 border-emerald-700 text-white'
+                                      : 'bg-white border-emerald-300 text-emerald-800'
+                                  }`}
+                                >
+                                  ✓ रूम में
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleStudentRoomStatus(sId, 'Absent')}
+                                  className={`py-1 px-2 rounded-lg text-[11px] font-black cursor-pointer border ${
+                                    status === 'Absent'
+                                      ? 'bg-rose-600 border-rose-700 text-white'
+                                      : 'bg-white border-rose-300 text-rose-800'
+                                  }`}
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      ) : activeSubTab === 'history' ? (
         <div className="space-y-4">
           {/* HISTORY SEARCH & FILTER HEADER */}
           <div className="no-print bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-4">
@@ -883,9 +1589,21 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
                               Bench {m.benchNo} · {m.seatPosition}
                             </td>
                             <td className="p-2.5">
-                              <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 font-black">
-                                {m.invigilator || '—'}
-                              </span>
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 font-black">
+                                  {m.invigilator || '—'}
+                                </span>
+                                {m.roomCheckInStatus === 'Sent to Room' && (
+                                  <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-900 text-[10px] font-black">
+                                    ✓ रूम में
+                                  </span>
+                                )}
+                                {m.roomCheckInStatus === 'Absent' && (
+                                  <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-900 text-[10px] font-black">
+                                    ✕ Absent
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td className="p-2.5 text-right whitespace-nowrap">
                               <button
@@ -1106,6 +1824,16 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
                               {rm.invigilator || 'बिना निरीक्षक'}
                             </span>
                             <span className="text-slate-500 tabular-nums"> ({rm.totalStudents})</span>
+                            {(rm.sentCount || 0) > 0 && (
+                              <span className="ml-1 px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-900 text-[10px] font-black tabular-nums">
+                                ✓ {rm.sentCount}/{rm.totalStudents} रूम में
+                              </span>
+                            )}
+                            {(rm.absentCount || 0) > 0 && (
+                              <span className="ml-1 px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 text-[10px] font-black tabular-nums">
+                                {rm.absentCount} Abs
+                              </span>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -1495,15 +2223,85 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
                                 </button>
                               )}
                             </div>
-                            <input
-                              type="text"
-                              value={room.invigilator}
-                              onChange={(e) =>
-                                handleRoomFieldChange(room.slotKey, 'invigilator', e.target.value)
-                              }
-                              placeholder="निरीक्षक / टीचर"
-                              className="w-full px-2 py-1 rounded bg-white/10 text-white placeholder:text-blue-200/70 text-[11px] font-semibold border border-white/20"
-                            />
+                            {teacherOptions.length > 0 && !manualInvigSlots[room.slotKey] ? (
+                              <div className="space-y-1">
+                                <select
+                                  value={
+                                    room.invigilatorId
+                                      ? `ID:${room.invigilatorId}`
+                                      : room.invigilator
+                                      ? `NAME:${room.invigilator}`
+                                      : ''
+                                  }
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    if (val === '__MANUAL__') {
+                                      setManualInvigSlots((prev) => ({ ...prev, [room.slotKey]: true }));
+                                      return;
+                                    }
+                                    if (!val) {
+                                      handleRoomFieldChange(room.slotKey, 'invigilator', '', '');
+                                      return;
+                                    }
+                                    if (val.startsWith('ID:')) {
+                                      const uId = val.slice(3);
+                                      const u = teacherOptions.find((t) => String(t.User_ID) === uId);
+                                      handleRoomFieldChange(
+                                        room.slotKey,
+                                        'invigilator',
+                                        u?.Name || room.invigilator,
+                                        uId
+                                      );
+                                    } else if (val.startsWith('NAME:')) {
+                                      handleRoomFieldChange(room.slotKey, 'invigilator', val.slice(5), '');
+                                    }
+                                  }}
+                                  className="w-full px-2 py-1 rounded bg-[#133262] text-white text-[11px] font-bold border border-white/25"
+                                >
+                                  <option value="">-- टीचर चुनें --</option>
+                                  {teacherOptions.map((t) => (
+                                    <option key={t.User_ID || t.Name} value={`ID:${t.User_ID}`}>
+                                      {t.Name} ({t.Designation || 'Teacher'})
+                                    </option>
+                                  ))}
+                                  {room.invigilator &&
+                                    !teacherOptions.some(
+                                      (t) =>
+                                        (room.invigilatorId && t.User_ID === room.invigilatorId) ||
+                                        t.Name.trim().toLowerCase() === room.invigilator.trim().toLowerCase()
+                                    ) && (
+                                      <option value={`NAME:${room.invigilator}`}>
+                                        {room.invigilator}
+                                      </option>
+                                    )}
+                                  <option value="__MANUAL__">✏️ अन्य नाम लिखें...</option>
+                                </select>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="text"
+                                  value={room.invigilator}
+                                  onChange={(e) =>
+                                    handleRoomFieldChange(room.slotKey, 'invigilator', e.target.value, '')
+                                  }
+                                  placeholder="निरीक्षक / टीचर"
+                                  className="w-full px-2 py-1 rounded bg-white/10 text-white placeholder:text-blue-200/70 text-[11px] font-semibold border border-white/20"
+                                />
+                                {teacherOptions.length > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setManualInvigSlots((prev) => ({ ...prev, [room.slotKey]: false }))
+                                    }
+                                    className="p-1 text-amber-300 hover:text-amber-200 cursor-pointer shrink-0"
+                                    title="टीचर सूची से चुनें"
+                                  >
+                                    <i className="fa-solid fa-list text-[11px]"></i>
+                                  </button>
+                                )}
+                              </div>
+                            )}
                             <div className="mt-1 text-[10px] font-bold text-amber-300 tabular-nums">
                               {roomStats?.totalStudents || 0} छात्र · {roomStats?.benches.length || 0} बेंच
                             </div>
@@ -1765,6 +2563,18 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
                       ✓ 0 नकल जोड़े
                     </span>
                   )}
+                  {(() => {
+                    const liveDisp =
+                      serverSnapshot?.roomDispatches?.[`${activeArchiveKey}::${room.slotKey}`] ||
+                      serverSnapshot?.roomDispatches?.[`${activeArchiveKey}::${room.roomNumber}`];
+                    if (!liveDisp) return null;
+                    return (
+                      <span className="px-2 py-0.5 rounded bg-emerald-400 text-slate-950 text-[10px] font-black tabular-nums">
+                        ✓ {liveDisp.sentCount}/{liveDisp.totalStudents} रूम में भेजे गए
+                        {liveDisp.absentCount > 0 ? ` (${liveDisp.absentCount} Abs)` : ''}
+                      </span>
+                    );
+                  })()}
                 </div>
                 <p className="text-xs text-blue-100 font-semibold mt-0.5">
                   {room.classBreakdown.length > 0

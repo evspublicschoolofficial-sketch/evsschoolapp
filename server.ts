@@ -5536,12 +5536,14 @@ async function startServer() {
     roomMeta: Record<string, any>;
     draftConfig: any | null;
     approvedConfig: any | null;
+    roomDispatches: Record<string, any>;
     updatedAt: string;
   } = {
     rows: [],
     roomMeta: {},
     draftConfig: null,
     approvedConfig: null,
+    roomDispatches: {},
     updatedAt: '',
   };
   try {
@@ -5553,6 +5555,7 @@ async function startServer() {
           roomMeta: rawSeat.roomMeta && typeof rawSeat.roomMeta === 'object' ? rawSeat.roomMeta : {},
           draftConfig: rawSeat.draftConfig && typeof rawSeat.draftConfig === 'object' ? rawSeat.draftConfig : null,
           approvedConfig: rawSeat.approvedConfig && typeof rawSeat.approvedConfig === 'object' ? rawSeat.approvedConfig : null,
+          roomDispatches: rawSeat.roomDispatches && typeof rawSeat.roomDispatches === 'object' ? rawSeat.roomDispatches : {},
           updatedAt: String(rawSeat.updatedAt || ''),
         };
       }
@@ -5607,6 +5610,15 @@ async function startServer() {
       grouped.set(archiveKey, arr);
     }
 
+    const normalizeRoomStatus = (raw: any) => {
+      const s = String(raw || '').trim().toLowerCase();
+      if (s === 'sent to room' || s === 'sent' || s === 'seated' || s === 'present' || s === 'dispatched') {
+        return 'Sent to Room';
+      }
+      if (s === 'absent') return 'Absent';
+      return 'Pending';
+    };
+
     const entries: any[] = [];
     for (const [archiveKey, grpRows] of grouped.entries()) {
       const first = grpRows[0];
@@ -5619,29 +5631,56 @@ async function startServer() {
             slotKey: r.slotKey || rKey,
             roomNumber: r.roomNo || rKey,
             invigilator: r.invigilator || '',
+            invigilatorId: r.invigilatorId || '',
             totalStudents: 0,
+            sentCount: 0,
+            absentCount: 0,
+            pendingCount: 0,
+            dispatchedAt: '',
+            dispatchedBy: '',
             benchesSet: new Set<number>(),
             classCounts: new Map<string, number>(),
           };
           roomMap.set(rKey, rm);
         }
         if (!rm.invigilator && r.invigilator) rm.invigilator = r.invigilator;
+        if (!rm.invigilatorId && r.invigilatorId) rm.invigilatorId = r.invigilatorId;
         rm.totalStudents++;
+        const st = normalizeRoomStatus(r.roomCheckInStatus);
+        if (st === 'Sent to Room') rm.sentCount++;
+        else if (st === 'Absent') rm.absentCount++;
+        else rm.pendingCount++;
+        if (r.checkedInAt && (!rm.dispatchedAt || String(r.checkedInAt) > rm.dispatchedAt)) {
+          rm.dispatchedAt = String(r.checkedInAt);
+        }
+        if (r.checkedInBy && !rm.dispatchedBy) rm.dispatchedBy = String(r.checkedInBy);
         if (r.benchNo) rm.benchesSet.add(Number(r.benchNo));
         const cls = String(r.className || 'Class');
         rm.classCounts.set(cls, (rm.classCounts.get(cls) || 0) + 1);
       }
-      const roomsSummary = Array.from(roomMap.values()).map((rm) => ({
-        slotKey: rm.slotKey,
-        roomNumber: rm.roomNumber,
-        invigilator: rm.invigilator,
-        totalStudents: rm.totalStudents,
-        benchesCount: rm.benchesSet.size || 1,
-        classBreakdown: Array.from(rm.classCounts.entries()).map(([classLabel, count]) => ({
-          classLabel,
-          count,
-        })),
-      }));
+      const roomsSummary = Array.from(roomMap.values()).map((rm) => {
+        const disp =
+          examSeatingStore.roomDispatches?.[`${archiveKey}::${rm.slotKey}`] ||
+          examSeatingStore.roomDispatches?.[`${archiveKey}::${rm.roomNumber}`];
+        return {
+          slotKey: rm.slotKey,
+          roomNumber: rm.roomNumber,
+          invigilator: rm.invigilator,
+          invigilatorId: rm.invigilatorId || disp?.invigilatorId || undefined,
+          totalStudents: rm.totalStudents,
+          benchesCount: rm.benchesSet.size || 1,
+          sentCount: rm.sentCount,
+          absentCount: rm.absentCount,
+          pendingCount: rm.pendingCount,
+          dispatchedAt: rm.dispatchedAt || disp?.dispatchedAt || undefined,
+          dispatchedBy: rm.dispatchedBy || disp?.dispatchedBy || undefined,
+          roomNote: disp?.note || undefined,
+          classBreakdown: Array.from(rm.classCounts.entries()).map(([classLabel, count]) => ({
+            classLabel,
+            count,
+          })),
+        };
+      });
       entries.push({
         archiveKey,
         examDate: first.examDate,
@@ -5704,6 +5743,13 @@ async function startServer() {
               }
               if (parsed.approvedConfig && typeof parsed.approvedConfig === 'object' && Array.isArray(parsed.approvedConfig.rooms)) {
                 examSeatingStore.approvedConfig = parsed.approvedConfig;
+                changed = true;
+              }
+              if (parsed.roomDispatches && typeof parsed.roomDispatches === 'object' && Object.keys(parsed.roomDispatches).length > 0) {
+                examSeatingStore.roomDispatches = {
+                  ...(examSeatingStore.roomDispatches || {}),
+                  ...parsed.roomDispatches,
+                };
                 changed = true;
               }
               if (changed) {
@@ -5826,18 +5872,40 @@ async function startServer() {
   app.post('/api/exam-seating-plan', async (req, res) => {
     try {
       const targetUrl = resolveTargetAppsScriptUrl(req);
-      const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+      const rawRows = Array.isArray(req.body?.rows) ? req.body.rows : [];
       const roomMeta = req.body?.roomMeta && typeof req.body.roomMeta === 'object' ? req.body.roomMeta : {};
       const approvedConfig =
         req.body?.approvedConfig && typeof req.body.approvedConfig === 'object' ? req.body.approvedConfig : null;
       const examDate = String(req.body?.examDate || approvedConfig?.examDate || getLocalTimestampIST().slice(0, 10)).slice(0, 10);
       const examShift = String(req.body?.examShift !== undefined ? req.body.examShift : approvedConfig?.examShift || '').trim();
 
+      // Preserve any existing teacher morning room dispatch statuses on matching archiveKey+slotKey+studentId
+      const existingDispatches = examSeatingStore.roomDispatches || {};
+      const rows = rawRows.map((r: any) => {
+        const rDate = String(r?.examDate || examDate).slice(0, 10);
+        const rShift = String(r?.examShift !== undefined ? r.examShift : examShift).trim();
+        const rArchive = String(r?.archiveKey || '').trim() || (rShift ? `${rDate}::${rShift.toUpperCase()}` : `${rDate}::MAIN`);
+        const disp =
+          existingDispatches[`${rArchive}::${r?.slotKey}`] ||
+          existingDispatches[`${rArchive}::${r?.roomNo}`];
+        const stStatus = disp?.studentStatuses?.[String(r?.studentId || '').trim()];
+        if (stStatus && (!r?.roomCheckInStatus || r.roomCheckInStatus === 'Pending')) {
+          return {
+            ...r,
+            roomCheckInStatus: stStatus.status || r.roomCheckInStatus || 'Pending',
+            checkedInAt: stStatus.checkedInAt || disp?.dispatchedAt || r.checkedInAt || '',
+            checkedInBy: stStatus.checkedInBy || disp?.dispatchedBy || r.checkedInBy || '',
+          };
+        }
+        return r;
+      });
+
       examSeatingStore = {
         rows,
         roomMeta,
         draftConfig: approvedConfig || examSeatingStore.draftConfig,
         approvedConfig: approvedConfig || examSeatingStore.approvedConfig,
+        roomDispatches: existingDispatches,
         updatedAt: getLocalTimestampIST(),
       };
       persistExamSeatingStore();
@@ -5877,6 +5945,90 @@ async function startServer() {
       });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err?.message || 'Could not save seating plan' });
+    }
+  });
+
+  app.post('/api/exam-seating-room-dispatch', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const dispatch = req.body?.dispatch && typeof req.body.dispatch === 'object' ? req.body.dispatch : null;
+      const roomRows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+      if (!dispatch || !dispatch.archiveKey || !dispatch.slotKey || roomRows.length === 0) {
+        return res.status(400).json({ success: false, error: 'Missing room dispatch data or student rows' });
+      }
+
+      const archiveKey = String(dispatch.archiveKey).trim();
+      const slotKey = String(dispatch.slotKey).trim();
+      const roomNo = String(dispatch.roomNumber || slotKey).trim();
+      const examDate = String(dispatch.examDate || getLocalTimestampIST().slice(0, 10)).slice(0, 10);
+      const examShift = String(dispatch.examShift || '').trim();
+      const dispatchKey = `${archiveKey}::${slotKey}`;
+
+      examSeatingStore.roomDispatches = {
+        ...(examSeatingStore.roomDispatches || {}),
+        [dispatchKey]: dispatch,
+      };
+
+      // Update active examSeatingStore.rows for this room (merge if rows exist, or seed with roomRows)
+      const currentRows = Array.isArray(examSeatingStore.rows) ? examSeatingStore.rows : [];
+      const currentArchiveKey =
+        currentRows[0]?.archiveKey ||
+        (examSeatingStore.approvedConfig?.examDate
+          ? `${String(examSeatingStore.approvedConfig.examDate).slice(0, 10)}::${
+              String(examSeatingStore.approvedConfig.examShift || '').trim().toUpperCase() || 'MAIN'
+            }`
+          : archiveKey);
+
+      if (currentRows.length === 0 || currentArchiveKey === archiveKey) {
+        const otherCurrentRows = currentRows.filter(
+          (r: any) => String(r?.slotKey || '') !== slotKey && String(r?.roomNo || '') !== roomNo
+        );
+        examSeatingStore.rows = [...otherCurrentRows, ...roomRows];
+      }
+      examSeatingStore.updatedAt = getLocalTimestampIST();
+      persistExamSeatingStore();
+
+      // Update or create matching archive entry in examSeatingHistoryStore
+      const existingHist = examSeatingHistoryStore.find((e) => e?.archiveKey === archiveKey);
+      const otherHistRows = Array.isArray(existingHist?.rows)
+        ? existingHist.rows.filter(
+            (r: any) => String(r?.slotKey || '') !== slotKey && String(r?.roomNo || '') !== roomNo
+          )
+        : [];
+      const combinedHistRows = [...otherHistRows, ...roomRows];
+      const rebuiltEntries = buildServerHistoryEntriesFromRows(combinedHistRows, examDate, examShift);
+      if (rebuiltEntries.length > 0) {
+        examSeatingHistoryStore = mergeServerHistoryLists(rebuiltEntries, examSeatingHistoryStore);
+        persistExamSeatingHistoryStore();
+      }
+
+      const seatingBroadcast = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'exam_seating_plan',
+        action: 'room_dispatched',
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) client.send(seatingBroadcast);
+      }
+
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'saveExamSeatingRoomDispatch',
+        dispatch,
+        rows: roomRows,
+        appsScriptUrl: targetUrl,
+      });
+
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : gasResult.error,
+        dispatch,
+        historyCount: examSeatingHistoryStore.length,
+        ...examSeatingStore,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Could not save room dispatch' });
     }
   });
 

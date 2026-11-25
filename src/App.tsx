@@ -21,6 +21,14 @@ import {
   loadLocalHallPassConfig,
 } from './utils/hallPassHelper';
 import {
+  ExamSeatingHistoryEntry,
+  ExamSeatingSnapshot,
+  fetchExamSeatingHistory,
+  fetchExamSeatingPlanSnapshot,
+  findTeacherAssignedRooms,
+  formatExamDateDisplay,
+} from './utils/seatingPlanHelper';
+import {
   fetchParentReviewsFromServer,
   loadLocalParentReviews,
   ParentReviewRecord,
@@ -1957,6 +1965,47 @@ export default function App() {
   const [behaviorDateFilter, setBehaviorDateFilter] = useState<string>('');
   const [behaviorClassFilter, setBehaviorClassFilter] = useState<string>('all');
   const [behaviorSearch, setBehaviorSearch] = useState<string>('');
+
+  // Teacher Exam Room Duty (Morning Seating Assignment + Room Dispatch Sync)
+  const [teacherSeatingSnapshot, setTeacherSeatingSnapshot] = useState<ExamSeatingSnapshot | null>(null);
+  const [teacherSeatingHistory, setTeacherSeatingHistory] = useState<ExamSeatingHistoryEntry[]>([]);
+
+  const refreshTeacherSeatingDuty = async () => {
+    try {
+      const [snap, histRes] = await Promise.all([
+        fetchExamSeatingPlanSnapshot(false),
+        fetchExamSeatingHistory(false),
+      ]);
+      if (snap) setTeacherSeatingSnapshot(snap);
+      if (histRes?.entries) setTeacherSeatingHistory(histRes.entries);
+    } catch {}
+  };
+
+  useEffect(() => {
+    if (activeTab === 'teacher' && teacherUser) {
+      refreshTeacherSeatingDuty();
+    }
+  }, [activeTab, teacherUser?.User_ID]);
+
+  const teacherAssignedRooms = useMemo(() => {
+    if (!teacherUser) return [];
+    return findTeacherAssignedRooms({
+      snapshot: teacherSeatingSnapshot,
+      historyEntries: teacherSeatingHistory,
+      students,
+      getClassName,
+      config: hallPassConfig,
+      teacherId: teacherUser.User_ID,
+      teacherName: teacherUser.Name,
+      teacherUsername: teacherUser.Username,
+    });
+  }, [
+    teacherUser,
+    teacherSeatingSnapshot,
+    teacherSeatingHistory,
+    students,
+    hallPassConfig,
+  ]);
 
   useEffect(() => {
     try {
@@ -4255,6 +4304,7 @@ export default function App() {
       } else if (event.entity === 'hall_pass_config') {
         fetchHallPassConfigFromServer(true).then(setHallPassConfig);
       } else if (event.entity === 'exam_seating_plan') {
+        refreshTeacherSeatingDuty();
         return;
       } else if (event.entity === 'fee_waivers') {
         syncFeeWaiversWithServer();
@@ -11713,6 +11763,54 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               </div>
             </div>
 
+            {/* Morning Exam Room Duty Alert Banner (Auto-visible when Teacher is assigned an Exam Room) */}
+            {teacherAssignedRooms.length > 0 && (
+              <div className="bg-gradient-to-r from-emerald-50 via-amber-50/70 to-blue-50 border-2 border-emerald-400 rounded-2xl p-3.5 sm:p-4 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-[#0c2340] text-amber-300 flex items-center justify-center shrink-0 text-lg shadow-xs">
+                    <i className="fa-solid fa-door-open"></i>
+                  </div>
+                  <div className="space-y-0.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs sm:text-sm font-black text-[#0c2340]">
+                        🏫 आज की परीक्षा रूम ड्यूटी:{' '}
+                        {teacherAssignedRooms.map((r) => r.roomNumber).join(', ')}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-full bg-white border border-slate-200 text-[10px] font-black text-slate-700 tabular-nums">
+                        {formatExamDateDisplay(teacherAssignedRooms[0].examDate)}
+                        {teacherAssignedRooms[0].examShift ? ` · ${teacherAssignedRooms[0].examShift}` : ''}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-700 font-semibold">
+                      आपके रूम में कुल{' '}
+                      <span className="font-black text-[#0c2340]">
+                        {teacherAssignedRooms.reduce((s, r) => s + r.totalStudents, 0)} बच्चे
+                      </span>{' '}
+                      हैं (
+                      {teacherAssignedRooms.reduce((s, r) => s + r.sentCount, 0)} रूम में भेजे गए ·{' '}
+                      {teacherAssignedRooms.reduce((s, r) => s + r.pendingCount, 0)} भेजना बाकी
+                      {teacherAssignedRooms.reduce((s, r) => s + r.absentCount, 0) > 0
+                        ? ` · ${teacherAssignedRooms.reduce((s, r) => s + r.absentCount, 0)} अनुपस्थित`
+                        : ''}
+                      )।
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleSelectTeacherTab('seating_plan')}
+                  className="px-4 py-2.5 rounded-xl bg-[#0c2340] hover:bg-blue-950 text-amber-300 text-xs font-black inline-flex items-center justify-center gap-2 cursor-pointer shadow-sm shrink-0 active:scale-95"
+                >
+                  <i className="fa-solid fa-arrow-right-to-bracket"></i>
+                  <span>
+                    {teacherPortalTab === 'seating_plan'
+                      ? 'मेरा रूम नीचे खुला है ↓'
+                      : '🚪 मेरा रूम खोलें व बच्चों को रूम में भेजें'}
+                  </span>
+                </button>
+              </div>
+            )}
+
             {/* Teacher Sub-Navigation Tabs */}
             <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-2">
               <button
@@ -11864,12 +11962,30 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
                   teacherPortalTab === 'seating_plan'
                     ? 'bg-[#0c2340] text-amber-300 shadow-sm ring-2 ring-amber-400/50'
+                    : teacherAssignedRooms.length > 0
+                    ? 'bg-emerald-50 text-emerald-950 hover:bg-emerald-100 border-2 border-emerald-400'
                     : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
                 }`}
               >
                 <i className="fa-solid fa-chair text-amber-400"></i>
-                <span>{currentLang === 'en' ? 'Exam Seating Plan' : 'परीक्षा सीटिंग प्लान'}</span>
-                <span className="px-1.5 py-0.5 text-[10px] bg-emerald-400/20 text-emerald-700 font-black rounded-md">Anti-Cheat</span>
+                <span>
+                  {currentLang === 'en'
+                    ? teacherAssignedRooms.length > 0
+                      ? 'My Exam Room & Seating'
+                      : 'Exam Seating Plan'
+                    : teacherAssignedRooms.length > 0
+                    ? 'मेरा एग्जाम रूम व सीटिंग'
+                    : 'परीक्षा सीटिंग प्लान'}
+                </span>
+                {teacherAssignedRooms.length > 0 ? (
+                  <span className="px-1.5 py-0.5 text-[10px] bg-emerald-600 text-white font-black rounded-md tabular-nums">
+                    {teacherAssignedRooms.map((r) => `${r.roomNumber} (${r.totalStudents})`).join(', ')}
+                  </span>
+                ) : (
+                  <span className="px-1.5 py-0.5 text-[10px] bg-emerald-400/20 text-emerald-700 font-black rounded-md">
+                    Anti-Cheat
+                  </span>
+                )}
               </button>
 
               {/* Universal Student Finder & QR Scanner button */}
@@ -13306,6 +13422,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   userRole="teacher"
                   currentUserName={teacherUser.Name}
                   currentUserId={teacherUser.User_ID}
+                  users={usersList}
+                  initialSubTab={teacherAssignedRooms.length > 0 ? 'my_room' : undefined}
                 />
               </Suspense>
             )}
@@ -15991,6 +16109,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   getClassName={getClassName}
                   getStudentPhoto={getStudentPhoto}
                   managerName={managerUser?.Name || 'प्रबंधक / प्रधानाचार्य'}
+                  users={usersList}
                 />
               </Suspense>
             )}

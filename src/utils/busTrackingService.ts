@@ -757,7 +757,7 @@ function doGet(e) {
   }
 
   // 10. GET FALLBACK: Delegate write actions when called via GET query parameters
-  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "saveTeacherProfile" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveReportCardDraft" || action === "saveReportCardAccess" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig" || action === "saveExamDatesheet" || action === "saveExamSeatingPlan" || action === "saveExamSeatingDraft" || action === "deleteExamSeatingHistory" || action === "saveFeeWaiver" || action === "saveFeeWaiversBatch" || action === "saveParentReview" || action === "updateParentReviewStatus" || action === "deleteParentReview") {
+  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "saveTeacherProfile" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveReportCardDraft" || action === "saveReportCardAccess" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig" || action === "saveExamDatesheet" || action === "saveExamSeatingPlan" || action === "saveExamSeatingDraft" || action === "saveExamSeatingRoomDispatch" || action === "deleteExamSeatingHistory" || action === "saveFeeWaiver" || action === "saveFeeWaiversBatch" || action === "saveParentReview" || action === "updateParentReviewStatus" || action === "deleteParentReview") {
     return doPost(e);
   }
 
@@ -1482,6 +1482,9 @@ function doPost(e) {
     }
     if (action === "saveExamSeatingDraft") {
       return handleSaveExamSeatingDraft(ss, data);
+    }
+    if (action === "saveExamSeatingRoomDispatch") {
+      return handleSaveExamSeatingRoomDispatch(ss, data);
     }
     if (action === "deleteExamSeatingHistory") {
       return handleDeleteExamSeatingHistory(ss, data);
@@ -4094,6 +4097,7 @@ function saveAppWorkflowJson_(ss, key, obj) {
 function handleGetExamSeatingPlan(ss) {
   var draftConfig = getAppWorkflowJson_(ss, "EVS_EXAM_SEATING_DRAFT");
   var approvedConfig = getAppWorkflowJson_(ss, "EVS_EXAM_SEATING_APPROVED");
+  var roomDispatches = getAppWorkflowJson_(ss, "EVS_EXAM_SEATING_ROOM_DISPATCHES") || {};
 
   var sheet = findExistingSheet_(ss, ["Exam_Seating_Plan", "Exam Seating Plan", "Seating_Plan", "Seating Plan"]);
   if (!sheet || sheet.getLastRow() < 2) {
@@ -4102,7 +4106,8 @@ function handleGetExamSeatingPlan(ss) {
       rows: [],
       roomMeta: {},
       draftConfig: draftConfig,
-      approvedConfig: approvedConfig
+      approvedConfig: approvedConfig,
+      roomDispatches: roomDispatches
     })).setMimeType(ContentService.MimeType.JSON);
   }
   var vals = sheet.getDataRange().getValues();
@@ -4114,8 +4119,9 @@ function handleGetExamSeatingPlan(ss) {
     var slotKey = String(r[0] || "").trim();
     var roomNo = String(r[1] || "").trim();
     var invig = String(r[9] || "").trim();
+    var invigId = String(r[20] || "").trim();
     if (slotKey && !roomMeta[slotKey]) {
-      roomMeta[slotKey] = { roomNumber: roomNo, invigilator: invig };
+      roomMeta[slotKey] = { roomNumber: roomNo, invigilator: invig, invigilatorId: invigId };
     }
     out.push({
       slotKey: slotKey,
@@ -4128,11 +4134,17 @@ function handleGetExamSeatingPlan(ss) {
       studentName: String(r[7] || "").trim(),
       className: String(r[8] || "").trim(),
       invigilator: invig,
+      invigilatorId: invigId,
       examType: String(r[10] || "").trim(),
       session: String(r[11] || "").trim(),
-      updatedAt: String(r[12] || "").trim(),
+      updatedAt: formatSheetCellTimestamp_(r[12]),
       confirmedBy: String(r[13] || "").trim(),
-      status: String(r[14] || "").trim()
+      status: String(r[14] || "").trim(),
+      examDate: formatSheetCellDateKey_(r[15]),
+      examShift: String(r[16] || "").trim(),
+      roomCheckInStatus: String(r[17] || "Pending").trim() || "Pending",
+      checkedInBy: String(r[18] || "").trim(),
+      checkedInAt: formatSheetCellTimestamp_(r[19])
     });
   }
   return ContentService.createTextOutput(JSON.stringify({
@@ -4140,7 +4152,8 @@ function handleGetExamSeatingPlan(ss) {
     rows: out,
     roomMeta: roomMeta,
     draftConfig: draftConfig,
-    approvedConfig: approvedConfig
+    approvedConfig: approvedConfig,
+    roomDispatches: roomDispatches
   })).setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -4176,7 +4189,7 @@ function handleSaveExamSeatingPlan(ss, data) {
   if (!sheet) {
     return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "Exam_Seating_Plan tab not created" })).setMimeType(ContentService.MimeType.JSON);
   }
-  var headers = ["Slot_Key", "Room_No", "Wing", "Bench_No", "Seat_Position", "Student_ID", "Roll_Number", "Student_Name", "Class", "Invigilator", "Exam_Type", "Session", "Updated_At", "Confirmed_By", "Status", "Exam_Date", "Exam_Shift"];
+  var headers = ["Slot_Key", "Room_No", "Wing", "Bench_No", "Seat_Position", "Student_ID", "Roll_Number", "Student_Name", "Class", "Invigilator", "Exam_Type", "Session", "Updated_At", "Confirmed_By", "Status", "Exam_Date", "Exam_Shift", "Room_CheckIn_Status", "Checked_In_By", "Checked_In_At", "Invigilator_ID"];
   var hdrRange = sheet.getRange(1, 1, 1, headers.length);
   hdrRange.setValues([headers]);
   try {
@@ -4232,7 +4245,11 @@ function handleSaveExamSeatingPlan(ss, data) {
       String(item.confirmedBy || ""),
       String(item.status || "Approved"),
       rowExamDate,
-      rowExamShift
+      rowExamShift,
+      String(item.roomCheckInStatus || "Pending"),
+      String(item.checkedInBy || ""),
+      String(item.checkedInAt || ""),
+      String(item.invigilatorId || "")
     ]);
 
     historyNewValues.push([
@@ -4253,7 +4270,11 @@ function handleSaveExamSeatingPlan(ss, data) {
       String(item.session || ""),
       nowIst,
       String(item.confirmedBy || ""),
-      String(item.status || "Approved")
+      String(item.status || "Approved"),
+      String(item.roomCheckInStatus || "Pending"),
+      String(item.checkedInBy || ""),
+      String(item.checkedInAt || ""),
+      String(item.invigilatorId || "")
     ]);
   }
   if (outValues.length > 0) {
@@ -4264,7 +4285,7 @@ function handleSaveExamSeatingPlan(ss, data) {
   try {
     var histSheet = findExistingSheet_(ss, ["Exam_Seating_History", "Exam Seating History", "Seating_History"]);
     if (histSheet && historyNewValues.length > 0) {
-      var histHeaders = ["Archive_Key", "Exam_Date", "Exam_Shift", "Slot_Key", "Room_No", "Wing", "Bench_No", "Seat_Position", "Student_ID", "Roll_Number", "Student_Name", "Class", "Invigilator", "Exam_Type", "Session", "Saved_At", "Confirmed_By", "Status"];
+      var histHeaders = ["Archive_Key", "Exam_Date", "Exam_Shift", "Slot_Key", "Room_No", "Wing", "Bench_No", "Seat_Position", "Student_ID", "Roll_Number", "Student_Name", "Class", "Invigilator", "Exam_Type", "Session", "Saved_At", "Confirmed_By", "Status", "Room_CheckIn_Status", "Checked_In_By", "Checked_In_At", "Invigilator_ID"];
       var hHdr = histSheet.getRange(1, 1, 1, histHeaders.length);
       hHdr.setValues([histHeaders]);
       try {
@@ -4275,7 +4296,7 @@ function handleSaveExamSeatingPlan(ss, data) {
       var keptRows = [];
       var hLastRow = histSheet.getLastRow();
       if (hLastRow > 1) {
-        var existingHist = histSheet.getRange(2, 1, hLastRow - 1, histHeaders.length).getValues();
+        var existingHist = histSheet.getRange(2, 1, hLastRow - 1, Math.max(histSheet.getLastColumn(), histHeaders.length)).getValues();
         for (var h = 0; h < existingHist.length; h++) {
           var er = existingHist[h];
           var eKey = String(er[0] || "").trim();
@@ -4299,7 +4320,11 @@ function handleSaveExamSeatingPlan(ss, data) {
             String(er[14] || "").trim(),
             formatSheetCellTimestamp_(er[15]),
             String(er[16] || "").trim(),
-            String(er[17] || "").trim()
+            String(er[17] || "").trim(),
+            String(er[18] || "Pending").trim() || "Pending",
+            String(er[19] || "").trim(),
+            formatSheetCellTimestamp_(er[20]),
+            String(er[21] || "").trim()
           ]);
         }
         histSheet.getRange(2, 1, hLastRow - 1, Math.max(histSheet.getLastColumn(), histHeaders.length)).clearContent();
@@ -4321,6 +4346,105 @@ function handleSaveExamSeatingPlan(ss, data) {
     status: "success",
     savedCount: outValues.length,
     message: "Exam_Seating_Plan & Date-Wise Exam_Seating_History saved permanently to Google Sheet!"
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveExamSeatingRoomDispatch(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var dispatchObj = data.dispatch ? (typeof data.dispatch === "string" ? JSON.parse(data.dispatch) : data.dispatch) : null;
+  var roomRows = data.rows ? (typeof data.rows === "string" ? JSON.parse(data.rows) : data.rows) : [];
+  if (!dispatchObj || !dispatchObj.archiveKey || !dispatchObj.slotKey) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "Missing dispatch payload" })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var allDispatches = getAppWorkflowJson_(ss, "EVS_EXAM_SEATING_ROOM_DISPATCHES") || {};
+  allDispatches[String(dispatchObj.archiveKey) + "::" + String(dispatchObj.slotKey)] = dispatchObj;
+  saveAppWorkflowJson_(ss, "EVS_EXAM_SEATING_ROOM_DISPATCHES", allDispatches);
+
+  if (Array.isArray(roomRows) && roomRows.length > 0) {
+    var histSheet = findExistingSheet_(ss, ["Exam_Seating_History", "Exam Seating History", "Seating_History"]);
+    if (histSheet) {
+      var histHeaders = ["Archive_Key", "Exam_Date", "Exam_Shift", "Slot_Key", "Room_No", "Wing", "Bench_No", "Seat_Position", "Student_ID", "Roll_Number", "Student_Name", "Class", "Invigilator", "Exam_Type", "Session", "Saved_At", "Confirmed_By", "Status", "Room_CheckIn_Status", "Checked_In_By", "Checked_In_At", "Invigilator_ID"];
+      var hHdr = histSheet.getRange(1, 1, 1, histHeaders.length);
+      hHdr.setValues([histHeaders]);
+      var targetArchive = String(dispatchObj.archiveKey).trim();
+      var targetSlot = String(dispatchObj.slotKey).trim();
+      var targetRoom = String(dispatchObj.roomNumber || targetSlot).trim();
+      var kept = [];
+      var hLast = histSheet.getLastRow();
+      if (hLast > 1) {
+        var existing = histSheet.getRange(2, 1, hLast - 1, Math.max(histSheet.getLastColumn(), histHeaders.length)).getValues();
+        for (var i = 0; i < existing.length; i++) {
+          var er = existing[i];
+          var eKey = String(er[0] || "").trim();
+          if (!eKey && !er[4] && !er[10]) continue;
+          var eSlot = String(er[3] || "").trim();
+          var eRoom = String(er[4] || "").trim();
+          if (eKey === targetArchive && (eSlot === targetSlot || eRoom === targetRoom)) continue;
+          kept.push([
+            eKey,
+            formatSheetCellDateKey_(er[1]),
+            String(er[2] || "").trim(),
+            eSlot,
+            eRoom,
+            String(er[5] || "").trim(),
+            Number(er[6]) || 0,
+            String(er[7] || "").trim(),
+            String(er[8] || "").trim(),
+            String(er[9] || "").trim(),
+            String(er[10] || "").trim(),
+            String(er[11] || "").trim(),
+            String(er[12] || "").trim(),
+            String(er[13] || "").trim(),
+            String(er[14] || "").trim(),
+            formatSheetCellTimestamp_(er[15]),
+            String(er[16] || "").trim(),
+            String(er[17] || "").trim(),
+            String(er[18] || "Pending").trim() || "Pending",
+            String(er[19] || "").trim(),
+            formatSheetCellTimestamp_(er[20]),
+            String(er[21] || "").trim()
+          ]);
+        }
+        histSheet.getRange(2, 1, hLast - 1, Math.max(histSheet.getLastColumn(), histHeaders.length)).clearContent();
+      }
+      var newHistRows = [];
+      for (var j = 0; j < roomRows.length; j++) {
+        var it = roomRows[j] || {};
+        newHistRows.push([
+          targetArchive,
+          String(it.examDate || dispatchObj.examDate || "").slice(0, 10),
+          String(it.examShift || dispatchObj.examShift || ""),
+          String(it.slotKey || targetSlot),
+          String(it.roomNo || targetRoom),
+          String(it.wing || ""),
+          Number(it.benchNo) || 0,
+          String(it.seatPosition || ""),
+          String(it.studentId || ""),
+          String(it.rollNumber || ""),
+          String(it.studentName || ""),
+          String(it.className || ""),
+          String(it.invigilator || dispatchObj.invigilator || ""),
+          String(it.examType || ""),
+          String(it.session || ""),
+          String(it.updatedAt || dispatchObj.dispatchedAt || ""),
+          String(it.confirmedBy || dispatchObj.dispatchedBy || ""),
+          String(it.status || "Room Dispatched"),
+          String(it.roomCheckInStatus || "Pending"),
+          String(it.checkedInBy || ""),
+          String(it.checkedInAt || ""),
+          String(it.invigilatorId || dispatchObj.invigilatorId || "")
+        ]);
+      }
+      var finalHist = kept.concat(newHistRows);
+      if (finalHist.length > 0) {
+        histSheet.getRange(2, 1, finalHist.length, histHeaders.length).setValues(finalHist);
+      }
+    }
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Room duty & student check-in saved!"
   })).setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -4355,7 +4479,11 @@ function handleGetExamSeatingHistory(ss) {
       session: String(r[14] || "").trim(),
       updatedAt: formatSheetCellTimestamp_(r[15]),
       confirmedBy: String(r[16] || "").trim(),
-      status: String(r[17] || "Approved").trim()
+      status: String(r[17] || "Approved").trim(),
+      roomCheckInStatus: String(r[18] || "Pending").trim() || "Pending",
+      checkedInBy: String(r[19] || "").trim(),
+      checkedInAt: formatSheetCellTimestamp_(r[20]),
+      invigilatorId: String(r[21] || "").trim()
     });
   }
   return ContentService.createTextOutput(JSON.stringify({

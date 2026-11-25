@@ -7,12 +7,14 @@ import { directGetFromSheet, dualSyncWriteToSheet } from './sheetDirectSync';
 export interface RoomCustomMeta {
   roomNumber: string;
   invigilator: string;
+  invigilatorId?: string;
 }
 
 export interface SeatingRoomConfig {
   slotKey: string;
   roomNumber: string;
   invigilator: string;
+  invigilatorId?: string;
   /** Canonical classCode -> count of students assigned to this room */
   classCounts: Record<string, number>;
 }
@@ -66,6 +68,7 @@ export interface ExamRoomPlan {
   defaultRoomName: string;
   roomNumber: string;
   invigilator: string;
+  invigilatorId?: string;
   benches: SeatingBench[];
   totalStudents: number;
   adjacentSameClassPairs: number;
@@ -196,6 +199,7 @@ export function loadLocalSeatingWorkflow(): SeatingPlanConfigPayload | null {
           slotKey: String(r?.slotKey || `room_${idx + 1}`),
           roomNumber: String(r?.roomNumber || `Room ${idx + 1}`),
           invigilator: String(r?.invigilator || ''),
+          invigilatorId: r?.invigilatorId ? String(r.invigilatorId) : undefined,
           classCounts: r?.classCounts && typeof r.classCounts === 'object' ? { ...r.classCounts } : {},
         })),
         seatsPerBench: [2, 3, 4].includes(Number(parsed.seatsPerBench)) ? Number(parsed.seatsPerBench) : 3,
@@ -290,6 +294,7 @@ export function buildAutoBalancedRoomConfigs(opts: {
           slotKey: r.slotKey || `room_${idx + 1}`,
           roomNumber: String(r.roomNumber || `Room ${idx + 1}`),
           invigilator: String(r.invigilator || ''),
+          invigilatorId: r.invigilatorId,
           classCounts: {},
         }))
       : [
@@ -818,6 +823,7 @@ export function generateCustomSeatingPlan(opts: {
       defaultRoomName: `Room ${rIdx + 1}`,
       roomNumber: String(cfg.roomNumber || `Room ${rIdx + 1}`).trim(),
       invigilator: String(cfg.invigilator || '').trim(),
+      invigilatorId: cfg.invigilatorId ? String(cfg.invigilatorId).trim() : undefined,
       benches,
       totalStudents: totalInRoom,
       adjacentSameClassPairs: adjacentPairs,
@@ -1203,6 +1209,8 @@ export function generateExamSeatingPlanPdf(opts: {
   return filename;
 }
 
+export type RoomStudentCheckInStatus = 'Pending' | 'Sent to Room' | 'Absent';
+
 export interface SheetSeatingRow {
   archiveKey?: string;
   examDate?: string;
@@ -1217,19 +1225,30 @@ export interface SheetSeatingRow {
   studentName: string;
   className: string;
   invigilator: string;
+  invigilatorId?: string;
   examType: string;
   session: string;
   updatedAt?: string;
   confirmedBy?: string;
   status?: string;
+  roomCheckInStatus?: RoomStudentCheckInStatus;
+  checkedInAt?: string;
+  checkedInBy?: string;
 }
 
 export interface ExamSeatingHistoryRoomSummary {
   slotKey: string;
   roomNumber: string;
   invigilator: string;
+  invigilatorId?: string;
   totalStudents: number;
   benchesCount: number;
+  sentCount?: number;
+  absentCount?: number;
+  pendingCount?: number;
+  dispatchedAt?: string;
+  dispatchedBy?: string;
+  roomNote?: string;
   classBreakdown: Array<{ classLabel: string; count: number }>;
 }
 
@@ -1245,6 +1264,34 @@ export interface ExamSeatingHistoryEntry {
   totalBenches: number;
   roomsSummary: ExamSeatingHistoryRoomSummary[];
   rows: SheetSeatingRow[];
+}
+
+export interface ExamRoomDispatchRecord {
+  archiveKey: string;
+  slotKey: string;
+  roomNumber: string;
+  invigilator: string;
+  invigilatorId?: string;
+  examDate: string;
+  examShift: string;
+  totalStudents: number;
+  sentCount: number;
+  absentCount: number;
+  pendingCount: number;
+  dispatchedBy: string;
+  dispatchedById?: string;
+  dispatchedAt: string;
+  note?: string;
+  studentStatuses: Record<string, { status: RoomStudentCheckInStatus; checkedInAt?: string; checkedInBy?: string }>;
+}
+
+export function normalizeRoomCheckInStatus(raw?: string | null): RoomStudentCheckInStatus {
+  const s = String(raw || '').trim().toLowerCase();
+  if (s === 'sent to room' || s === 'sent' || s === 'seated' || s === 'present' || s === 'dispatched') {
+    return 'Sent to Room';
+  }
+  if (s === 'absent') return 'Absent';
+  return 'Pending';
 }
 
 export function flattenSeatingPlanForSheet(
@@ -1275,10 +1322,12 @@ export function flattenSeatingPlanForSheet(
           studentName: String(seat.student.Student_Name || ''),
           className: seat.classLabel,
           invigilator: room.invigilator || '',
+          invigilatorId: room.invigilatorId || '',
           examType: config.examType || 'Half-Yearly',
           session: config.session || '2026-27',
           confirmedBy: confirmedBy || '',
           status: 'Approved',
+          roomCheckInStatus: 'Pending',
         });
       }
     }
@@ -1300,6 +1349,7 @@ export function buildHistoryEntriesFromRows(rows: SheetSeatingRow[]): ExamSeatin
       archiveKey,
       examDate,
       examShift,
+      roomCheckInStatus: normalizeRoomCheckInStatus(row.roomCheckInStatus),
     };
     const arr = grouped.get(archiveKey) || [];
     arr.push(normalizedRow);
@@ -1315,7 +1365,13 @@ export function buildHistoryEntriesFromRows(rows: SheetSeatingRow[]): ExamSeatin
         slotKey: string;
         roomNumber: string;
         invigilator: string;
+        invigilatorId: string;
         totalStudents: number;
+        sentCount: number;
+        absentCount: number;
+        pendingCount: number;
+        dispatchedAt: string;
+        dispatchedBy: string;
         benchesSet: Set<number>;
         classCounts: Map<string, number>;
       }
@@ -1329,14 +1385,29 @@ export function buildHistoryEntriesFromRows(rows: SheetSeatingRow[]): ExamSeatin
           slotKey: r.slotKey || rKey,
           roomNumber: r.roomNo || rKey,
           invigilator: r.invigilator || '',
+          invigilatorId: r.invigilatorId || '',
           totalStudents: 0,
+          sentCount: 0,
+          absentCount: 0,
+          pendingCount: 0,
+          dispatchedAt: '',
+          dispatchedBy: '',
           benchesSet: new Set<number>(),
           classCounts: new Map<string, number>(),
         };
         roomMap.set(rKey, rm);
       }
       if (!rm.invigilator && r.invigilator) rm.invigilator = r.invigilator;
+      if (!rm.invigilatorId && r.invigilatorId) rm.invigilatorId = r.invigilatorId;
       rm.totalStudents++;
+      const checkStatus = normalizeRoomCheckInStatus(r.roomCheckInStatus);
+      if (checkStatus === 'Sent to Room') rm.sentCount++;
+      else if (checkStatus === 'Absent') rm.absentCount++;
+      else rm.pendingCount++;
+      if (r.checkedInAt && (!rm.dispatchedAt || r.checkedInAt > rm.dispatchedAt)) {
+        rm.dispatchedAt = r.checkedInAt;
+      }
+      if (r.checkedInBy && !rm.dispatchedBy) rm.dispatchedBy = r.checkedInBy;
       if (r.benchNo) rm.benchesSet.add(Number(r.benchNo));
       const cls = r.className || 'Class';
       rm.classCounts.set(cls, (rm.classCounts.get(cls) || 0) + 1);
@@ -1346,8 +1417,14 @@ export function buildHistoryEntriesFromRows(rows: SheetSeatingRow[]): ExamSeatin
       slotKey: rm.slotKey,
       roomNumber: rm.roomNumber,
       invigilator: rm.invigilator,
+      invigilatorId: rm.invigilatorId || undefined,
       totalStudents: rm.totalStudents,
       benchesCount: rm.benchesSet.size || 1,
+      sentCount: rm.sentCount,
+      absentCount: rm.absentCount,
+      pendingCount: rm.pendingCount,
+      dispatchedAt: rm.dispatchedAt || undefined,
+      dispatchedBy: rm.dispatchedBy || undefined,
       classBreakdown: Array.from(rm.classCounts.entries()).map(([classLabel, count]) => ({
         classLabel,
         count,
@@ -1546,6 +1623,7 @@ export interface ExamSeatingSnapshot {
   roomMeta: Record<string, RoomCustomMeta>;
   draftConfig: SeatingPlanConfigPayload | null;
   approvedConfig: SeatingPlanConfigPayload | null;
+  roomDispatches?: Record<string, ExamRoomDispatchRecord>;
   updatedAt?: string;
 }
 
@@ -1562,16 +1640,20 @@ export async function fetchExamSeatingPlanSnapshot(forceRefresh = false): Promis
           roomMeta[k] = {
             roomNumber: String(v.roomNumber || k),
             invigilator: String(v.invigilator || ''),
+            invigilatorId: v.invigilatorId ? String(v.invigilatorId) : undefined,
           };
         }
       }
       saveRoomMeta(roomMeta);
     }
+    const roomDispatches: Record<string, ExamRoomDispatchRecord> =
+      json?.roomDispatches && typeof json.roomDispatches === 'object' ? json.roomDispatches : {};
     return {
       rows: Array.isArray(json?.rows) ? json.rows : [],
       roomMeta,
       draftConfig,
       approvedConfig,
+      roomDispatches,
       updatedAt: json?.updatedAt,
     };
   };
@@ -1761,3 +1843,508 @@ export async function saveExamSeatingPlanToSheet(
     sheetError: syncRes.sheetError,
   };
 }
+
+export interface TeacherAssignedRoomStudent {
+  studentId: string;
+  rollNumber: string;
+  studentName: string;
+  classCode: string;
+  classLabel: string;
+  benchNumber: number;
+  seatPosition: SeatingBenchSeat['seatPosition'];
+  roomCheckInStatus: RoomStudentCheckInStatus;
+  checkedInAt?: string;
+  checkedInBy?: string;
+}
+
+export interface TeacherAssignedRoomView {
+  archiveKey: string;
+  examDate: string;
+  examShift: string;
+  examType: string;
+  session: string;
+  slotKey: string;
+  roomNumber: string;
+  wing: string;
+  invigilator: string;
+  invigilatorId?: string;
+  benches: SeatingBench[];
+  totalStudents: number;
+  classBreakdown: Array<{ classCode: string; classLabel: string; count: number }>;
+  studentsList: TeacherAssignedRoomStudent[];
+  sentCount: number;
+  absentCount: number;
+  pendingCount: number;
+  dispatchedAt?: string;
+  dispatchedBy?: string;
+  note?: string;
+  sourceStatus: 'approved' | 'draft' | 'history';
+  plan: FullExamSeatingPlan;
+  seatsPerBench: number;
+}
+
+const cleanTeacherNameToken = (name?: string | null): string =>
+  String(name || '')
+    .toLowerCase()
+    .replace(/\b(mr|mrs|ms|miss|shri|smt|dr|prof|sir|mam|ma'am|maam|ji)\b\.?/gi, ' ')
+    .replace(/[^a-z0-9\u0900-\u097f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+export function doesRoomBelongToTeacher(opts: {
+  roomInvigilator?: string | null;
+  roomInvigilatorId?: string | null;
+  teacherId?: string | null;
+  teacherName?: string | null;
+  teacherUsername?: string | null;
+}): boolean {
+  const { roomInvigilator, roomInvigilatorId, teacherId, teacherName, teacherUsername } = opts;
+  const rId = String(roomInvigilatorId || '').trim().toLowerCase();
+  const tId = String(teacherId || '').trim().toLowerCase();
+  if (rId && tId && rId === tId) return true;
+
+  const rawInvig = String(roomInvigilator || '').trim().toLowerCase();
+  if (!rawInvig) return false;
+  if (tId && rawInvig === tId) return true;
+
+  const rawTName = String(teacherName || '').trim().toLowerCase();
+  const rawTUser = String(teacherUsername || '').trim().toLowerCase();
+  if (rawTName && rawInvig === rawTName) return true;
+  if (rawTUser && rawInvig === rawTUser) return true;
+
+  const cleanInvig = cleanTeacherNameToken(roomInvigilator);
+  const cleanTName = cleanTeacherNameToken(teacherName);
+  if (!cleanInvig || !cleanTName) return false;
+  if (cleanInvig === cleanTName) return true;
+
+  // Allow matching when one contains the full first+last or single name token (>= 3 chars)
+  const invigWords = cleanInvig.split(' ').filter((w) => w.length >= 3);
+  const teacherWords = cleanTName.split(' ').filter((w) => w.length >= 3);
+  if (invigWords.length === 1 && teacherWords.length > 0 && invigWords[0] === teacherWords[0]) {
+    return true;
+  }
+  if (teacherWords.length === 1 && invigWords.length > 0 && teacherWords[0] === invigWords[0]) {
+    return true;
+  }
+  return false;
+}
+
+export function findTeacherAssignedRooms(opts: {
+  snapshot: ExamSeatingSnapshot | null;
+  historyEntries: ExamSeatingHistoryEntry[];
+  students: Student[];
+  getClassName: (cls?: string | null) => string;
+  config: HallPassConfig;
+  teacherId?: string;
+  teacherName?: string;
+  teacherUsername?: string;
+}): TeacherAssignedRoomView[] {
+  const {
+    snapshot,
+    historyEntries,
+    students,
+    getClassName,
+    config,
+    teacherId,
+    teacherName,
+    teacherUsername,
+  } = opts;
+
+  if (!teacherId && !teacherName && !teacherUsername) return [];
+
+  const todayKey = getTodayIstDateKey();
+  const activeConfig =
+    snapshot?.approvedConfig && snapshot.approvedConfig.rooms?.length
+      ? snapshot.approvedConfig
+      : snapshot?.draftConfig && snapshot.draftConfig.rooms?.length
+      ? snapshot.draftConfig
+      : null;
+
+  const dispatchesMap = snapshot?.roomDispatches || {};
+  const results: TeacherAssignedRoomView[] = [];
+  const seenRoomKey = new Set<string>();
+
+  const buildStudentDispatchMapForRoom = (archiveKey: string, slotKey: string, roomNo: string) => {
+    const map = new Map<
+      string,
+      { status: RoomStudentCheckInStatus; checkedInAt?: string; checkedInBy?: string }
+    >();
+    let roomDispatchedAt = '';
+    let roomDispatchedBy = '';
+    let roomNote = '';
+
+    const exactHist = historyEntries.find((h) => h.archiveKey === archiveKey);
+    const rowSources = [
+      ...(exactHist?.rows || []),
+      ...(snapshot?.rows || []).filter((r) => {
+        const rKey =
+          String(r.archiveKey || '').trim() ||
+          buildSeatingArchiveKey(r.examDate || todayKey, r.examShift || '');
+        return rKey === archiveKey || !r.archiveKey;
+      }),
+    ];
+
+    for (const r of rowSources) {
+      if (r.slotKey !== slotKey && r.roomNo !== roomNo) continue;
+      const st = normalizeRoomCheckInStatus(r.roomCheckInStatus);
+      const sId = String(r.studentId || '').trim();
+      if (!sId) continue;
+      const existing = map.get(sId);
+      if (!existing || st !== 'Pending') {
+        map.set(sId, {
+          status: st,
+          checkedInAt: r.checkedInAt,
+          checkedInBy: r.checkedInBy,
+        });
+      }
+      if (r.checkedInAt && (!roomDispatchedAt || r.checkedInAt > roomDispatchedAt)) {
+        roomDispatchedAt = r.checkedInAt;
+      }
+      if (r.checkedInBy && !roomDispatchedBy) roomDispatchedBy = r.checkedInBy;
+    }
+
+    const dispatchKey = `${archiveKey}::${slotKey}`;
+    const disp = dispatchesMap[dispatchKey] || dispatchesMap[`${archiveKey}::${roomNo}`];
+    if (disp) {
+      if (disp.dispatchedAt) roomDispatchedAt = disp.dispatchedAt;
+      if (disp.dispatchedBy) roomDispatchedBy = disp.dispatchedBy;
+      if (disp.note) roomNote = disp.note;
+      if (disp.studentStatuses) {
+        for (const [sId, stInfo] of Object.entries(disp.studentStatuses)) {
+          map.set(sId, {
+            status: normalizeRoomCheckInStatus(stInfo.status),
+            checkedInAt: stInfo.checkedInAt || disp.dispatchedAt,
+            checkedInBy: stInfo.checkedInBy || disp.dispatchedBy,
+          });
+        }
+      }
+    }
+
+    return { map, roomDispatchedAt, roomDispatchedBy, roomNote };
+  };
+
+  if (activeConfig) {
+    const examDate = normalizeExamDateKey(activeConfig.examDate || todayKey);
+    const examShift = String(activeConfig.examShift || '').trim();
+    const archiveKey = buildSeatingArchiveKey(examDate, examShift);
+
+    const matchingRoomsCfg = activeConfig.rooms.filter((r) =>
+      doesRoomBelongToTeacher({
+        roomInvigilator: r.invigilator,
+        roomInvigilatorId: r.invigilatorId,
+        teacherId,
+        teacherName,
+        teacherUsername,
+      })
+    );
+
+    if (matchingRoomsCfg.length > 0) {
+      const fullPlan = generateCustomSeatingPlan({
+        students,
+        getClassName,
+        roomConfigs: activeConfig.rooms,
+        seatsPerBench: activeConfig.seatsPerBench || 3,
+        mode: activeConfig.mode || 'anti_cheating_mixed',
+      });
+
+      for (const roomPlan of fullPlan.rooms) {
+        const matches = doesRoomBelongToTeacher({
+          roomInvigilator: roomPlan.invigilator,
+          roomInvigilatorId: roomPlan.invigilatorId,
+          teacherId,
+          teacherName,
+          teacherUsername,
+        });
+        if (!matches || roomPlan.totalStudents === 0) continue;
+
+        const uniq = `${archiveKey}::${roomPlan.slotKey}`;
+        if (seenRoomKey.has(uniq)) continue;
+        seenRoomKey.add(uniq);
+
+        const { map, roomDispatchedAt, roomDispatchedBy, roomNote } = buildStudentDispatchMapForRoom(
+          archiveKey,
+          roomPlan.slotKey,
+          roomPlan.roomNumber
+        );
+
+        const studentsList: TeacherAssignedRoomStudent[] = [];
+        let sentCount = 0;
+        let absentCount = 0;
+        let pendingCount = 0;
+
+        for (const bench of roomPlan.benches) {
+          for (const seat of bench.seats) {
+            const sId = String(seat.student.Student_ID || '').trim();
+            const saved = map.get(sId);
+            const checkStatus: RoomStudentCheckInStatus = saved ? saved.status : 'Pending';
+            if (checkStatus === 'Sent to Room') sentCount++;
+            else if (checkStatus === 'Absent') absentCount++;
+            else pendingCount++;
+            studentsList.push({
+              studentId: sId,
+              rollNumber: String(seat.student.Roll_Number || ''),
+              studentName: String(seat.student.Student_Name || ''),
+              classCode: seat.classCode,
+              classLabel: seat.classLabel,
+              benchNumber: bench.benchNumber,
+              seatPosition: seat.seatPosition,
+              roomCheckInStatus: checkStatus,
+              checkedInAt: saved?.checkedInAt,
+              checkedInBy: saved?.checkedInBy,
+            });
+          }
+        }
+
+        results.push({
+          archiveKey,
+          examDate,
+          examShift,
+          examType: String(config.examType || 'Half-Yearly'),
+          session: String(config.session || '2026-27'),
+          slotKey: roomPlan.slotKey,
+          roomNumber: roomPlan.roomNumber,
+          wing: roomPlan.groupLabelHi,
+          invigilator: roomPlan.invigilator,
+          invigilatorId: roomPlan.invigilatorId,
+          benches: roomPlan.benches,
+          totalStudents: roomPlan.totalStudents,
+          classBreakdown: roomPlan.classBreakdown,
+          studentsList,
+          sentCount,
+          absentCount,
+          pendingCount,
+          dispatchedAt: roomDispatchedAt || undefined,
+          dispatchedBy: roomDispatchedBy || undefined,
+          note: roomNote || undefined,
+          sourceStatus: activeConfig.status === 'approved' ? 'approved' : 'draft',
+          plan: {
+            ...fullPlan,
+            rooms: [roomPlan],
+            allocatedStudentsCount: roomPlan.totalStudents,
+            totalBenches: roomPlan.benches.length,
+          },
+          seatsPerBench: activeConfig.seatsPerBench || 3,
+        });
+      }
+    }
+  }
+
+  // Fallback / additional rooms from Today's saved Exam_Seating_History if not already present
+  for (const entry of historyEntries) {
+    if (entry.examDate !== todayKey && results.length > 0) continue;
+    if (results.length > 0 && entry.examDate !== results[0]?.examDate) continue;
+    const rebuilt = buildExamSeatingPlanFromHistoryEntry(entry);
+    for (const roomPlan of rebuilt.plan.rooms) {
+      const uniq = `${entry.archiveKey}::${roomPlan.slotKey}`;
+      if (seenRoomKey.has(uniq)) continue;
+      const roomRows = entry.rows.filter(
+        (r) => r.slotKey === roomPlan.slotKey || r.roomNo === roomPlan.roomNumber
+      );
+      const invigId = roomRows.find((r) => r.invigilatorId)?.invigilatorId;
+      if (
+        !doesRoomBelongToTeacher({
+          roomInvigilator: roomPlan.invigilator,
+          roomInvigilatorId: invigId,
+          teacherId,
+          teacherName,
+          teacherUsername,
+        })
+      ) {
+        continue;
+      }
+      seenRoomKey.add(uniq);
+
+      const { map, roomDispatchedAt, roomDispatchedBy, roomNote } = buildStudentDispatchMapForRoom(
+        entry.archiveKey,
+        roomPlan.slotKey,
+        roomPlan.roomNumber
+      );
+
+      const studentsList: TeacherAssignedRoomStudent[] = [];
+      let sentCount = 0;
+      let absentCount = 0;
+      let pendingCount = 0;
+      for (const bench of roomPlan.benches) {
+        for (const seat of bench.seats) {
+          const sId = String(seat.student.Student_ID || '').trim();
+          const saved = map.get(sId);
+          const checkStatus: RoomStudentCheckInStatus = saved ? saved.status : 'Pending';
+          if (checkStatus === 'Sent to Room') sentCount++;
+          else if (checkStatus === 'Absent') absentCount++;
+          else pendingCount++;
+          studentsList.push({
+            studentId: sId,
+            rollNumber: String(seat.student.Roll_Number || ''),
+            studentName: String(seat.student.Student_Name || ''),
+            classCode: seat.classCode,
+            classLabel: seat.classLabel,
+            benchNumber: bench.benchNumber,
+            seatPosition: seat.seatPosition,
+            roomCheckInStatus: checkStatus,
+            checkedInAt: saved?.checkedInAt,
+            checkedInBy: saved?.checkedInBy,
+          });
+        }
+      }
+
+      results.push({
+        archiveKey: entry.archiveKey,
+        examDate: entry.examDate,
+        examShift: entry.examShift,
+        examType: entry.examType,
+        session: entry.session,
+        slotKey: roomPlan.slotKey,
+        roomNumber: roomPlan.roomNumber,
+        wing: roomPlan.groupLabelHi,
+        invigilator: roomPlan.invigilator,
+        invigilatorId: invigId,
+        benches: roomPlan.benches,
+        totalStudents: roomPlan.totalStudents,
+        classBreakdown: roomPlan.classBreakdown,
+        studentsList,
+        sentCount,
+        absentCount,
+        pendingCount,
+        dispatchedAt: roomDispatchedAt || undefined,
+        dispatchedBy: roomDispatchedBy || undefined,
+        note: roomNote || undefined,
+        sourceStatus: 'history',
+        plan: {
+          ...rebuilt.plan,
+          rooms: [roomPlan],
+          allocatedStudentsCount: roomPlan.totalStudents,
+          totalBenches: roomPlan.benches.length,
+        },
+        seatsPerBench: rebuilt.seatsPerBench,
+      });
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Teacher saves/confirms sending assigned students to their Exam Room.
+ * Permanently updates server store, Exam_Seating_History, local cache & Google Sheet!
+ */
+export async function saveExamSeatingRoomDispatch(opts: {
+  room: TeacherAssignedRoomView;
+  studentStatuses: Record<string, RoomStudentCheckInStatus>;
+  dispatchedBy: string;
+  dispatchedById?: string;
+  dispatchedAt: string;
+  note?: string;
+}): Promise<{
+  serverOk: boolean;
+  sheetSynced: boolean;
+  sentCount: number;
+  absentCount: number;
+  pendingCount: number;
+  sheetError?: string;
+}> {
+  const { room, studentStatuses, dispatchedBy, dispatchedById, dispatchedAt, note } = opts;
+
+  let sentCount = 0;
+  let absentCount = 0;
+  let pendingCount = 0;
+  const dispatchStatusMap: Record<
+    string,
+    { status: RoomStudentCheckInStatus; checkedInAt?: string; checkedInBy?: string }
+  > = {};
+
+  const roomRows: SheetSeatingRow[] = room.studentsList.map((st) => {
+    const checkStatus = normalizeRoomCheckInStatus(
+      studentStatuses[st.studentId] ?? st.roomCheckInStatus
+    );
+    if (checkStatus === 'Sent to Room') sentCount++;
+    else if (checkStatus === 'Absent') absentCount++;
+    else pendingCount++;
+
+    dispatchStatusMap[st.studentId] = {
+      status: checkStatus,
+      checkedInAt: checkStatus === 'Pending' ? undefined : dispatchedAt,
+      checkedInBy: checkStatus === 'Pending' ? undefined : dispatchedBy,
+    };
+
+    return {
+      archiveKey: room.archiveKey,
+      examDate: room.examDate,
+      examShift: room.examShift,
+      slotKey: room.slotKey,
+      roomNo: room.roomNumber,
+      wing: room.wing,
+      benchNo: st.benchNumber,
+      seatPosition: st.seatPosition,
+      studentId: st.studentId,
+      rollNumber: st.rollNumber,
+      studentName: st.studentName,
+      className: st.classLabel,
+      invigilator: room.invigilator || dispatchedBy,
+      invigilatorId: room.invigilatorId || dispatchedById || '',
+      examType: room.examType,
+      session: room.session,
+      updatedAt: dispatchedAt,
+      confirmedBy: dispatchedBy,
+      status: sentCount > 0 ? 'Room Dispatched' : 'Approved',
+      roomCheckInStatus: checkStatus,
+      checkedInAt: checkStatus === 'Pending' ? '' : dispatchedAt,
+      checkedInBy: checkStatus === 'Pending' ? '' : dispatchedBy,
+    };
+  });
+
+  const dispatchRecord: ExamRoomDispatchRecord = {
+    archiveKey: room.archiveKey,
+    slotKey: room.slotKey,
+    roomNumber: room.roomNumber,
+    invigilator: room.invigilator || dispatchedBy,
+    invigilatorId: room.invigilatorId || dispatchedById,
+    examDate: room.examDate,
+    examShift: room.examShift,
+    totalStudents: roomRows.length,
+    sentCount,
+    absentCount,
+    pendingCount,
+    dispatchedBy,
+    dispatchedById,
+    dispatchedAt,
+    note: note?.trim() || undefined,
+    studentStatuses: dispatchStatusMap,
+  };
+
+  // Immediately update local history archive so search & history view reflect room dispatch instantaneously
+  try {
+    const existingLocal = loadLocalSeatingHistory();
+    const existingEntry = existingLocal.find((e) => e.archiveKey === room.archiveKey);
+    const otherRows = (existingEntry?.rows || []).filter(
+      (r) => r.slotKey !== room.slotKey && r.roomNo !== room.roomNumber
+    );
+    const combinedRows = [...otherRows, ...roomRows];
+    const updatedBatch = buildHistoryEntriesFromRows(combinedRows);
+    if (updatedBatch.length > 0) {
+      saveLocalSeatingHistory(mergeSeatingHistoryLists(updatedBatch, existingLocal));
+    }
+  } catch {}
+
+  const syncRes = await dualSyncWriteToSheet({
+    apiPath: '/api/exam-seating-room-dispatch',
+    apiBody: {
+      dispatch: dispatchRecord,
+      rows: roomRows,
+    },
+    directPayload: {
+      action: 'saveExamSeatingRoomDispatch',
+      dispatch: JSON.stringify(dispatchRecord),
+      rows: JSON.stringify(roomRows),
+    },
+  });
+
+  return {
+    serverOk: syncRes.serverOk,
+    sheetSynced: syncRes.sheetSynced,
+    sentCount,
+    absentCount,
+    pendingCount,
+    sheetError: syncRes.sheetError,
+  };
+}
+
