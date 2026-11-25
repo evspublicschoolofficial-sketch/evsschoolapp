@@ -11,6 +11,17 @@ import {
   logWhatsappAlertBackup,
   normalizeWhatsappDigits,
 } from '../utils/whatsappReminders';
+import {
+  loadLocalSeatingWorkflow,
+  loadLocalSeatingHistory,
+  normalizeExamDateKey,
+} from '../utils/seatingPlanHelper';
+import {
+  loadLocalHallPassConfig,
+  fetchHallPassConfigFromServer,
+  hasDatesheetExamOnDate,
+  getStudentExamPaperForAndAfterDate,
+} from '../utils/hallPassHelper';
 
 interface ManagerOverviewModalsProps {
   students: Student[];
@@ -85,6 +96,9 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
   const [batchSenderOpen, setBatchSenderOpen] = useState<boolean>(false);
   const [batchIndex, setBatchIndex] = useState<number>(0);
   const [batchCopiedNotice, setBatchCopiedNotice] = useState<boolean>(false);
+  const [absentAlertDayType, setAbsentAlertDayType] = useState<'normal' | 'exam'>('normal');
+  const [absentExamLabel, setAbsentExamLabel] = useState<string>('');
+  const [activeHallPassConfig, setActiveHallPassConfig] = useState(() => loadLocalHallPassConfig());
 
   useEffect(() => {
     const refresh = () => setWaiverVersion((v) => v + 1);
@@ -95,15 +109,6 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
       window.removeEventListener(FEE_MASTER_UPDATED_EVENT, refresh);
     };
   }, []);
-
-  // Reset search and filters whenever modal opens/changes
-  useEffect(() => {
-    setSearchTerm('');
-    setClassFilter('all');
-    setBatchSenderOpen(false);
-    setBatchIndex(0);
-    setBatchCopiedNotice(false);
-  }, [activeModal]);
 
   // Handle ESC key to dismiss modal
   useEffect(() => {
@@ -155,6 +160,54 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
   const currentMonthNum = pad(now.getMonth() + 1);
   const currentMonthLong = now.toLocaleString('en-US', { month: 'long' }).toLowerCase();
   const currentMonthShort = now.toLocaleString('en-US', { month: 'short' }).toLowerCase();
+
+  // Reset search and filters whenever modal opens/changes (and auto-detect Exam Day + Datesheet)
+  useEffect(() => {
+    setSearchTerm('');
+    setClassFilter('all');
+    setBatchSenderOpen(false);
+    setBatchIndex(0);
+    setBatchCopiedNotice(false);
+    if (activeModal === 'absentToday') {
+      const applyExamDetection = (hpCfg: ReturnType<typeof loadLocalHallPassConfig>) => {
+        try {
+          const wf = loadLocalSeatingWorkflow();
+          const hist = loadLocalSeatingHistory();
+          const todayNorm = normalizeExamDateKey(todayYmd);
+          const matchHist = hist.find((h) => normalizeExamDateKey(h.examDate) === todayNorm);
+          const hasDatesheetExam = hasDatesheetExamOnDate(hpCfg, todayYmd);
+          const hasTodayExamPlan =
+            Boolean(matchHist) ||
+            (wf && normalizeExamDateKey(wf.examDate) === todayNorm) ||
+            hasDatesheetExam;
+          if (hasTodayExamPlan) {
+            setAbsentAlertDayType('exam');
+            const autoLabel = matchHist
+              ? `${matchHist.examType}${matchHist.examShift ? ` · ${matchHist.examShift}` : ''}`
+              : wf?.examShift ||
+                (hpCfg.customExamTitle?.trim() || `${hpCfg.examType} (${hpCfg.session})`);
+            setAbsentExamLabel(autoLabel);
+          } else {
+            const savedMode = localStorage.getItem('evs_absent_alert_day_mode_v1');
+            setAbsentAlertDayType(savedMode === 'exam' ? 'exam' : 'normal');
+          }
+        } catch {}
+      };
+
+      const localHp = loadLocalHallPassConfig();
+      setActiveHallPassConfig(localHp);
+      applyExamDetection(localHp);
+
+      fetchHallPassConfigFromServer(false)
+        .then((fresh) => {
+          if (fresh) {
+            setActiveHallPassConfig(fresh);
+            applyExamDetection(fresh);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [activeModal, todayYmd]);
 
   // 1. Total Students Metrics
   const totalStudentsCount = students.length;
@@ -563,13 +616,27 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
       const absentKey = `absent_${rec.Student_ID}_${rec.Date || todayDmy}`;
       const isSent = Boolean(sentAlertIds[absentKey]);
       const studentName = st?.Student_Name || `Student ${rec.Student_ID}`;
-      const className = getClassName(rec.Class || st?.Class || '');
+      const rawClass = rec.Class || st?.Class || '';
+      const className = getClassName(rawClass);
+      const paperInfo =
+        absentAlertDayType === 'exam'
+          ? getStudentExamPaperForAndAfterDate(
+              activeHallPassConfig,
+              rawClass,
+              className,
+              rec.Date || todayYmd
+            )
+          : null;
       const message = buildAbsentAlertMessage({
         studentName,
         className,
         rollNumber: st?.Roll_Number,
         dateStr: rec.Date || todayDmy,
         remark: rec.Remark,
+        isExamDay: absentAlertDayType === 'exam',
+        examLabel: absentExamLabel,
+        todayPaper: paperInfo?.todayPaper,
+        nextPaperText: paperInfo?.nextPaperText,
       });
       const whatsappUrl = buildWhatsappUrl(phone, message);
       return {
@@ -581,11 +648,21 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
         isSent,
         studentName,
         className,
+        paperInfo,
         message,
         whatsappUrl,
       };
     });
-  }, [filteredAbsentees, studentMap, sentAlertIds, todayDmy]);
+  }, [
+    filteredAbsentees,
+    studentMap,
+    sentAlertIds,
+    todayDmy,
+    todayYmd,
+    absentAlertDayType,
+    absentExamLabel,
+    activeHallPassConfig,
+  ]);
 
   const batchSentCount = useMemo(
     () => batchQueueItems.filter((item) => item.isSent).length,
@@ -599,6 +676,14 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
   const absentGroupSummaryText = useMemo(() => {
     const dateLabel =
       attendanceDateTab === 'today' ? todayDmy : latestRecordedDate || todayDmy;
+    const heading =
+      absentAlertDayType === 'exam'
+        ? `*E.V.S. PUBLIC SCHOOL — परीक्षा अनुपस्थित छात्र सूची (${dateLabel})*`
+        : `*E.V.S. PUBLIC SCHOOL — अनुपस्थित छात्र सूची (${dateLabel})*`;
+    const examLine =
+      absentAlertDayType === 'exam' && absentExamLabel.trim()
+        ? `परीक्षा: ${absentExamLabel.trim()}\n`
+        : '';
     const lines = batchQueueItems.map(
       (item, idx) =>
         `${idx + 1}. ${item.studentName} (Class ${item.className}${
@@ -606,12 +691,13 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
         })${item.phone ? ` — ${item.phone}` : ''}`
     );
     return (
-      `*E.V.S. PUBLIC SCHOOL — अनुपस्थित छात्र सूची (${dateLabel})*\n` +
+      `${heading}\n` +
+      examLine +
       `कुल अनुपस्थित: ${batchQueueItems.length} छात्र\n` +
       `━━━━━━━━━━━━━━━━━━\n` +
       lines.join('\n')
     );
-  }, [batchQueueItems, attendanceDateTab, todayDmy, latestRecordedDate]);
+  }, [batchQueueItems, attendanceDateTab, todayDmy, latestRecordedDate, absentAlertDayType, absentExamLabel]);
 
   const advanceToNextUnsent = (fromIdx: number, newlySentKey?: string) => {
     if (batchQueueItems.length <= 1) return;
@@ -1840,6 +1926,75 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                     </div>
                   )}
 
+                  {/* WHATSAPP MESSAGE MODE SWITCH: NORMAL DAY (HOMEWORK) VS EXAM DAY */}
+                  <div className="mb-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-2.5 sm:p-3 space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-xs font-black text-[#0c2340] flex items-center gap-1.5">
+                        <i className="fa-solid fa-comment-dots text-amber-600"></i>
+                        <span>WhatsApp संदेश का प्रकार चुनें:</span>
+                      </span>
+                      <div className="inline-flex items-center gap-1.5 bg-white p-1 rounded-xl border border-amber-200">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAbsentAlertDayType('exam');
+                            try {
+                              localStorage.setItem('evs_absent_alert_day_mode_v1', 'exam');
+                            } catch {}
+                          }}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-black cursor-pointer transition-colors inline-flex items-center gap-1.5 ${
+                            absentAlertDayType === 'exam'
+                              ? 'bg-[#0c2340] text-amber-300 shadow-xs'
+                              : 'text-slate-700 hover:bg-slate-100'
+                          }`}
+                        >
+                          <i className="fa-solid fa-file-signature"></i>
+                          <span>📝 परीक्षा दिवस (Exam Alert)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAbsentAlertDayType('normal');
+                            try {
+                              localStorage.setItem('evs_absent_alert_day_mode_v1', 'normal');
+                            } catch {}
+                          }}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-black cursor-pointer transition-colors inline-flex items-center gap-1.5 ${
+                            absentAlertDayType === 'normal'
+                              ? 'bg-[#0c2340] text-amber-300 shadow-xs'
+                              : 'text-slate-700 hover:bg-slate-100'
+                          }`}
+                        >
+                          <i className="fa-solid fa-book-open"></i>
+                          <span>🏫 सामान्य दिन (Homework)</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {absentAlertDayType === 'exam' && (
+                      <div className="space-y-1.5 pt-1 border-t border-amber-200/70">
+                        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                          <label className="text-[11px] font-black text-slate-800 shrink-0">
+                            परीक्षा का नाम (वैकल्पिक):
+                          </label>
+                          <input
+                            type="text"
+                            value={absentExamLabel}
+                            onChange={(e) => setAbsentExamLabel(e.target.value)}
+                            placeholder="जैसे: Half-Yearly (2026-27)"
+                            className="flex-1 px-3 py-1.5 rounded-xl border border-amber-300 bg-white text-xs font-semibold text-slate-900"
+                          />
+                        </div>
+                        <div className="text-[11px] font-bold text-emerald-900 flex items-center gap-1.5">
+                          <i className="fa-solid fa-calendar-check text-emerald-700"></i>
+                          <span>
+                            हर बच्चे की कक्षा के अनुसार Datesheet से आज का छूटा पेपर व अगला पेपर अपने-आप संदेश में जुड़ जाएगा।
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
                   {/* FAST BATCH WHATSAPP SENDER BAR & QUEUE RUNNER */}
                   {filteredAbsentees.length > 0 && (
                     <div className="mb-3.5 rounded-2xl border border-emerald-200 bg-emerald-50/60 p-3 space-y-3">
@@ -2111,6 +2266,17 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                         const phone = getStudentPhone(st);
                         const absentKey = `absent_${rec.Student_ID}_${rec.Date || todayDmy}`;
                         const isSent = Boolean(sentAlertIds[absentKey]);
+                        const rawClass = rec.Class || st?.Class || '';
+                        const classNameLabel = getClassName(rawClass);
+                        const paperInfo =
+                          absentAlertDayType === 'exam'
+                            ? getStudentExamPaperForAndAfterDate(
+                                activeHallPassConfig,
+                                rawClass,
+                                classNameLabel,
+                                rec.Date || todayYmd
+                              )
+                            : null;
 
                         return (
                           <div
@@ -2129,7 +2295,7 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                                     {st?.Student_Name || `Student ${rec.Student_ID}`}
                                   </h4>
                                   <span className="text-[10px] font-bold px-1.5 py-0.2 bg-blue-100 text-blue-900 rounded">
-                                    Class {getClassName(rec.Class || st?.Class || '')}
+                                    Class {classNameLabel}
                                   </span>
                                   <span className="text-[10px] font-bold px-2 py-0.2 bg-rose-100 text-rose-800 rounded-full">
                                     ❌ अनुपस्थित (Absent)
@@ -2142,6 +2308,20 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                                   <span>•</span>
                                   <span>तारीख: {rec.Date || todayDmy}</span>
                                 </div>
+                                {paperInfo && (paperInfo.todayPaper || paperInfo.nextPaperText) && (
+                                  <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                                    {paperInfo.todayPaper && (
+                                      <span className="px-2 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-[10px] font-black text-amber-950">
+                                        📘 आज का पेपर: {paperInfo.todayPaper}
+                                      </span>
+                                    )}
+                                    {paperInfo.nextPaperText && (
+                                      <span className="px-2 py-0.5 rounded-md bg-blue-50 border border-blue-200 text-[10px] font-black text-blue-950">
+                                        📅 अगला: {paperInfo.nextPaperText}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
                                 {rec.Remark && rec.Remark !== 'OK' && (
                                   <div className="text-[11px] text-slate-600 italic mt-0.5">
                                     टिप्पणी: "{rec.Remark}"
@@ -2171,17 +2351,21 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                                 onClick={() => {
                                   const msg = buildAbsentAlertMessage({
                                     studentName: st?.Student_Name || `Student ${rec.Student_ID}`,
-                                    className: getClassName(rec.Class || st?.Class || ''),
+                                    className: classNameLabel,
                                     rollNumber: st?.Roll_Number,
                                     dateStr: rec.Date || todayDmy,
                                     remark: rec.Remark,
+                                    isExamDay: absentAlertDayType === 'exam',
+                                    examLabel: absentExamLabel,
+                                    todayPaper: paperInfo?.todayPaper,
+                                    nextPaperText: paperInfo?.nextPaperText,
                                   });
                                   openWhatsappAlert(phone, msg, {
                                     alertType: 'Absent Alert',
                                     recipientType: 'Parent',
                                     recipientId: rec.Student_ID,
                                     recipientName: st?.Student_Name || `Student ${rec.Student_ID}`,
-                                    classOrRole: getClassName(rec.Class || st?.Class || ''),
+                                    classOrRole: classNameLabel,
                                     amount: 0,
                                     sentBy: 'Manager',
                                   });

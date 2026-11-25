@@ -797,3 +797,87 @@ export async function saveHallPassConfigToServer(config: HallPassConfig): Promis
   const res = await saveHallPassConfigWithStatus(config);
   return res.config;
 }
+
+export function parseDatesheetRowToYmd(rawDate?: string | null, fallbackYear?: number): string {
+  const clean = String(rawDate || '').trim();
+  if (!clean) return '';
+  const isoMatch = clean.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`;
+  }
+  const dmyMatch = clean.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/);
+  if (dmyMatch) {
+    return `${dmyMatch[3]}-${dmyMatch[2].padStart(2, '0')}-${dmyMatch[1].padStart(2, '0')}`;
+  }
+  const dmMatch = clean.match(/^(\d{1,2})[-\/](\d{1,2})$/);
+  if (dmMatch && fallbackYear) {
+    return `${fallbackYear}-${dmMatch[2].padStart(2, '0')}-${dmMatch[1].padStart(2, '0')}`;
+  }
+  return '';
+}
+
+function isExamSubjectValidPaper(subject?: string | null): boolean {
+  const s = String(subject || '').trim();
+  if (!s || s === '—' || s === '-' || /^n\/?a$/i.test(s)) return false;
+  if (/\b(holiday|off|sunday|no\s*exam|vacations?)\b/i.test(s)) return false;
+  return true;
+}
+
+export function hasDatesheetExamOnDate(config: HallPassConfig, targetDateStr: string): boolean {
+  const targetYmd = parseDatesheetRowToYmd(targetDateStr, new Date().getFullYear());
+  if (!targetYmd) return false;
+  const fallbackYear = Number(targetYmd.slice(0, 4)) || new Date().getFullYear();
+  const rawRows =
+    Array.isArray(config?.datesheetRows) && config.datesheetRows.length > 0
+      ? config.datesheetRows
+      : DEFAULT_HALF_YEARLY_DATESHEET_ROWS;
+  const rows = backfillEmptyDatesheetColumns(rawRows);
+  return rows.some((r) => {
+    const rYmd = parseDatesheetRowToYmd(r.date, fallbackYear);
+    if (rYmd !== targetYmd) return false;
+    return Object.values(r.subjects || {}).some((sub) => isExamSubjectValidPaper(sub));
+  });
+}
+
+export function getStudentExamPaperForAndAfterDate(
+  config: HallPassConfig,
+  rawClass?: string | null,
+  mappedLabel?: string | null,
+  targetDateStr?: string | null
+): {
+  todayPaper: string | null;
+  nextPaper: { date: string; day: string; subject: string } | null;
+  nextPaperText: string | null;
+} {
+  const targetYmd = parseDatesheetRowToYmd(targetDateStr, new Date().getFullYear());
+  if (!targetYmd) {
+    return { todayPaper: null, nextPaper: null, nextPaperText: null };
+  }
+  const fallbackYear = Number(targetYmd.slice(0, 4)) || new Date().getFullYear();
+  const schedule = getStudentDatesheetSchedule(config, rawClass, mappedLabel);
+
+  const normalizedRows = schedule
+    .map((r) => ({
+      ...r,
+      ymd: parseDatesheetRowToYmd(r.date, fallbackYear),
+      cleanSubject: String(r.subject || '').trim(),
+    }))
+    .filter((r) => Boolean(r.ymd) && isExamSubjectValidPaper(r.cleanSubject))
+    .sort((a, b) => a.ymd.localeCompare(b.ymd));
+
+  const todayMatch = normalizedRows.find((r) => r.ymd === targetYmd) || null;
+  const nextMatch = normalizedRows.find((r) => r.ymd > targetYmd) || null;
+
+  const nextPaperText = nextMatch
+    ? `${nextMatch.date}${nextMatch.day ? ` (${nextMatch.day})` : ''} — ${nextMatch.cleanSubject}`
+    : null;
+
+  return {
+    todayPaper: todayMatch ? todayMatch.cleanSubject : null,
+    nextPaper: nextMatch
+      ? { date: nextMatch.date, day: nextMatch.day, subject: nextMatch.cleanSubject }
+      : null,
+    nextPaperText,
+  };
+}
+

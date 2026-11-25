@@ -128,13 +128,54 @@ export const buildAbsentAlertMessage = (params: {
   rollNumber?: string | number;
   dateStr: string;
   remark?: string;
+  isExamDay?: boolean;
+  examLabel?: string;
+  todayPaper?: string | null;
+  nextPaperText?: string | null;
 }): string => {
-  const { studentName, className, rollNumber, dateStr, remark } = params;
+  const {
+    studentName,
+    className,
+    rollNumber,
+    dateStr,
+    remark,
+    isExamDay,
+    examLabel,
+    todayPaper,
+    nextPaperText,
+  } = params;
   const rollText = rollNumber ? ` (Roll No: ${rollNumber})` : '';
-  const remarkLine =
-    remark && remark.trim() && remark.trim().toUpperCase() !== 'OK'
-      ? `\n📝 *टिप्पणी (Note):* ${remark.trim()}`
-      : '';
+  const remarkTrimmed = remark ? remark.trim() : '';
+  const isGenericAbsentRemark =
+    !remarkTrimmed ||
+    remarkTrimmed.toUpperCase() === 'OK' ||
+    /^student is absent today\.?$/i.test(remarkTrimmed);
+  const remarkLine = !isGenericAbsentRemark ? `\n📝 *टिप्पणी (Note):* ${remarkTrimmed}` : '';
+
+  if (isExamDay) {
+    const examText = examLabel && examLabel.trim() ? ` (*${examLabel.trim()}*)` : '';
+    const todayPaperLine =
+      todayPaper && todayPaper.trim() ? `\n📘 *आज का छूटा पेपर:* *${todayPaper.trim()}*` : '';
+    const nextPaperLine =
+      nextPaperText && nextPaperText.trim()
+        ? `\n📅 *अगला पेपर:* *${nextPaperText.trim()}*`
+        : '';
+    const followUpLine =
+      nextPaperText && nextPaperText.trim()
+        ? `तथा अगले पेपर की तैयारी व समय पर उपस्थिति सुनिश्चित करें।`
+        : `तथा परीक्षा समय-सारणी (Date Sheet) के अनुसार शेष परीक्षाओं में समय पर उपस्थिति सुनिश्चित करें।`;
+
+    return (
+      `*E.V.S. PUBLIC SCHOOL — परीक्षा अनुपस्थिति सूचना (Exam Absent Alert)*\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `अस्सलाम वालेकुम / आदरणीय अभिभावक,\n\n` +
+      `आपको सूचित किया जाता है कि आज दिनांक *${dateStr}* को विद्यालय में हो रही *परीक्षा (Exam)*${examText} में आपका बच्चा *${studentName}* (कक्षा: *${className}*${rollText}) *अनुपस्थित (Absent)* रहा है।${todayPaperLine}${nextPaperLine}${remarkLine}\n\n` +
+      `⚠️ *महत्वपूर्ण:* परीक्षा में अनुपस्थित रहने से बच्चे के परिणाम व अंकों पर सीधा प्रभाव पड़ सकता है। यदि कोई विशेष या आकस्मिक कारण हो तो कृपया *तुरंत विद्यालय कार्यालय / परीक्षा प्रभारी को सूचित करें* ${followUpLine}\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `_सादर, परीक्षा विभाग / प्रधानाचार्य_\n` +
+      `_ई.वी.एस. पब्लिक स्कूल (E.V.S. Public School)_`
+    );
+  }
 
   return (
     `*E.V.S. PUBLIC SCHOOL — अनुपस्थिति सूचना (Absent Alert)*\n` +
