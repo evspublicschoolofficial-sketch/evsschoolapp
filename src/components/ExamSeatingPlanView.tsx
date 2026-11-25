@@ -4,11 +4,19 @@ import { getLocalTimestamp } from '../utils/localTime';
 import { realtimeSync } from '../utils/realtimeSync';
 import {
   buildAutoBalancedRoomConfigs,
+  buildExamSeatingPlanFromHistoryEntry,
   clearRoomAllocations,
+  deleteExamSeatingHistoryEntry,
+  ExamSeatingHistoryEntry,
+  fetchExamSeatingHistory,
   fetchExamSeatingPlanSnapshot,
+  formatExamDateDisplay,
   generateCustomSeatingPlan,
   generateExamSeatingPlanPdf,
+  getTodayIstDateKey,
+  loadLocalSeatingHistory,
   loadLocalSeatingWorkflow,
+  normalizeExamDateKey,
   saveExamSeatingPlanToSheet,
   saveLocalSeatingWorkflow,
   saveTeacherSeatingDraft,
@@ -64,6 +72,10 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
   });
   const [seatsPerBench, setSeatsPerBench] = useState<number>(() => initialBoot?.seatsPerBench ?? 3);
   const [mode, setMode] = useState<SeatingDistributionMode>(() => initialBoot?.mode ?? 'anti_cheating_mixed');
+  const [examDate, setExamDate] = useState<string>(() =>
+    initialBoot?.examDate ? normalizeExamDateKey(initialBoot.examDate) : getTodayIstDateKey()
+  );
+  const [examShift, setExamShift] = useState<string>(() => initialBoot?.examShift ?? '');
   const [workflowStatus, setWorkflowStatus] = useState<SeatingPlanApprovalStatus>(
     () => initialBoot?.status ?? 'draft'
   );
@@ -74,6 +86,7 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
   const [teacherNote, setTeacherNote] = useState<string>(() => initialBoot?.teacherNote ?? '');
   const [managerNote, setManagerNote] = useState<string>(() => initialBoot?.managerNote ?? '');
 
+  const [activeSubTab, setActiveSubTab] = useState<'planner' | 'history'>('planner');
   const [selectedRoomKey, setSelectedRoomKey] = useState<string>('ALL');
   const [showMatrixEditor, setShowMatrixEditor] = useState<boolean>(true);
   const [refreshingSnapshot, setRefreshingSnapshot] = useState<boolean>(false);
@@ -83,6 +96,20 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [sheetWarning, setSheetWarning] = useState<string | null>(null);
   const [hasLoadedServerOnce, setHasLoadedServerOnce] = useState<boolean>(false);
+
+  // History Archive & Search state
+  const [historyEntries, setHistoryEntries] = useState<ExamSeatingHistoryEntry[]>(() =>
+    loadLocalSeatingHistory()
+  );
+  const [loadingHistory, setLoadingHistory] = useState<boolean>(false);
+  const [historySheetSynced, setHistorySheetSynced] = useState<boolean>(true);
+  const [searchStudentQuery, setSearchStudentQuery] = useState<string>('');
+  const [searchClassFilter, setSearchClassFilter] = useState<string>('ALL');
+  const [searchInvigilatorQuery, setSearchInvigilatorQuery] = useState<string>('');
+  const [searchDateFilter, setSearchDateFilter] = useState<string>('');
+  const [selectedHistoryKey, setSelectedHistoryKey] = useState<string | null>(null);
+  const [historyRoomFilter, setHistoryRoomFilter] = useState<string>('ALL');
+  const [deletingHistoryKey, setDeletingHistoryKey] = useState<string | null>(null);
 
   // If initial students arrived after first render and local storage was empty & allocations are all 0, auto-seed once
   useEffect(() => {
@@ -100,6 +127,8 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
     setRoomConfigs(payload.rooms);
     setSeatsPerBench([2, 3, 4].includes(payload.seatsPerBench) ? payload.seatsPerBench : 3);
     setMode(payload.mode === 'class_grouped' ? 'class_grouped' : 'anti_cheating_mixed');
+    if (payload.examDate) setExamDate(normalizeExamDateKey(payload.examDate));
+    if (payload.examShift !== undefined) setExamShift(payload.examShift || '');
     setWorkflowStatus(payload.status || 'draft');
     setSubmittedBy(payload.submittedBy || '');
     setSubmittedAt(payload.submittedAt || '');
@@ -139,11 +168,30 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
     }
   };
 
+  const loadHistoryFromServer = async (showFeedback = false) => {
+    setLoadingHistory(true);
+    try {
+      const res = await fetchExamSeatingHistory(showFeedback);
+      setHistoryEntries(res.entries);
+      setHistorySheetSynced(res.sheetSynced);
+      if (showFeedback) {
+        setNotice(`✓ कुल ${res.entries.length} तारीख/शिफ्ट के सीटिंग रिकॉर्ड लोड हो गए हैं।`);
+        setTimeout(() => setNotice(null), 4000);
+      }
+    } catch {
+      if (showFeedback) setErrorMsg('हिस्ट्री रिकॉर्ड लाने में समस्या आई।');
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
   useEffect(() => {
     loadFromServer(false);
+    loadHistoryFromServer(false);
     const unsub = realtimeSync.subscribe((ev) => {
       if (ev.entity === 'exam_seating_plan') {
         loadFromServer(false);
+        loadHistoryFromServer(false);
       }
     });
     return () => unsub();
@@ -171,17 +219,126 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
     [seatingPlan.classSummaries]
   );
 
+  // History filter derived collections
+  const historyClassOptions = useMemo(() => {
+    const set = new Set<string>();
+    historyEntries.forEach((entry) => {
+      entry.rows.forEach((r) => {
+        if (r.className) set.add(r.className);
+      });
+    });
+    return Array.from(set);
+  }, [historyEntries]);
+
+  const historyInvigilatorOptions = useMemo(() => {
+    const set = new Set<string>();
+    historyEntries.forEach((entry) => {
+      entry.rows.forEach((r) => {
+        if (r.invigilator && r.invigilator.trim()) set.add(r.invigilator.trim());
+      });
+    });
+    return Array.from(set).sort();
+  }, [historyEntries]);
+
+  const isHistoryFilterActive = Boolean(
+    searchStudentQuery.trim() ||
+      searchClassFilter !== 'ALL' ||
+      searchInvigilatorQuery.trim() ||
+      searchDateFilter.trim()
+  );
+
+  const filteredHistoryRowMatches = useMemo(() => {
+    if (!isHistoryFilterActive) return [];
+    const qStudent = searchStudentQuery.trim().toLowerCase();
+    const qInvig = searchInvigilatorQuery.trim().toLowerCase();
+    const qDate = searchDateFilter.trim();
+    const out: Array<{
+      archiveKey: string;
+      examDate: string;
+      examShift: string;
+      examType: string;
+      roomNo: string;
+      invigilator: string;
+      benchNo: number;
+      seatPosition: string;
+      studentId: string;
+      rollNumber: string;
+      studentName: string;
+      className: string;
+    }> = [];
+
+    for (const entry of historyEntries) {
+      if (qDate && entry.examDate !== qDate) continue;
+      for (const r of entry.rows) {
+        if (searchClassFilter !== 'ALL' && r.className !== searchClassFilter) continue;
+        if (qInvig && !String(r.invigilator || '').toLowerCase().includes(qInvig)) continue;
+        if (qStudent) {
+          const hay = `${r.studentName || ''} ${r.studentId || ''} ${r.rollNumber || ''} ${r.roomNo || ''}`.toLowerCase();
+          if (!hay.includes(qStudent)) continue;
+        }
+        out.push({
+          archiveKey: entry.archiveKey,
+          examDate: entry.examDate,
+          examShift: entry.examShift,
+          examType: entry.examType,
+          roomNo: r.roomNo,
+          invigilator: r.invigilator || '—',
+          benchNo: r.benchNo,
+          seatPosition: r.seatPosition,
+          studentId: r.studentId,
+          rollNumber: r.rollNumber,
+          studentName: r.studentName,
+          className: r.className,
+        });
+      }
+    }
+    return out.slice(0, 250);
+  }, [
+    historyEntries,
+    isHistoryFilterActive,
+    searchStudentQuery,
+    searchClassFilter,
+    searchInvigilatorQuery,
+    searchDateFilter,
+  ]);
+
+  const filteredHistoryEntries = useMemo(() => {
+    if (!searchDateFilter.trim() && !searchInvigilatorQuery.trim()) return historyEntries;
+    const qInvig = searchInvigilatorQuery.trim().toLowerCase();
+    return historyEntries.filter((entry) => {
+      if (searchDateFilter.trim() && entry.examDate !== searchDateFilter.trim()) return false;
+      if (qInvig) {
+        return entry.roomsSummary.some((rm) => String(rm.invigilator || '').toLowerCase().includes(qInvig));
+      }
+      return true;
+    });
+  }, [historyEntries, searchDateFilter, searchInvigilatorQuery]);
+
+  const selectedHistoryEntry = useMemo(
+    () => historyEntries.find((e) => e.archiveKey === selectedHistoryKey) || null,
+    [historyEntries, selectedHistoryKey]
+  );
+
+  const selectedHistoryPlanData = useMemo(() => {
+    if (!selectedHistoryEntry) return null;
+    return buildExamSeatingPlanFromHistoryEntry(selectedHistoryEntry);
+  }, [selectedHistoryEntry]);
+
   const persistLocalSnapshot = (
     nextRooms: SeatingRoomConfig[],
     nextSeats = seatsPerBench,
     nextMode = mode,
-    nextStatus: SeatingPlanApprovalStatus = workflowStatus === 'approved' ? 'draft' : workflowStatus
+    nextStatus: SeatingPlanApprovalStatus = workflowStatus === 'approved' ? 'draft' : workflowStatus,
+    nextDate = examDate,
+    nextShift = examShift
   ) => {
     saveLocalSeatingWorkflow({
       rooms: nextRooms,
       seatsPerBench: nextSeats,
       mode: nextMode,
       status: nextStatus,
+      examDate: normalizeExamDateKey(nextDate),
+      examShift: nextShift,
       submittedBy,
       submittedAt,
       approvedBy,
@@ -302,6 +459,8 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
     seatsPerBench,
     mode,
     status,
+    examDate: normalizeExamDateKey(examDate),
+    examShift: examShift.trim(),
     submittedBy:
       userRole === 'teacher'
         ? currentUserName || submittedBy || 'Teacher'
@@ -402,16 +561,21 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
       setWorkflowStatus('approved');
       setApprovedBy(approvedPayload.approvedBy || 'Manager');
       setApprovedAt(approvedPayload.approvedAt || getLocalTimestamp());
+      loadHistoryFromServer(false);
       realtimeSync.broadcastUpdate('exam_seating_plan', 'approved');
 
+      const dateText = formatExamDateDisplay(approvedPayload.examDate);
+      const shiftText = approvedPayload.examShift ? ` (${approvedPayload.examShift})` : '';
       if (res.sheetSynced) {
         setNotice(
-          `✅ कन्फर्म हो गया! सभी ${res.savedCount} छात्रों का एंटी-चीटिंग सीटिंग प्लान Google Sheet की "Exam_Seating_Plan" टैब में स्थायी रूप से सेव हो गया है।`
+          `✅ कन्फर्म हो गया! सभी ${res.savedCount} छात्रों का प्लान Google Sheet की "Exam_Seating_Plan" और दिनांक ${dateText}${shiftText} की "Exam_Seating_History" में स्थायी सेव हो गया है।`
         );
       } else {
-        setNotice(`✓ प्लान ऐप में कन्फर्म हो गया है (${res.savedCount} छात्र)।`);
+        setNotice(
+          `✓ प्लान ऐप सर्वर और दिनांक ${dateText}${shiftText} की हिस्ट्री में सेव हो गया है (${res.savedCount} छात्र)।`
+        );
         setSheetWarning(
-          'Google Sheet में "Exam_Seating_Plan" टैब में सेव करने के लिए Apps Script अपडेट की आवश्यकता हो सकती है।'
+          'Google Sheet में तारीख-वार हिस्ट्री ("Exam_Seating_History") सेव करने के लिए कृपया Apps Script कोड एक बार अपडेट करें।'
         );
       }
     } catch {
@@ -436,14 +600,45 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
     }
   };
 
+  const handleDeleteHistory = async (archiveKey: string, label: string) => {
+    setDeletingHistoryKey(archiveKey);
+    try {
+      await deleteExamSeatingHistoryEntry(archiveKey);
+      setHistoryEntries((prev) => prev.filter((e) => e.archiveKey !== archiveKey));
+      if (selectedHistoryKey === archiveKey) {
+        setSelectedHistoryKey(null);
+      }
+      setNotice(`✓ ${label} का पुराना रिकॉर्ड हटा दिया गया है।`);
+      setTimeout(() => setNotice(null), 3500);
+    } finally {
+      setDeletingHistoryKey(null);
+    }
+  };
+
   const handleDownloadPdf = (roomKey: string = selectedRoomKey) => {
     const filename = generateExamSeatingPlanPdf({
       plan: seatingPlan,
       config,
       selectedRoomKey: roomKey,
       seatsPerBench,
+      examDate,
+      examShift,
     });
     setNotice(`✓ PDF डाउनलोड हो गई: ${filename}`);
+    setTimeout(() => setNotice(null), 5000);
+  };
+
+  const handleDownloadHistoryPdf = (entry: ExamSeatingHistoryEntry, roomKey: string = 'ALL') => {
+    const rebuilt = buildExamSeatingPlanFromHistoryEntry(entry);
+    const filename = generateExamSeatingPlanPdf({
+      plan: rebuilt.plan,
+      config: { ...config, examType: entry.examType as any, session: entry.session },
+      selectedRoomKey: roomKey,
+      seatsPerBench: rebuilt.seatsPerBench,
+      examDate: entry.examDate,
+      examShift: entry.examShift,
+    });
+    setNotice(`✓ पुरानी तारीख (${formatExamDateDisplay(entry.examDate)}) की PDF डाउनलोड हो गई: ${filename}`);
     setTimeout(() => setNotice(null), 5000);
   };
 
@@ -456,6 +651,495 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
 
   return (
     <div className="space-y-4">
+      {/* SUB-TAB SWITCHER: PLANNER vs DATE-WISE HISTORY & SEARCH */}
+      <div className="no-print bg-white border border-slate-200 rounded-2xl p-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('planner')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-black cursor-pointer inline-flex items-center gap-2 transition-colors ${
+              activeSubTab === 'planner'
+                ? 'bg-[#0c2340] text-amber-300 shadow-xs'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+            }`}
+          >
+            <i className="fa-solid fa-chair"></i>
+            <span>नया / चालू सिटिंग प्लान (Planner)</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setActiveSubTab('history');
+              loadHistoryFromServer(false);
+            }}
+            className={`px-3.5 py-2 rounded-xl text-xs font-black cursor-pointer inline-flex items-center gap-2 transition-colors ${
+              activeSubTab === 'history'
+                ? 'bg-[#0c2340] text-amber-300 shadow-xs'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+            }`}
+          >
+            <i className="fa-solid fa-clock-rotate-left"></i>
+            <span>तारीख-वार रिकॉर्ड व छात्र खोज (History & Search)</span>
+            <span
+              className={`px-1.5 py-0.5 rounded-full text-[10px] font-black tabular-nums ${
+                activeSubTab === 'history' ? 'bg-amber-400 text-slate-950' : 'bg-white text-slate-800'
+              }`}
+            >
+              {historyEntries.length}
+            </span>
+          </button>
+        </div>
+
+        <div className="text-[11px] font-bold text-slate-600 px-2">
+          {activeSubTab === 'planner'
+            ? `तारीख: ${formatExamDateDisplay(examDate)}${examShift ? ` · ${examShift}` : ''}`
+            : `कुल सेव परीक्षा रिकॉर्ड: ${historyEntries.length}`}
+        </div>
+      </div>
+
+      {activeSubTab === 'history' ? (
+        <div className="space-y-4">
+          {/* HISTORY SEARCH & FILTER HEADER */}
+          <div className="no-print bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+              <div>
+                <h2 className="text-base sm:text-lg font-black text-slate-900">
+                  परीक्षा सीटिंग प्लान हिस्ट्री — तारीख, छात्र या निरीक्षक से खोजें
+                </h2>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  पता करें किस तारीख को कौन सा छात्र किस कमरे व बेंच पर बैठा था और किस टीचर (Examiner) ने उसका एग्जाम लिया।
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => loadHistoryFromServer(true)}
+                  disabled={loadingHistory}
+                  className="px-3 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-800 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <i className={`fa-solid fa-rotate ${loadingHistory ? 'fa-spin' : ''}`}></i>
+                  <span>ताज़ा रिकॉर्ड लाएं</span>
+                </button>
+              </div>
+            </div>
+
+            {!historySheetSynced && (
+              <div className="px-3 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-950 text-xs flex flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold">
+                  Google Sheet में तारीख-वार हिस्ट्री ("Exam_Seating_History") सिंक करने के लिए कृपया एक बार अपडेटेड Apps Script पेस्ट व डिप्लॉय करें।
+                </span>
+                {onOpenSheetSetup && (
+                  <button
+                    type="button"
+                    onClick={onOpenSheetSetup}
+                    className="px-3 py-1 rounded-lg bg-[#0c2340] hover:bg-blue-950 text-amber-300 text-[11px] font-bold cursor-pointer"
+                  >
+                    शीट सेटअप कोड देखें
+                  </button>
+                )}
+              </div>
+            )}
+
+            {notice && (
+              <div className="px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold">
+                {notice}
+              </div>
+            )}
+
+            {/* 4 SEARCH FILTERS */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                  छात्र खोजें (नाम / Roll / ID)
+                </label>
+                <div className="relative">
+                  <i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                  <input
+                    type="text"
+                    value={searchStudentQuery}
+                    onChange={(e) => setSearchStudentQuery(e.target.value)}
+                    placeholder="जैसे: Farah, 104, Room 2..."
+                    className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-900"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 mb-1">कक्षा चुनें (Class)</label>
+                <select
+                  value={searchClassFilter}
+                  onChange={(e) => setSearchClassFilter(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-900"
+                >
+                  <option value="ALL">सभी कक्षाएं</option>
+                  {historyClassOptions.map((cls) => (
+                    <option key={cls} value={cls}>
+                      {cls}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                  एग्जामिनर / टीचर (Invigilator)
+                </label>
+                <input
+                  type="text"
+                  list="seating-history-invigilators"
+                  value={searchInvigilatorQuery}
+                  onChange={(e) => setSearchInvigilatorQuery(e.target.value)}
+                  placeholder="टीचर का नाम लिखें या चुनें..."
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-900"
+                />
+                <datalist id="seating-history-invigilators">
+                  {historyInvigilatorOptions.map((inv) => (
+                    <option key={inv} value={inv} />
+                  ))}
+                </datalist>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 mb-1">परीक्षा की तारीख</label>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="date"
+                    value={searchDateFilter}
+                    onChange={(e) => setSearchDateFilter(e.target.value)}
+                    className="flex-1 px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-900"
+                  />
+                  {isHistoryFilterActive && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearchStudentQuery('');
+                        setSearchClassFilter('ALL');
+                        setSearchInvigilatorQuery('');
+                        setSearchDateFilter('');
+                      }}
+                      className="px-2.5 py-2 rounded-xl border border-slate-300 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer"
+                      title="फ़िल्टर साफ करें"
+                    >
+                      साफ
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* INSTANT STUDENT / INVIGILATOR SEARCH RESULTS */}
+            {isHistoryFilterActive && (
+              <div className="rounded-xl border border-blue-200 bg-blue-50/40 overflow-hidden">
+                <div className="px-3.5 py-2.5 bg-[#0c2340] text-white flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span className="font-black text-amber-300">
+                    खोज परिणाम: {filteredHistoryRowMatches.length} प्रविष्टियाँ मिलीं
+                  </span>
+                  <span className="text-[11px] text-blue-100">
+                    रूम, बेंच, सीट और निरीक्षक टीचर का विवरण
+                  </span>
+                </div>
+                {filteredHistoryRowMatches.length === 0 ? (
+                  <div className="p-5 text-center text-xs font-bold text-slate-600">
+                    इस खोज से मेल खाने वाला कोई छात्र या टीचर रिकॉर्ड नहीं मिला।
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto max-h-[380px]">
+                    <table className="w-full text-xs border-collapse bg-white">
+                      <thead className="sticky top-0 bg-slate-100 border-b border-slate-300 text-slate-800">
+                        <tr>
+                          <th className="text-left p-2.5 font-black">तारीख / शिफ्ट</th>
+                          <th className="text-left p-2.5 font-black">छात्र (नाम · रोल)</th>
+                          <th className="text-left p-2.5 font-black">कक्षा</th>
+                          <th className="text-left p-2.5 font-black">रूम नं.</th>
+                          <th className="text-left p-2.5 font-black">बेंच व सीट</th>
+                          <th className="text-left p-2.5 font-black">निरीक्षक (Examiner)</th>
+                          <th className="text-right p-2.5 font-black">पूरा चार्ट</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {filteredHistoryRowMatches.map((m, idx) => (
+                          <tr key={`${m.archiveKey}-${m.studentId}-${idx}`} className="hover:bg-amber-50/50">
+                            <td className="p-2.5 whitespace-nowrap">
+                              <div className="font-black text-slate-900 tabular-nums">
+                                {formatExamDateDisplay(m.examDate)}
+                              </div>
+                              {m.examShift && (
+                                <div className="text-[10px] font-bold text-indigo-700">{m.examShift}</div>
+                              )}
+                            </td>
+                            <td className="p-2.5">
+                              <div className="font-black text-slate-900">{m.studentName}</div>
+                              <div className="text-[10px] font-bold text-slate-500 tabular-nums">
+                                Roll: {m.rollNumber || '—'} · ID: {m.studentId}
+                              </div>
+                            </td>
+                            <td className="p-2.5 font-bold text-slate-800 whitespace-nowrap">{m.className}</td>
+                            <td className="p-2.5 whitespace-nowrap">
+                              <span className="px-2 py-0.5 rounded bg-blue-100 text-[#0c2340] font-black">
+                                {m.roomNo}
+                              </span>
+                            </td>
+                            <td className="p-2.5 font-bold text-slate-700 whitespace-nowrap tabular-nums">
+                              Bench {m.benchNo} · {m.seatPosition}
+                            </td>
+                            <td className="p-2.5">
+                              <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 font-black">
+                                {m.invigilator || '—'}
+                              </span>
+                            </td>
+                            <td className="p-2.5 text-right whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedHistoryKey(m.archiveKey);
+                                  setHistoryRoomFilter('ALL');
+                                }}
+                                className="px-2.5 py-1 rounded-lg bg-[#0c2340] hover:bg-blue-950 text-amber-300 text-[11px] font-bold cursor-pointer"
+                              >
+                                पूरा प्लान देखें
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* SELECTED HISTORICAL DATE FULL VIEWER OR SAVED DATE CARDS */}
+          {selectedHistoryEntry && selectedHistoryPlanData ? (
+            <div className="space-y-4">
+              <div className="no-print bg-[#0c2340] text-white rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 border-b-4 border-amber-400">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedHistoryKey(null)}
+                      className="px-3 py-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-white text-xs font-black cursor-pointer inline-flex items-center gap-1.5"
+                    >
+                      <i className="fa-solid fa-arrow-left"></i>
+                      <span>सभी तारीखों पर वापस</span>
+                    </button>
+                    <h3 className="text-base font-black text-amber-300 tabular-nums">
+                      दिनांक: {formatExamDateDisplay(selectedHistoryEntry.examDate)}
+                      {selectedHistoryEntry.examShift ? ` · ${selectedHistoryEntry.examShift}` : ''}
+                    </h3>
+                  </div>
+                  <p className="text-xs text-blue-100 mt-1">
+                    {selectedHistoryEntry.examType} ({selectedHistoryEntry.session}) ·{' '}
+                    {selectedHistoryEntry.totalStudents} छात्र · कन्फर्म किया: {selectedHistoryEntry.confirmedBy}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    value={historyRoomFilter}
+                    onChange={(e) => setHistoryRoomFilter(e.target.value)}
+                    className="px-3 py-1.5 rounded-xl bg-white text-slate-950 text-xs font-bold"
+                  >
+                    <option value="ALL">सभी कमरे ({selectedHistoryPlanData.plan.rooms.length})</option>
+                    {selectedHistoryPlanData.plan.rooms.map((r) => (
+                      <option key={r.slotKey} value={r.slotKey}>
+                        {r.roomNumber} ({r.invigilator || 'No Teacher'})
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadHistoryPdf(selectedHistoryEntry, historyRoomFilter)}
+                    className="px-3.5 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black cursor-pointer inline-flex items-center gap-1.5"
+                  >
+                    <i className="fa-solid fa-file-pdf"></i>
+                    <span>PDF डाउनलोड</span>
+                  </button>
+                </div>
+              </div>
+
+              {selectedHistoryPlanData.plan.rooms
+                .filter((r) => historyRoomFilter === 'ALL' || r.slotKey === historyRoomFilter)
+                .map((room) => (
+                  <div
+                    key={`hist-${selectedHistoryEntry.archiveKey}-${room.slotKey}`}
+                    className="bg-white border-2 border-[#0c2340] rounded-2xl overflow-hidden shadow-xs break-inside-avoid"
+                  >
+                    <div className="bg-[#0c2340] text-white px-4 py-3 flex flex-wrap items-center justify-between gap-2 border-b-[3px] border-amber-400">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-base font-black">{room.roomNumber}</h3>
+                          <span className="px-2 py-0.5 rounded bg-amber-400 text-slate-950 text-[11px] font-black">
+                            निरीक्षक: {room.invigilator || '—'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-blue-100 font-semibold mt-0.5">
+                          {room.classBreakdown.map((c) => `${c.classLabel}: ${c.count}`).join('  ·  ')}
+                        </p>
+                      </div>
+                      <div className="text-right text-xs font-black text-amber-300 tabular-nums">
+                        {room.totalStudents} छात्र · {room.benches.length} बेंच
+                      </div>
+                    </div>
+
+                    <div className="p-3 sm:p-4 space-y-2.5">
+                      {room.benches.map((bench) => (
+                        <div
+                          key={`hb-${room.slotKey}-${bench.benchNumber}`}
+                          className="flex flex-col sm:flex-row border border-slate-300 rounded-xl overflow-hidden bg-slate-50/40"
+                        >
+                          <div className="sm:w-24 shrink-0 bg-slate-100 border-b sm:border-b-0 sm:border-r border-slate-300 p-2.5 flex sm:flex-col items-center justify-center gap-1">
+                            <span className="text-[10px] font-extrabold text-slate-500 uppercase">बेंच</span>
+                            <span className="text-base font-black text-[#0c2340] tabular-nums">
+                              #{bench.benchNumber}
+                            </span>
+                          </div>
+                          <div
+                            className={`flex-1 grid ${
+                              selectedHistoryPlanData.seatsPerBench === 2
+                                ? 'grid-cols-1 md:grid-cols-2'
+                                : selectedHistoryPlanData.seatsPerBench === 4
+                                ? 'grid-cols-1 md:grid-cols-2 xl:grid-cols-4'
+                                : 'grid-cols-1 md:grid-cols-3'
+                            } divide-y sm:divide-y-0 sm:divide-x divide-slate-200 bg-white`}
+                          >
+                            {bench.seats.map((seat, sIdx) => {
+                              const badgeClass =
+                                CLASS_BADGE_COLORS[seat.classCode] || 'bg-slate-100 text-slate-900 border-slate-300';
+                              return (
+                                <div
+                                  key={`${seat.student.Student_ID}-${sIdx}`}
+                                  className="p-2.5 flex items-start justify-between gap-2"
+                                >
+                                  <div className="min-w-0">
+                                    <div className="text-[10px] font-extrabold uppercase tracking-wide text-slate-500">
+                                      {seat.seatPosition}
+                                    </div>
+                                    <div className="text-sm font-black text-slate-900 truncate">
+                                      {seat.student.Student_Name}
+                                    </div>
+                                    <div className="text-[11px] font-bold text-[#0c2340] tabular-nums">
+                                      Roll: {seat.student.Roll_Number || '—'} · ID: {seat.student.Student_ID}
+                                    </div>
+                                  </div>
+                                  <span
+                                    className={`shrink-0 px-2 py-0.5 rounded border text-[11px] font-black ${badgeClass}`}
+                                  >
+                                    {seat.classLabel}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {filteredHistoryEntries.length === 0 ? (
+                <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center space-y-2">
+                  <div className="text-sm font-black text-slate-800">
+                    अभी तक कोई तारीख-वार सीटिंग प्लान रिकॉर्ड सेव नहीं है।
+                  </div>
+                  <p className="text-xs text-slate-600">
+                    "नया / चालू सिटिंग प्लान" में परीक्षा की तारीख चुनकर जब मैनेजर प्लान को कन्फर्म व सेव करेंगे, तो हर तारीख का पूरा डेटा यहाँ स्थायी रूप से दिखने लगेगा।
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {filteredHistoryEntries.map((entry) => (
+                    <div
+                      key={entry.archiveKey}
+                      className="bg-white border border-slate-200 hover:border-[#0c2340] rounded-2xl p-4 space-y-3 transition-colors"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="px-2.5 py-1 rounded-lg bg-[#0c2340] text-amber-300 text-xs font-black tabular-nums">
+                              {formatExamDateDisplay(entry.examDate)}
+                            </span>
+                            {entry.examShift && (
+                              <span className="px-2 py-0.5 rounded-lg bg-indigo-100 text-indigo-900 text-xs font-black">
+                                {entry.examShift}
+                              </span>
+                            )}
+                            <span className="text-xs font-bold text-slate-600">
+                              {entry.examType} ({entry.session})
+                            </span>
+                          </div>
+                          <div className="text-[11px] font-semibold text-slate-500 mt-1">
+                            {entry.totalStudents} छात्र · {entry.roomsSummary.length} कमरे · कन्फर्म किया:{' '}
+                            {entry.confirmedBy || 'Manager'}
+                          </div>
+                        </div>
+
+                        {userRole === 'manager' && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleDeleteHistory(
+                                entry.archiveKey,
+                                `${formatExamDateDisplay(entry.examDate)}${entry.examShift ? ` (${entry.examShift})` : ''}`
+                              )
+                            }
+                            disabled={deletingHistoryKey === entry.archiveKey}
+                            className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 cursor-pointer"
+                            title="यह पुराना रिकॉर्ड हटाएं"
+                          >
+                            <i className="fa-solid fa-trash-can text-xs"></i>
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap gap-1.5">
+                        {entry.roomsSummary.map((rm) => (
+                          <div
+                            key={`${entry.archiveKey}-${rm.slotKey}`}
+                            className="px-2.5 py-1.5 rounded-xl bg-slate-50 border border-slate-200 text-[11px]"
+                          >
+                            <span className="font-black text-slate-900">{rm.roomNumber}</span>
+                            <span className="text-slate-500"> · </span>
+                            <span className="font-bold text-emerald-800">
+                              {rm.invigilator || 'बिना निरीक्षक'}
+                            </span>
+                            <span className="text-slate-500 tabular-nums"> ({rm.totalStudents})</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedHistoryKey(entry.archiveKey);
+                            setHistoryRoomFilter('ALL');
+                          }}
+                          className="flex-1 px-3 py-2 rounded-xl bg-[#0c2340] hover:bg-blue-950 text-amber-300 text-xs font-black cursor-pointer inline-flex items-center justify-center gap-1.5"
+                        >
+                          <i className="fa-solid fa-eye"></i>
+                          <span>पूरा सिटिंग प्लान देखें</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadHistoryPdf(entry, 'ALL')}
+                          className="px-3 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-800 text-xs font-bold cursor-pointer inline-flex items-center gap-1.5"
+                        >
+                          <i className="fa-solid fa-file-pdf text-rose-600"></i>
+                          <span>PDF</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
       {/* WORKFLOW STATUS BANNER */}
       <div
         className={`no-print rounded-2xl border p-3.5 sm:p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3 ${
@@ -619,6 +1303,49 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
               <i className="fa-solid fa-print"></i>
               <span>प्रिंट करें</span>
             </button>
+          </div>
+        </div>
+
+        {/* EXAM DATE & SHIFT / SUBJECT METADATA */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 rounded-xl border border-blue-200 bg-blue-50/50 p-3">
+          <div>
+            <label className="block text-[11px] font-black text-[#0c2340] mb-1">
+              परीक्षा की तारीख (Exam Date — हिस्ट्री के लिए)
+            </label>
+            <input
+              type="date"
+              value={examDate}
+              onChange={(e) => {
+                const nextDate = normalizeExamDateKey(e.target.value);
+                markModifiedIfApproved();
+                setExamDate(nextDate);
+                persistLocalSnapshot(roomConfigs, seatsPerBench, mode, undefined, nextDate, examShift);
+              }}
+              className="w-full px-3 py-1.5 rounded-lg border border-blue-300 bg-white text-xs font-black text-slate-900"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] font-black text-[#0c2340] mb-1">
+              शिफ्ट / विषय (Shift / Subject — वैकल्पिक)
+            </label>
+            <input
+              type="text"
+              value={examShift}
+              onChange={(e) => {
+                const nextShift = e.target.value;
+                markModifiedIfApproved();
+                setExamShift(nextShift);
+                persistLocalSnapshot(roomConfigs, seatsPerBench, mode, undefined, examDate, nextShift);
+              }}
+              placeholder="जैसे: Morning / Maths / Paper 1"
+              className="w-full px-3 py-1.5 rounded-lg border border-blue-300 bg-white text-xs font-bold text-slate-900"
+            />
+          </div>
+          <div className="flex items-end">
+            <div className="w-full px-3 py-1.5 rounded-lg bg-white/80 border border-blue-200 text-[11px] font-semibold text-slate-700">
+              कन्फर्म करते ही <span className="font-black text-[#0c2340]">{formatExamDateDisplay(examDate)}</span>
+              {examShift.trim() ? ` (${examShift.trim()})` : ''} का पूरा रूम + टीचर + छात्र डेटा स्थायी रिकॉर्ड में जुड़ जाएगा।
+            </div>
           </div>
         </div>
 
@@ -1136,6 +1863,8 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
           </div>
         ))}
       </div>
+        </>
+      )}
     </div>
   );
 };

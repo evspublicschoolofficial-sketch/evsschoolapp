@@ -5530,6 +5530,7 @@ async function startServer() {
   });
 
   const EXAM_SEATING_CACHE_FILE = '/tmp/evs_exam_seating_plan.json';
+  const EXAM_SEATING_HISTORY_FILE = '/tmp/evs_exam_seating_history.json';
   let examSeatingStore: {
     rows: any[];
     roomMeta: Record<string, any>;
@@ -5558,10 +5559,119 @@ async function startServer() {
     }
   } catch {}
 
+  let examSeatingHistoryStore: any[] = [];
+  try {
+    if (fs.existsSync(EXAM_SEATING_HISTORY_FILE)) {
+      const rawHist = JSON.parse(fs.readFileSync(EXAM_SEATING_HISTORY_FILE, 'utf-8'));
+      if (Array.isArray(rawHist)) {
+        examSeatingHistoryStore = rawHist;
+      }
+    }
+  } catch {}
+
   const persistExamSeatingStore = () => {
     try {
       fs.writeFileSync(EXAM_SEATING_CACHE_FILE, JSON.stringify(examSeatingStore, null, 2), 'utf-8');
     } catch {}
+  };
+
+  const persistExamSeatingHistoryStore = () => {
+    try {
+      fs.writeFileSync(
+        EXAM_SEATING_HISTORY_FILE,
+        JSON.stringify(examSeatingHistoryStore.slice(0, 120), null, 2),
+        'utf-8'
+      );
+    } catch {}
+  };
+
+  const buildServerHistoryEntriesFromRows = (rows: any[], fallbackDate?: string, fallbackShift?: string) => {
+    if (!Array.isArray(rows) || rows.length === 0) return [];
+    const grouped = new Map<string, any[]>();
+    const defaultDate = String(fallbackDate || getLocalTimestampIST().slice(0, 10)).slice(0, 10);
+    for (const r of rows) {
+      if (!r || (!r.studentId && !r.studentName && !r.roomNo)) continue;
+      const examDate = String(r.examDate || defaultDate).trim().slice(0, 10);
+      const examShift = String(r.examShift !== undefined ? r.examShift : fallbackShift || '').trim();
+      const archiveKey =
+        String(r.archiveKey || '').trim() ||
+        (examShift ? `${examDate}::${examShift.toUpperCase()}` : `${examDate}::MAIN`);
+      const arr = grouped.get(archiveKey) || [];
+      arr.push({
+        ...r,
+        archiveKey,
+        examDate,
+        examShift,
+        updatedAt: String(r.updatedAt || getLocalTimestampIST()),
+      });
+      grouped.set(archiveKey, arr);
+    }
+
+    const entries: any[] = [];
+    for (const [archiveKey, grpRows] of grouped.entries()) {
+      const first = grpRows[0];
+      const roomMap = new Map<string, any>();
+      for (const r of grpRows) {
+        const rKey = String(r.slotKey || r.roomNo || 'Room');
+        let rm = roomMap.get(rKey);
+        if (!rm) {
+          rm = {
+            slotKey: r.slotKey || rKey,
+            roomNumber: r.roomNo || rKey,
+            invigilator: r.invigilator || '',
+            totalStudents: 0,
+            benchesSet: new Set<number>(),
+            classCounts: new Map<string, number>(),
+          };
+          roomMap.set(rKey, rm);
+        }
+        if (!rm.invigilator && r.invigilator) rm.invigilator = r.invigilator;
+        rm.totalStudents++;
+        if (r.benchNo) rm.benchesSet.add(Number(r.benchNo));
+        const cls = String(r.className || 'Class');
+        rm.classCounts.set(cls, (rm.classCounts.get(cls) || 0) + 1);
+      }
+      const roomsSummary = Array.from(roomMap.values()).map((rm) => ({
+        slotKey: rm.slotKey,
+        roomNumber: rm.roomNumber,
+        invigilator: rm.invigilator,
+        totalStudents: rm.totalStudents,
+        benchesCount: rm.benchesSet.size || 1,
+        classBreakdown: Array.from(rm.classCounts.entries()).map(([classLabel, count]) => ({
+          classLabel,
+          count,
+        })),
+      }));
+      entries.push({
+        archiveKey,
+        examDate: first.examDate,
+        examShift: first.examShift || '',
+        examType: first.examType || 'Exam',
+        session: first.session || '2026-27',
+        confirmedBy: first.confirmedBy || 'Manager',
+        savedAt: first.updatedAt || getLocalTimestampIST(),
+        totalStudents: grpRows.length,
+        totalBenches: roomsSummary.reduce((s, r) => s + r.benchesCount, 0),
+        roomsSummary,
+        rows: grpRows,
+      });
+    }
+    return entries;
+  };
+
+  const mergeServerHistoryLists = (primary: any[], secondary: any[]) => {
+    const byKey = new Map<string, any>();
+    for (const item of secondary) {
+      if (item?.archiveKey) byKey.set(item.archiveKey, item);
+    }
+    for (const item of primary) {
+      if (item?.archiveKey) byKey.set(item.archiveKey, item);
+    }
+    return Array.from(byKey.values()).sort((a, b) => {
+      const dCmp = String(b.examDate || '').localeCompare(String(a.examDate || ''));
+      if (dCmp !== 0) return dCmp;
+      return String(b.savedAt || '').localeCompare(String(a.savedAt || ''));
+    });
   };
 
   app.get('/api/exam-seating-plan', async (req, res) => {
@@ -5610,6 +5720,71 @@ async function startServer() {
     }
   });
 
+  app.get('/api/exam-seating-history', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      let sheetSynced = false;
+      try {
+        const gasRes = await fetch(`${targetUrl}?action=getExamSeatingHistory&_t=${Date.now()}`, {
+          redirect: 'follow',
+          signal: AbortSignal.timeout(9000),
+        });
+        if (gasRes.ok) {
+          const text = await gasRes.text();
+          if (text && !text.trim().startsWith('<')) {
+            const parsed: any = JSON.parse(text);
+            if (parsed?.status === 'success') {
+              sheetSynced = true;
+              const sheetEntries = Array.isArray(parsed.entries)
+                ? parsed.entries
+                : Array.isArray(parsed.rows)
+                ? buildServerHistoryEntriesFromRows(parsed.rows)
+                : [];
+              if (sheetEntries.length > 0) {
+                examSeatingHistoryStore = mergeServerHistoryLists(sheetEntries, examSeatingHistoryStore);
+                persistExamSeatingHistoryStore();
+              }
+            }
+          }
+        }
+      } catch {}
+
+      return res.json({
+        success: true,
+        sheetSynced,
+        entries: examSeatingHistoryStore,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Could not load seating history' });
+    }
+  });
+
+  app.delete('/api/exam-seating-history/:archiveKey', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const archiveKey = decodeURIComponent(String(req.params.archiveKey || req.body?.archiveKey || '')).trim();
+      if (!archiveKey) {
+        return res.status(400).json({ success: false, error: 'Missing archiveKey' });
+      }
+      examSeatingHistoryStore = examSeatingHistoryStore.filter((e) => e?.archiveKey !== archiveKey);
+      persistExamSeatingHistoryStore();
+
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'deleteExamSeatingHistory',
+        archiveKey,
+        appsScriptUrl: targetUrl,
+      });
+
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        entries: examSeatingHistoryStore,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Could not delete seating history entry' });
+    }
+  });
+
   app.post('/api/exam-seating-plan/draft', async (req, res) => {
     try {
       const targetUrl = resolveTargetAppsScriptUrl(req);
@@ -5655,6 +5830,8 @@ async function startServer() {
       const roomMeta = req.body?.roomMeta && typeof req.body.roomMeta === 'object' ? req.body.roomMeta : {};
       const approvedConfig =
         req.body?.approvedConfig && typeof req.body.approvedConfig === 'object' ? req.body.approvedConfig : null;
+      const examDate = String(req.body?.examDate || approvedConfig?.examDate || getLocalTimestampIST().slice(0, 10)).slice(0, 10);
+      const examShift = String(req.body?.examShift !== undefined ? req.body.examShift : approvedConfig?.examShift || '').trim();
 
       examSeatingStore = {
         rows,
@@ -5664,6 +5841,12 @@ async function startServer() {
         updatedAt: getLocalTimestampIST(),
       };
       persistExamSeatingStore();
+
+      const newHistoryEntries = buildServerHistoryEntriesFromRows(rows, examDate, examShift);
+      if (newHistoryEntries.length > 0) {
+        examSeatingHistoryStore = mergeServerHistoryLists(newHistoryEntries, examSeatingHistoryStore);
+        persistExamSeatingHistoryStore();
+      }
 
       const seatingBroadcast = JSON.stringify({
         type: 'APP_DATA_UPDATED',
@@ -5678,6 +5861,8 @@ async function startServer() {
       const gasResult = await forwardToGoogleAppsScript({
         action: 'saveExamSeatingPlan',
         rows,
+        examDate,
+        examShift,
         approvedConfig,
         appsScriptUrl: targetUrl,
       });
@@ -5687,6 +5872,7 @@ async function startServer() {
         sheetSynced: gasResult.ok,
         sheetError: gasResult.ok ? undefined : gasResult.error,
         savedCount: rows.length,
+        historyCount: examSeatingHistoryStore.length,
         ...examSeatingStore,
       });
     } catch (err: any) {

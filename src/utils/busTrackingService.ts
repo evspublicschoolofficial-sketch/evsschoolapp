@@ -455,7 +455,8 @@ function ensureFeatureBackupTabs(ss) {
   ensureTabSafe_(ss, "School_Holidays", ["School Holidays", "Holidays"], ["ID", "Date", "End_Date", "Title", "Category", "Description", "Timestamp"], added);
   ensureTabSafe_(ss, "Hall_Pass_Config", ["Hall Pass Config", "HallPassConfig", "Exam_Hall_Pass"], ["Config_Key", "Exam_Type", "Session", "Custom_Title", "Exam_Schedule_Line", "Instruction_Line", "Published_To_Parent", "Backside_Flip_Mode", "Datesheet_Arrival_Line", "Datesheet_Holiday_Note", "Datesheet_Rows_JSON", "Allowed_Overrides_JSON", "Updated_At"], added);
   ensureTabSafe_(ss, "Exam_Datesheet", ["Exam Datesheet", "Datesheet", "Exam_Schedule"], ["Date", "Day", "Play", "M1", "M2", "M3", "Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6 & 7", "Class 8"], added);
-  ensureTabSafe_(ss, "Exam_Seating_Plan", ["Exam Seating Plan", "Seating_Plan", "Seating Plan"], ["Slot_Key", "Room_No", "Wing", "Bench_No", "Seat_Position", "Student_ID", "Roll_Number", "Student_Name", "Class", "Invigilator", "Exam_Type", "Session", "Updated_At"], added);
+  ensureTabSafe_(ss, "Exam_Seating_Plan", ["Exam Seating Plan", "Seating_Plan", "Seating Plan"], ["Slot_Key", "Room_No", "Wing", "Bench_No", "Seat_Position", "Student_ID", "Roll_Number", "Student_Name", "Class", "Invigilator", "Exam_Type", "Session", "Updated_At", "Confirmed_By", "Status", "Exam_Date", "Exam_Shift"], added);
+  ensureTabSafe_(ss, "Exam_Seating_History", ["Exam Seating History", "Seating_History"], ["Archive_Key", "Exam_Date", "Exam_Shift", "Slot_Key", "Room_No", "Wing", "Bench_No", "Seat_Position", "Student_ID", "Roll_Number", "Student_Name", "Class", "Invigilator", "Exam_Type", "Session", "Saved_At", "Confirmed_By", "Status"], added);
   ensureTabSafe_(ss, "Fee_Waivers", ["Fee Waivers", "FeeWaivers"], ["Student_ID", "Is_Free", "Reason", "Updated_At", "Updated_TS", "Monthly_Discount"], added);
   ensureTabSafe_(ss, "Parent_Reviews", ["Parent Reviews", "ParentReviews"], ["Review_ID", "Student_ID", "Student_Name", "Class_Name", "Parent_Name", "Father_Name", "Parent_Mobile", "Rating", "Highlight_Category", "Review_Text", "Parent_Photo", "Marketing_Consent", "Status", "Featured", "Source", "Created_At", "Updated_At", "Survey_Answers_JSON"], added);
   return added;
@@ -742,6 +743,9 @@ function doGet(e) {
   if (action === "getExamSeatingPlan") {
     return handleGetExamSeatingPlan(ss);
   }
+  if (action === "getExamSeatingHistory") {
+    return handleGetExamSeatingHistory(ss);
+  }
   if (action === "getFeeWaivers") {
     return handleGetFeeWaivers(ss);
   }
@@ -753,7 +757,7 @@ function doGet(e) {
   }
 
   // 10. GET FALLBACK: Delegate write actions when called via GET query parameters
-  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "saveTeacherProfile" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveReportCardDraft" || action === "saveReportCardAccess" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig" || action === "saveExamDatesheet" || action === "saveExamSeatingPlan" || action === "saveExamSeatingDraft" || action === "saveFeeWaiver" || action === "saveFeeWaiversBatch" || action === "saveParentReview" || action === "updateParentReviewStatus" || action === "deleteParentReview") {
+  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "saveTeacherProfile" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveReportCardDraft" || action === "saveReportCardAccess" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig" || action === "saveExamDatesheet" || action === "saveExamSeatingPlan" || action === "saveExamSeatingDraft" || action === "deleteExamSeatingHistory" || action === "saveFeeWaiver" || action === "saveFeeWaiversBatch" || action === "saveParentReview" || action === "updateParentReviewStatus" || action === "deleteParentReview") {
     return doPost(e);
   }
 
@@ -1478,6 +1482,9 @@ function doPost(e) {
     }
     if (action === "saveExamSeatingDraft") {
       return handleSaveExamSeatingDraft(ss, data);
+    }
+    if (action === "deleteExamSeatingHistory") {
+      return handleDeleteExamSeatingHistory(ss, data);
     }
 
     // 17. FEE WAIVERS DIRECTORY (Fee_Waivers - Tuition-Only Waiver 2-Way Sync)
@@ -4149,13 +4156,27 @@ function handleSaveExamSeatingDraft(ss, data) {
   })).setMimeType(ContentService.MimeType.JSON);
 }
 
+function formatSheetCellDateKey_(val) {
+  if (val instanceof Date) {
+    return Utilities.formatDate(val, "Asia/Kolkata", "yyyy-MM-dd");
+  }
+  return String(val || "").trim();
+}
+
+function formatSheetCellTimestamp_(val) {
+  if (val instanceof Date) {
+    return Utilities.formatDate(val, "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  }
+  return String(val || "").trim();
+}
+
 function handleSaveExamSeatingPlan(ss, data) {
   ensureFeatureBackupTabs(ss);
   var sheet = findExistingSheet_(ss, ["Exam_Seating_Plan", "Exam Seating Plan", "Seating_Plan", "Seating Plan"]);
   if (!sheet) {
     return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "Exam_Seating_Plan tab not created" })).setMimeType(ContentService.MimeType.JSON);
   }
-  var headers = ["Slot_Key", "Room_No", "Wing", "Bench_No", "Seat_Position", "Student_ID", "Roll_Number", "Student_Name", "Class", "Invigilator", "Exam_Type", "Session", "Updated_At", "Confirmed_By", "Status"];
+  var headers = ["Slot_Key", "Room_No", "Wing", "Bench_No", "Seat_Position", "Student_ID", "Roll_Number", "Student_Name", "Class", "Invigilator", "Exam_Type", "Session", "Updated_At", "Confirmed_By", "Status", "Exam_Date", "Exam_Shift"];
   var hdrRange = sheet.getRange(1, 1, 1, headers.length);
   hdrRange.setValues([headers]);
   try {
@@ -4172,10 +4193,52 @@ function handleSaveExamSeatingPlan(ss, data) {
   var rows = data.rows ? (typeof data.rows === "string" ? JSON.parse(data.rows) : data.rows) : [];
   if (!Array.isArray(rows)) rows = [];
   var nowIst = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var todayDate = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd");
+  var appObj = null;
+  try {
+    if (data.approvedConfig) {
+      appObj = typeof data.approvedConfig === "string" ? JSON.parse(data.approvedConfig) : data.approvedConfig;
+    }
+  } catch (eParseCfg) {}
+
+  var reqExamDate = String(data.examDate || (appObj && appObj.examDate) || todayDate).trim().slice(0, 10);
+  var reqExamShift = String(data.examShift !== undefined ? data.examShift : ((appObj && appObj.examShift) || "")).trim();
+
   var outValues = [];
+  var historyNewValues = [];
+  var archiveKeysToReplace = {};
+
   for (var i = 0; i < rows.length; i++) {
     var item = rows[i] || {};
+    var rowExamDate = String(item.examDate || reqExamDate || todayDate).trim().slice(0, 10);
+    var rowExamShift = String(item.examShift !== undefined ? item.examShift : reqExamShift).trim();
+    var rowArchiveKey = String(item.archiveKey || "").trim() || (rowExamShift ? (rowExamDate + "::" + rowExamShift.toUpperCase()) : (rowExamDate + "::MAIN"));
+    archiveKeysToReplace[rowArchiveKey] = true;
+
     outValues.push([
+      String(item.slotKey || ""),
+      String(item.roomNo || ""),
+      String(item.wing || ""),
+      Number(item.benchNo) || 0,
+      String(item.seatPosition || ""),
+      String(item.studentId || ""),
+      String(item.rollNumber || ""),
+      String(item.studentName || ""),
+      String(item.className || ""),
+      String(item.invigilator || ""),
+      String(item.examType || ""),
+      String(item.session || ""),
+      nowIst,
+      String(item.confirmedBy || ""),
+      String(item.status || "Approved"),
+      rowExamDate,
+      rowExamShift
+    ]);
+
+    historyNewValues.push([
+      rowArchiveKey,
+      rowExamDate,
+      rowExamShift,
       String(item.slotKey || ""),
       String(item.roomNo || ""),
       String(item.wing || ""),
@@ -4196,9 +4259,60 @@ function handleSaveExamSeatingPlan(ss, data) {
   if (outValues.length > 0) {
     sheet.getRange(2, 1, outValues.length, headers.length).setValues(outValues);
   }
+
+  // Also preserve permanent Date + Shift archive in Exam_Seating_History tab
   try {
-    if (data.approvedConfig) {
-      var appObj = typeof data.approvedConfig === "string" ? JSON.parse(data.approvedConfig) : data.approvedConfig;
+    var histSheet = findExistingSheet_(ss, ["Exam_Seating_History", "Exam Seating History", "Seating_History"]);
+    if (histSheet && historyNewValues.length > 0) {
+      var histHeaders = ["Archive_Key", "Exam_Date", "Exam_Shift", "Slot_Key", "Room_No", "Wing", "Bench_No", "Seat_Position", "Student_ID", "Roll_Number", "Student_Name", "Class", "Invigilator", "Exam_Type", "Session", "Saved_At", "Confirmed_By", "Status"];
+      var hHdr = histSheet.getRange(1, 1, 1, histHeaders.length);
+      hHdr.setValues([histHeaders]);
+      try {
+        hHdr.setBackground("#0c2340").setFontColor("#fde68a").setFontWeight("bold");
+        histSheet.setFrozenRows(1);
+      } catch (eHistStyle) {}
+
+      var keptRows = [];
+      var hLastRow = histSheet.getLastRow();
+      if (hLastRow > 1) {
+        var existingHist = histSheet.getRange(2, 1, hLastRow - 1, histHeaders.length).getValues();
+        for (var h = 0; h < existingHist.length; h++) {
+          var er = existingHist[h];
+          var eKey = String(er[0] || "").trim();
+          if (!eKey && !er[4] && !er[10]) continue;
+          if (archiveKeysToReplace[eKey]) continue;
+          keptRows.push([
+            eKey,
+            formatSheetCellDateKey_(er[1]),
+            String(er[2] || "").trim(),
+            String(er[3] || "").trim(),
+            String(er[4] || "").trim(),
+            String(er[5] || "").trim(),
+            Number(er[6]) || 0,
+            String(er[7] || "").trim(),
+            String(er[8] || "").trim(),
+            String(er[9] || "").trim(),
+            String(er[10] || "").trim(),
+            String(er[11] || "").trim(),
+            String(er[12] || "").trim(),
+            String(er[13] || "").trim(),
+            String(er[14] || "").trim(),
+            formatSheetCellTimestamp_(er[15]),
+            String(er[16] || "").trim(),
+            String(er[17] || "").trim()
+          ]);
+        }
+        histSheet.getRange(2, 1, hLastRow - 1, Math.max(histSheet.getLastColumn(), histHeaders.length)).clearContent();
+      }
+      var finalHist = keptRows.concat(historyNewValues);
+      if (finalHist.length > 0) {
+        histSheet.getRange(2, 1, finalHist.length, histHeaders.length).setValues(finalHist);
+      }
+    }
+  } catch (eHist) {}
+
+  try {
+    if (appObj) {
       saveAppWorkflowJson_(ss, "EVS_EXAM_SEATING_APPROVED", appObj);
       saveAppWorkflowJson_(ss, "EVS_EXAM_SEATING_DRAFT", appObj);
     }
@@ -4206,7 +4320,81 @@ function handleSaveExamSeatingPlan(ss, data) {
   return ContentService.createTextOutput(JSON.stringify({
     status: "success",
     savedCount: outValues.length,
-    message: "Exam_Seating_Plan confirmed & saved permanently to Google Sheet!"
+    message: "Exam_Seating_Plan & Date-Wise Exam_Seating_History saved permanently to Google Sheet!"
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleGetExamSeatingHistory(ss) {
+  var histSheet = findExistingSheet_(ss, ["Exam_Seating_History", "Exam Seating History", "Seating_History"]);
+  if (!histSheet || histSheet.getLastRow() < 2) {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      rows: []
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var vals = histSheet.getDataRange().getValues();
+  var out = [];
+  for (var i = 1; i < vals.length; i++) {
+    var r = vals[i];
+    if (!r[0] && !r[4] && !r[10]) continue;
+    out.push({
+      archiveKey: String(r[0] || "").trim(),
+      examDate: formatSheetCellDateKey_(r[1]),
+      examShift: String(r[2] || "").trim(),
+      slotKey: String(r[3] || "").trim(),
+      roomNo: String(r[4] || "").trim(),
+      wing: String(r[5] || "").trim(),
+      benchNo: Number(r[6]) || 0,
+      seatPosition: String(r[7] || "").trim(),
+      studentId: String(r[8] || "").trim(),
+      rollNumber: String(r[9] || "").trim(),
+      studentName: String(r[10] || "").trim(),
+      className: String(r[11] || "").trim(),
+      invigilator: String(r[12] || "").trim(),
+      examType: String(r[13] || "").trim(),
+      session: String(r[14] || "").trim(),
+      updatedAt: formatSheetCellTimestamp_(r[15]),
+      confirmedBy: String(r[16] || "").trim(),
+      status: String(r[17] || "Approved").trim()
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    rows: out
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleDeleteExamSeatingHistory(ss, data) {
+  var targetKey = String(data.archiveKey || "").trim();
+  if (!targetKey) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "Missing archiveKey" })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var histSheet = findExistingSheet_(ss, ["Exam_Seating_History", "Exam Seating History", "Seating_History"]);
+  if (!histSheet || histSheet.getLastRow() < 2) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", deleted: 0 })).setMimeType(ContentService.MimeType.JSON);
+  }
+  var lastRow = histSheet.getLastRow();
+  var numCols = Math.max(histSheet.getLastColumn(), 18);
+  var vals = histSheet.getRange(2, 1, lastRow - 1, numCols).getValues();
+  var kept = [];
+  var deleted = 0;
+  for (var i = 0; i < vals.length; i++) {
+    var er = vals[i];
+    var eKey = String(er[0] || "").trim();
+    if (!eKey && !er[4] && !er[10]) continue;
+    if (eKey === targetKey) {
+      deleted++;
+      continue;
+    }
+    kept.push(er);
+  }
+  histSheet.getRange(2, 1, lastRow - 1, numCols).clearContent();
+  if (kept.length > 0) {
+    histSheet.getRange(2, 1, kept.length, numCols).setValues(kept);
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    deleted: deleted
   })).setMimeType(ContentService.MimeType.JSON);
 }
 

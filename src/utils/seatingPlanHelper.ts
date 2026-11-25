@@ -26,6 +26,8 @@ export interface SeatingPlanConfigPayload {
   seatsPerBench: number;
   mode: SeatingDistributionMode;
   status: SeatingPlanApprovalStatus;
+  examDate?: string;
+  examShift?: string;
   submittedBy?: string;
   submittedById?: string;
   submittedAt?: string;
@@ -85,6 +87,47 @@ export interface FullExamSeatingPlan {
 
 export const SEATING_PLAN_META_STORAGE_KEY = 'evs_exam_seating_rooms_v1';
 export const SEATING_PLAN_WORKFLOW_STORAGE_KEY = 'evs_exam_seating_workflow_v2';
+export const SEATING_PLAN_HISTORY_STORAGE_KEY = 'evs_exam_seating_history_v1';
+
+export function getTodayIstDateKey(): string {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
+export function formatExamDateDisplay(isoDate?: string | null): string {
+  const clean = String(isoDate || '').trim();
+  const m = clean.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return clean || '—';
+  return `${m[3]}/${m[2]}/${m[1]}`;
+}
+
+export function normalizeExamDateKey(raw?: string | null): string {
+  const s = String(raw || '').trim();
+  if (!s) return getTodayIstDateKey();
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (dmy) {
+    return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
+  }
+  return s.slice(0, 10);
+}
+
+export function buildSeatingArchiveKey(examDate?: string | null, examShift?: string | null): string {
+  const datePart = normalizeExamDateKey(examDate);
+  const shiftClean = String(examShift || '')
+    .trim()
+    .replace(/\s+/g, ' ');
+  return shiftClean ? `${datePart}::${shiftClean.toUpperCase()}` : `${datePart}::MAIN`;
+}
 
 export const DEFAULT_ROOM_META: Record<string, RoomCustomMeta> = {
   pre_1: { roomNumber: 'Room 1', invigilator: '' },
@@ -161,6 +204,8 @@ export function loadLocalSeatingWorkflow(): SeatingPlanConfigPayload | null {
           parsed.status === 'pending_approval' || parsed.status === 'approved'
             ? parsed.status
             : 'draft',
+        examDate: parsed.examDate ? normalizeExamDateKey(parsed.examDate) : getTodayIstDateKey(),
+        examShift: parsed.examShift ? String(parsed.examShift) : '',
         submittedBy: parsed.submittedBy ? String(parsed.submittedBy) : undefined,
         submittedById: parsed.submittedById ? String(parsed.submittedById) : undefined,
         submittedAt: parsed.submittedAt ? String(parsed.submittedAt) : undefined,
@@ -874,9 +919,14 @@ export function generateExamSeatingPlanPdf(opts: {
   config: HallPassConfig;
   selectedRoomKey?: string;
   seatsPerBench?: number;
+  examDate?: string;
+  examShift?: string;
 }): string {
-  const { plan, config, selectedRoomKey, seatsPerBench = 3 } = opts;
+  const { plan, config, selectedRoomKey, seatsPerBench = 3, examDate, examShift } = opts;
+  const dateSuffix = examDate ? ` · Date: ${formatExamDateDisplay(examDate)}` : '';
+  const shiftSuffix = examShift && examShift.trim() ? ` · ${examShift.trim()}` : '';
   const examTitle = getExamDisplayTitle(config.examType, config.customExamTitle);
+  const examMetaLine = `${examTitle} (${config.session})${dateSuffix}${shiftSuffix}`;
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -911,9 +961,13 @@ export function generateExamSeatingPlanPdf(opts: {
     doc.setFontSize(14);
     doc.text('E.V.S. PUBLIC SCHOOL — EXAM SEATING PLAN MASTER CHART', 105, 19, { align: 'center' });
     doc.setTextColor(...AMBER);
-    doc.setFontSize(10);
+    doc.setFontSize(9.5);
     doc.text(
-      `${examTitle} (${config.session}) · Seated: ${plan.allocatedStudentsCount}/${plan.totalStudents} · ${plan.rooms.length} Rooms · ${seatsPerBench} Seats/Bench`,
+      fitPdfText(
+        doc,
+        `${examMetaLine} · Seated: ${plan.allocatedStudentsCount}/${plan.totalStudents} · ${plan.rooms.length} Rooms`,
+        184
+      ),
       105,
       26.5,
       { align: 'center' }
@@ -1011,8 +1065,8 @@ export function generateExamSeatingPlanPdf(opts: {
     doc.text(`E.V.S. PUBLIC SCHOOL — ${room.roomNumber.toUpperCase()}`, 14, 18.5);
 
     doc.setTextColor(...AMBER);
-    doc.setFontSize(9.5);
-    doc.text(`${examTitle} (${config.session})`, 14, 25.5);
+    doc.setFontSize(9);
+    doc.text(fitPdfText(doc, examMetaLine, 118), 14, 25.5);
 
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(9.5);
@@ -1150,6 +1204,9 @@ export function generateExamSeatingPlanPdf(opts: {
 }
 
 export interface SheetSeatingRow {
+  archiveKey?: string;
+  examDate?: string;
+  examShift?: string;
   slotKey: string;
   roomNo: string;
   wing: string;
@@ -1162,21 +1219,52 @@ export interface SheetSeatingRow {
   invigilator: string;
   examType: string;
   session: string;
+  updatedAt?: string;
   confirmedBy?: string;
   status?: string;
+}
+
+export interface ExamSeatingHistoryRoomSummary {
+  slotKey: string;
+  roomNumber: string;
+  invigilator: string;
+  totalStudents: number;
+  benchesCount: number;
+  classBreakdown: Array<{ classLabel: string; count: number }>;
+}
+
+export interface ExamSeatingHistoryEntry {
+  archiveKey: string;
+  examDate: string;
+  examShift: string;
+  examType: string;
+  session: string;
+  confirmedBy: string;
+  savedAt: string;
+  totalStudents: number;
+  totalBenches: number;
+  roomsSummary: ExamSeatingHistoryRoomSummary[];
+  rows: SheetSeatingRow[];
 }
 
 export function flattenSeatingPlanForSheet(
   plan: FullExamSeatingPlan,
   config: HallPassConfig,
-  confirmedBy?: string
+  confirmedBy?: string,
+  meta?: { examDate?: string; examShift?: string }
 ): SheetSeatingRow[] {
+  const examDate = normalizeExamDateKey(meta?.examDate);
+  const examShift = String(meta?.examShift || '').trim();
+  const archiveKey = buildSeatingArchiveKey(examDate, examShift);
   const out: SheetSeatingRow[] = [];
   for (const room of plan.rooms) {
     const wing = room.groupLabelHi || (room.group === 'pre_primary' ? 'Play - UKG (M3)' : 'Class 1st - 8th');
     for (const bench of room.benches) {
       for (const seat of bench.seats) {
         out.push({
+          archiveKey,
+          examDate,
+          examShift,
           slotKey: room.slotKey,
           roomNo: room.roomNumber,
           wing,
@@ -1196,6 +1284,261 @@ export function flattenSeatingPlanForSheet(
     }
   }
   return out;
+}
+
+export function buildHistoryEntriesFromRows(rows: SheetSeatingRow[]): ExamSeatingHistoryEntry[] {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  const grouped = new Map<string, SheetSeatingRow[]>();
+
+  for (const row of rows) {
+    if (!row || (!row.studentId && !row.studentName && !row.roomNo)) continue;
+    const examDate = normalizeExamDateKey(row.examDate || (row.updatedAt ? String(row.updatedAt).slice(0, 10) : ''));
+    const examShift = String(row.examShift || '').trim();
+    const archiveKey = String(row.archiveKey || '').trim() || buildSeatingArchiveKey(examDate, examShift);
+    const normalizedRow: SheetSeatingRow = {
+      ...row,
+      archiveKey,
+      examDate,
+      examShift,
+    };
+    const arr = grouped.get(archiveKey) || [];
+    arr.push(normalizedRow);
+    grouped.set(archiveKey, arr);
+  }
+
+  const entries: ExamSeatingHistoryEntry[] = [];
+  for (const [archiveKey, grpRows] of grouped.entries()) {
+    const first = grpRows[0];
+    const roomMap = new Map<
+      string,
+      {
+        slotKey: string;
+        roomNumber: string;
+        invigilator: string;
+        totalStudents: number;
+        benchesSet: Set<number>;
+        classCounts: Map<string, number>;
+      }
+    >();
+
+    for (const r of grpRows) {
+      const rKey = r.slotKey || r.roomNo || 'Room';
+      let rm = roomMap.get(rKey);
+      if (!rm) {
+        rm = {
+          slotKey: r.slotKey || rKey,
+          roomNumber: r.roomNo || rKey,
+          invigilator: r.invigilator || '',
+          totalStudents: 0,
+          benchesSet: new Set<number>(),
+          classCounts: new Map<string, number>(),
+        };
+        roomMap.set(rKey, rm);
+      }
+      if (!rm.invigilator && r.invigilator) rm.invigilator = r.invigilator;
+      rm.totalStudents++;
+      if (r.benchNo) rm.benchesSet.add(Number(r.benchNo));
+      const cls = r.className || 'Class';
+      rm.classCounts.set(cls, (rm.classCounts.get(cls) || 0) + 1);
+    }
+
+    const roomsSummary: ExamSeatingHistoryRoomSummary[] = Array.from(roomMap.values()).map((rm) => ({
+      slotKey: rm.slotKey,
+      roomNumber: rm.roomNumber,
+      invigilator: rm.invigilator,
+      totalStudents: rm.totalStudents,
+      benchesCount: rm.benchesSet.size || 1,
+      classBreakdown: Array.from(rm.classCounts.entries()).map(([classLabel, count]) => ({
+        classLabel,
+        count,
+      })),
+    }));
+
+    const totalBenches = roomsSummary.reduce((s, r) => s + r.benchesCount, 0);
+    entries.push({
+      archiveKey,
+      examDate: first.examDate || getTodayIstDateKey(),
+      examShift: first.examShift || '',
+      examType: first.examType || 'Exam',
+      session: first.session || '2026-27',
+      confirmedBy: first.confirmedBy || 'Manager',
+      savedAt: first.updatedAt || `${first.examDate || ''} 09:00:00`,
+      totalStudents: grpRows.length,
+      totalBenches,
+      roomsSummary,
+      rows: grpRows,
+    });
+  }
+
+  return entries.sort((a, b) => {
+    const dCmp = b.examDate.localeCompare(a.examDate);
+    if (dCmp !== 0) return dCmp;
+    return String(b.savedAt || '').localeCompare(String(a.savedAt || ''));
+  });
+}
+
+export function buildExamSeatingPlanFromHistoryEntry(
+  entry: ExamSeatingHistoryEntry
+): { plan: FullExamSeatingPlan; seatsPerBench: number } {
+  const roomsByKey = new Map<string, SheetSeatingRow[]>();
+  const roomOrder: string[] = [];
+
+  for (const r of entry.rows || []) {
+    const rKey = r.slotKey || r.roomNo || 'Room';
+    if (!roomsByKey.has(rKey)) {
+      roomsByKey.set(rKey, []);
+      roomOrder.push(rKey);
+    }
+    roomsByKey.get(rKey)!.push(r);
+  }
+
+  let detectedSeatsPerBench = 2;
+  const rooms: ExamRoomPlan[] = roomOrder.map((rKey, rIdx) => {
+    const rRows = roomsByKey.get(rKey) || [];
+    const benchesMap = new Map<number, SheetSeatingRow[]>();
+    for (const r of rRows) {
+      const bNo = Math.max(1, Number(r.benchNo) || 1);
+      const list = benchesMap.get(bNo) || [];
+      list.push(r);
+      benchesMap.set(bNo, list);
+    }
+
+    const posRank = (pos: string): number => {
+      const p = String(pos || '').toLowerCase();
+      if (p.includes('left')) return 0;
+      if (p.includes('middle')) return 1;
+      if (p.includes('right')) return 2;
+      if (p.includes('4')) return 3;
+      return 4;
+    };
+
+    const sortedBenchNos = Array.from(benchesMap.keys()).sort((a, b) => a - b);
+    const benches: SeatingBench[] = sortedBenchNos.map((bNo) => {
+      const seatRows = [...(benchesMap.get(bNo) || [])].sort(
+        (a, b) => posRank(a.seatPosition) - posRank(b.seatPosition)
+      );
+      if (seatRows.length > detectedSeatsPerBench) {
+        detectedSeatsPerBench = Math.min(4, seatRows.length);
+      }
+      return {
+        benchNumber: bNo,
+        seats: seatRows.map((sr, sIdx) => {
+          const canonCode = normalizeCanonicalClassCode(sr.className, sr.className);
+          const posName: SeatingBenchSeat['seatPosition'] =
+            sr.seatPosition === 'Left' ||
+            sr.seatPosition === 'Middle' ||
+            sr.seatPosition === 'Right' ||
+            sr.seatPosition === 'Seat 4'
+              ? sr.seatPosition
+              : getSeatPositionName(sIdx, seatRows.length);
+          return {
+            student: {
+              Student_ID: sr.studentId || `HIS-${bNo}-${sIdx}`,
+              Admission_Number: '',
+              Roll_Number: sr.rollNumber || '',
+              Student_Name: sr.studentName || 'Student',
+              Class: canonCode,
+              Father_Name: '',
+              Mother_Name: '',
+              Parent_Mobile: '',
+            },
+            classCode: canonCode,
+            classLabel: sr.className || DEFAULT_CLASS_NAMES[canonCode] || canonCode,
+            seatPosition: posName,
+          };
+        }),
+      };
+    });
+
+    const classMap = new Map<string, { classCode: string; classLabel: string; count: number }>();
+    let adjacentSameClassPairs = 0;
+    for (const b of benches) {
+      for (let i = 0; i < b.seats.length; i++) {
+        const s = b.seats[i];
+        const prev = classMap.get(s.classCode);
+        if (prev) prev.count++;
+        else classMap.set(s.classCode, { classCode: s.classCode, classLabel: s.classLabel, count: 1 });
+        if (i < b.seats.length - 1 && s.classCode === b.seats[i + 1].classCode) {
+          adjacentSameClassPairs++;
+        }
+      }
+    }
+
+    const firstRow = rRows[0];
+    const classBreakdown = Array.from(classMap.values()).map((c) => ({
+      classCode: c.classCode,
+      classLabel: c.classLabel,
+      count: c.count,
+    }));
+
+    return {
+      slotKey: firstRow?.slotKey || rKey,
+      group: 'mixed' as const,
+      groupLabelHi: firstRow?.wing || 'Exam Room',
+      defaultRoomName: `Room ${rIdx + 1}`,
+      roomNumber: firstRow?.roomNo || rKey,
+      invigilator: firstRow?.invigilator || '',
+      benches,
+      totalStudents: rRows.length,
+      adjacentSameClassPairs,
+      classBreakdown,
+    };
+  });
+
+  const totalStudents = rooms.reduce((s, r) => s + r.totalStudents, 0);
+  const totalBenches = rooms.reduce((s, r) => s + r.benches.length, 0);
+  const totalSameClassConflicts = rooms.reduce((s, r) => s + r.adjacentSameClassPairs, 0);
+
+  return {
+    seatsPerBench: detectedSeatsPerBench,
+    plan: {
+      rooms,
+      totalStudents,
+      allocatedStudentsCount: totalStudents,
+      unassignedCount: 0,
+      unassignedStudents: [],
+      classSummaries: [],
+      prePrimaryCount: 0,
+      upperCount: totalStudents,
+      totalBenches,
+      totalSameClassConflicts,
+    },
+  };
+}
+
+export function loadLocalSeatingHistory(): ExamSeatingHistoryEntry[] {
+  try {
+    const raw = localStorage.getItem(SEATING_PLAN_HISTORY_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalSeatingHistory(entries: ExamSeatingHistoryEntry[]): void {
+  try {
+    localStorage.setItem(SEATING_PLAN_HISTORY_STORAGE_KEY, JSON.stringify(entries.slice(0, 60)));
+  } catch {}
+}
+
+export function mergeSeatingHistoryLists(
+  primary: ExamSeatingHistoryEntry[],
+  secondary: ExamSeatingHistoryEntry[]
+): ExamSeatingHistoryEntry[] {
+  const byKey = new Map<string, ExamSeatingHistoryEntry>();
+  for (const item of secondary) {
+    if (item?.archiveKey) byKey.set(item.archiveKey, item);
+  }
+  for (const item of primary) {
+    if (item?.archiveKey) byKey.set(item.archiveKey, item);
+  }
+  return Array.from(byKey.values()).sort((a, b) => {
+    const dCmp = String(b.examDate || '').localeCompare(String(a.examDate || ''));
+    if (dCmp !== 0) return dCmp;
+    return String(b.savedAt || '').localeCompare(String(a.savedAt || ''));
+  });
 }
 
 export interface ExamSeatingSnapshot {
@@ -1260,6 +1603,73 @@ export async function fetchExamSeatingPlanSnapshot(forceRefresh = false): Promis
   return apiSnap;
 }
 
+export async function fetchExamSeatingHistory(forceRefresh = false): Promise<{
+  entries: ExamSeatingHistoryEntry[];
+  sheetSynced: boolean;
+}> {
+  const activeUrl = getAppsScriptUrl();
+  const localEntries = loadLocalSeatingHistory();
+  let serverEntries: ExamSeatingHistoryEntry[] = [];
+  let sheetSynced = false;
+
+  try {
+    const res = await fetch(`/api/exam-seating-history${forceRefresh ? '?refresh=1&' : '?'}_t=${Date.now()}`, {
+      headers: { 'x-apps-script-url': activeUrl },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(10000),
+    });
+    if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
+      const json = await res.json();
+      if (Array.isArray(json?.entries)) {
+        serverEntries = json.entries;
+      } else if (Array.isArray(json?.rows)) {
+        serverEntries = buildHistoryEntriesFromRows(json.rows);
+      }
+      sheetSynced = Boolean(json?.sheetSynced);
+    }
+  } catch {}
+
+  if (!sheetSynced) {
+    try {
+      const direct = await directGetFromSheet('getExamSeatingHistory', activeUrl);
+      if (direct.ok && direct.json) {
+        const sheetEntries = Array.isArray(direct.json.entries)
+          ? direct.json.entries
+          : Array.isArray(direct.json.rows)
+          ? buildHistoryEntriesFromRows(direct.json.rows)
+          : [];
+        if (sheetEntries.length > 0 || direct.json.status === 'success') {
+          sheetSynced = true;
+          const merged = mergeSeatingHistoryLists(sheetEntries, mergeSeatingHistoryLists(serverEntries, localEntries));
+          saveLocalSeatingHistory(merged);
+          return { entries: merged, sheetSynced };
+        }
+      }
+    } catch {}
+  }
+
+  const merged = mergeSeatingHistoryLists(serverEntries, localEntries);
+  if (merged.length > 0) saveLocalSeatingHistory(merged);
+  return { entries: merged, sheetSynced };
+}
+
+export async function deleteExamSeatingHistoryEntry(
+  archiveKey: string
+): Promise<{ serverOk: boolean; sheetSynced: boolean }> {
+  const nextLocal = loadLocalSeatingHistory().filter((e) => e.archiveKey !== archiveKey);
+  saveLocalSeatingHistory(nextLocal);
+  const syncRes = await dualSyncWriteToSheet({
+    apiPath: `/api/exam-seating-history/${encodeURIComponent(archiveKey)}`,
+    method: 'DELETE',
+    apiBody: { archiveKey },
+    directPayload: {
+      action: 'deleteExamSeatingHistory',
+      archiveKey,
+    },
+  });
+  return { serverOk: syncRes.serverOk, sheetSynced: syncRes.sheetSynced };
+}
+
 export async function fetchExamSeatingPlanRoomMeta(): Promise<Record<string, RoomCustomMeta> | null> {
   const snap = await fetchExamSeatingPlanSnapshot();
   return snap ? snap.roomMeta : null;
@@ -1305,31 +1715,49 @@ export async function saveTeacherSeatingDraft(
 }
 
 /**
- * Manager confirms the Seating Plan and saves all seats permanently to Google Sheet ("Exam_Seating_Plan" tab).
+ * Manager confirms the Seating Plan and saves all seats permanently to Google Sheet:
+ * 1) "Exam_Seating_Plan" tab (active/latest display)
+ * 2) "Exam_Seating_History" tab (date + shift permanent searchable archive)
  */
 export async function saveExamSeatingPlanToSheet(
   plan: FullExamSeatingPlan,
   config: HallPassConfig,
   roomMeta: Record<string, RoomCustomMeta>,
   approvedConfig?: SeatingPlanConfigPayload
-): Promise<{ savedCount: number; sheetSynced: boolean; sheetError?: string }> {
+): Promise<{ savedCount: number; sheetSynced: boolean; historySaved?: boolean; sheetError?: string }> {
   saveRoomMeta(roomMeta);
   if (approvedConfig) {
     saveLocalSeatingWorkflow(approvedConfig);
   }
-  const rows = flattenSeatingPlanForSheet(plan, config, approvedConfig?.approvedBy);
+  const examDate = normalizeExamDateKey(approvedConfig?.examDate);
+  const examShift = String(approvedConfig?.examShift || '').trim();
+  const rows = flattenSeatingPlanForSheet(plan, config, approvedConfig?.approvedBy, {
+    examDate,
+    examShift,
+  });
+
+  // Immediately persist to local browser history archive so history search works instantaneously
+  const historyBatch = buildHistoryEntriesFromRows(rows);
+  if (historyBatch.length > 0) {
+    const mergedLocal = mergeSeatingHistoryLists(historyBatch, loadLocalSeatingHistory());
+    saveLocalSeatingHistory(mergedLocal);
+  }
+
   const syncRes = await dualSyncWriteToSheet({
     apiPath: '/api/exam-seating-plan',
-    apiBody: { rows, roomMeta, approvedConfig },
+    apiBody: { rows, roomMeta, approvedConfig, examDate, examShift },
     directPayload: {
       action: 'saveExamSeatingPlan',
       rows: JSON.stringify(rows),
+      examDate,
+      examShift,
       approvedConfig: approvedConfig ? JSON.stringify(approvedConfig) : '',
     },
   });
   return {
     savedCount: rows.length,
     sheetSynced: syncRes.sheetSynced,
+    historySaved: syncRes.serverOk || syncRes.sheetSynced,
     sheetError: syncRes.sheetError,
   };
 }
