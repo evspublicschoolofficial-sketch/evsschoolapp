@@ -11795,6 +11795,20 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         : ''}
                       )।
                     </p>
+                    <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                      <span className="text-[11px] font-black text-[#0c2340]">कक्षा-वार बच्चे:</span>
+                      {teacherAssignedRooms.flatMap((rm) =>
+                        rm.classBreakdown.map((cb) => (
+                          <span
+                            key={`${rm.slotKey}-${cb.classCode}`}
+                            className="px-2 py-0.5 rounded-lg bg-white border border-emerald-300 text-[11px] font-black text-[#0c2340] tabular-nums shadow-2xs"
+                          >
+                            {teacherAssignedRooms.length > 1 ? `${rm.roomNumber} · ` : ''}
+                            {cb.classLabel}: {cb.count}
+                          </span>
+                        ))
+                      )}
+                    </div>
                   </div>
                 </div>
                 <button

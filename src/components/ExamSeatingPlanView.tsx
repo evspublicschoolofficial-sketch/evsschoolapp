@@ -119,6 +119,7 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
   const [roomNoteDraft, setRoomNoteDraft] = useState<string>('');
   const [roomStudentSearch, setRoomStudentSearch] = useState<string>('');
   const [roomStatusFilter, setRoomStatusFilter] = useState<'ALL' | RoomStudentCheckInStatus>('ALL');
+  const [roomClassFilter, setRoomClassFilter] = useState<string>('ALL');
   const [roomViewMode, setRoomViewMode] = useState<'list' | 'bench'>('list');
   const [savingRoomDispatch, setSavingRoomDispatch] = useState<boolean>(false);
 
@@ -355,6 +356,10 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
     activeMyRoom?.sentCount,
     activeMyRoom?.absentCount,
   ]);
+
+  useEffect(() => {
+    setRoomClassFilter('ALL');
+  }, [activeMyRoom?.archiveKey, activeMyRoom?.slotKey]);
 
   const activeArchiveKey = useMemo(
     () => buildSeatingArchiveKey(examDate, examShift),
@@ -886,10 +891,46 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
     return { sent, absent, pending };
   }, [activeMyRoom, roomStatusDrafts]);
 
+  const myRoomClassStats = useMemo(() => {
+    if (!activeMyRoom) return [];
+    const statsMap = new Map<
+      string,
+      { classCode: string; classLabel: string; total: number; sent: number; absent: number; pending: number }
+    >();
+    activeMyRoom.classBreakdown.forEach((cb) => {
+      statsMap.set(cb.classCode, {
+        classCode: cb.classCode,
+        classLabel: cb.classLabel,
+        total: 0,
+        sent: 0,
+        absent: 0,
+        pending: 0,
+      });
+    });
+    activeMyRoom.studentsList.forEach((st) => {
+      const existing = statsMap.get(st.classCode) || {
+        classCode: st.classCode,
+        classLabel: st.classLabel,
+        total: 0,
+        sent: 0,
+        absent: 0,
+        pending: 0,
+      };
+      existing.total += 1;
+      const status = roomStatusDrafts[st.studentId] ?? st.roomCheckInStatus ?? 'Pending';
+      if (status === 'Sent to Room') existing.sent += 1;
+      else if (status === 'Absent') existing.absent += 1;
+      else existing.pending += 1;
+      statsMap.set(st.classCode, existing);
+    });
+    return Array.from(statsMap.values());
+  }, [activeMyRoom, roomStatusDrafts]);
+
   const filteredMyRoomStudents = useMemo(() => {
     if (!activeMyRoom) return [];
     const q = roomStudentSearch.trim().toLowerCase();
     return activeMyRoom.studentsList.filter((st) => {
+      if (roomClassFilter !== 'ALL' && st.classCode !== roomClassFilter) return false;
       const status = roomStatusDrafts[st.studentId] ?? st.roomCheckInStatus ?? 'Pending';
       if (roomStatusFilter !== 'ALL' && status !== roomStatusFilter) return false;
       if (q) {
@@ -898,7 +939,7 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
       }
       return true;
     });
-  }, [activeMyRoom, roomStatusDrafts, roomStudentSearch, roomStatusFilter]);
+  }, [activeMyRoom, roomStatusDrafts, roomStudentSearch, roomStatusFilter, roomClassFilter]);
 
   return (
     <div className="space-y-4">
@@ -1134,6 +1175,82 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
                     <div className="text-xl font-black text-rose-300 tabular-nums">{myRoomLiveStats.absent}</div>
                   </div>
                 </div>
+
+                {/* PROMINENT CLASS-WISE STUDENT COUNT CARDS */}
+                {myRoomClassStats.length > 0 && (
+                  <div className="pt-2.5 border-t border-white/15 space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-xs font-black text-amber-300 flex items-center gap-1.5">
+                        <i className="fa-solid fa-layer-group"></i>
+                        <span>किस कक्षा के कितने बच्चे ({myRoomClassStats.length} कक्षाएं)</span>
+                      </span>
+                      <div className="flex items-center gap-2">
+                        {roomClassFilter !== 'ALL' ? (
+                          <button
+                            type="button"
+                            onClick={() => setRoomClassFilter('ALL')}
+                            className="px-2.5 py-1 rounded-lg bg-amber-400 text-slate-950 text-[11px] font-black cursor-pointer hover:bg-amber-300"
+                          >
+                            सभी कक्षाएं दिखाएं ({activeMyRoom.totalStudents})
+                          </button>
+                        ) : (
+                          <span className="text-[11px] font-semibold text-blue-200">
+                            किसी कक्षा पर टैप करके उसी कक्षा के बच्चे देखें
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-2">
+                      {myRoomClassStats.map((cls) => {
+                        const isSelected = roomClassFilter === cls.classCode;
+                        return (
+                          <button
+                            key={cls.classCode}
+                            type="button"
+                            onClick={() => setRoomClassFilter(isSelected ? 'ALL' : cls.classCode)}
+                            className={`text-left rounded-xl px-3 py-2 border transition-all cursor-pointer ${
+                              isSelected
+                                ? 'bg-amber-400 border-amber-300 text-slate-950 shadow-md ring-2 ring-amber-300/60'
+                                : 'bg-white/10 hover:bg-white/20 border-white/15 text-white'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-1">
+                              <span
+                                className={`text-xs font-black truncate ${
+                                  isSelected ? 'text-slate-950' : 'text-amber-300'
+                                }`}
+                              >
+                                {cls.classLabel}
+                              </span>
+                              <span
+                                className={`text-base font-black tabular-nums leading-none ${
+                                  isSelected ? 'text-slate-950' : 'text-white'
+                                }`}
+                              >
+                                {cls.total}
+                              </span>
+                            </div>
+                            <div
+                              className={`text-[10px] font-bold mt-1 tabular-nums flex items-center justify-between gap-1 ${
+                                isSelected ? 'text-slate-900' : 'text-blue-100'
+                              }`}
+                            >
+                              <span>{cls.total} बच्चे</span>
+                              <span>
+                                {cls.sent === cls.total
+                                  ? '✓ सभी भेजे'
+                                  : cls.sent > 0 || cls.absent > 0
+                                  ? `✓${cls.sent}${cls.absent > 0 ? ` ✕${cls.absent}` : ''}`
+                                  : `बाकी ${cls.pending}`}
+                              </span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {errorMsg && (
@@ -1184,6 +1301,20 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
                       </button>
                     ))}
 
+                    {roomClassFilter !== 'ALL' && (
+                      <button
+                        type="button"
+                        onClick={() => setRoomClassFilter('ALL')}
+                        className="px-2.5 py-1.5 rounded-lg text-[11px] font-black cursor-pointer bg-amber-100 text-amber-950 border border-amber-300 hover:bg-amber-200 inline-flex items-center gap-1"
+                      >
+                        <span>
+                          कक्षा:{' '}
+                          {myRoomClassStats.find((c) => c.classCode === roomClassFilter)?.classLabel ||
+                            roomClassFilter}
+                        </span>
+                        <i className="fa-solid fa-xmark"></i>
+                      </button>
+                    )}
                     <div className="inline-flex items-center p-0.5 bg-slate-100 rounded-lg ml-1">
                       <button
                         type="button"
@@ -1341,11 +1472,14 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
                           const status = roomStatusDrafts[sId] ?? 'Pending';
                           const badgeClass =
                             CLASS_BADGE_COLORS[seat.classCode] || 'bg-slate-100 text-slate-900 border-slate-300';
+                          const matchesClass = roomClassFilter === 'ALL' || seat.classCode === roomClassFilter;
                           return (
                             <div
                               key={sId}
-                              className={`p-2.5 space-y-2 ${
-                                status === 'Sent to Room'
+                              className={`p-2.5 space-y-2 transition-opacity ${
+                                !matchesClass
+                                  ? 'opacity-35 bg-slate-50'
+                                  : status === 'Sent to Room'
                                   ? 'bg-emerald-50/60'
                                   : status === 'Absent'
                                   ? 'bg-rose-50/60'
