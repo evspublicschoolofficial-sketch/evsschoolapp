@@ -60,6 +60,12 @@ export const EXAM_TERM_LABELS: Record<ExamTermType, string> = {
   Annual: 'सालाना परीक्षा (Annual Exam)',
 };
 
+export const DEFAULT_MAX_MARKS_BY_TERM: Record<ExamTermType, number> = {
+  Quarterly: 40,
+  'Half-Yearly': 60,
+  Annual: 100,
+};
+
 export const loadLocalExamMarks = (): ExamMarkRecord[] => {
   try {
     const raw = localStorage.getItem(EXAM_MARKS_STORAGE_KEY);
@@ -885,13 +891,14 @@ export const computeStudentReportCardData = (params: {
 
   const subjectMap = new Map<string, SubjectScoreRow>();
   const ensureSubjectRow = (rawLabel: string): SubjectScoreRow => {
-    const key = normalizeSubjectKey(rawLabel) || rawLabel.trim().toLowerCase();
+    const safeRaw = String(rawLabel || 'General');
+    const key = normalizeSubjectKey(safeRaw) || safeRaw.trim().toLowerCase();
     const existing = subjectMap.get(key);
     if (existing) return existing;
-    const strippedRaw = String(rawLabel || '').replace(/\s*\([^)]*\)\s*/g, ' ').trim();
+    const strippedRaw = safeRaw.replace(/\s*\([^)]*\)\s*/g, ' ').trim();
     const cleanEnglish =
       ENGLISH_SUBJECT_LABELS[key] ||
-      (/^[A-Za-z0-9\s/&.-]+$/.test(strippedRaw) ? strippedRaw : rawLabel.trim()) ||
+      (/^[A-Za-z0-9\s/&.-]+$/.test(strippedRaw) ? strippedRaw : safeRaw.trim()) ||
       'Other Subject';
     const created: SubjectScoreRow = {
       subjectKey: key,
@@ -901,13 +908,13 @@ export const computeStudentReportCardData = (params: {
       weeklyCount: 0,
       weeklyAbsentCount: 0,
       quarterlyObtained: null,
-      quarterlyMax: 50,
+      quarterlyMax: DEFAULT_MAX_MARKS_BY_TERM.Quarterly,
       quarterlyAbsent: false,
       halfYearlyObtained: null,
-      halfYearlyMax: 100,
+      halfYearlyMax: DEFAULT_MAX_MARKS_BY_TERM['Half-Yearly'],
       halfYearlyAbsent: false,
       annualObtained: null,
-      annualMax: 100,
+      annualMax: DEFAULT_MAX_MARKS_BY_TERM.Annual,
       annualAbsent: false,
       combinedObtained: 0,
       combinedMax: 0,
@@ -936,7 +943,8 @@ export const computeStudentReportCardData = (params: {
 
   sortedExams.forEach((em) => {
     const row = ensureSubjectRow(em.subject || 'General');
-    const maxM = Math.max(1, Number(em.max_marks) || 50);
+    const termDefault = DEFAULT_MAX_MARKS_BY_TERM[em.exam_type] || 40;
+    const maxM = Math.max(1, Number(em.max_marks) || termDefault);
     const isAbs = em.attendance_status === 'Absent';
     const obtM = isAbs ? 0 : Math.max(0, Number(em.marks_obtained) || 0);
     if (em.exam_type === 'Quarterly') {

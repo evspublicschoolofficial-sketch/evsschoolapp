@@ -4286,6 +4286,9 @@ export default function App() {
           })
           .catch(() => {});
         return;
+      } else if (event.entity === 'exam_marks' || event.entity === 'report_card_meta' || event.entity === 'weekly_tests') {
+        fetchReportCardAllData(true);
+        return;
       } else {
         syncAllData(false, false);
       }
@@ -13265,6 +13268,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               >
                 <ReportCardManagerView
                   students={students}
+                  users={usersList}
                   behaviorList={behaviorList}
                   weeklyTests={weeklyTestsList}
                   examMarks={examMarksList}
@@ -15948,6 +15952,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               >
                 <ReportCardManagerView
                   students={students}
+                  users={usersList}
                   behaviorList={behaviorList}
                   weeklyTests={weeklyTestsList}
                   examMarks={examMarksList}

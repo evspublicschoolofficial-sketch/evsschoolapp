@@ -1,15 +1,17 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ExamMarkRecord,
   ExamTermType,
   ReportCardAccessConfig,
   ReportCardRemarkRecord,
+  SchoolUser,
   Student,
   StudentBehaviorRecord,
   WeeklyTestRecord,
 } from '../types';
 import {
   CURRENT_ACADEMIC_SESSION,
+  DEFAULT_MAX_MARKS_BY_TERM,
   DEFAULT_REPORT_CARD_ACCESS_CONFIG,
   EXAM_TERM_LABELS,
   REPORT_CARD_SUBJECTS,
@@ -33,6 +35,7 @@ import { PrintableReportCard } from './PrintableReportCard';
 
 interface ReportCardManagerViewProps {
   students: Student[];
+  users?: SchoolUser[];
   behaviorList: StudentBehaviorRecord[];
   weeklyTests: WeeklyTestRecord[];
   examMarks: ExamMarkRecord[];
@@ -54,8 +57,33 @@ const normalizeClassToken = (cls: string) =>
     .replace(/\s+/g, '')
     .replace(/^class-?/, '');
 
+const getClassSortRank = (cls: string): number => {
+  const t = normalizeClassToken(cls);
+  if (!t) return 999;
+  if (t.includes('play') || t.includes('pn') || t.includes('pre')) return 0;
+  if (t.includes('nur')) return 1;
+  if (t.includes('lkg')) return 2;
+  if (t.includes('ukg')) return 3;
+  const m = t.match(/\d+/);
+  if (m) return 10 + parseInt(m[0], 10);
+  return 500;
+};
+
+type QueueSortOption =
+  | 'newest'
+  | 'teacher_asc'
+  | 'class_asc'
+  | 'student_asc'
+  | 'roll_asc'
+  | 'marks_desc'
+  | 'marks_asc'
+  | 'subject_asc';
+
+type DraftRowState = { obtained: string; absent: boolean; remarks: string };
+
 export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
   students,
+  users = [],
   behaviorList,
   weeklyTests,
   examMarks,
@@ -129,11 +157,14 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
   const [selectedClass, setSelectedClass] = useState<string>(() => availableClasses[0] || '');
 
   useEffect(() => {
-    if (
-      availableClasses.length > 0 &&
-      (!selectedClass || (selectedClass !== 'ALL' && !availableClasses.includes(selectedClass)))
-    ) {
+    if (availableClasses.length === 0) return;
+    if (!selectedClass) {
       setSelectedClass(availableClasses[0]);
+      return;
+    }
+    if (selectedClass !== 'ALL' && !availableClasses.includes(selectedClass)) {
+      const matched = availableClasses.find((c) => normalizeClassToken(c) === normalizeClassToken(selectedClass));
+      setSelectedClass(matched || availableClasses[0]);
     }
   }, [availableClasses, selectedClass]);
 
@@ -146,13 +177,13 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
   const [selectedStudentId, setSelectedStudentId] = useState<string>('');
 
   useEffect(() => {
-    if (classStudents.length > 0 && !classStudents.some((s) => s.Student_ID === selectedStudentId)) {
-      setSelectedStudentId(classStudents[0].Student_ID);
+    if (classStudents.length > 0 && !classStudents.some((s) => String(s.Student_ID || '') === selectedStudentId)) {
+      setSelectedStudentId(String(classStudents[0].Student_ID || ''));
     }
   }, [classStudents, selectedStudentId]);
 
   const selectedStudent = useMemo(
-    () => classStudents.find((s) => s.Student_ID === selectedStudentId) || classStudents[0] || null,
+    () => classStudents.find((s) => String(s.Student_ID || '') === selectedStudentId) || classStudents[0] || null,
     [classStudents, selectedStudentId]
   );
 
@@ -384,27 +415,80 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
   const [examTerm, setExamTerm] = useState<ExamTermType>('Quarterly');
   const [examSubject, setExamSubject] = useState<string>(REPORT_CARD_SUBJECTS[0]);
   const [customSubject, setCustomSubject] = useState<string>('');
-  const [maxMarks, setMaxMarks] = useState<number>(50);
+  const [maxMarksInput, setMaxMarksInput] = useState<string>(String(DEFAULT_MAX_MARKS_BY_TERM.Quarterly));
   const [savingMarks, setSavingMarks] = useState(false);
+
+  const parsedMaxMarks = parseInt(maxMarksInput, 10);
+  const maxMarks =
+    Number.isFinite(parsedMaxMarks) && parsedMaxMarks > 0
+      ? Math.min(500, parsedMaxMarks)
+      : DEFAULT_MAX_MARKS_BY_TERM[examTerm];
 
   const effectiveSubject = examSubject === '__CUSTOM__' ? customSubject.trim() || 'सामान्य ज्ञान' : examSubject;
 
+  const entryContextKey = `${currentUser.id || currentUser.name || (isManager ? 'mgr' : 'tch')}::${selectedClass}::${examTerm}::${effectiveSubject}::${isManager ? 'M' : 'T'}`;
+  const localDraftStorageKey = `evs_marks_entry_draft_v1::${entryContextKey}`;
+
+  const lastContextKeyRef = useRef<string>('');
+  const dirtyStudentIdsRef = useRef<Set<string>>(new Set());
+  const [hasRestoredLocalDraft, setHasRestoredLocalDraft] = useState(false);
+
   const handleExamTermChange = (term: ExamTermType) => {
     setExamTerm(term);
-    setMaxMarks(term === 'Quarterly' ? 50 : 100);
+    setMaxMarksInput(String(DEFAULT_MAX_MARKS_BY_TERM[term]));
   };
 
-  const [marksDraft, setMarksDraft] = useState<
-    Record<string, { obtained: string; absent: boolean; remarks: string }>
-  >({});
+  const [marksDraft, setMarksDraft] = useState<Record<string, DraftRowState>>({});
+
+  const persistLocalDraft = (rows: Record<string, DraftRowState>, overrideMaxStr?: string) => {
+    try {
+      localStorage.setItem(
+        localDraftStorageKey,
+        JSON.stringify({
+          maxMarksInput: overrideMaxStr !== undefined ? overrideMaxStr : maxMarksInput,
+          rows,
+          updatedAt: Date.now(),
+        })
+      );
+    } catch {}
+  };
+
+  const handleMaxMarksInputChange = (rawVal: string) => {
+    const cleaned = rawVal.replace(/[^0-9]/g, '').slice(0, 3);
+    setMaxMarksInput(cleaned);
+    persistLocalDraft(marksDraft, cleaned);
+  };
+
+  const handleSelectMaxMarksPreset = (val: number) => {
+    const strVal = String(val);
+    setMaxMarksInput(strVal);
+    persistLocalDraft(marksDraft, strVal);
+  };
+
+  const updateStudentDraftRow = (studentId: string, patch: Partial<DraftRowState>) => {
+    if (!studentId) return;
+    dirtyStudentIdsRef.current.add(studentId);
+    setMarksDraft((prev) => {
+      const cur = prev[studentId] || { obtained: '', absent: false, remarks: '' };
+      const next: Record<string, DraftRowState> = {
+        ...prev,
+        [studentId]: { ...cur, ...patch },
+      };
+      persistLocalDraft(next);
+      return next;
+    });
+  };
 
   useEffect(() => {
-    const draft: Record<string, { obtained: string; absent: boolean; remarks: string }> = {};
     const subjLower = effectiveSubject.trim().toLowerCase();
     const subjKey = normalizeSubjectKey(effectiveSubject);
+    const serverBase: Record<string, DraftRowState> = {};
+
     classStudents.forEach((st) => {
+      const sid = String(st.Student_ID || '').trim();
+      if (!sid) return;
       const matchFn = (m: ExamMarkRecord) =>
-        String(m.student_id || '').trim().toLowerCase() === String(st.Student_ID || '').trim().toLowerCase() &&
+        String(m.student_id || '').trim().toLowerCase() === sid.toLowerCase() &&
         m.exam_type === examTerm &&
         (String(m.subject || '').trim().toLowerCase() === subjLower ||
           (subjKey && normalizeSubjectKey(m.subject) === subjKey)) &&
@@ -415,38 +499,152 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
       const confirmedExisting = examMarks.find(matchFn);
       const source = pendingExisting || confirmedExisting;
 
-      draft[st.Student_ID] = {
-        obtained: source ? String(source.marks_obtained) : '',
+      serverBase[sid] = {
+        obtained: source ? String(source.marks_obtained ?? '') : '',
         absent: source?.attendance_status === 'Absent',
-        remarks: source?.remarks || '',
+        remarks: source?.remarks ? String(source.remarks) : '',
       };
     });
-    setMarksDraft(draft);
-  }, [classStudents, examMarks, pendingMarks, examTerm, effectiveSubject, isManager]);
+
+    const isContextSwitch = lastContextKeyRef.current !== entryContextKey;
+
+    if (isContextSwitch) {
+      lastContextKeyRef.current = entryContextKey;
+      dirtyStudentIdsRef.current.clear();
+
+      // Check for unsaved local auto-draft (prevents data loss if phone refreshed or tab closed mid-entry)
+      let restored = false;
+      const merged: Record<string, DraftRowState> = { ...serverBase };
+      try {
+        const raw = localStorage.getItem(localDraftStorageKey);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.rows && typeof parsed.rows === 'object') {
+            let anyDirty = false;
+            Object.entries(parsed.rows as Record<string, DraftRowState>).forEach(([sid, row]) => {
+              if (!row) return;
+              const base = serverBase[sid] || { obtained: '', absent: false, remarks: '' };
+              const differs =
+                String(row.obtained || '') !== String(base.obtained || '') ||
+                Boolean(row.absent) !== Boolean(base.absent) ||
+                String(row.remarks || '') !== String(base.remarks || '');
+              if (differs || row.obtained !== '' || row.absent || row.remarks !== '') {
+                merged[sid] = {
+                  obtained: String(row.obtained ?? ''),
+                  absent: Boolean(row.absent),
+                  remarks: String(row.remarks ?? ''),
+                };
+                if (differs) {
+                  dirtyStudentIdsRef.current.add(sid);
+                  anyDirty = true;
+                }
+              }
+            });
+            if (typeof parsed.maxMarksInput === 'string' && parsed.maxMarksInput.trim() !== '') {
+              setMaxMarksInput(parsed.maxMarksInput);
+            }
+            restored = anyDirty;
+          }
+        }
+      } catch {}
+
+      setHasRestoredLocalDraft(restored);
+      setMarksDraft(merged);
+      return;
+    }
+
+    // Background sync while teacher is actively typing: NEVER overwrite dirty or already-typed cells!
+    setMarksDraft((prev) => {
+      let changed = false;
+      const next: Record<string, DraftRowState> = { ...prev };
+      Object.entries(serverBase).forEach(([sid, srvRow]) => {
+        const cur = prev[sid];
+        if (!cur) {
+          next[sid] = srvRow;
+          changed = true;
+          return;
+        }
+        if (dirtyStudentIdsRef.current.has(sid)) return;
+        const userTypedSomething = cur.obtained.trim() !== '' || cur.absent || cur.remarks.trim() !== '';
+        if (!userTypedSomething && (srvRow.obtained !== '' || srvRow.absent || srvRow.remarks !== '')) {
+          next[sid] = srvRow;
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [classStudents, examMarks, pendingMarks, examTerm, effectiveSubject, isManager, entryContextKey, localDraftStorageKey]);
+
+  const handleResetLocalDraft = () => {
+    try {
+      localStorage.removeItem(localDraftStorageKey);
+    } catch {}
+    dirtyStudentIdsRef.current.clear();
+    setHasRestoredLocalDraft(false);
+    lastContextKeyRef.current = '';
+    setMaxMarksInput(String(DEFAULT_MAX_MARKS_BY_TERM[examTerm]));
+    const subjLower = effectiveSubject.trim().toLowerCase();
+    const subjKey = normalizeSubjectKey(effectiveSubject);
+    const fresh: Record<string, DraftRowState> = {};
+    classStudents.forEach((st) => {
+      const sid = String(st.Student_ID || '').trim();
+      if (!sid) return;
+      const matchFn = (m: ExamMarkRecord) =>
+        String(m.student_id || '').trim().toLowerCase() === sid.toLowerCase() &&
+        m.exam_type === examTerm &&
+        (String(m.subject || '').trim().toLowerCase() === subjLower ||
+          (subjKey && normalizeSubjectKey(m.subject) === subjKey)) &&
+        (!m.session || m.session === CURRENT_ACADEMIC_SESSION);
+      const pendingExisting = !isManager ? pendingMarks.find(matchFn) : undefined;
+      const confirmedExisting = examMarks.find(matchFn);
+      const source = pendingExisting || confirmedExisting;
+      fresh[sid] = {
+        obtained: source ? String(source.marks_obtained ?? '') : '',
+        absent: source?.attendance_status === 'Absent',
+        remarks: source?.remarks ? String(source.remarks) : '',
+      };
+    });
+    setMarksDraft(fresh);
+  };
 
   const handleSaveBatchMarks = async () => {
     if (classStudents.length === 0) return;
+    const typedMax = parseInt(maxMarksInput.trim(), 10);
+    if (!Number.isFinite(typedMax) || typedMax <= 0) {
+      setStatusBanner({
+        type: 'warning',
+        text: `कृपया सही अधिकतम अंक (Max Marks) दर्ज करें (जैसे ${DEFAULT_MAX_MARKS_BY_TERM[examTerm]})।`,
+      });
+      return;
+    }
+    const effectiveMax = Math.min(500, typedMax);
+
     setSavingMarks(true);
     setStatusBanner(null);
     try {
       const recordsToSave: ExamMarkRecord[] = [];
       classStudents.forEach((st) => {
-        const entry = marksDraft[st.Student_ID];
+        const sid = String(st.Student_ID || '').trim();
+        if (!sid) return;
+        const entry = marksDraft[sid];
         if (!entry) return;
         const hasVal = entry.obtained.trim() !== '' || entry.absent;
         if (!hasVal) return;
 
-        const numObt = entry.absent ? 0 : Math.min(maxMarks, Math.max(0, Number(entry.obtained) || 0));
+        const parsedObt = parseFloat(entry.obtained);
+        const numObt = entry.absent
+          ? 0
+          : Math.min(effectiveMax, Math.max(0, Number.isFinite(parsedObt) ? parsedObt : 0));
         const safeSubjKey = effectiveSubject.replace(/[^a-z0-9\u0900-\u097f]/gi, '').slice(0, 18);
         recordsToSave.push({
-          id: `em_${CURRENT_ACADEMIC_SESSION}_${examTerm}_${st.Student_ID}_${safeSubjKey}`,
+          id: `em_${CURRENT_ACADEMIC_SESSION}_${examTerm}_${sid}_${safeSubjKey}`,
           session: CURRENT_ACADEMIC_SESSION,
           exam_type: examTerm,
-          student_id: st.Student_ID,
-          student_name: st.Student_Name,
-          class_name: st.Class,
+          student_id: sid,
+          student_name: String(st.Student_Name || sid),
+          class_name: String(st.Class || selectedClass || ''),
           subject: effectiveSubject,
-          max_marks: maxMarks,
+          max_marks: effectiveMax,
           marks_obtained: numObt,
           attendance_status: entry.absent ? 'Absent' : 'Present',
           teacher_id: currentUser.id || '',
@@ -476,6 +674,11 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
         });
         onWorkflowUpdated?.(res.snapshot);
         realtimeSync.broadcastUpdate('report_card_workflow', 'teacher_submit');
+        try {
+          localStorage.removeItem(localDraftStorageKey);
+        } catch {}
+        dirtyStudentIdsRef.current.clear();
+        setHasRestoredLocalDraft(false);
         if (!res.serverOk && !res.sheetSynced) {
           setStatusBanner({
             type: 'error',
@@ -489,17 +692,22 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
         } else {
           setStatusBanner({
             type: 'success',
-            text: `✅ ${EXAM_TERM_LABELS[examTerm]} (${effectiveSubject}) के ${recordsToSave.length} छात्रों के अंक क्लाउड में मैनेजर कन्फर्मेशन के लिए भेज दिए गए हैं!`,
+            text: `✅ ${EXAM_TERM_LABELS[examTerm]} (${effectiveSubject} • /${effectiveMax}) के ${recordsToSave.length} छात्रों के अंक क्लाउड में मैनेजर कन्फर्मेशन के लिए भेज दिए गए हैं!`,
           });
         }
       } else {
         // MANAGER: Save directly to Sheet
         const res = await saveExamMarksBatchToServer(recordsToSave);
         onExamMarksUpdated(res.records);
+        try {
+          localStorage.removeItem(localDraftStorageKey);
+        } catch {}
+        dirtyStudentIdsRef.current.clear();
+        setHasRestoredLocalDraft(false);
         setStatusBanner({
           type: res.sheetSynced ? 'success' : 'warning',
           text: res.sheetSynced
-            ? `${EXAM_TERM_LABELS[examTerm]} (${effectiveSubject}) के ${recordsToSave.length} छात्रों के अंक Google Sheet 'Exam_Marks' में सेव हो गए!`
+            ? `${EXAM_TERM_LABELS[examTerm]} (${effectiveSubject} • /${effectiveMax}) के ${recordsToSave.length} छात्रों के अंक Google Sheet 'Exam_Marks' में सेव हो गए!`
             : `ऐप में ${recordsToSave.length} अंक सेव हो गए! Google Sheet सिंक चेतावनी: ${res.sheetError || 'Apps Script सिंक टाइमआउट/त्रुटि'}`,
         });
       }
@@ -765,6 +973,381 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
     a.download = `EVS_Report_Cards_${selectedClass || 'All'}_${CURRENT_ACADEMIC_SESSION}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  // Manager Queue Controls: Teacher-wise Grouping, Who Submitted vs Not Submitted, Filters & Sorting
+  const [queueViewMode, setQueueViewMode] = useState<'by_teacher' | 'teacher_status' | 'all_rows'>('by_teacher');
+  const [queueSearch, setQueueSearch] = useState<string>('');
+  const [queueTeacherFilter, setQueueTeacherFilter] = useState<string>('ALL');
+  const [queueClassFilter, setQueueClassFilter] = useState<string>('ALL');
+  const [queueTermFilter, setQueueTermFilter] = useState<'ALL' | ExamTermType>('ALL');
+  const [queueSubjectFilter, setQueueSubjectFilter] = useState<string>('ALL');
+  const [queueSortBy, setQueueSortBy] = useState<QueueSortOption>('newest');
+  const [statusTermFilter, setStatusTermFilter] = useState<'ALL' | ExamTermType>('ALL');
+  const [statusMatrixFilter, setStatusMatrixFilter] = useState<'all' | 'pending' | 'confirmed' | 'not_submitted'>('all');
+  const [collapsedTeacherKeys, setCollapsedTeacherKeys] = useState<Record<string, boolean>>({});
+
+  const studentRollMap = useMemo(() => {
+    const m = new Map<string, string>();
+    students.forEach((s) => {
+      const sid = String(s.Student_ID || '').trim().toLowerCase();
+      if (sid) m.set(sid, String(s.Roll_Number || ''));
+    });
+    return m;
+  }, [students]);
+
+  const activeTeachersRoster = useMemo(() => {
+    return (users || []).filter((u) => {
+      const desig = String(u.Designation || '').toLowerCase();
+      if (/driver|van|bus|conductor|guard|peon|parent|student/i.test(desig)) return false;
+      return (
+        !desig ||
+        desig.includes('teacher') ||
+        desig.includes('शिक्षक') ||
+        desig.includes('faculty') ||
+        desig.includes('instructor') ||
+        desig.includes('incharge') ||
+        desig.includes('head') ||
+        desig.includes('principal') ||
+        desig.includes('staff')
+      );
+    });
+  }, [users]);
+
+  const resolveTeacherCanonicalKey = useMemo(() => {
+    return (teacherId?: string, teacherName?: string): { key: string; displayName: string; user?: SchoolUser } => {
+      const tid = String(teacherId || '').trim().toLowerCase();
+      const tname = String(teacherName || '').trim().toLowerCase();
+      const matched = activeTeachersRoster.find((u) => {
+        const uid = String(u.User_ID || '').trim().toLowerCase();
+        const uname = String(u.Username || '').trim().toLowerCase();
+        const nm = String(u.Name || '').trim().toLowerCase();
+        return (tid && (uid === tid || uname === tid)) || (tname && nm === tname);
+      });
+      if (matched) {
+        const k = `u::${String(matched.User_ID || matched.Username || matched.Name).trim().toLowerCase()}`;
+        return { key: k, displayName: String(matched.Name || teacherName || 'Teacher'), user: matched };
+      }
+      const fallbackName = String(teacherName || teacherId || 'अन्य शिक्षक (Teacher)').trim();
+      return {
+        key: `n::${fallbackName.toLowerCase()}`,
+        displayName: fallbackName,
+      };
+    };
+  }, [activeTeachersRoster]);
+
+  const teacherSubmissionDirectory = useMemo(() => {
+    if (!isManager) return [];
+    type Entry = {
+      key: string;
+      name: string;
+      designation: string;
+      assignedClass: string;
+      assignedSubjects: string;
+      mobile: string;
+      pendingMarks: ExamMarkRecord[];
+      pendingMetas: ReportCardRemarkRecord[];
+      confirmedMarks: ExamMarkRecord[];
+      pendingBatchSummary: string[];
+      confirmedBatchSummary: string[];
+      lastSubmittedAt: string;
+      status: 'pending' | 'confirmed' | 'not_submitted';
+    };
+
+    const map = new Map<string, Entry>();
+    activeTeachersRoster.forEach((u) => {
+      const key = `u::${String(u.User_ID || u.Username || u.Name).trim().toLowerCase()}`;
+      map.set(key, {
+        key,
+        name: String(u.Name || u.Username || u.User_ID || 'Teacher'),
+        designation: String(u.Designation || 'Teacher'),
+        assignedClass: String(u.Assigned_Class || ''),
+        assignedSubjects: String(u.Assigned_Subjects || ''),
+        mobile: String(u.Mobile_number || ''),
+        pendingMarks: [],
+        pendingMetas: [],
+        confirmedMarks: [],
+        pendingBatchSummary: [],
+        confirmedBatchSummary: [],
+        lastSubmittedAt: '',
+        status: 'not_submitted',
+      });
+    });
+
+    const ensureEntry = (tid?: string, tname?: string): Entry => {
+      const resolved = resolveTeacherCanonicalKey(tid, tname);
+      const existing = map.get(resolved.key);
+      if (existing) return existing;
+      const created: Entry = {
+        key: resolved.key,
+        name: resolved.displayName,
+        designation: 'Teacher',
+        assignedClass: '',
+        assignedSubjects: '',
+        mobile: '',
+        pendingMarks: [],
+        pendingMetas: [],
+        confirmedMarks: [],
+        pendingBatchSummary: [],
+        confirmedBatchSummary: [],
+        lastSubmittedAt: '',
+        status: 'not_submitted',
+      };
+      map.set(resolved.key, created);
+      return created;
+    };
+
+    pendingMarks.forEach((pm) => {
+      if (statusTermFilter !== 'ALL' && pm.exam_type !== statusTermFilter) return;
+      const e = ensureEntry(pm.teacher_id, pm.teacher_name);
+      e.pendingMarks.push(pm);
+      const ts = String(pm.submitted_at || pm.updated_at || '');
+      if (ts && ts > e.lastSubmittedAt) e.lastSubmittedAt = ts;
+    });
+
+    pendingMetaList.forEach((draft) => {
+      const e = ensureEntry(undefined, draft.submittedBy);
+      e.pendingMetas.push(draft);
+      const ts = String(draft.submittedAt || '');
+      if (ts && ts > e.lastSubmittedAt) e.lastSubmittedAt = ts;
+    });
+
+    examMarks.forEach((em) => {
+      if (em.session && em.session !== CURRENT_ACADEMIC_SESSION) return;
+      if (statusTermFilter !== 'ALL' && em.exam_type !== statusTermFilter) return;
+      if (!em.teacher_name && !em.teacher_id) return;
+      const e = ensureEntry(em.teacher_id, em.teacher_name);
+      e.confirmedMarks.push(em);
+    });
+
+    const summarizeMarks = (list: ExamMarkRecord[]): string[] => {
+      const bMap = new Map<string, number>();
+      list.forEach((m) => {
+        const label = `${m.class_name || '—'} • ${m.exam_type} • ${m.subject || 'Subject'}`;
+        bMap.set(label, (bMap.get(label) || 0) + 1);
+      });
+      return Array.from(bMap.entries()).map(([k, count]) => `${k} (${count})`);
+    };
+
+    const result = Array.from(map.values()).map((e) => {
+      const pCount = e.pendingMarks.length + e.pendingMetas.length;
+      const cCount = e.confirmedMarks.length;
+      const status: Entry['status'] = pCount > 0 ? 'pending' : cCount > 0 ? 'confirmed' : 'not_submitted';
+      return {
+        ...e,
+        pendingBatchSummary: summarizeMarks(e.pendingMarks),
+        confirmedBatchSummary: summarizeMarks(e.confirmedMarks),
+        status,
+      };
+    });
+
+    // Sort: pending first, then not_submitted, then confirmed; alphabetically inside
+    const orderRank = { pending: 0, not_submitted: 1, confirmed: 2 };
+    result.sort((a, b) => {
+      const rDiff = orderRank[a.status] - orderRank[b.status];
+      if (rDiff !== 0) return rDiff;
+      return a.name.localeCompare(b.name);
+    });
+
+    return result;
+  }, [isManager, activeTeachersRoster, pendingMarks, pendingMetaList, examMarks, statusTermFilter, resolveTeacherCanonicalKey]);
+
+  const queueFilterOptions = useMemo(() => {
+    const teacherMap = new Map<string, string>();
+    const classSet = new Set<string>();
+    const subjectSet = new Set<string>();
+
+    pendingMarks.forEach((pm) => {
+      const resolved = resolveTeacherCanonicalKey(pm.teacher_id, pm.teacher_name);
+      teacherMap.set(resolved.key, resolved.displayName);
+      if (pm.class_name) classSet.add(String(pm.class_name).trim());
+      if (pm.subject) subjectSet.add(String(pm.subject).trim());
+    });
+
+    pendingMetaList.forEach((draft: any) => {
+      const resolved = resolveTeacherCanonicalKey(undefined, draft.submittedBy);
+      teacherMap.set(resolved.key, resolved.displayName);
+      if (draft.className) classSet.add(String(draft.className).trim());
+    });
+
+    return {
+      teachers: Array.from(teacherMap.entries())
+        .map(([key, name]) => ({ key, name }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+      classes: Array.from(classSet).sort((a, b) => getClassSortRank(a) - getClassSortRank(b) || a.localeCompare(b)),
+      subjects: Array.from(subjectSet).sort((a, b) => a.localeCompare(b)),
+    };
+  }, [pendingMarks, pendingMetaList, resolveTeacherCanonicalKey]);
+
+  const filteredAndSortedPendingMarks = useMemo(() => {
+    const q = queueSearch.trim().toLowerCase();
+    const filtered = pendingMarks.filter((pm) => {
+      if (queueTermFilter !== 'ALL' && pm.exam_type !== queueTermFilter) return false;
+      if (queueClassFilter !== 'ALL' && normalizeClassToken(pm.class_name) !== normalizeClassToken(queueClassFilter)) {
+        return false;
+      }
+      if (queueSubjectFilter !== 'ALL' && String(pm.subject || '').trim() !== queueSubjectFilter) return false;
+      if (queueTeacherFilter !== 'ALL') {
+        const res = resolveTeacherCanonicalKey(pm.teacher_id, pm.teacher_name);
+        if (res.key !== queueTeacherFilter) return false;
+      }
+      if (q) {
+        const sid = String(pm.student_id || '').trim().toLowerCase();
+        const roll = String(studentRollMap.get(sid) || '').toLowerCase();
+        const hay = `${pm.student_name || ''} ${pm.student_id || ''} ${roll} ${pm.class_name || ''} ${pm.subject || ''} ${pm.teacher_name || ''} ${pm.exam_type || ''}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+
+    return [...filtered].sort((a, b) => {
+      switch (queueSortBy) {
+        case 'teacher_asc':
+          return String(a.teacher_name || '').localeCompare(String(b.teacher_name || '')) ||
+            getClassSortRank(a.class_name) - getClassSortRank(b.class_name) ||
+            String(a.student_name || '').localeCompare(String(b.student_name || ''));
+        case 'class_asc':
+          return getClassSortRank(a.class_name) - getClassSortRank(b.class_name) ||
+            String(a.class_name || '').localeCompare(String(b.class_name || '')) ||
+            String(a.student_name || '').localeCompare(String(b.student_name || ''));
+        case 'student_asc':
+          return String(a.student_name || '').localeCompare(String(b.student_name || ''));
+        case 'roll_asc': {
+          const rA = parseInt(studentRollMap.get(String(a.student_id || '').trim().toLowerCase()) || '99999', 10) || 99999;
+          const rB = parseInt(studentRollMap.get(String(b.student_id || '').trim().toLowerCase()) || '99999', 10) || 99999;
+          return rA - rB || String(a.student_name || '').localeCompare(String(b.student_name || ''));
+        }
+        case 'marks_desc': {
+          const pctA = a.attendance_status === 'Absent' ? -1 : (Number(a.marks_obtained) || 0);
+          const pctB = b.attendance_status === 'Absent' ? -1 : (Number(b.marks_obtained) || 0);
+          return pctB - pctA || String(a.student_name || '').localeCompare(String(b.student_name || ''));
+        }
+        case 'marks_asc': {
+          const pctA = a.attendance_status === 'Absent' ? 99999 : (Number(a.marks_obtained) || 0);
+          const pctB = b.attendance_status === 'Absent' ? 99999 : (Number(b.marks_obtained) || 0);
+          return pctA - pctB || String(a.student_name || '').localeCompare(String(b.student_name || ''));
+        }
+        case 'subject_asc':
+          return String(a.subject || '').localeCompare(String(b.subject || '')) ||
+            getClassSortRank(a.class_name) - getClassSortRank(b.class_name);
+        case 'newest':
+        default: {
+          const tsA = String(a.submitted_at || a.updated_at || '');
+          const tsB = String(b.submitted_at || b.updated_at || '');
+          return tsB.localeCompare(tsA) || String(a.student_name || '').localeCompare(String(b.student_name || ''));
+        }
+      }
+    });
+  }, [
+    pendingMarks,
+    queueSearch,
+    queueTermFilter,
+    queueClassFilter,
+    queueSubjectFilter,
+    queueTeacherFilter,
+    queueSortBy,
+    studentRollMap,
+    resolveTeacherCanonicalKey,
+  ]);
+
+  const filteredPendingMetas = useMemo(() => {
+    const q = queueSearch.trim().toLowerCase();
+    return pendingMetaList.filter((draft: any) => {
+      if (queueClassFilter !== 'ALL' && normalizeClassToken(draft.className || '') !== normalizeClassToken(queueClassFilter)) {
+        return false;
+      }
+      if (queueTeacherFilter !== 'ALL') {
+        const res = resolveTeacherCanonicalKey(undefined, draft.submittedBy);
+        if (res.key !== queueTeacherFilter) return false;
+      }
+      if (q) {
+        const hay = `${draft.studentName || ''} ${draft.studentId || ''} ${draft.className || ''} ${draft.submittedBy || ''} ${draft.teacherRemark || ''}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [pendingMetaList, queueSearch, queueClassFilter, queueTeacherFilter, resolveTeacherCanonicalKey]);
+
+  const groupedPendingByTeacher = useMemo(() => {
+    type TeacherGroup = {
+      key: string;
+      teacherName: string;
+      assignedClass: string;
+      marks: ExamMarkRecord[];
+      metas: ReportCardRemarkRecord[];
+      batchChips: string[];
+      latestAt: string;
+    };
+    const gMap = new Map<string, TeacherGroup>();
+
+    const ensureGroup = (tid?: string, tname?: string): TeacherGroup => {
+      const resolved = resolveTeacherCanonicalKey(tid, tname);
+      const existing = gMap.get(resolved.key);
+      if (existing) return existing;
+      const created: TeacherGroup = {
+        key: resolved.key,
+        teacherName: resolved.displayName,
+        assignedClass: String(resolved.user?.Assigned_Class || ''),
+        marks: [],
+        metas: [],
+        batchChips: [],
+        latestAt: '',
+      };
+      gMap.set(resolved.key, created);
+      return created;
+    };
+
+    filteredAndSortedPendingMarks.forEach((pm) => {
+      const g = ensureGroup(pm.teacher_id, pm.teacher_name);
+      g.marks.push(pm);
+      const ts = String(pm.submitted_at || pm.updated_at || '');
+      if (ts && ts > g.latestAt) g.latestAt = ts;
+    });
+
+    filteredPendingMetas.forEach((draft) => {
+      const g = ensureGroup(undefined, draft.submittedBy);
+      g.metas.push(draft);
+      const ts = String(draft.submittedAt || '');
+      if (ts && ts > g.latestAt) g.latestAt = ts;
+    });
+
+    const groups = Array.from(gMap.values()).map((g) => {
+      const chipMap = new Map<string, number>();
+      g.marks.forEach((m) => {
+        const k = `${m.class_name || '—'} • ${m.exam_type} • ${m.subject || 'Subject'}`;
+        chipMap.set(k, (chipMap.get(k) || 0) + 1);
+      });
+      if (g.metas.length > 0) {
+        chipMap.set(`रिमार्क ड्राफ्ट`, g.metas.length);
+      }
+      return {
+        ...g,
+        batchChips: Array.from(chipMap.entries()).map(([k, count]) => `${k} (${count})`),
+      };
+    });
+
+    if (queueSortBy === 'teacher_asc') {
+      groups.sort((a, b) => a.teacherName.localeCompare(b.teacherName));
+    } else {
+      groups.sort((a, b) => b.latestAt.localeCompare(a.latestAt) || a.teacherName.localeCompare(b.teacherName));
+    }
+
+    return groups;
+  }, [filteredAndSortedPendingMarks, filteredPendingMetas, queueSortBy, resolveTeacherCanonicalKey]);
+
+  const hasActiveQueueFilters =
+    queueSearch.trim() !== '' ||
+    queueTeacherFilter !== 'ALL' ||
+    queueClassFilter !== 'ALL' ||
+    queueTermFilter !== 'ALL' ||
+    queueSubjectFilter !== 'ALL';
+
+  const resetQueueFilters = () => {
+    setQueueSearch('');
+    setQueueTeacherFilter('ALL');
+    setQueueClassFilter('ALL');
+    setQueueTermFilter('ALL');
+    setQueueSubjectFilter('ALL');
   };
 
   // Helper to check if a student+term+subject has a pending mark awaiting approval
@@ -1062,207 +1645,800 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
         )}
       </div>
 
-      {/* MANAGER TAB: Pending Teacher Approvals Queue */}
-      {isManager && activeSubTab === 'pending_approvals' && (
-        <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 bg-amber-50 border border-amber-200 rounded-xl p-3.5">
-            <div>
-              <h3 className="text-xs sm:text-sm font-black text-amber-950">
-                ⏳ टीचर द्वारा भेजे गए अंक व रिपोर्ट कार्ड ड्राफ्ट (Manager Confirmation Queue)
-              </h3>
-              <p className="text-[11px] text-amber-900 mt-0.5">
-                जब तक आप कन्फर्म नहीं करेंगे, तब तक ये अंक Google Sheet ('Exam_Marks' / 'Report_Cards_Backup') में सेव नहीं होंगे।
-              </p>
+      {/* MANAGER TAB: Pending Teacher Approvals Queue (Teacher-Wise, Who Submitted vs Not Submitted, Filters & Sort) */}
+      {isManager && activeSubTab === 'pending_approvals' && (() => {
+        const pendingTeachersCount = teacherSubmissionDirectory.filter((t) => t.status === 'pending').length;
+        const confirmedOnlyCount = teacherSubmissionDirectory.filter((t) => t.status === 'confirmed').length;
+        const notSubmittedCount = teacherSubmissionDirectory.filter((t) => t.status === 'not_submitted').length;
+        const filteredTotalCount = filteredAndSortedPendingMarks.length + filteredPendingMetas.length;
+
+        const filteredStatusRows = teacherSubmissionDirectory.filter((t) => {
+          if (statusMatrixFilter !== 'all' && t.status !== statusMatrixFilter) return false;
+          const q = queueSearch.trim().toLowerCase();
+          if (q) {
+            const hay = `${t.name} ${t.assignedClass} ${t.assignedSubjects} ${t.pendingBatchSummary.join(' ')} ${t.confirmedBatchSummary.join(' ')}`.toLowerCase();
+            if (!hay.includes(q)) return false;
+          }
+          return true;
+        });
+
+        const renderMarksTable = (rows: ExamMarkRecord[], showTeacherCol: boolean) => (
+          <div className="border border-slate-200 rounded-xl overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs min-w-[680px]">
+              <thead>
+                <tr className="bg-slate-900 text-white">
+                  <th className="py-2.5 px-3">छात्र (कक्षा / रोल)</th>
+                  <th className="py-2.5 px-3">परीक्षा / विषय</th>
+                  <th className="py-2.5 px-3 text-center">टीचर के अंक</th>
+                  <th className="py-2.5 px-3 text-center">पुराने Sheet अंक</th>
+                  {showTeacherCol && <th className="py-2.5 px-3">टीचर / समय</th>}
+                  <th className="py-2.5 px-3 text-right">कार्रवाई</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 bg-white">
+                {rows.map((pm) => {
+                  const existing = examMarks.find((em) => em.id === pm.id);
+                  const rollNo = studentRollMap.get(String(pm.student_id || '').trim().toLowerCase());
+                  return (
+                    <tr key={pm.id} className="hover:bg-amber-50/40">
+                      <td className="py-2 px-3">
+                        <div className="font-black text-slate-900">{pm.student_name}</div>
+                        <div className="text-[10px] text-slate-500">
+                          {pm.class_name} {rollNo ? `• Roll #${rollNo}` : ''} • {pm.student_id}
+                        </div>
+                      </td>
+                      <td className="py-2 px-3">
+                        <div className="font-bold text-indigo-900">{pm.exam_type}</div>
+                        <div className="text-[11px] text-slate-700">{pm.subject}</div>
+                      </td>
+                      <td className="py-2 px-3 text-center">
+                        {pm.attendance_status === 'Absent' ? (
+                          <span className="px-2 py-0.5 rounded-md bg-rose-100 text-rose-800 font-black text-[11px]">
+                            Absent
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-0.5 rounded-md bg-amber-100 text-amber-950 font-black text-xs">
+                            {pm.marks_obtained} / {pm.max_marks}
+                          </span>
+                        )}
+                        {pm.remarks && <div className="text-[10px] text-slate-500 mt-0.5">{pm.remarks}</div>}
+                      </td>
+                      <td className="py-2 px-3 text-center text-slate-500 font-semibold">
+                        {existing
+                          ? existing.attendance_status === 'Absent'
+                            ? 'Absent'
+                            : `${existing.marks_obtained} / ${existing.max_marks}`
+                          : 'नया रिकॉर्ड'}
+                      </td>
+                      {showTeacherCol && (
+                        <td className="py-2 px-3 text-[11px] text-slate-600">
+                          <div className="font-bold text-slate-800">{pm.teacher_name || 'Teacher'}</div>
+                          <div>{pm.submitted_at || pm.updated_at}</div>
+                        </td>
+                      )}
+                      <td className="py-2 px-3 text-right space-x-1.5 whitespace-nowrap">
+                        <button
+                          type="button"
+                          disabled={confirmingKey !== null}
+                          onClick={() => handleConfirmSubset([pm], [], `confirm_${pm.id}`)}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-[10px] font-black cursor-pointer disabled:opacity-50"
+                        >
+                          ✓ कन्फर्म
+                        </button>
+                        <button
+                          type="button"
+                          disabled={confirmingKey !== null}
+                          onClick={() => handleRejectSubset({ markIds: [pm.id] }, `reject_${pm.id}`)}
+                          className="px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-bold cursor-pointer disabled:opacity-50"
+                        >
+                          ✕ हटाएँ
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        );
+
+        return (
+          <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-4">
+            {/* Top Action Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-amber-50 border border-amber-200 rounded-xl p-3.5">
+              <div>
+                <h3 className="text-xs sm:text-sm font-black text-amber-950">
+                  ⏳ टीचर-वार अंक कन्फर्मेशन व सबमिशन ट्रैकर (Manager Confirmation Hub)
+                </h3>
+                <p className="text-[11px] text-amber-900 mt-0.5">
+                  अलग-अलग टीचर के अनुसार देखें, फ़िल्टर/शॉर्ट करें और जानें किस टीचर के अंक आ गए व किसके अभी बाकी हैं।
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={refreshingWorkflow}
+                  onClick={() => handleRefreshWorkflow(false)}
+                  className="px-3 py-2 rounded-xl bg-white hover:bg-slate-50 border border-amber-300 text-amber-950 text-xs font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  <i className={`fa-solid ${refreshingWorkflow ? 'fa-spinner fa-spin' : 'fa-rotate'}`}></i>
+                  <span>{refreshingWorkflow ? 'जाँच हो रही है...' : 'ताज़ा ड्राफ्ट लाएँ'}</span>
+                </button>
+                {totalPendingCount > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={confirmingKey !== null}
+                      onClick={() => handleRejectSubset({ clearAll: true }, 'reject_all')}
+                      className="px-3 py-2 rounded-xl bg-white hover:bg-rose-50 border border-rose-300 text-rose-700 text-xs font-bold cursor-pointer disabled:opacity-50"
+                    >
+                      <i className="fa-solid fa-trash-can mr-1"></i>
+                      सभी अस्वीकार करें
+                    </button>
+                    <button
+                      type="button"
+                      disabled={confirmingKey !== null}
+                      onClick={() => handleConfirmSubset(pendingMarks, pendingMetaList, 'confirm_all')}
+                      className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+                    >
+                      <i className={`fa-solid ${confirmingKey === 'confirm_all' ? 'fa-spinner fa-spin' : 'fa-check-double'}`}></i>
+                      <span>
+                        {confirmingKey === 'confirm_all'
+                          ? 'Sheet में सेव हो रहा है...'
+                          : `सभी कन्फर्म करें (${totalPendingCount})`}
+                      </span>
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
-            <div className="flex flex-wrap gap-2">
+
+            {/* 4 Interactive KPI Summary Cards: Who Submitted vs Who Did Not */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
               <button
                 type="button"
-                disabled={refreshingWorkflow}
-                onClick={() => handleRefreshWorkflow(false)}
-                className="px-3 py-2 rounded-xl bg-white hover:bg-slate-50 border border-amber-300 text-amber-950 text-xs font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+                onClick={() => {
+                  setQueueViewMode('teacher_status');
+                  setStatusMatrixFilter('all');
+                }}
+                className="p-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-left cursor-pointer transition-all"
               >
-                <i className={`fa-solid ${refreshingWorkflow ? 'fa-spinner fa-spin' : 'fa-rotate'}`}></i>
-                <span>{refreshingWorkflow ? 'जाँच हो रही है...' : 'ताज़ा ड्राफ्ट लाएँ'}</span>
+                <div className="text-[11px] font-bold text-slate-600">कुल शिक्षक (Total Staff)</div>
+                <div className="text-lg font-black text-slate-900 mt-0.5">{teacherSubmissionDirectory.length}</div>
+                <div className="text-[10px] text-slate-500">सबमिशन स्टेटस देखें →</div>
               </button>
-              {totalPendingCount > 0 && (
-                <>
-                  <button
-                    type="button"
-                    disabled={confirmingKey !== null}
-                    onClick={() => handleRejectSubset({ clearAll: true }, 'reject_all')}
-                    className="px-3 py-2 rounded-xl bg-white hover:bg-rose-50 border border-rose-300 text-rose-700 text-xs font-bold cursor-pointer disabled:opacity-50"
-                  >
-                    <i className="fa-solid fa-trash-can mr-1"></i>
-                    सभी अस्वीकार करें
-                  </button>
-                  <button
-                    type="button"
-                    disabled={confirmingKey !== null}
-                    onClick={() => handleConfirmSubset(pendingMarks, pendingMetaList, 'confirm_all')}
-                    className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
-                  >
-                    <i className={`fa-solid ${confirmingKey === 'confirm_all' ? 'fa-spinner fa-spin' : 'fa-check-double'}`}></i>
-                    <span>
-                      {confirmingKey === 'confirm_all'
-                        ? 'Sheet में सेव हो रहा है...'
-                        : `सभी कन्फर्म करें व Google Sheet में सेव करें (${totalPendingCount})`}
-                    </span>
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
 
-          {totalPendingCount === 0 ? (
-            <div className="p-8 text-center border border-dashed border-slate-200 rounded-xl space-y-2">
-              <div className="w-12 h-12 mx-auto rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center text-xl">
-                <i className="fa-solid fa-circle-check"></i>
-              </div>
-              <div className="text-sm font-black text-slate-800">कोई पेंडिंग कन्फर्मेशन बाकी नहीं है</div>
-              <p className="text-xs text-slate-500">
-                जब कोई टीचर परीक्षा अंक या रिमार्क ड्राफ्ट सबमिट करेगा, तो वह यहाँ आपकी मंज़ूरी के लिए दिखाई देगा।
-              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setQueueViewMode('by_teacher');
+                  setStatusMatrixFilter('pending');
+                }}
+                className="p-3 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100/70 text-left cursor-pointer transition-all"
+              >
+                <div className="text-[11px] font-bold text-amber-900">⏳ कन्फर्मेशन बाकी (आए हुए)</div>
+                <div className="text-lg font-black text-amber-950 mt-0.5">
+                  {pendingTeachersCount} टीचर <span className="text-xs font-bold">({totalPendingCount} प्रविष्टियाँ)</span>
+                </div>
+                <div className="text-[10px] text-amber-800">टीचर-वार कार्ड खोलें →</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setQueueViewMode('teacher_status');
+                  setStatusMatrixFilter('not_submitted');
+                }}
+                className="p-3 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100/70 text-left cursor-pointer transition-all"
+              >
+                <div className="text-[11px] font-bold text-rose-800">❌ जिनके अभी नहीं आए</div>
+                <div className="text-lg font-black text-rose-950 mt-0.5">{notSubmittedCount} टीचर</div>
+                <div className="text-[10px] text-rose-700">किसने नहीं भेजे देखें →</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setQueueViewMode('teacher_status');
+                  setStatusMatrixFilter('confirmed');
+                }}
+                className="p-3 rounded-xl border border-emerald-200 bg-emerald-50 hover:bg-emerald-100/70 text-left cursor-pointer transition-all"
+              >
+                <div className="text-[11px] font-bold text-emerald-800">✅ पहले से कन्फर्म हो चुके</div>
+                <div className="text-lg font-black text-emerald-950 mt-0.5">{confirmedOnlyCount} टीचर</div>
+                <div className="text-[10px] text-emerald-700">कन्फर्म सूची देखें →</div>
+              </button>
             </div>
-          ) : (
-            <div className="space-y-4">
-              {pendingMarks.length > 0 && (
-                <div className="space-y-2">
-                  <h4 className="text-xs font-black text-slate-800">
-                    📝 पेंडिंग परीक्षा अंक ({pendingMarks.length} प्रविष्टियाँ):
-                  </h4>
-                  <div className="border border-slate-200 rounded-xl overflow-x-auto">
-                    <table className="w-full text-left border-collapse text-xs min-w-[680px]">
-                      <thead>
-                        <tr className="bg-slate-900 text-white">
-                          <th className="py-2.5 px-3">छात्र (कक्षा)</th>
-                          <th className="py-2.5 px-3">परीक्षा / विषय</th>
-                          <th className="py-2.5 px-3 text-center">टीचर के अंक</th>
-                          <th className="py-2.5 px-3 text-center">पुराने Sheet अंक</th>
-                          <th className="py-2.5 px-3">टीचर / समय</th>
-                          <th className="py-2.5 px-3 text-right">कार्रवाई</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-200">
-                        {pendingMarks.map((pm) => {
-                          const existing = examMarks.find((em) => em.id === pm.id);
-                          return (
-                            <tr key={pm.id} className="hover:bg-amber-50/40">
-                              <td className="py-2 px-3">
-                                <div className="font-black text-slate-900">{pm.student_name}</div>
-                                <div className="text-[10px] text-slate-500">
-                                  {pm.class_name} • {pm.student_id}
-                                </div>
-                              </td>
-                              <td className="py-2 px-3">
-                                <div className="font-bold text-indigo-900">{pm.exam_type}</div>
-                                <div className="text-[11px] text-slate-700">{pm.subject}</div>
-                              </td>
-                              <td className="py-2 px-3 text-center">
-                                {pm.attendance_status === 'Absent' ? (
-                                  <span className="px-2 py-0.5 rounded-md bg-rose-100 text-rose-800 font-black text-[11px]">
-                                    Absent
-                                  </span>
-                                ) : (
-                                  <span className="px-2.5 py-0.5 rounded-md bg-amber-100 text-amber-950 font-black text-xs">
-                                    {pm.marks_obtained} / {pm.max_marks}
-                                  </span>
-                                )}
-                                {pm.remarks && <div className="text-[10px] text-slate-500 mt-0.5">{pm.remarks}</div>}
-                              </td>
-                              <td className="py-2 px-3 text-center text-slate-500 font-semibold">
-                                {existing
-                                  ? existing.attendance_status === 'Absent'
-                                    ? 'Absent'
-                                    : `${existing.marks_obtained} / ${existing.max_marks}`
-                                  : 'नया रिकॉर्ड'}
-                              </td>
-                              <td className="py-2 px-3 text-[11px] text-slate-600">
-                                <div className="font-bold text-slate-800">{pm.teacher_name || 'Teacher'}</div>
-                                <div>{pm.submitted_at || pm.updated_at}</div>
-                              </td>
-                              <td className="py-2 px-3 text-right space-x-1.5 whitespace-nowrap">
-                                <button
-                                  type="button"
-                                  disabled={confirmingKey !== null}
-                                  onClick={() => handleConfirmSubset([pm], [], `confirm_${pm.id}`)}
-                                  className="px-2.5 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-[10px] font-black cursor-pointer disabled:opacity-50"
-                                >
-                                  ✓ कन्फर्म
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={confirmingKey !== null}
-                                  onClick={() => handleRejectSubset({ markIds: [pm.id] }, `reject_${pm.id}`)}
-                                  className="px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-bold cursor-pointer disabled:opacity-50"
-                                >
-                                  ✕ हटाएँ
-                                </button>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+
+            {/* Sub-View Switcher */}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setQueueViewMode('by_teacher')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-black cursor-pointer flex items-center gap-1.5 ${
+                    queueViewMode === 'by_teacher'
+                      ? 'bg-indigo-900 text-white shadow-xs'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  <i className="fa-solid fa-chalkboard-user"></i>
+                  <span>टीचर के अनुसार ग्रुप ({groupedPendingByTeacher.length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setQueueViewMode('teacher_status')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-black cursor-pointer flex items-center gap-1.5 ${
+                    queueViewMode === 'teacher_status'
+                      ? 'bg-blue-950 text-white shadow-xs'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  <i className="fa-solid fa-clipboard-check"></i>
+                  <span>किसके आए / किसके नहीं आए ({teacherSubmissionDirectory.length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setQueueViewMode('all_rows')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-black cursor-pointer flex items-center gap-1.5 ${
+                    queueViewMode === 'all_rows'
+                      ? 'bg-slate-900 text-white shadow-xs'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  <i className="fa-solid fa-table-list"></i>
+                  <span>सभी की सूची ({filteredTotalCount})</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Filter & Sort Toolbar (शॉर्ट फ़ंक्शन) */}
+            {queueViewMode !== 'teacher_status' ? (
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2">
+                  <div className="lg:col-span-2">
+                    <label className="block text-[10px] font-black text-slate-600 mb-1">खोजें (Search):</label>
+                    <input
+                      type="text"
+                      value={queueSearch}
+                      onChange={(e) => setQueueSearch(e.target.value)}
+                      placeholder="छात्र, रोल नं, टीचर, कक्षा या विषय..."
+                      className="w-full px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold outline-none focus:border-indigo-700"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-600 mb-1">टीचर चुनें:</label>
+                    <select
+                      value={queueTeacherFilter}
+                      onChange={(e) => setQueueTeacherFilter(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-bold outline-none focus:border-indigo-700"
+                    >
+                      <option value="ALL">सभी टीचर</option>
+                      {queueFilterOptions.teachers.map((t) => (
+                        <option key={t.key} value={t.key}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-600 mb-1">कक्षा चुनें:</label>
+                    <select
+                      value={queueClassFilter}
+                      onChange={(e) => setQueueClassFilter(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-bold outline-none focus:border-indigo-700"
+                    >
+                      <option value="ALL">सभी कक्षाएँ</option>
+                      {queueFilterOptions.classes.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-600 mb-1">परीक्षा / विषय:</label>
+                    <div className="grid grid-cols-2 gap-1">
+                      <select
+                        value={queueTermFilter}
+                        onChange={(e) => setQueueTermFilter(e.target.value as any)}
+                        className="w-full px-2 py-1.5 rounded-lg border border-slate-300 bg-white text-[11px] font-bold outline-none focus:border-indigo-700"
+                      >
+                        <option value="ALL">सब परीक्षा</option>
+                        <option value="Quarterly">Quarterly</option>
+                        <option value="Half-Yearly">Half-Yearly</option>
+                        <option value="Annual">Annual</option>
+                      </select>
+                      <select
+                        value={queueSubjectFilter}
+                        onChange={(e) => setQueueSubjectFilter(e.target.value)}
+                        className="w-full px-2 py-1.5 rounded-lg border border-slate-300 bg-white text-[11px] font-bold outline-none focus:border-indigo-700"
+                      >
+                        <option value="ALL">सब विषय</option>
+                        {queueFilterOptions.subjects.map((s) => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-black text-indigo-900 mb-1">
+                      <i className="fa-solid fa-arrow-up-wide-short mr-1"></i>
+                      शॉर्ट / क्रम (Sort By):
+                    </label>
+                    <select
+                      value={queueSortBy}
+                      onChange={(e) => setQueueSortBy(e.target.value as QueueSortOption)}
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-indigo-300 bg-indigo-50/70 text-xs font-black text-indigo-950 outline-none focus:border-indigo-700"
+                    >
+                      <option value="newest">नवीनतम पहले (Newest First)</option>
+                      <option value="teacher_asc">टीचर नाम (A → Z)</option>
+                      <option value="class_asc">कक्षा क्रम (Play → 8th)</option>
+                      <option value="student_asc">छात्र नाम (A → Z)</option>
+                      <option value="roll_asc">रोल नंबर (1 → N)</option>
+                      <option value="marks_desc">अंक: ज़्यादा → कम</option>
+                      <option value="marks_asc">अंक: कम → ज़्यादा</option>
+                      <option value="subject_asc">विषय के अनुसार (A → Z)</option>
+                    </select>
                   </div>
                 </div>
-              )}
 
-              {pendingMetaList.length > 0 && (
-                <div className="space-y-2">
-                  <h4 className="text-xs font-black text-slate-800">
-                    💬 पेंडिंग टीचर रिमार्क व परिणाम ड्राफ्ट ({pendingMetaList.length}):
-                  </h4>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {pendingMetaList.map((draft) => (
-                      <div key={draft.reportKey} className="p-3.5 rounded-xl border border-amber-200 bg-amber-50/40 space-y-2">
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <div className="font-black text-xs text-slate-900">
-                              {draft.studentName || draft.studentId}{' '}
-                              <span className="text-blue-900">({draft.className || '—'})</span>
+                {hasActiveQueueFilters && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200">
+                    <div className="text-[11px] font-bold text-slate-700">
+                      फ़िल्टर परिणाम: <span className="text-indigo-900 font-black">{filteredTotalCount}</span> प्रविष्टियाँ ({groupedPendingByTeacher.length} टीचर)
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={resetQueueFilters}
+                        className="px-2.5 py-1 rounded-lg bg-white border border-slate-300 text-slate-700 text-[11px] font-bold cursor-pointer hover:bg-slate-100"
+                      >
+                        ✕ फ़िल्टर हटाएँ
+                      </button>
+                      {filteredTotalCount > 0 && (
+                        <>
+                          <button
+                            type="button"
+                            disabled={confirmingKey !== null}
+                            onClick={() =>
+                              handleRejectSubset(
+                                {
+                                  markIds: filteredAndSortedPendingMarks.map((m) => m.id),
+                                  reportKeys: filteredPendingMetas.map((d) => d.reportKey),
+                                },
+                                'reject_filtered'
+                              )
+                            }
+                            className="px-2.5 py-1 rounded-lg bg-rose-50 border border-rose-300 text-rose-700 text-[11px] font-bold cursor-pointer"
+                          >
+                            फ़िल्टर किए अस्वीकार करें ({filteredTotalCount})
+                          </button>
+                          <button
+                            type="button"
+                            disabled={confirmingKey !== null}
+                            onClick={() =>
+                              handleConfirmSubset(filteredAndSortedPendingMarks, filteredPendingMetas, 'confirm_filtered')
+                            }
+                            className="px-3 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-[11px] font-black cursor-pointer"
+                          >
+                            ✓ फ़िल्टर किए कन्फर्म करें ({filteredTotalCount})
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {/* VIEW 1: Teacher-Wise Grouped Cards (Default) */}
+            {queueViewMode === 'by_teacher' && (
+              groupedPendingByTeacher.length === 0 ? (
+                <div className="p-8 text-center border border-dashed border-slate-200 rounded-xl space-y-2">
+                  <div className="w-12 h-12 mx-auto rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center text-xl">
+                    <i className="fa-solid fa-circle-check"></i>
+                  </div>
+                  <div className="text-sm font-black text-slate-800">
+                    {hasActiveQueueFilters ? 'चयनित फ़िल्टर में कोई पेंडिंग ड्राफ्ट नहीं मिला' : 'कोई पेंडिंग कन्फर्मेशन बाकी नहीं है'}
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    {hasActiveQueueFilters
+                      ? 'कृपया फ़िल्टर बदलें या ऊपर "किसके आए / किसके नहीं आए" टैब से सभी टीचर की स्थिति देखें।'
+                      : 'जब कोई टीचर परीक्षा अंक या रिमार्क ड्राफ्ट सबमिट करेगा, तो वह टीचर-वार कार्ड के रूप में यहाँ दिखाई देगा।'}
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {groupedPendingByTeacher.map((group) => {
+                    const isCollapsed = Boolean(collapsedTeacherKeys[group.key]);
+                    const groupTotal = group.marks.length + group.metas.length;
+                    return (
+                      <div key={group.key} className="border border-amber-300 rounded-2xl overflow-hidden shadow-2xs bg-amber-50/20">
+                        <div className="p-3.5 bg-gradient-to-r from-amber-50 to-white border-b border-amber-200 flex flex-wrap items-center justify-between gap-3">
+                          <div className="flex items-start gap-3 min-w-0">
+                            <div className="w-10 h-10 rounded-xl bg-indigo-900 text-amber-300 font-black text-sm flex items-center justify-center shrink-0">
+                              {group.teacherName.charAt(0).toUpperCase()}
                             </div>
-                            <div className="text-[10px] text-slate-500">
-                              प्रेषक: {draft.submittedBy || 'Teacher'} • {draft.submittedAt}
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-sm font-black text-slate-900">{group.teacherName}</span>
+                                <span className="px-2 py-0.5 rounded-full bg-amber-200 text-amber-950 text-[10px] font-black">
+                                  {groupTotal} पेंडिंग
+                                </span>
+                                {group.assignedClass && (
+                                  <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-900 border border-blue-200 text-[10px] font-bold">
+                                    कक्षा: {group.assignedClass}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                {group.batchChips.map((chip) => (
+                                  <span
+                                    key={chip}
+                                    className="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-[10px] font-bold text-slate-700"
+                                  >
+                                    {chip}
+                                  </span>
+                                ))}
+                                {group.latestAt && (
+                                  <span className="text-[10px] text-slate-500 self-center">
+                                    • अंतिम भेजा: {group.latestAt}
+                                  </span>
+                                )}
+                              </div>
                             </div>
                           </div>
-                          <span className="px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-900 text-[10px] font-black">
-                            {draft.resultStatus || 'PROMOTED'}
-                          </span>
+
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setCollapsedTeacherKeys((prev) => ({ ...prev, [group.key]: !prev[group.key] }))
+                              }
+                              className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 text-[11px] font-bold cursor-pointer"
+                            >
+                              {isCollapsed ? '▼ सूची खोलें' : '▲ छुपाएँ'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={confirmingKey !== null}
+                              onClick={() =>
+                                handleRejectSubset(
+                                  {
+                                    markIds: group.marks.map((m) => m.id),
+                                    reportKeys: group.metas.map((d) => d.reportKey),
+                                  },
+                                  `reject_teacher_${group.key}`
+                                )
+                              }
+                              className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-rose-50 border border-rose-300 text-rose-700 text-[11px] font-bold cursor-pointer disabled:opacity-50"
+                            >
+                              ✕ अस्वीकार
+                            </button>
+                            <button
+                              type="button"
+                              disabled={confirmingKey !== null}
+                              onClick={() =>
+                                handleConfirmSubset(group.marks, group.metas, `confirm_teacher_${group.key}`)
+                              }
+                              className="px-3.5 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-[11px] font-black flex items-center gap-1 cursor-pointer shadow-xs disabled:opacity-50"
+                            >
+                              <i
+                                className={`fa-solid ${
+                                  confirmingKey === `confirm_teacher_${group.key}` ? 'fa-spinner fa-spin' : 'fa-check-double'
+                                }`}
+                              ></i>
+                              <span>इस टीचर के कन्फर्म करें ({groupTotal})</span>
+                            </button>
+                          </div>
                         </div>
-                        <p className="text-xs text-slate-800 bg-white p-2.5 rounded-lg border border-slate-200">
-                          {draft.teacherRemark}
-                        </p>
-                        <div className="flex justify-end gap-2">
-                          <button
-                            type="button"
-                            disabled={confirmingKey !== null}
-                            onClick={() =>
-                              handleRejectSubset({ reportKeys: [draft.reportKey] }, `reject_meta_${draft.reportKey}`)
-                            }
-                            className="px-2.5 py-1 rounded-lg bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-bold cursor-pointer"
-                          >
-                            ✕ अस्वीकार
-                          </button>
-                          <button
-                            type="button"
-                            disabled={confirmingKey !== null}
-                            onClick={() =>
-                              handleConfirmSubset([], [draft], `confirm_meta_${draft.reportKey}`)
-                            }
-                            className="px-3 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-[10px] font-black cursor-pointer"
-                          >
-                            ✓ कन्फर्म व Sheet सेव
-                          </button>
-                        </div>
+
+                        {!isCollapsed && (
+                          <div className="p-3 space-y-3">
+                            {group.marks.length > 0 && renderMarksTable(group.marks, false)}
+                            {group.metas.length > 0 && (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                                {group.metas.map((draft: any) => (
+                                  <div key={draft.reportKey} className="p-3 rounded-xl border border-amber-200 bg-white space-y-2">
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div>
+                                        <div className="font-black text-xs text-slate-900">
+                                          {draft.studentName || draft.studentId}{' '}
+                                          <span className="text-blue-900">({draft.className || '—'})</span>
+                                        </div>
+                                        <div className="text-[10px] text-slate-500">रिमार्क ड्राफ्ट • {draft.submittedAt}</div>
+                                      </div>
+                                      <span className="px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-900 text-[10px] font-black">
+                                        {draft.resultStatus || 'PROMOTED'}
+                                      </span>
+                                    </div>
+                                    <p className="text-xs text-slate-800 bg-slate-50 p-2 rounded-lg border border-slate-200">
+                                      {draft.teacherRemark}
+                                    </p>
+                                    <div className="flex justify-end gap-2">
+                                      <button
+                                        type="button"
+                                        disabled={confirmingKey !== null}
+                                        onClick={() =>
+                                          handleRejectSubset({ reportKeys: [draft.reportKey] }, `reject_meta_${draft.reportKey}`)
+                                        }
+                                        className="px-2.5 py-1 rounded-lg bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-bold cursor-pointer"
+                                      >
+                                        ✕ अस्वीकार
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={confirmingKey !== null}
+                                        onClick={() =>
+                                          handleConfirmSubset([], [draft], `confirm_meta_${draft.reportKey}`)
+                                        }
+                                        className="px-3 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-[10px] font-black cursor-pointer"
+                                      >
+                                        ✓ कन्फर्म
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
+                    );
+                  })}
+                </div>
+              )
+            )}
+
+            {/* VIEW 2: Teacher Submission Status Matrix ("किसके आए / किसके नहीं आए") */}
+            {queueViewMode === 'teacher_status' && (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-50 border border-slate-200 rounded-xl p-3">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] font-black text-slate-700 mr-1">परीक्षा:</span>
+                    {(['ALL', 'Quarterly', 'Half-Yearly', 'Annual'] as const).map((term) => (
+                      <button
+                        key={term}
+                        type="button"
+                        onClick={() => setStatusTermFilter(term)}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${
+                          statusTermFilter === term
+                            ? 'bg-indigo-900 text-white'
+                            : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        {term === 'ALL' ? 'सभी परीक्षाएँ' : term === 'Quarterly' ? 'तिमाही (Quarterly)' : term === 'Half-Yearly' ? 'छमाही (Half-Yearly)' : 'सालाना (Annual)'}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {[
+                      { id: 'all', label: `सब (${teacherSubmissionDirectory.length})` },
+                      { id: 'pending', label: `⏳ आए हुए / बाकी (${pendingTeachersCount})` },
+                      { id: 'not_submitted', label: `❌ नहीं आए (${notSubmittedCount})` },
+                      { id: 'confirmed', label: `✅ कन्फर्म हो चुके (${confirmedOnlyCount})` },
+                    ].map((st) => (
+                      <button
+                        key={st.id}
+                        type="button"
+                        onClick={() => setStatusMatrixFilter(st.id as any)}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${
+                          statusMatrixFilter === st.id
+                            ? 'bg-blue-950 text-white'
+                            : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        {st.label}
+                      </button>
                     ))}
                   </div>
                 </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+
+                <div>
+                  <input
+                    type="text"
+                    value={queueSearch}
+                    onChange={(e) => setQueueSearch(e.target.value)}
+                    placeholder="टीचर का नाम, कक्षा या विषय खोजें..."
+                    className="w-full sm:w-80 px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold outline-none focus:border-indigo-700"
+                  />
+                </div>
+
+                <div className="border border-slate-200 rounded-xl overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs min-w-[720px]">
+                    <thead>
+                      <tr className="bg-slate-900 text-white">
+                        <th className="py-2.5 px-3">शिक्षक (Teacher)</th>
+                        <th className="py-2.5 px-3">असाइन कक्षा / विषय</th>
+                        <th className="py-2.5 px-3">स्थिति (Status)</th>
+                        <th className="py-2.5 px-3">कन्फर्मेशन बाकी (आए हुए)</th>
+                        <th className="py-2.5 px-3">Sheet में कन्फर्म हो चुके</th>
+                        <th className="py-2.5 px-3 text-right">कार्रवाई</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 bg-white">
+                      {filteredStatusRows.map((row) => {
+                        const pTotal = row.pendingMarks.length + row.pendingMetas.length;
+                        const cleanPhone = String(row.mobile || '').replace(/\D/g, '').slice(-10);
+                        const waText = encodeURIComponent(
+                          `नमस्ते ${row.name} जी, कृपया E.V.S. Public School ऐप के Teacher Portal से ${statusTermFilter === 'ALL' ? 'परीक्षा' : statusTermFilter} के अंक जल्द ही भरकर भेज दें।`
+                        );
+                        return (
+                          <tr key={row.key} className="hover:bg-slate-50">
+                            <td className="py-2.5 px-3">
+                              <div className="font-black text-slate-900">{row.name}</div>
+                              <div className="text-[10px] text-slate-500">
+                                {row.designation} {row.mobile ? `• ${row.mobile}` : ''}
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <div className="font-bold text-blue-900">{row.assignedClass || '—'}</div>
+                              {row.assignedSubjects && (
+                                <div className="text-[10px] text-slate-500">{row.assignedSubjects}</div>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3">
+                              {row.status === 'pending' ? (
+                                <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-950 border border-amber-300 text-[10px] font-black">
+                                  ⏳ आ गए ({pTotal} कन्फर्म बाकी)
+                                </span>
+                              ) : row.status === 'confirmed' ? (
+                                <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-black">
+                                  ✅ कन्फर्म हो चुके
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-300 text-[10px] font-black">
+                                  ❌ अभी नहीं आए
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3">
+                              {pTotal > 0 ? (
+                                <div className="space-y-0.5">
+                                  <div className="font-black text-amber-900">{pTotal} प्रविष्टियाँ</div>
+                                  <div className="text-[10px] text-slate-600">
+                                    {row.pendingBatchSummary.join(' | ') || `${row.pendingMetas.length} रिमार्क`}
+                                  </div>
+                                </div>
+                              ) : (
+                                <span className="text-slate-400">—</span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3">
+                              {row.confirmedMarks.length > 0 ? (
+                                <div className="space-y-0.5">
+                                  <div className="font-black text-emerald-800">{row.confirmedMarks.length} अंक</div>
+                                  <div className="text-[10px] text-slate-600">
+                                    {row.confirmedBatchSummary.slice(0, 3).join(' | ')}
+                                    {row.confirmedBatchSummary.length > 3 ? ` +${row.confirmedBatchSummary.length - 3}` : ''}
+                                  </div>
+                                </div>
+                              ) : (
+                                <span className="text-slate-400">0</span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                              {pTotal > 0 ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setQueueTeacherFilter(row.key);
+                                    if (statusTermFilter !== 'ALL') setQueueTermFilter(statusTermFilter);
+                                    setQueueViewMode('by_teacher');
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg bg-indigo-900 hover:bg-indigo-800 text-white text-[10px] font-black cursor-pointer"
+                                >
+                                  देखें व कन्फर्म करें →
+                                </button>
+                              ) : cleanPhone.length === 10 ? (
+                                <a
+                                  href={`https://wa.me/91${cleanPhone}?text=${waText}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold"
+                                >
+                                  <i className="fa-brands fa-whatsapp"></i>
+                                  <span>रिमाइंडर</span>
+                                </a>
+                              ) : (
+                                <span className="text-[10px] text-slate-400">—</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* VIEW 3: Flat Detailed List (All Rows Sorted) */}
+            {queueViewMode === 'all_rows' && (
+              filteredTotalCount === 0 ? (
+                <div className="p-8 text-center border border-dashed border-slate-200 rounded-xl space-y-2">
+                  <div className="w-12 h-12 mx-auto rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center text-xl">
+                    <i className="fa-solid fa-circle-check"></i>
+                  </div>
+                  <div className="text-sm font-black text-slate-800">कोई पेंडिंग प्रविष्टि नहीं मिली</div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {filteredAndSortedPendingMarks.length > 0 && (
+                    <div className="space-y-2">
+                      <h4 className="text-xs font-black text-slate-800">
+                        📝 पेंडिंग परीक्षा अंक ({filteredAndSortedPendingMarks.length} प्रविष्टियाँ):
+                      </h4>
+                      {renderMarksTable(filteredAndSortedPendingMarks, true)}
+                    </div>
+                  )}
+
+                  {filteredPendingMetas.length > 0 && (
+                    <div className="space-y-2">
+                      <h4 className="text-xs font-black text-slate-800">
+                        💬 पेंडिंग टीचर रिमार्क व परिणाम ड्राफ्ट ({filteredPendingMetas.length}):
+                      </h4>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {filteredPendingMetas.map((draft: any) => (
+                          <div key={draft.reportKey} className="p-3.5 rounded-xl border border-amber-200 bg-amber-50/40 space-y-2">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <div className="font-black text-xs text-slate-900">
+                                  {draft.studentName || draft.studentId}{' '}
+                                  <span className="text-blue-900">({draft.className || '—'})</span>
+                                </div>
+                                <div className="text-[10px] text-slate-500">
+                                  प्रेषक: {draft.submittedBy || 'Teacher'} • {draft.submittedAt}
+                                </div>
+                              </div>
+                              <span className="px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-900 text-[10px] font-black">
+                                {draft.resultStatus || 'PROMOTED'}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-800 bg-white p-2.5 rounded-lg border border-slate-200">
+                              {draft.teacherRemark}
+                            </p>
+                            <div className="flex justify-end gap-2">
+                              <button
+                                type="button"
+                                disabled={confirmingKey !== null}
+                                onClick={() =>
+                                  handleRejectSubset({ reportKeys: [draft.reportKey] }, `reject_meta_${draft.reportKey}`)
+                                }
+                                className="px-2.5 py-1 rounded-lg bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-bold cursor-pointer"
+                              >
+                                ✕ अस्वीकार
+                              </button>
+                              <button
+                                type="button"
+                                disabled={confirmingKey !== null}
+                                onClick={() =>
+                                  handleConfirmSubset([], [draft], `confirm_meta_${draft.reportKey}`)
+                                }
+                                className="px-3 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-[10px] font-black cursor-pointer"
+                              >
+                                ✓ कन्फर्म व Sheet सेव
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            )}
+          </div>
+        );
+      })()}
 
       {/* MANAGER TAB: Report Card Preview, Remark Editor & 1-Click PDF Print */}
       {isManager && activeSubTab === 'report_card' && (
@@ -1343,33 +2519,36 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 focus:border-blue-800 outline-none"
                   placeholder="Write personalized English remark about student's academic progress..."
                 />
-                {selectedReportData && (
-                  <div className="flex flex-wrap gap-1.5 mt-1.5">
-                    {[
-                      {
-                        label: 'Merit / Top',
-                        text: `${selectedReportData.student.Student_Name.split(' ')[0]} is an exceptionally bright, disciplined, and conscientious learner who excels consistently across subjects.`,
-                      },
-                      {
-                        label: 'Steady Growth',
-                        text: `${selectedReportData.student.Student_Name.split(' ')[0]} shows steady progress and active curiosity in class. Daily written practice will elevate scores even further.`,
-                      },
-                      {
-                        label: 'Focus & Attendance',
-                        text: `${selectedReportData.student.Student_Name.split(' ')[0]} has good learning potential. Regular school attendance and daily home revision are strongly encouraged.`,
-                      },
-                    ].map((preset) => (
-                      <button
-                        key={preset.label}
-                        type="button"
-                        onClick={() => setTeacherRemarkDraft(preset.text)}
-                        className="px-2 py-0.5 rounded-md bg-blue-50 hover:bg-blue-100 text-blue-900 border border-blue-200 text-[10px] font-bold cursor-pointer"
-                      >
-                        + {preset.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                {selectedReportData && (() => {
+                  const sFirstName = String(selectedReportData.student.Student_Name || 'Student').trim().split(/\s+/)[0] || 'Student';
+                  return (
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {[
+                        {
+                          label: 'Merit / Top',
+                          text: `${sFirstName} is an exceptionally bright, disciplined, and conscientious learner who excels consistently across subjects.`,
+                        },
+                        {
+                          label: 'Steady Growth',
+                          text: `${sFirstName} shows steady progress and active curiosity in class. Daily written practice will elevate scores even further.`,
+                        },
+                        {
+                          label: 'Focus & Attendance',
+                          text: `${sFirstName} has good learning potential. Regular school attendance and daily home revision are strongly encouraged.`,
+                        },
+                      ].map((preset) => (
+                        <button
+                          key={preset.label}
+                          type="button"
+                          onClick={() => setTeacherRemarkDraft(preset.text)}
+                          className="px-2 py-0.5 rounded-md bg-blue-50 hover:bg-blue-100 text-blue-900 border border-blue-200 text-[10px] font-bold cursor-pointer"
+                        >
+                          + {preset.label}
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
 
               <div>
@@ -1394,33 +2573,36 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 focus:border-blue-800 outline-none"
                   placeholder="Write Principal's encouraging English remark..."
                 />
-                {selectedReportData && (
-                  <div className="flex flex-wrap gap-1.5 mt-1.5">
-                    {[
-                      {
-                        label: 'Honour Roll',
-                        text: `Heartiest congratulations! Proud of ${selectedReportData.student.Student_Name.split(' ')[0]}'s outstanding dedication and conduct.`,
-                      },
-                      {
-                        label: 'Good Potential',
-                        text: `Keep striving for excellence! Consistent effort and discipline will bring even brighter achievements ahead.`,
-                      },
-                      {
-                        label: 'Parent Support',
-                        text: `With regular attendance and guided practice at home, ${selectedReportData.student.Student_Name.split(' ')[0]} can achieve distinction in upcoming terms.`,
-                      },
-                    ].map((preset) => (
-                      <button
-                        key={preset.label}
-                        type="button"
-                        onClick={() => setPrincipalRemarkDraft(preset.text)}
-                        className="px-2 py-0.5 rounded-md bg-amber-50 hover:bg-amber-100 text-amber-950 border border-amber-200 text-[10px] font-bold cursor-pointer"
-                      >
-                        + {preset.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                {selectedReportData && (() => {
+                  const sFirstName = String(selectedReportData.student.Student_Name || 'Student').trim().split(/\s+/)[0] || 'Student';
+                  return (
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {[
+                        {
+                          label: 'Honour Roll',
+                          text: `Heartiest congratulations! Proud of ${sFirstName}'s outstanding dedication and conduct.`,
+                        },
+                        {
+                          label: 'Good Potential',
+                          text: `Keep striving for excellence! Consistent effort and discipline will bring even brighter achievements ahead.`,
+                        },
+                        {
+                          label: 'Parent Support',
+                          text: `With regular attendance and guided practice at home, ${sFirstName} can achieve distinction in upcoming terms.`,
+                        },
+                      ].map((preset) => (
+                        <button
+                          key={preset.label}
+                          type="button"
+                          onClick={() => setPrincipalRemarkDraft(preset.text)}
+                          className="px-2 py-0.5 rounded-md bg-amber-50 hover:bg-amber-100 text-amber-950 border border-amber-200 text-[10px] font-bold cursor-pointer"
+                        >
+                          + {preset.label}
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
 
@@ -1562,9 +2744,9 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
                   onChange={(e) => handleExamTermChange(e.target.value as ExamTermType)}
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-bold text-slate-900 bg-slate-50 outline-none focus:border-indigo-700"
                 >
-                  <option value="Quarterly">तिमाही परीक्षा (Quarterly Exam)</option>
-                  <option value="Half-Yearly">छमाही परीक्षा (Half-Yearly Exam)</option>
-                  <option value="Annual">सालाना परीक्षा (Annual Exam)</option>
+                  <option value="Quarterly">तिमाही परीक्षा (Quarterly • 40 अंक)</option>
+                  <option value="Half-Yearly">छमाही परीक्षा (Half-Yearly • 60 अंक)</option>
+                  <option value="Annual">सालाना परीक्षा (Annual • 100 अंक)</option>
                 </select>
               </div>
 
@@ -1582,32 +2764,49 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
                   ))}
                   <option value="__CUSTOM__">+ अन्य विषय लिखें...</option>
                 </select>
-              </div>
-
-              {examSubject === '__CUSTOM__' ? (
-                <div>
-                  <label className="block text-[11px] font-black text-slate-700 mb-1">नया विषय नाम:</label>
+                {examSubject === '__CUSTOM__' && (
                   <input
                     type="text"
                     value={customSubject}
                     onChange={(e) => setCustomSubject(e.target.value)}
-                    placeholder="उदा. ड्राइंग / कला"
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-bold outline-none focus:border-indigo-700"
+                    placeholder="नया विषय नाम लिखें..."
+                    className="mt-1.5 w-full px-3 py-1.5 rounded-xl border border-indigo-300 text-xs font-bold outline-none focus:border-indigo-700"
                   />
+                )}
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-black text-slate-700 mb-1">अधिकतम अंक (Max Marks):</label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={maxMarksInput}
+                  onChange={(e) => handleMaxMarksInputChange(e.target.value)}
+                  onBlur={() => {
+                    if (!maxMarksInput.trim() || parseInt(maxMarksInput, 10) <= 0) {
+                      handleSelectMaxMarksPreset(DEFAULT_MAX_MARKS_BY_TERM[examTerm]);
+                    }
+                  }}
+                  placeholder={`उदा. ${DEFAULT_MAX_MARKS_BY_TERM[examTerm]}`}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-black text-slate-900 outline-none focus:border-indigo-700"
+                />
+                <div className="flex flex-wrap gap-1 mt-1.5">
+                  {[40, 50, 60, 80, 100].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => handleSelectMaxMarksPreset(preset)}
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-black cursor-pointer border ${
+                        maxMarksInput === String(preset)
+                          ? 'bg-indigo-900 text-white border-indigo-900'
+                          : 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'
+                      }`}
+                    >
+                      {preset}
+                    </button>
+                  ))}
                 </div>
-              ) : (
-                <div>
-                  <label className="block text-[11px] font-black text-slate-700 mb-1">अधिकतम अंक (Max Marks):</label>
-                  <input
-                    type="number"
-                    min={5}
-                    max={500}
-                    value={maxMarks}
-                    onChange={(e) => setMaxMarks(Math.max(1, Number(e.target.value) || 50))}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-black text-slate-900 outline-none focus:border-indigo-700"
-                  />
-                </div>
-              )}
+              </div>
 
               <div className="flex items-end">
                 <button
@@ -1642,6 +2841,33 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
               </div>
             )}
 
+            {/* Auto-Draft Safety Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-emerald-50/70 border border-emerald-200 text-[11px] font-bold text-emerald-950">
+              <div className="flex items-center gap-1.5">
+                <i className="fa-solid fa-shield-check text-emerald-700"></i>
+                <span>
+                  💾 टाइप करते ही अंक फोन मेमोरी में सुरक्षित हो रहे हैं — बैकग्राउंड रिफ्रेश से लिखे हुए नंबर ब्लैंक नहीं होंगे।
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.5 rounded-md bg-white border border-emerald-300 text-[10px] font-black">
+                  भरे गए: {classStudents.filter((s) => {
+                    const r = marksDraft[String(s.Student_ID || '').trim()];
+                    return r && (r.obtained.trim() !== '' || r.absent);
+                  }).length} / {classStudents.length}
+                </span>
+                {hasRestoredLocalDraft && (
+                  <button
+                    type="button"
+                    onClick={handleResetLocalDraft}
+                    className="px-2 py-0.5 rounded-md bg-white hover:bg-rose-50 border border-rose-300 text-rose-700 text-[10px] font-bold cursor-pointer"
+                  >
+                    ड्राफ्ट रीसेट करें
+                  </button>
+                )}
+              </div>
+            </div>
+
             <div className="border border-slate-200 rounded-xl overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs min-w-[640px]">
                 <thead>
@@ -1657,13 +2883,16 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
                 </thead>
                 <tbody className="divide-y divide-slate-200">
                   {classStudents.map((st) => {
-                    const rowState = marksDraft[st.Student_ID] || { obtained: '', absent: false, remarks: '' };
-                    const hasPending = getPendingStatusForStudent(st.Student_ID);
-                    const hasConfirmed = getConfirmedStatusForStudent(st.Student_ID);
+                    const sid = String(st.Student_ID || '').trim();
+                    const rowState = marksDraft[sid] || { obtained: '', absent: false, remarks: '' };
+                    const hasPending = getPendingStatusForStudent(sid);
+                    const hasConfirmed = getConfirmedStatusForStudent(sid);
+                    const numericObt = parseFloat(rowState.obtained);
+                    const isOverMax = !rowState.absent && rowState.obtained.trim() !== '' && Number.isFinite(numericObt) && numericObt > maxMarks;
                     return (
-                      <tr key={st.Student_ID} className="hover:bg-slate-50">
+                      <tr key={sid || String(st.Student_Name)} className="hover:bg-slate-50">
                         <td className="py-2 px-3 font-mono text-[11px] text-slate-600">
-                          #{st.Roll_Number || '—'} ({st.Student_ID})
+                          #{st.Roll_Number || '—'} ({sid})
                         </td>
                         <td className="py-2 px-3 font-black text-slate-900">{st.Student_Name}</td>
                         <td className="py-2 px-3 font-semibold text-blue-900">{st.Class}</td>
@@ -1683,12 +2912,7 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
                         <td className="py-2 px-3 text-center">
                           <button
                             type="button"
-                            onClick={() =>
-                              setMarksDraft((prev) => ({
-                                ...prev,
-                                [st.Student_ID]: { ...rowState, absent: !rowState.absent },
-                              }))
-                            }
+                            onClick={() => updateStudentDraftRow(sid, { absent: !rowState.absent })}
                             className={`px-2.5 py-1 rounded-lg text-[10px] font-black cursor-pointer ${
                               rowState.absent
                                 ? 'bg-rose-100 text-rose-800 border border-rose-300'
@@ -1700,32 +2924,32 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
                         </td>
                         <td className="py-2 px-3 text-center">
                           <input
-                            type="number"
-                            min={0}
-                            max={maxMarks}
-                            step="0.5"
+                            type="text"
+                            inputMode="decimal"
                             disabled={rowState.absent}
                             value={rowState.absent ? '' : rowState.obtained}
-                            onChange={(e) =>
-                              setMarksDraft((prev) => ({
-                                ...prev,
-                                [st.Student_ID]: { ...rowState, obtained: e.target.value },
-                              }))
-                            }
+                            onChange={(e) => {
+                              const cleaned = e.target.value
+                                .replace(/[^0-9.]/g, '')
+                                .replace(/(\..*)\./g, '$1');
+                              updateStudentDraftRow(sid, { obtained: cleaned });
+                            }}
                             placeholder={rowState.absent ? 'AB' : `0 - ${maxMarks}`}
-                            className="w-24 px-2.5 py-1.5 rounded-lg border border-slate-300 text-center font-black text-slate-900 disabled:bg-slate-100 outline-none focus:border-indigo-700"
+                            className={`w-24 px-2.5 py-1.5 rounded-lg border text-center font-black text-slate-900 disabled:bg-slate-100 outline-none ${
+                              isOverMax
+                                ? 'border-rose-500 bg-rose-50 focus:border-rose-600'
+                                : 'border-slate-300 focus:border-indigo-700'
+                            }`}
                           />
+                          {isOverMax && (
+                            <div className="text-[9px] font-bold text-rose-600 mt-0.5">अधिकतम {maxMarks} से अधिक!</div>
+                          )}
                         </td>
                         <td className="py-2 px-3">
                           <input
                             type="text"
                             value={rowState.remarks}
-                            onChange={(e) =>
-                              setMarksDraft((prev) => ({
-                                ...prev,
-                                [st.Student_ID]: { ...rowState, remarks: e.target.value },
-                              }))
-                            }
+                            onChange={(e) => updateStudentDraftRow(sid, { remarks: e.target.value })}
                             placeholder="विषय टिप्पणी..."
                             className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs outline-none focus:border-indigo-700"
                           />
