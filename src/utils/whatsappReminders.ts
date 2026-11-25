@@ -19,6 +19,7 @@ export interface WhatsappAlertLog {
 }
 
 const WA_LOG_STORAGE_KEY = 'evs_whatsapp_alert_logs_v1';
+export const WHATSAPP_LOGS_UPDATED_EVENT = 'evs-whatsapp-logs-updated';
 
 export const loadLocalWhatsappLogs = (): WhatsappAlertLog[] => {
   try {
@@ -69,12 +70,15 @@ export const logWhatsappAlertBackup = async (
     classOrRole: String(meta.classOrRole || '').trim(),
     mobile: normalizeWhatsappDigits(meta.mobile || '') || String(meta.mobile || '').trim(),
     amount: Number(meta.amount || 0),
-    summary: String(meta.summary || '').trim().slice(0, 280),
+    summary: String(meta.summary || '').trim().slice(0, 350),
     sentBy: String(meta.sentBy || 'Manager').trim(),
   };
 
   const prev = loadLocalWhatsappLogs();
   saveLocalWhatsappLogs([entry, ...prev]);
+  try {
+    window.dispatchEvent(new Event(WHATSAPP_LOGS_UPDATED_EVENT));
+  } catch {}
 
   const syncRes = await dualSyncWriteToSheet({
     apiPath: '/api/whatsapp-logs',
@@ -117,7 +121,7 @@ export const openWhatsappAlert = (
     logWhatsappAlertBackup({
       ...backupMeta,
       mobile: String(rawPhone || backupMeta.mobile || ''),
-      summary: backupMeta.summary || message.replace(/\*/g, '').slice(0, 200),
+      summary: backupMeta.summary || message.replace(/\*/g, '').slice(0, 350),
     }).catch(() => {});
   }
 };
