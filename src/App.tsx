@@ -1987,26 +1987,6 @@ export default function App() {
     }
   }, [activeTab, teacherUser?.User_ID]);
 
-  const teacherAssignedRooms = useMemo(() => {
-    if (!teacherUser) return [];
-    return findTeacherAssignedRooms({
-      snapshot: teacherSeatingSnapshot,
-      historyEntries: teacherSeatingHistory,
-      students,
-      getClassName,
-      config: hallPassConfig,
-      teacherId: teacherUser.User_ID,
-      teacherName: teacherUser.Name,
-      teacherUsername: teacherUser.Username,
-    });
-  }, [
-    teacherUser,
-    teacherSeatingSnapshot,
-    teacherSeatingHistory,
-    students,
-    hallPassConfig,
-  ]);
-
   useEffect(() => {
     try {
       localStorage.setItem('evs_teacher_portal_tab', teacherPortalTab);
@@ -3760,6 +3740,27 @@ export default function App() {
     const metrics = computeStudentFeeMetrics(student, feeRecords);
     return metrics.dueBalance;
   };
+
+  const teacherAssignedRooms = useMemo(() => {
+    if (!teacherUser) return [];
+    return findTeacherAssignedRooms({
+      snapshot: teacherSeatingSnapshot,
+      historyEntries: teacherSeatingHistory,
+      students,
+      getClassName,
+      config: hallPassConfig,
+      teacherId: teacherUser.User_ID,
+      teacherName: teacherUser.Name,
+      teacherUsername: teacherUser.Username,
+    });
+  }, [
+    teacherUser,
+    teacherSeatingSnapshot,
+    teacherSeatingHistory,
+    students,
+    hallPassConfig,
+    classMap,
+  ]);
 
   const syncInFlightRef = useRef<boolean>(false);
 
