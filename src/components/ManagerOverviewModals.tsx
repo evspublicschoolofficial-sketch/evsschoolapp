@@ -7,6 +7,9 @@ import {
   openWhatsappAlert,
   buildAbsentAlertMessage,
   buildFeeDueReminderMessage,
+  buildWhatsappUrl,
+  logWhatsappAlertBackup,
+  normalizeWhatsappDigits,
 } from '../utils/whatsappReminders';
 
 interface ManagerOverviewModalsProps {
@@ -79,6 +82,9 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
   const [sentAlertIds, setSentAlertIds] = useState<Record<string, boolean>>({});
   const [waiverVersion, setWaiverVersion] = useState<number>(0);
+  const [batchSenderOpen, setBatchSenderOpen] = useState<boolean>(false);
+  const [batchIndex, setBatchIndex] = useState<number>(0);
+  const [batchCopiedNotice, setBatchCopiedNotice] = useState<boolean>(false);
 
   useEffect(() => {
     const refresh = () => setWaiverVersion((v) => v + 1);
@@ -94,6 +100,9 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
   useEffect(() => {
     setSearchTerm('');
     setClassFilter('all');
+    setBatchSenderOpen(false);
+    setBatchIndex(0);
+    setBatchCopiedNotice(false);
   }, [activeModal]);
 
   // Handle ESC key to dismiss modal
@@ -544,6 +553,80 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
       return matchSearch && matchClass;
     });
   }, [currentAbsentSource, searchTerm, classFilter, studentMap]);
+
+  const batchQueueItems = useMemo(() => {
+    return filteredAbsentees.map((rec) => {
+      const st = findStudent(rec.Student_ID);
+      const phone = getStudentPhone(st);
+      const digits = normalizeWhatsappDigits(phone);
+      const hasValidPhone = digits.length >= 12;
+      const absentKey = `absent_${rec.Student_ID}_${rec.Date || todayDmy}`;
+      const isSent = Boolean(sentAlertIds[absentKey]);
+      const studentName = st?.Student_Name || `Student ${rec.Student_ID}`;
+      const className = getClassName(rec.Class || st?.Class || '');
+      const message = buildAbsentAlertMessage({
+        studentName,
+        className,
+        rollNumber: st?.Roll_Number,
+        dateStr: rec.Date || todayDmy,
+        remark: rec.Remark,
+      });
+      const whatsappUrl = buildWhatsappUrl(phone, message);
+      return {
+        rec,
+        student: st,
+        phone,
+        hasValidPhone,
+        absentKey,
+        isSent,
+        studentName,
+        className,
+        message,
+        whatsappUrl,
+      };
+    });
+  }, [filteredAbsentees, studentMap, sentAlertIds, todayDmy]);
+
+  const batchSentCount = useMemo(
+    () => batchQueueItems.filter((item) => item.isSent).length,
+    [batchQueueItems]
+  );
+  const batchUnsentCount = batchQueueItems.length - batchSentCount;
+  const safeBatchIndex =
+    batchQueueItems.length > 0 ? Math.min(batchIndex, batchQueueItems.length - 1) : 0;
+  const currentBatchItem = batchQueueItems[safeBatchIndex] || null;
+
+  const absentGroupSummaryText = useMemo(() => {
+    const dateLabel =
+      attendanceDateTab === 'today' ? todayDmy : latestRecordedDate || todayDmy;
+    const lines = batchQueueItems.map(
+      (item, idx) =>
+        `${idx + 1}. ${item.studentName} (Class ${item.className}${
+          item.student?.Roll_Number ? `, Roll ${item.student.Roll_Number}` : ''
+        })${item.phone ? ` — ${item.phone}` : ''}`
+    );
+    return (
+      `*E.V.S. PUBLIC SCHOOL — अनुपस्थित छात्र सूची (${dateLabel})*\n` +
+      `कुल अनुपस्थित: ${batchQueueItems.length} छात्र\n` +
+      `━━━━━━━━━━━━━━━━━━\n` +
+      lines.join('\n')
+    );
+  }, [batchQueueItems, attendanceDateTab, todayDmy, latestRecordedDate]);
+
+  const advanceToNextUnsent = (fromIdx: number, newlySentKey?: string) => {
+    if (batchQueueItems.length <= 1) return;
+    for (let offset = 1; offset <= batchQueueItems.length; offset++) {
+      const candIdx = (fromIdx + offset) % batchQueueItems.length;
+      const cand = batchQueueItems[candIdx];
+      if (!cand) continue;
+      const candIsSent = cand.absentKey === newlySentKey ? true : cand.isSent;
+      if (!candIsSent) {
+        setBatchIndex(candIdx);
+        return;
+      }
+    }
+    setBatchIndex((fromIdx + 1) % batchQueueItems.length);
+  };
 
   // Filtered Faulty Behaviour for Card 4 Modal
   const filteredFaultyRecords = useMemo(() => {
@@ -1754,6 +1837,258 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                         <i className="fa-solid fa-calendar-check text-amber-400"></i>
                         <span>📅 मासिक हाजिरी कैलेंडर खोलें</span>
                       </button>
+                    </div>
+                  )}
+
+                  {/* FAST BATCH WHATSAPP SENDER BAR & QUEUE RUNNER */}
+                  {filteredAbsentees.length > 0 && (
+                    <div className="mb-3.5 rounded-2xl border border-emerald-200 bg-emerald-50/60 p-3 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                            <i className="fa-brands fa-whatsapp text-base"></i>
+                          </div>
+                          <div>
+                            <div className="text-xs font-black text-emerald-950">
+                              फ़ास्ट बैच WhatsApp सेंडर (एक के बाद एक तेज़ सूचना)
+                            </div>
+                            <div className="text-[11px] font-semibold text-emerald-800 tabular-nums">
+                              भेजे गए: {batchSentCount} / {batchQueueItems.length} · बाकी: {batchUnsentCount}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!batchSenderOpen) {
+                                const firstUnsent = batchQueueItems.findIndex((i) => !i.isSent);
+                                if (firstUnsent >= 0) setBatchIndex(firstUnsent);
+                              }
+                              setBatchSenderOpen((v) => !v);
+                            }}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-black inline-flex items-center gap-1.5 cursor-pointer transition-colors ${
+                              batchSenderOpen
+                                ? 'bg-[#0c2340] text-amber-300'
+                                : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
+                            }`}
+                          >
+                            <i className="fa-solid fa-bolt"></i>
+                            <span>
+                              {batchSenderOpen
+                                ? 'बैच सेंडर बंद करें'
+                                : `क्रम से भेजें (${batchUnsentCount > 0 ? `${batchUnsentCount} बाकी` : 'सभी पूर्ण ✓'})`}
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                await navigator.clipboard.writeText(absentGroupSummaryText);
+                                setBatchCopiedNotice(true);
+                                setTimeout(() => setBatchCopiedNotice(false), 2500);
+                              } catch {}
+                            }}
+                            className="px-2.5 py-1.5 rounded-xl border border-emerald-300 bg-white hover:bg-emerald-50 text-emerald-900 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                            title="सभी अनुपस्थित छात्रों की लिस्ट कॉपी करें"
+                          >
+                            <i className={`fa-solid ${batchCopiedNotice ? 'fa-check text-emerald-600' : 'fa-copy'}`}></i>
+                            <span>{batchCopiedNotice ? 'कॉपी हो गया ✓' : 'लिस्ट कॉपी'}</span>
+                          </button>
+
+                          <a
+                            href={buildWhatsappUrl('', absentGroupSummaryText)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-2.5 py-1.5 rounded-xl border border-emerald-300 bg-white hover:bg-emerald-50 text-emerald-900 text-xs font-bold inline-flex items-center gap-1.5"
+                            title="एक क्लिक में WhatsApp ग्रुप या टीचर को पूरी लिस्ट शेयर करें"
+                          >
+                            <i className="fa-solid fa-share-nodes"></i>
+                            <span>ग्रुप में भेजें</span>
+                          </a>
+                        </div>
+                      </div>
+
+                      {batchSenderOpen && currentBatchItem && (
+                        <div className="bg-white rounded-2xl border border-emerald-200 p-3.5 space-y-3 shadow-xs">
+                          {/* Progress Bar */}
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 tabular-nums">
+                              <span>
+                                प्रगति: {batchSentCount}/{batchQueueItems.length} पूर्ण
+                              </span>
+                              <span>
+                                छात्र #{safeBatchIndex + 1} / {batchQueueItems.length}
+                              </span>
+                            </div>
+                            <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-emerald-600 transition-all duration-300"
+                                style={{
+                                  width: `${
+                                    batchQueueItems.length > 0
+                                      ? Math.round((batchSentCount / batchQueueItems.length) * 100)
+                                      : 0
+                                  }%`,
+                                }}
+                              />
+                            </div>
+                          </div>
+
+                          {batchUnsentCount === 0 && (
+                            <div className="px-3 py-2 rounded-xl bg-emerald-100 border border-emerald-300 text-emerald-950 text-xs font-black text-center">
+                              ✅ सभी {batchQueueItems.length} अनुपस्थित छात्रों को WhatsApp सूचना भेजी जा चुकी है!
+                            </div>
+                          )}
+
+                          {/* Quick Jump Chips */}
+                          <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto py-0.5">
+                            {batchQueueItems.map((item, idx) => {
+                              const isActive = idx === safeBatchIndex;
+                              return (
+                                <button
+                                  key={`chip-${item.absentKey}`}
+                                  type="button"
+                                  onClick={() => setBatchIndex(idx)}
+                                  className={`px-2 py-1 rounded-lg text-[11px] font-bold cursor-pointer transition-all inline-flex items-center gap-1 ${
+                                    isActive
+                                      ? 'bg-[#0c2340] text-amber-300 ring-2 ring-amber-400'
+                                      : item.isSent
+                                      ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                                      : !item.hasValidPhone
+                                      ? 'bg-rose-50 text-rose-800 border border-rose-200'
+                                      : 'bg-slate-100 text-slate-800 hover:bg-slate-200'
+                                  }`}
+                                >
+                                  <span className="tabular-nums">{idx + 1}.</span>
+                                  <span className="max-w-[90px] truncate">{item.studentName}</span>
+                                  {item.isSent && <span>✓</span>}
+                                  {!item.isSent && !item.hasValidPhone && <span>⚠</span>}
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          {/* Active Student Spotlight Card */}
+                          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2.5">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <StudentAvatar
+                                  student={currentBatchItem.student}
+                                  photoUrl={
+                                    currentBatchItem.student ? getStudentPhoto(currentBatchItem.student) : ''
+                                  }
+                                  size="md"
+                                />
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <h4 className="font-black text-sm text-slate-900">
+                                      {currentBatchItem.studentName}
+                                    </h4>
+                                    <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-900 text-[10px] font-bold">
+                                      Class {currentBatchItem.className}
+                                    </span>
+                                    {currentBatchItem.isSent && (
+                                      <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 text-[10px] font-black">
+                                        ✓ भेजा गया
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-[11px] font-semibold text-slate-600 mt-0.5">
+                                    Roll: {currentBatchItem.student?.Roll_Number || 'N/A'} · पिता:{' '}
+                                    {currentBatchItem.student?.Father_Name || 'N/A'} ·{' '}
+                                    {currentBatchItem.hasValidPhone ? (
+                                      <span className="font-black text-emerald-800 tabular-nums">
+                                        📞 {currentBatchItem.phone}
+                                      </span>
+                                    ) : (
+                                      <span className="font-black text-rose-700">
+                                        ⚠️ मोबाइल नंबर दर्ज नहीं है
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setBatchIndex(
+                                      (safeBatchIndex - 1 + batchQueueItems.length) %
+                                        batchQueueItems.length
+                                    )
+                                  }
+                                  className="px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold cursor-pointer"
+                                >
+                                  ← पिछला
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setBatchIndex((safeBatchIndex + 1) % batchQueueItems.length)
+                                  }
+                                  className="px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold cursor-pointer"
+                                >
+                                  छोड़ें / अगला →
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="bg-white border border-slate-200 rounded-xl p-2.5 text-[11px] text-slate-700 whitespace-pre-wrap max-h-28 overflow-y-auto leading-relaxed">
+                              {currentBatchItem.message}
+                            </div>
+
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <a
+                                href={currentBatchItem.whatsappUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={() => {
+                                  const sentKey = currentBatchItem.absentKey;
+                                  logWhatsappAlertBackup({
+                                    alertType: 'Absent Alert',
+                                    recipientType: 'Parent',
+                                    recipientId: currentBatchItem.rec.Student_ID,
+                                    recipientName: currentBatchItem.studentName,
+                                    classOrRole: currentBatchItem.className,
+                                    amount: 0,
+                                    mobile: currentBatchItem.phone,
+                                    summary: currentBatchItem.message.replace(/\*/g, '').slice(0, 200),
+                                    sentBy: 'Manager',
+                                  }).catch(() => {});
+                                  setSentAlertIds((prev) => ({ ...prev, [sentKey]: true }));
+                                  setTimeout(() => {
+                                    advanceToNextUnsent(safeBatchIndex, sentKey);
+                                  }, 250);
+                                }}
+                                className="flex-1 min-w-[210px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-black inline-flex items-center justify-center gap-2 shadow-xs transition-colors"
+                              >
+                                <i className="fa-brands fa-whatsapp text-base"></i>
+                                <span>
+                                  {currentBatchItem.hasValidPhone
+                                    ? `WhatsApp खोलें व भेजें (${currentBatchItem.studentName}) → अगला`
+                                    : `WhatsApp खोलें (नंबर चुनें) → अगला`}
+                                </span>
+                              </a>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const sentKey = currentBatchItem.absentKey;
+                                  setSentAlertIds((prev) => ({ ...prev, [sentKey]: true }));
+                                  advanceToNextUnsent(safeBatchIndex, sentKey);
+                                }}
+                                className="px-3 py-2.5 rounded-xl border border-emerald-300 bg-white hover:bg-emerald-50 text-emerald-900 text-xs font-bold cursor-pointer"
+                              >
+                                ✓ भेजा मार्क करें
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 
