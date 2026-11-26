@@ -13593,6 +13593,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 setAttendanceCalendarMode('calendar');
                 setIsAttendanceCalendarOpen(true);
               }}
+              onSaveBatchAttendance={handleSaveBatchBehavior}
             />
 
             {/* Manager Compact Active Feature Bar with 3-Line Hamburger Trigger */}

@@ -19,6 +19,11 @@ import {
   loadLocalSeatingWorkflow,
   loadLocalSeatingHistory,
   normalizeExamDateKey,
+  fetchExamSeatingPlanSnapshot,
+  fetchExamSeatingHistory,
+  generateCustomSeatingPlan,
+  ExamSeatingSnapshot,
+  ExamSeatingHistoryEntry,
 } from '../utils/seatingPlanHelper';
 import {
   loadLocalHallPassConfig,
@@ -46,6 +51,7 @@ interface ManagerOverviewModalsProps {
   onDeleteStudent?: (studentId: string, studentName: string) => Promise<boolean>;
   onRequestDeleteStudent?: (student: Student) => void;
   onOpenAttendanceCalendar?: (student?: Student) => void;
+  onSaveBatchAttendance?: (records: Partial<StudentBehaviorRecord>[]) => Promise<void> | void;
 }
 
 export type ManagerModalType = 'totalStudents' | 'feesOverview' | 'attendanceOverview' | 'absentToday' | 'faultyBehavior' | null;
@@ -86,6 +92,7 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
   onDeleteStudent,
   onRequestDeleteStudent,
   onOpenAttendanceCalendar,
+  onSaveBatchAttendance,
 }) => {
   const [activeModal, setActiveModal] = useState<ManagerModalType>(null);
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -108,6 +115,15 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
   const [loadingWaLogs, setLoadingWaLogs] = useState<boolean>(false);
   const [waLogTypeFilter, setWaLogTypeFilter] = useState<'ALL' | 'Absent Alert' | 'Fee Due Reminder' | 'Staff Salary Slip'>('ALL');
   const [waLogDateFilter, setWaLogDateFilter] = useState<string>('');
+  const [attendanceOverviewTab, setAttendanceOverviewTab] = useState<'classes' | 'pending'>('pending');
+  const [seatingSnapshotData, setSeatingSnapshotData] = useState<ExamSeatingSnapshot | null>(null);
+  const [seatingHistoryList, setSeatingHistoryList] = useState<ExamSeatingHistoryEntry[]>(() => loadLocalSeatingHistory());
+  const [loadingSeatingLookup, setLoadingSeatingLookup] = useState<boolean>(false);
+  const [pendingRoomFilter, setPendingRoomFilter] = useState<string>('ALL');
+  const [selectedPendingIds, setSelectedPendingIds] = useState<Record<string, boolean>>({});
+  const [confirmPendingAction, setConfirmPendingAction] = useState<{ mode: 'selected' | 'all_filtered'; count: number } | null>(null);
+  const [savingPendingBatch, setSavingPendingBatch] = useState<boolean>(false);
+  const [pendingActionNotice, setPendingActionNotice] = useState<string | null>(null);
 
   useEffect(() => {
     const refresh = () => setWaiverVersion((v) => v + 1);
@@ -180,6 +196,24 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
     setBatchSenderOpen(false);
     setBatchIndex(0);
     setBatchCopiedNotice(false);
+    if (activeModal === 'attendanceOverview') {
+      setPendingRoomFilter('ALL');
+      setSelectedPendingIds({});
+      setConfirmPendingAction(null);
+      setPendingActionNotice(null);
+      setLoadingSeatingLookup(true);
+      setSeatingHistoryList(loadLocalSeatingHistory());
+      Promise.all([
+        fetchExamSeatingPlanSnapshot(false).catch(() => null),
+        fetchExamSeatingHistory(false).catch(() => null),
+      ])
+        .then(([snap, histRes]) => {
+          if (snap) setSeatingSnapshotData(snap);
+          if (histRes?.entries) setSeatingHistoryList(histRes.entries);
+        })
+        .finally(() => setLoadingSeatingLookup(false));
+    }
+
     if (activeModal === 'absentToday') {
       setAbsentSubTab('send');
       setWhatsappLogs(loadLocalWhatsappLogs());
@@ -460,6 +494,223 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
       return matchSearch && matchClass;
     });
   }, [todayAttendanceOverview.classBreakdown, searchTerm, classFilter, classMap]);
+
+  // 3C. Pending Students + Exam Room Lookup (to verify unmarked students room-by-room & mark Absent in 1 click)
+  const studentExamRoomLookup = useMemo(() => {
+    const roomByStudentId = new Map<
+      string,
+      {
+        roomNumber: string;
+        benchNumber: number;
+        seatPosition: string;
+        invigilator: string;
+        roomCheckInStatus?: string;
+        examDate?: string;
+      }
+    >();
+    const todayNorm = normalizeExamDateKey(todayYmd);
+    let sourceLabel = '';
+
+    const indexSheetRows = (rows: any[], label: string) => {
+      rows.forEach((r) => {
+        const sid = String(r.studentId || r.Student_ID || '').trim().toLowerCase();
+        if (!sid) return;
+        roomByStudentId.set(sid, {
+          roomNumber: String(r.roomNo || r.Room_Number || 'Room'),
+          benchNumber: Number(r.benchNo || r.Bench_Number || 1),
+          seatPosition: String(r.seatPosition || r.Seat_Position || ''),
+          invigilator: String(r.invigilator || r.Invigilator || ''),
+          roomCheckInStatus: String(r.roomCheckInStatus || r.Room_CheckIn_Status || 'Pending'),
+          examDate: String(r.examDate || r.Exam_Date || ''),
+        });
+      });
+      sourceLabel = label;
+    };
+
+    const todayHist = seatingHistoryList.find((h) => normalizeExamDateKey(h.examDate) === todayNorm);
+    if (todayHist && todayHist.rows?.length > 0) {
+      indexSheetRows(todayHist.rows, `आज का सेव सिटिंग प्लान (${todayDmy})`);
+    } else if (
+      seatingSnapshotData?.rows?.length &&
+      (seatingSnapshotData.rows.some((r) => normalizeExamDateKey(r.examDate) === todayNorm) ||
+        normalizeExamDateKey(
+          seatingSnapshotData.approvedConfig?.examDate || seatingSnapshotData.draftConfig?.examDate
+        ) === todayNorm)
+    ) {
+      indexSheetRows(seatingSnapshotData.rows, `आज का सिटिंग प्लान (${todayDmy})`);
+    } else {
+      const activeCfg =
+        seatingSnapshotData?.approvedConfig ||
+        seatingSnapshotData?.draftConfig ||
+        loadLocalSeatingWorkflow();
+      if (activeCfg && Array.isArray(activeCfg.rooms) && activeCfg.rooms.length > 0) {
+        const builtPlan = generateCustomSeatingPlan({
+          students,
+          getClassName,
+          roomConfigs: activeCfg.rooms,
+          seatsPerBench: activeCfg.seatsPerBench || 3,
+          mode: activeCfg.mode || 'anti_cheating_mixed',
+        });
+        builtPlan.rooms.forEach((rm) => {
+          rm.benches.forEach((bench) => {
+            bench.seats.forEach((seat) => {
+              const sid = String(seat.student.Student_ID || '').trim().toLowerCase();
+              if (!sid) return;
+              roomByStudentId.set(sid, {
+                roomNumber: rm.roomNumber,
+                benchNumber: bench.benchNumber,
+                seatPosition: seat.seatPosition,
+                invigilator: rm.invigilator || '',
+                roomCheckInStatus: 'Pending',
+                examDate: activeCfg.examDate || todayYmd,
+              });
+            });
+          });
+        });
+        if (roomByStudentId.size > 0) {
+          sourceLabel =
+            normalizeExamDateKey(activeCfg.examDate) === todayNorm
+              ? `सिटिंग प्लान (${todayDmy})`
+              : `चालू सिटिंग प्लान (${activeCfg.examDate || todayDmy})`;
+        }
+      } else if (seatingSnapshotData?.rows?.length) {
+        indexSheetRows(
+          seatingSnapshotData.rows,
+          `सिटिंग प्लान (${seatingSnapshotData.rows[0]?.examDate || todayDmy})`
+        );
+      } else if (seatingHistoryList.length > 0 && seatingHistoryList[0].rows?.length > 0) {
+        indexSheetRows(
+          seatingHistoryList[0].rows,
+          `नवीनतम सिटिंग प्लान (${seatingHistoryList[0].examDate})`
+        );
+      }
+    }
+
+    return { roomByStudentId, sourceLabel };
+  }, [seatingHistoryList, seatingSnapshotData, students, todayYmd, todayDmy, classMap]);
+
+  const allPendingStudentsWithRooms = useMemo(() => {
+    const list: Array<{
+      student: Student;
+      className: string;
+      roomInfo: {
+        roomNumber: string;
+        benchNumber: number;
+        seatPosition: string;
+        invigilator: string;
+        roomCheckInStatus?: string;
+        examDate?: string;
+      } | null;
+    }> = [];
+
+    students.forEach((st) => {
+      const cleanId = String(st.Student_ID || '').trim().toLowerCase();
+      if (!cleanId) return;
+      if (todayStatusByStudent.has(cleanId)) return; // Already marked Present or Absent today
+      const className = getClassName(st.Class);
+      const roomInfo = studentExamRoomLookup.roomByStudentId.get(cleanId) || null;
+      list.push({ student: st, className, roomInfo });
+    });
+
+    return list.sort((a, b) => {
+      const rA = a.roomInfo?.roomNumber || 'zzz_Unassigned';
+      const rB = b.roomInfo?.roomNumber || 'zzz_Unassigned';
+      const rCmp = rA.localeCompare(rB, undefined, { numeric: true });
+      if (rCmp !== 0) return rCmp;
+      const bCmp = (a.roomInfo?.benchNumber || 999) - (b.roomInfo?.benchNumber || 999);
+      if (bCmp !== 0) return bCmp;
+      return String(a.student.Student_Name || '').localeCompare(String(b.student.Student_Name || ''));
+    });
+  }, [students, todayStatusByStudent, studentExamRoomLookup, classMap]);
+
+  const pendingRoomSummaryList = useMemo(() => {
+    const map = new Map<string, { roomKey: string; roomLabel: string; invigilator: string; count: number }>();
+    allPendingStudentsWithRooms.forEach(({ roomInfo }) => {
+      const key = roomInfo ? roomInfo.roomNumber : 'UNASSIGNED';
+      const label = roomInfo ? roomInfo.roomNumber : 'बिना रूम आवंटन';
+      const existing = map.get(key) || {
+        roomKey: key,
+        roomLabel: label,
+        invigilator: roomInfo?.invigilator || '',
+        count: 0,
+      };
+      existing.count += 1;
+      if (!existing.invigilator && roomInfo?.invigilator) {
+        existing.invigilator = roomInfo.invigilator;
+      }
+      map.set(key, existing);
+    });
+    return Array.from(map.values()).sort((a, b) => {
+      if (a.roomKey === 'UNASSIGNED') return 1;
+      if (b.roomKey === 'UNASSIGNED') return -1;
+      return a.roomLabel.localeCompare(b.roomLabel, undefined, { numeric: true });
+    });
+  }, [allPendingStudentsWithRooms]);
+
+  const filteredPendingStudents = useMemo(() => {
+    const term = searchTerm.toLowerCase().trim();
+    return allPendingStudentsWithRooms.filter(({ student, className, roomInfo }) => {
+      if (pendingRoomFilter !== 'ALL') {
+        const key = roomInfo ? roomInfo.roomNumber : 'UNASSIGNED';
+        if (key !== pendingRoomFilter) return false;
+      }
+      const matchClass =
+        classFilter === 'all' ||
+        String(student.Class || '').toLowerCase() === classFilter.toLowerCase() ||
+        className.toLowerCase() === getClassName(classFilter).toLowerCase();
+      if (!matchClass) return false;
+      if (term) {
+        const hay = `${student.Student_Name} ${student.Student_ID} ${student.Roll_Number} ${className} ${getStudentPhone(student)} ${roomInfo?.roomNumber || ''} ${roomInfo?.invigilator || ''}`.toLowerCase();
+        if (!hay.includes(term)) return false;
+      }
+      return true;
+    });
+  }, [allPendingStudentsWithRooms, pendingRoomFilter, classFilter, searchTerm, classMap]);
+
+  const selectedPendingCount = useMemo(
+    () => filteredPendingStudents.filter((p) => Boolean(selectedPendingIds[p.student.Student_ID])).length,
+    [filteredPendingStudents, selectedPendingIds]
+  );
+
+  const handleMarkPendingStudents = async (
+    items: typeof allPendingStudentsWithRooms,
+    isPresent: boolean
+  ) => {
+    if (!onSaveBatchAttendance || items.length === 0) return;
+    setSavingPendingBatch(true);
+    setConfirmPendingAction(null);
+    try {
+      const records: Partial<StudentBehaviorRecord>[] = items.map(({ student, roomInfo }) => ({
+        Student_ID: student.Student_ID,
+        Date: todayYmd,
+        Class: student.Class,
+        attendance_only: !isPresent ? false : true,
+        Is_Present: isPresent,
+        is_present: isPresent ? 'Present' : 'Absent',
+        Good_Manners: isPresent ? 'केवल उपस्थिति (सत्यापित)' : 'लागू नहीं (अनुपस्थित)',
+        Remark: isPresent
+          ? roomInfo
+            ? `प्रबंधक द्वारा ${roomInfo.roomNumber} में सत्यापित व उपस्थित`
+            : 'प्रबंधक द्वारा सत्यापित व उपस्थित'
+          : roomInfo
+          ? `परीक्षा सत्यापन (${roomInfo.roomNumber}, Bench #${roomInfo.benchNumber}) के दौरान अनुपस्थित`
+          : 'प्रबंधक सत्यापन के दौरान अनुपस्थित',
+      }));
+      await onSaveBatchAttendance(records);
+      const cleared: Record<string, boolean> = { ...selectedPendingIds };
+      items.forEach(({ student }) => {
+        delete cleared[student.Student_ID];
+      });
+      setSelectedPendingIds(cleared);
+      setPendingActionNotice(
+        isPresent
+          ? `✅ ${items.length} छात्र को उपस्थित (Present) दर्ज कर दिया गया।`
+          : `🚨 ${items.length} शेष छात्रों को आज (${todayDmy}) अनुपस्थित (Absent) दर्ज कर दिया गया। अब आप इन्हें एक साथ WhatsApp अलर्ट भेज सकते हैं।`
+      );
+    } finally {
+      setSavingPendingBatch(false);
+    }
+  };
 
   // 4. Faulty Behaviour Students Metrics
   const isFaultyRecord = (rec: StudentBehaviorRecord): { isFaulty: boolean; issue: string } => {
@@ -1816,15 +2067,27 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                           {todayAttendanceOverview.coveragePercent}% Coverage
                         </div>
                       </div>
-                      <div className="bg-white border border-slate-200 rounded-xl p-3">
-                        <div className="text-[11px] font-semibold text-slate-600">Pending (शेष छात्र)</div>
+                      <button
+                        type="button"
+                        onClick={() => setAttendanceOverviewTab('pending')}
+                        className={`text-left rounded-xl p-3 border transition-all cursor-pointer ${
+                          todayAttendanceOverview.unmarkedCount > 0
+                            ? 'bg-amber-50 border-amber-300 hover:bg-amber-100 ring-1 ring-amber-300/60'
+                            : 'bg-white border-slate-200 hover:bg-slate-50'
+                        }`}
+                        title="शेष छात्रों का एग्जाम रूम देखने और Absent करने के लिए टैप करें"
+                      >
+                        <div className="text-[11px] font-black text-amber-800 flex items-center justify-between gap-1">
+                          <span>Pending (शेष छात्र)</span>
+                          <i className="fa-solid fa-door-open text-amber-600"></i>
+                        </div>
                         <div className="text-2xl font-black text-amber-700 mt-0.5">
                           {todayAttendanceOverview.unmarkedCount}
                         </div>
-                        <div className="text-[11px] text-slate-500">
-                          Out of {totalStudentsCount} Enrolled
+                        <div className="text-[11px] text-amber-900 font-bold">
+                          रूम देखें / Absent करें →
                         </div>
-                      </div>
+                      </button>
                     </div>
 
                     {/* Visual Stacked Bar */}
@@ -1854,6 +2117,374 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                     </div>
                   </div>
 
+                  {/* SUB-TAB SWITCHER: PENDING ROOM CHECK & BULK ABSENT vs CLASS BREAKDOWN */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-100 p-1.5 rounded-2xl border border-slate-200">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setAttendanceOverviewTab('pending')}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-black cursor-pointer transition-colors inline-flex items-center gap-1.5 ${
+                          attendanceOverviewTab === 'pending'
+                            ? 'bg-[#0c2340] text-amber-300 shadow-xs'
+                            : 'text-slate-700 hover:bg-white'
+                        }`}
+                      >
+                        <i className="fa-solid fa-door-open"></i>
+                        <span>शेष छात्र — रूम-वार जाँच व Bulk Absent</span>
+                        <span
+                          className={`px-1.5 py-0.5 rounded-full text-[10px] font-black tabular-nums ${
+                            attendanceOverviewTab === 'pending'
+                              ? 'bg-amber-400 text-slate-950'
+                              : 'bg-amber-600 text-white'
+                          }`}
+                        >
+                          {allPendingStudentsWithRooms.length}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAttendanceOverviewTab('classes')}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-black cursor-pointer transition-colors inline-flex items-center gap-1.5 ${
+                          attendanceOverviewTab === 'classes'
+                            ? 'bg-[#0c2340] text-amber-300 shadow-xs'
+                            : 'text-slate-700 hover:bg-white'
+                        }`}
+                      >
+                        <i className="fa-solid fa-chalkboard-user"></i>
+                        <span>कक्षावार विश्लेषण ({filteredClassAttendance.length})</span>
+                      </button>
+                    </div>
+                    {studentExamRoomLookup.sourceLabel && (
+                      <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full">
+                        🏫 {studentExamRoomLookup.sourceLabel}
+                      </span>
+                    )}
+                  </div>
+
+                  {attendanceOverviewTab === 'pending' ? (
+                    <div className="space-y-3">
+                      {pendingActionNotice && (
+                        <div className="px-3.5 py-2.5 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-950 text-xs font-bold flex flex-wrap items-center justify-between gap-2">
+                          <span>{pendingActionNotice}</span>
+                          {todayAttendanceOverview.absentCount > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setActiveModal('absentToday')}
+                              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black cursor-pointer inline-flex items-center gap-1.5"
+                            >
+                              <i className="fa-brands fa-whatsapp"></i>
+                              <span>अनुपस्थित छात्रों को WhatsApp भेजें →</span>
+                            </button>
+                          )}
+                        </div>
+                      )}
+
+                      {allPendingStudentsWithRooms.length === 0 ? (
+                        <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-8 text-center space-y-2">
+                          <div className="text-3xl text-emerald-600">
+                            <i className="fa-solid fa-circle-check"></i>
+                          </div>
+                          <div className="text-sm font-black text-emerald-950">
+                            सभी {totalStudentsCount} छात्रों की आज की हाजिरी पूरी हो चुकी है!
+                          </div>
+                          <p className="text-xs text-emerald-800">
+                            कोई भी छात्र Pending (अचिह्नित) नहीं बचा है।
+                          </p>
+                        </div>
+                      ) : (
+                        <>
+                          {/* Room-wise Filter Chips */}
+                          <div className="bg-white border border-slate-200 rounded-2xl p-3 space-y-2.5">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className="text-xs font-black text-[#0c2340] flex items-center gap-1.5">
+                                <i className="fa-solid fa-building-columns text-amber-600"></i>
+                                <span>एग्जाम रूम चुनकर वेरीफाई करें (किस रूम में कौन-से शेष बच्चे हैं):</span>
+                              </span>
+                              {loadingSeatingLookup && (
+                                <span className="text-[11px] font-bold text-slate-500">
+                                  <i className="fa-solid fa-circle-notch fa-spin mr-1"></i>
+                                  रूम लोड हो रहे हैं...
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="flex flex-wrap gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPendingRoomFilter('ALL');
+                                  setConfirmPendingAction(null);
+                                }}
+                                className={`px-3 py-1.5 rounded-xl text-xs font-black cursor-pointer transition-colors ${
+                                  pendingRoomFilter === 'ALL'
+                                    ? 'bg-[#0c2340] text-amber-300'
+                                    : 'bg-slate-100 text-slate-800 hover:bg-slate-200'
+                                }`}
+                              >
+                                सभी रूम ({allPendingStudentsWithRooms.length})
+                              </button>
+                              {pendingRoomSummaryList.map((rm) => {
+                                const isAct = pendingRoomFilter === rm.roomKey;
+                                return (
+                                  <button
+                                    key={rm.roomKey}
+                                    type="button"
+                                    onClick={() => {
+                                      setPendingRoomFilter(rm.roomKey);
+                                      setConfirmPendingAction(null);
+                                    }}
+                                    className={`px-3 py-1.5 rounded-xl text-xs font-black cursor-pointer transition-colors inline-flex items-center gap-1.5 ${
+                                      isAct
+                                        ? 'bg-[#0c2340] text-amber-300 shadow-xs'
+                                        : rm.roomKey === 'UNASSIGNED'
+                                        ? 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                        : 'bg-amber-50 border border-amber-300 text-amber-950 hover:bg-amber-100'
+                                    }`}
+                                  >
+                                    <span>🏫 {rm.roomLabel}</span>
+                                    <span
+                                      className={`px-1.5 py-0.5 rounded-full text-[10px] font-black tabular-nums ${
+                                        isAct ? 'bg-amber-400 text-slate-950' : 'bg-white text-slate-900'
+                                      }`}
+                                    >
+                                      {rm.count}
+                                    </span>
+                                    {rm.invigilator && (
+                                      <span className={`text-[10px] font-bold ${isAct ? 'text-blue-200' : 'text-slate-600'}`}>
+                                        ({rm.invigilator})
+                                      </span>
+                                    )}
+                                  </button>
+                                );
+                              })}
+                            </div>
+
+                            {/* Bulk Selection & 1-Click Absent Action Bar */}
+                            {onSaveBatchAttendance && filteredPendingStudents.length > 0 && (
+                              <div className="pt-2.5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const next = { ...selectedPendingIds };
+                                      filteredPendingStudents.forEach((p) => {
+                                        next[p.student.Student_ID] = true;
+                                      });
+                                      setSelectedPendingIds(next);
+                                    }}
+                                    className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 text-[11px] font-black cursor-pointer"
+                                  >
+                                    ✓ इस लिस्ट के सभी ({filteredPendingStudents.length}) चुनें
+                                  </button>
+                                  {selectedPendingCount > 0 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedPendingIds({})}
+                                      className="px-2.5 py-1.5 rounded-lg bg-white border border-slate-300 text-slate-700 text-[11px] font-bold cursor-pointer"
+                                    >
+                                      चयन साफ़ ({selectedPendingCount})
+                                    </button>
+                                  )}
+                                </div>
+
+                                <div className="flex flex-wrap items-center gap-2">
+                                  {selectedPendingCount > 0 && (
+                                    <button
+                                      type="button"
+                                      disabled={savingPendingBatch}
+                                      onClick={() =>
+                                        setConfirmPendingAction({ mode: 'selected', count: selectedPendingCount })
+                                      }
+                                      className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-black cursor-pointer inline-flex items-center gap-1.5 shadow-xs"
+                                    >
+                                      <i className="fa-solid fa-user-xmark"></i>
+                                      <span>चुने गए ({selectedPendingCount}) को Absent करें</span>
+                                    </button>
+                                  )}
+
+                                  <button
+                                    type="button"
+                                    disabled={savingPendingBatch}
+                                    onClick={() =>
+                                      setConfirmPendingAction({
+                                        mode: 'all_filtered',
+                                        count: filteredPendingStudents.length,
+                                      })
+                                    }
+                                    className="px-3 py-1.5 rounded-xl bg-[#0c2340] hover:bg-blue-950 disabled:opacity-50 text-amber-300 text-xs font-black cursor-pointer inline-flex items-center gap-1.5 shadow-xs"
+                                  >
+                                    <i className="fa-solid fa-bolt"></i>
+                                    <span>
+                                      {pendingRoomFilter === 'ALL'
+                                        ? `एक साथ सभी (${filteredPendingStudents.length}) को Absent करें`
+                                        : `${pendingRoomFilter} के सभी (${filteredPendingStudents.length}) को Absent करें`}
+                                    </span>
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Inline Safe Confirmation Bar */}
+                            {confirmPendingAction && (
+                              <div className="rounded-xl bg-rose-50 border-2 border-rose-300 p-3 flex flex-wrap items-center justify-between gap-2">
+                                <div className="text-xs font-black text-rose-950">
+                                  ⚠️ क्या आपने रूम/निरीक्षक से पुष्टि कर ली है कि ये{' '}
+                                  <span className="underline">{confirmPendingAction.count} छात्र</span> आज ({todayDmy}) नहीं आए हैं?
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    disabled={savingPendingBatch}
+                                    onClick={() => {
+                                      const targetItems =
+                                        confirmPendingAction.mode === 'selected'
+                                          ? filteredPendingStudents.filter((p) =>
+                                              Boolean(selectedPendingIds[p.student.Student_ID])
+                                            )
+                                          : filteredPendingStudents;
+                                      handleMarkPendingStudents(targetItems, false);
+                                    }}
+                                    className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-black cursor-pointer inline-flex items-center gap-1.5"
+                                  >
+                                    <i className={`fa-solid ${savingPendingBatch ? 'fa-circle-notch fa-spin' : 'fa-check'}`}></i>
+                                    <span>हाँ, सभी ({confirmPendingAction.count}) को Absent सेव करें</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={savingPendingBatch}
+                                    onClick={() => setConfirmPendingAction(null)}
+                                    className="px-3 py-1.5 rounded-xl bg-white border border-slate-300 text-slate-800 text-xs font-bold cursor-pointer"
+                                  >
+                                    रद्द करें
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Pending Student Cards with Exam Room, Bench & Invigilator */}
+                          <div className="space-y-2">
+                            {filteredPendingStudents.map(({ student, className, roomInfo }) => {
+                              const checked = Boolean(selectedPendingIds[student.Student_ID]);
+                              const phone = getStudentPhone(student);
+                              return (
+                                <div
+                                  key={student.Student_ID}
+                                  className={`rounded-2xl border p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 transition-all ${
+                                    checked
+                                      ? 'bg-rose-50/70 border-rose-400 shadow-xs'
+                                      : 'bg-white border-slate-200 hover:border-amber-300'
+                                  }`}
+                                >
+                                  <div className="flex items-start sm:items-center gap-2.5 min-w-0">
+                                    {onSaveBatchAttendance && (
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={(e) =>
+                                          setSelectedPendingIds((prev) => ({
+                                            ...prev,
+                                            [student.Student_ID]: e.target.checked,
+                                          }))
+                                        }
+                                        className="mt-1 sm:mt-0 w-4 h-4 accent-rose-600 rounded cursor-pointer shrink-0"
+                                      />
+                                    )}
+                                    <StudentAvatar
+                                      student={student}
+                                      photoUrl={getStudentPhoto(student)}
+                                      size="md"
+                                    />
+                                    <div className="min-w-0 space-y-1">
+                                      <div className="flex flex-wrap items-center gap-1.5">
+                                        <h4 className="font-black text-sm text-slate-900">
+                                          {student.Student_Name}
+                                        </h4>
+                                        <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-900 text-[10px] font-black">
+                                          Class {className}
+                                        </span>
+                                        <span className="text-[11px] font-bold text-slate-500 tabular-nums">
+                                          Roll: {student.Roll_Number || '—'} · ID: {student.Student_ID}
+                                        </span>
+                                      </div>
+
+                                      <div className="flex flex-wrap items-center gap-1.5">
+                                        {roomInfo ? (
+                                          <span className="px-2.5 py-0.5 rounded-lg bg-[#0c2340] text-amber-300 text-[11px] font-black inline-flex items-center gap-1.5 tabular-nums">
+                                            <i className="fa-solid fa-door-open"></i>
+                                            <span>
+                                              {roomInfo.roomNumber} · Bench #{roomInfo.benchNumber}
+                                              {roomInfo.seatPosition ? ` (${roomInfo.seatPosition})` : ''}
+                                            </span>
+                                            {roomInfo.invigilator && (
+                                              <span className="text-blue-200 font-bold">
+                                                · निरीक्षक: {roomInfo.invigilator}
+                                              </span>
+                                            )}
+                                          </span>
+                                        ) : (
+                                          <span className="px-2 py-0.5 rounded-lg bg-slate-100 border border-slate-200 text-slate-600 text-[10px] font-bold">
+                                            अभी सिटिंग प्लान रूम आवंटित नहीं
+                                          </span>
+                                        )}
+
+                                        {roomInfo?.roomCheckInStatus === 'Sent to Room' && (
+                                          <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 text-[10px] font-black">
+                                            ✓ टीचर ने रूम में भेजा मार्क किया है
+                                          </span>
+                                        )}
+                                        {roomInfo?.roomCheckInStatus === 'Absent' && (
+                                          <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 text-[10px] font-black">
+                                            ✕ टीचर ने रूम से अनुपस्थित मार्क किया है
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-center">
+                                    {phone && (
+                                      <a
+                                        href={`tel:${phone}`}
+                                        className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold inline-flex items-center gap-1"
+                                        title={`कॉल करें: ${phone}`}
+                                      >
+                                        <i className="fa-solid fa-phone text-[10px]"></i>
+                                        <span className="hidden md:inline">Call</span>
+                                      </a>
+                                    )}
+                                    {onSaveBatchAttendance && (
+                                      <>
+                                        <button
+                                          type="button"
+                                          disabled={savingPendingBatch}
+                                          onClick={() => handleMarkPendingStudents([{ student, className, roomInfo }], true)}
+                                          className="px-2.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-600 text-emerald-800 hover:text-white border border-emerald-300 text-xs font-black cursor-pointer transition-colors"
+                                          title="यदि बच्चा रूम में मौजूद है तो Present मार्क करें"
+                                        >
+                                          ✓ Present
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={savingPendingBatch}
+                                          onClick={() => handleMarkPendingStudents([{ student, className, roomInfo }], false)}
+                                          className="px-2.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black cursor-pointer transition-colors shadow-2xs"
+                                          title="अनुपस्थित (Absent) मार्क करें"
+                                        >
+                                          ✕ Absent
+                                        </button>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ) : (
+                    <>
                   {/* Class-wise Breakdown */}
                   {filteredClassAttendance.length === 0 ? (
                     <div className="text-center py-10 text-slate-400">
@@ -1922,6 +2553,8 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                         ))}
                       </div>
                     </div>
+                  )}
+                    </>
                   )}
                 </div>
               )}
