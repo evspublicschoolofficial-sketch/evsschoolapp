@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { HallPassConfig, SchoolUser, Student } from '../types';
 import { getLocalTimestamp } from '../utils/localTime';
-import { realtimeSync } from '../utils/realtimeSync';
+import { CLIENT_TAB_ID, realtimeSync } from '../utils/realtimeSync';
 import {
   buildAutoBalancedRoomConfigs,
   buildExamSeatingPlanFromHistoryEntry,
@@ -17,6 +17,7 @@ import {
   generateCustomSeatingPlan,
   generateExamSeatingPlanPdf,
   getTodayIstDateKey,
+  invalidateSeatingPlanCache,
   loadLocalSeatingHistory,
   loadLocalSeatingWorkflow,
   normalizeExamDateKey,
@@ -165,10 +166,12 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
     saveLocalSeatingWorkflow(payload);
   };
 
-  const loadFromServer = async (showFeedback = false) => {
-    setRefreshingSnapshot(true);
+  const loadFromServer = async (showFeedback = false, forceRefresh = showFeedback) => {
+    if (forceRefresh || !serverSnapshot) {
+      setRefreshingSnapshot(true);
+    }
     try {
-      const snap = await fetchExamSeatingPlanSnapshot(true);
+      const snap = await fetchExamSeatingPlanSnapshot(forceRefresh);
       setHasLoadedServerOnce(true);
       if (snap) {
         setServerSnapshot(snap);
@@ -195,10 +198,12 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
     }
   };
 
-  const loadHistoryFromServer = async (showFeedback = false) => {
-    setLoadingHistory(true);
+  const loadHistoryFromServer = async (showFeedback = false, forceRefresh = showFeedback) => {
+    if (forceRefresh || historyEntries.length === 0) {
+      setLoadingHistory(true);
+    }
     try {
-      const res = await fetchExamSeatingHistory(showFeedback);
+      const res = await fetchExamSeatingHistory(forceRefresh);
       setHistoryEntries(res.entries);
       setHistorySheetSynced(res.sheetSynced);
       if (showFeedback) {
@@ -213,12 +218,16 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
   };
 
   useEffect(() => {
-    loadFromServer(false);
-    loadHistoryFromServer(false);
+    loadFromServer(false, false);
+    loadHistoryFromServer(false, false);
     const unsub = realtimeSync.subscribe((ev) => {
       if (ev.entity === 'exam_seating_plan') {
-        loadFromServer(false);
-        loadHistoryFromServer(false);
+        const isSameTab = Boolean(ev.originTabId && ev.originTabId === CLIENT_TAB_ID);
+        if (!isSameTab) {
+          invalidateSeatingPlanCache();
+        }
+        loadFromServer(false, !isSameTab);
+        loadHistoryFromServer(false, !isSameTab);
       }
     });
     return () => unsub();
@@ -576,7 +585,7 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
       }
 
       realtimeSync.broadcastUpdate('exam_seating_plan', 'room_dispatched');
-      await Promise.all([loadFromServer(false), loadHistoryFromServer(false)]);
+      await Promise.all([loadFromServer(false, true), loadHistoryFromServer(false, true)]);
 
       setNotice(
         `✅ ${activeMyRoom.roomNumber} की ड्यूटी सेव हो गई! ${res.sentCount}/${activeMyRoom.totalStudents} बच्चे रूम में भेजे गए${
@@ -789,7 +798,7 @@ export const ExamSeatingPlanView: React.FC<ExamSeatingPlanViewProps> = ({
       setWorkflowStatus('approved');
       setApprovedBy(approvedPayload.approvedBy || 'Manager');
       setApprovedAt(approvedPayload.approvedAt || getLocalTimestamp());
-      loadHistoryFromServer(false);
+      loadHistoryFromServer(false, true);
       realtimeSync.broadcastUpdate('exam_seating_plan', 'approved');
 
       const dateText = formatExamDateDisplay(approvedPayload.examDate);

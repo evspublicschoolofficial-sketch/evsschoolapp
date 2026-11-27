@@ -77,8 +77,19 @@ export const loadLocalExamMarks = (): ExamMarkRecord[] => {
   return [];
 };
 
+let cachedExamMarks: ExamMarkRecord[] | null = null;
+let cachedReportCardMeta: Record<string, ReportCardRemarkRecord> | null = null;
+let cachedReportCardWorkflow: ReportCardWorkflowSnapshot | null = null;
+
+export const invalidateReportCardCache = () => {
+  cachedExamMarks = null;
+  cachedReportCardMeta = null;
+  cachedReportCardWorkflow = null;
+};
+
 export const saveLocalExamMarks = (records: ExamMarkRecord[]) => {
   try {
+    cachedExamMarks = records;
     saveToPhoneMemory(EXAM_MARKS_STORAGE_KEY, records);
     window.dispatchEvent(new CustomEvent(REPORT_CARD_UPDATED_EVENT, { detail: { type: 'marks', records } }));
   } catch {}
@@ -97,12 +108,16 @@ export const loadLocalReportCardMeta = (): Record<string, ReportCardRemarkRecord
 
 export const saveLocalReportCardMeta = (map: Record<string, ReportCardRemarkRecord>) => {
   try {
+    cachedReportCardMeta = map;
     saveToPhoneMemory(REPORT_CARD_META_STORAGE_KEY, map);
     window.dispatchEvent(new CustomEvent(REPORT_CARD_UPDATED_EVENT, { detail: { type: 'meta', map } }));
   } catch {}
 };
 
 export const fetchExamMarksFromServer = async (forceRefresh = false): Promise<ExamMarkRecord[]> => {
+  if (!forceRefresh && cachedExamMarks !== null) {
+    return cachedExamMarks;
+  }
   const activeUrl = getAppsScriptUrl();
   try {
     const res = await fetch(`/api/exam-marks${forceRefresh ? '?refresh=1&' : '?'}_t=${Date.now()}`, {
@@ -130,7 +145,9 @@ export const fetchExamMarksFromServer = async (forceRefresh = false): Promise<Ex
     }
   } catch {}
 
-  return loadLocalExamMarks();
+  const fallback = loadLocalExamMarks();
+  cachedExamMarks = fallback;
+  return fallback;
 };
 
 export const saveExamMarksBatchToServer = async (
@@ -172,6 +189,9 @@ export const saveExamMarksBatchToServer = async (
 export const fetchReportCardMetaFromServer = async (
   forceRefresh = false
 ): Promise<Record<string, ReportCardRemarkRecord>> => {
+  if (!forceRefresh && cachedReportCardMeta !== null) {
+    return cachedReportCardMeta;
+  }
   const activeUrl = getAppsScriptUrl();
   const local = loadLocalReportCardMeta();
   try {
@@ -198,6 +218,7 @@ export const fetchReportCardMetaFromServer = async (
     }
   } catch {}
 
+  cachedReportCardMeta = local;
   return local;
 };
 
@@ -313,6 +334,7 @@ export const loadLocalReportCardWorkflow = (): ReportCardWorkflowSnapshot => {
 
 export const saveLocalReportCardWorkflow = (snap: ReportCardWorkflowSnapshot) => {
   try {
+    cachedReportCardWorkflow = snap;
     const nextJson = JSON.stringify(snap);
     const prevJson = localStorage.getItem(REPORT_CARD_WORKFLOW_STORAGE_KEY);
     if (prevJson === nextJson) return;
@@ -324,6 +346,9 @@ export const saveLocalReportCardWorkflow = (snap: ReportCardWorkflowSnapshot) =>
 export const fetchReportCardWorkflowFromServer = async (
   forceRefresh = false
 ): Promise<ReportCardWorkflowSnapshot> => {
+  if (!forceRefresh && cachedReportCardWorkflow !== null) {
+    return cachedReportCardWorkflow;
+  }
   const activeUrl = getAppsScriptUrl();
   const local = loadLocalReportCardWorkflow();
   let apiSnap: ReportCardWorkflowSnapshot | null = null;

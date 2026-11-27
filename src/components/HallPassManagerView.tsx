@@ -71,11 +71,11 @@ export const HallPassManagerView: React.FC<HallPassManagerViewProps> = ({
   const [qrMap, setQrMap] = useState<Record<string, string>>({});
   const hasAutoSyncedRef = useRef<boolean>(false);
 
-  // Auto-pull fresh Hall Pass config & live Exam_Datesheet from Google Sheet on mount
+  // Auto-pull Hall Pass config & live Exam_Datesheet from cache or server on first mount
   useEffect(() => {
     if (hasAutoSyncedRef.current) return;
     hasAutoSyncedRef.current = true;
-    fetchHallPassConfigFromServer(true)
+    fetchHallPassConfigFromServer(false)
       .then((fresh) => {
         if (fresh) onConfigChange(fresh);
       })

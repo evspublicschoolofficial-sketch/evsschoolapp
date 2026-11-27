@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, Suspense } from 'react';
 import type { StudentBehaviorInput } from './components/StudentBehaviorModal';
 import { StudentAvatar } from './components/StudentAvatar';
+import { ManagerLeftSidebar, MANAGER_MENU_ITEMS, type ManagerTabId } from './components/ManagerLeftSidebar';
 import { SchoolNoticeBoard, DEFAULT_SEED_NOTICES } from './components/SchoolNoticeBoard';
 import { EmergencyAlertBanner } from './components/EmergencyAlertBanner';
 import {
@@ -18,6 +19,7 @@ import { ExamMarkRecord, HallPassConfig, ReportCardRemarkRecord, SchoolNotice, S
 import {
   fetchHallPassConfigFromServer,
   HALL_PASS_CONFIG_STORAGE_KEY,
+  invalidateHallPassCache,
   loadLocalHallPassConfig,
 } from './utils/hallPassHelper';
 import {
@@ -27,6 +29,7 @@ import {
   fetchExamSeatingPlanSnapshot,
   findTeacherAssignedRooms,
   formatExamDateDisplay,
+  invalidateSeatingPlanCache,
 } from './utils/seatingPlanHelper';
 import {
   fetchParentReviewsFromServer,
@@ -39,10 +42,11 @@ import { initGeolocationPrewarmer, syncSchoolLocationFromServer } from './utils/
 import { computeStudentFeeMetrics, computeSchoolFeeTotals, getStudentHeadPaymentStatus, normalizeStudentId, reconcileFeeRecords, calculateStudentSummary, isStudentFeeExempt } from './utils/feeCalculation';
 import { computeFamilyFeeSummary, FamilyFeeSummary, findFamilyStudentsByMobile, findSiblingsForStudent } from './utils/familyFeeHelper';
 import { useFeeSettlementTransition, AnimatedSettledCurrency } from './components/FeeSettlementAnimator';
-import { realtimeSync } from './utils/realtimeSync';
+import { CLIENT_TAB_ID, realtimeSync } from './utils/realtimeSync';
 import { AppLanguage, getStoredLanguage, setStoredLanguage, TRANSLATIONS } from './utils/translations';
 import { NotificationPermissionBanner } from './components/NotificationPermissionBanner';
 import { PWAHeaderUpdateButton, PWAUpdateBanner } from './components/PWAUpdateBanner';
+import { reloadFullAppWithFreshSync } from './utils/pwaUpdater';
 import { checkAndNotifyNewNotices } from './utils/notificationService';
 import {
   CURRENT_ACADEMIC_SESSION,
@@ -52,6 +56,7 @@ import {
   fetchExamMarksFromServer,
   fetchReportCardMetaFromServer,
   fetchReportCardWorkflowFromServer,
+  invalidateReportCardCache,
   loadLocalExamMarks,
   loadLocalReportCardMeta,
   loadLocalReportCardWorkflow,
@@ -1639,14 +1644,45 @@ export default function App() {
   const [hallPassConfig, setHallPassConfig] = useState<HallPassConfig>(() => loadLocalHallPassConfig());
   const [parentReviewsList, setParentReviewsList] = useState<ParentReviewRecord[]>(() => loadLocalParentReviews());
 
+  const [isFullAppReloading, setIsFullAppReloading] = useState<boolean>(false);
+  const loadedModulesRef = useRef({
+    reportCard: false,
+    hallPass: false,
+    parentReviews: false,
+    qrAccess: false,
+  });
+
   const refreshParentReviews = async (forceRefresh = false) => {
+    if (!forceRefresh && loadedModulesRef.current.parentReviews && parentReviewsList.length > 0) {
+      return;
+    }
     try {
       const list = await fetchParentReviewsFromServer(forceRefresh);
       setParentReviewsList(list);
+      loadedModulesRef.current.parentReviews = true;
     } catch {}
   };
 
+  const ensureHallPassConfigLoaded = async (forceRefresh = false) => {
+    if (!forceRefresh && loadedModulesRef.current.hallPass) {
+      return hallPassConfig;
+    }
+    try {
+      const fresh = await fetchHallPassConfigFromServer(forceRefresh);
+      if (fresh) {
+        setHallPassConfig(fresh);
+        loadedModulesRef.current.hallPass = true;
+      }
+      return fresh;
+    } catch {
+      return null;
+    }
+  };
+
   const fetchReportCardAllData = async (forceRefresh = false) => {
+    if (!forceRefresh && loadedModulesRef.current.reportCard) {
+      return;
+    }
     try {
       const activeUrl = getEffectiveApiUrl();
       const [wtRes, emRes, rcRes, wfRes, hpRes] = await Promise.allSettled([
@@ -1682,7 +1718,9 @@ export default function App() {
       }
       if (hpRes.status === 'fulfilled' && hpRes.value && typeof hpRes.value === 'object') {
         setHallPassConfig(hpRes.value);
+        loadedModulesRef.current.hallPass = true;
       }
+      loadedModulesRef.current.reportCard = true;
     } catch {}
   };
 
@@ -1970,11 +2008,11 @@ export default function App() {
   const [teacherSeatingSnapshot, setTeacherSeatingSnapshot] = useState<ExamSeatingSnapshot | null>(null);
   const [teacherSeatingHistory, setTeacherSeatingHistory] = useState<ExamSeatingHistoryEntry[]>([]);
 
-  const refreshTeacherSeatingDuty = async () => {
+  const refreshTeacherSeatingDuty = async (forceRefresh = false) => {
     try {
       const [snap, histRes] = await Promise.all([
-        fetchExamSeatingPlanSnapshot(false),
-        fetchExamSeatingHistory(false),
+        fetchExamSeatingPlanSnapshot(forceRefresh),
+        fetchExamSeatingHistory(forceRefresh),
       ]);
       if (snap) setTeacherSeatingSnapshot(snap);
       if (histRes?.entries) setTeacherSeatingHistory(histRes.entries);
@@ -1983,7 +2021,7 @@ export default function App() {
 
   useEffect(() => {
     if (activeTab === 'teacher' && teacherUser) {
-      refreshTeacherSeatingDuty();
+      refreshTeacherSeatingDuty(false);
     }
   }, [activeTab, teacherUser?.User_ID]);
 
@@ -2106,14 +2144,33 @@ export default function App() {
   const [managerSelectedFeeStudent, setManagerSelectedFeeStudent] = useState<Student | null>(null);
 
   // Manager Dashboard State
-  const [managerTab, setManagerTab] = useState<'students' | 'homework' | 'behavior' | 'fees' | 'users' | 'vanTracking' | 'attendance' | 'notices' | 'autoTransport' | 'staffAttendance' | 'teacherPerformance' | 'reportCards' | 'hallPass' | 'parentReviews'>(() => {
+  const [managerTab, setManagerTab] = useState<ManagerTabId>(() => {
     try {
       const saved = localStorage.getItem('evs_manager_tab');
-      if (saved && ['students', 'homework', 'behavior', 'fees', 'users', 'vanTracking', 'attendance', 'notices', 'autoTransport', 'staffAttendance', 'teacherPerformance', 'reportCards', 'hallPass', 'parentReviews'].includes(saved)) {
-        return saved as any;
+      if (
+        saved &&
+        [
+          'home',
+          'students',
+          'homework',
+          'behavior',
+          'fees',
+          'users',
+          'vanTracking',
+          'attendance',
+          'notices',
+          'autoTransport',
+          'staffAttendance',
+          'teacherPerformance',
+          'reportCards',
+          'hallPass',
+          'parentReviews',
+        ].includes(saved)
+      ) {
+        return saved as ManagerTabId;
       }
     } catch {}
-    return 'students';
+    return 'home';
   });
 
   useEffect(() => {
@@ -3203,12 +3260,37 @@ export default function App() {
     }
   };
 
-  // Dedicated Complete Teacher Portal Refresh Handler
+  // Quiet initial fill for Teacher Portal: only loads datasets not already present in memory
+  const fetchMissingTeacherData = async () => {
+    const tasks: Promise<any>[] = [];
+    if (homeworkList.length === 0) tasks.push(fetchHomework(true, false));
+    if (hwTrackerList.length === 0) tasks.push(fetchHomeworkTracker(false, false));
+    if (behaviorList.length === 0) tasks.push(fetchStudentBehavior(false, false));
+    if (students.length === 0) tasks.push(fetchStudents(true));
+    if (usersList.length === 0) tasks.push(fetchUsers());
+    if (staffAttendanceList.length === 0) tasks.push(fetchStaffAttendance(true));
+    if (!loadedModulesRef.current.qrAccess) tasks.push(syncTeacherQrAttendanceAccess(false, false));
+    if (!loadedModulesRef.current.reportCard) tasks.push(fetchReportCardAllData(false));
+    if (tasks.length > 0) {
+      await Promise.allSettled(tasks);
+    }
+  };
+
+  // Dedicated Complete Teacher Portal Refresh Handler (Manual button click)
   const handleRefreshTeacherPortal = async () => {
     setIsRefreshingTeacherPortal(true);
     setLoadingHwTracker(true);
     setLoadingBehavior(true);
     setLoadingHomework(true);
+    invalidateHallPassCache();
+    invalidateReportCardCache();
+    invalidateSeatingPlanCache();
+    loadedModulesRef.current = {
+      reportCard: false,
+      hallPass: false,
+      parentReviews: false,
+      qrAccess: false,
+    };
     setSyncToastMessage('🔄 टीचर पोर्टल का पूरा डेटा (होमवर्क, ट्रैकर, आचरण, छात्र) रिफ्रेश हो रहा है...');
     try {
       await Promise.allSettled([
@@ -3221,6 +3303,7 @@ export default function App() {
         fetchStaffAttendance(true),
         syncTeacherQrAttendanceAccess(true, false),
         fetchReportCardAllData(true),
+        refreshTeacherSeatingDuty(true),
       ]);
       setSyncToastMessage('✅ टीचर पोर्टल (हाजिरी, अनुमतियाँ, रिपोर्ट कार्ड व छात्र डेटा) ताज़ा हो गया!');
       setTimeout(() => setSyncToastMessage(null), 3500);
@@ -3543,22 +3626,23 @@ export default function App() {
     }) || null;
   }, [staffAttendanceList, teacherUser, managerUser]);
 
-  // Switch tabs in Teacher Portal with automatic tab-specific data refresh
+  // Switch tabs in Teacher Portal cleanly using already-loaded memory (no redundant reloads on tab clicks)
   const handleSelectTeacherTab = (tab: 'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior' | 'staff_attendance' | 'performance' | 'syllabus' | 'weekly_tests' | 'report_card' | 'seating_plan') => {
     setTeacherPortalTab(tab);
-    if (tab === 'tracker') {
-      fetchHomeworkTracker(false, true);
-    } else if (tab === 'submissions') {
-      fetchHomework(false, false);
+    if (tab === 'tracker' && hwTrackerList.length === 0) {
+      fetchHomeworkTracker(false, false);
+    } else if (tab === 'submissions' && homeworkList.length === 0) {
+      fetchHomework(true, false);
     } else if (tab === 'behavior') {
-      fetchStudentBehavior(false, true);
-      syncTeacherQrAttendanceAccess(true, false);
-    } else if (tab === 'staff_attendance') {
+      if (behaviorList.length === 0) fetchStudentBehavior(false, false);
+      syncTeacherQrAttendanceAccess(false, false);
+    } else if (tab === 'staff_attendance' && staffAttendanceList.length === 0) {
       fetchStaffAttendance(true);
     } else if (tab === 'weekly_tests' || tab === 'report_card') {
-      fetchReportCardAllData(true);
+      fetchReportCardAllData(false);
     } else if (tab === 'seating_plan') {
-      fetchHallPassConfigFromServer(true).then(setHallPassConfig);
+      ensureHallPassConfigLoaded(false);
+      if (!teacherSeatingSnapshot) refreshTeacherSeatingDuty(false);
     }
   };
 
@@ -3770,6 +3854,17 @@ export default function App() {
     if (syncInFlightRef.current) return;
     syncInFlightRef.current = true;
     setIsBackgroundSyncing(true);
+    if (manual || forceFullAll) {
+      invalidateSeatingPlanCache();
+      invalidateHallPassCache();
+      invalidateReportCardCache();
+      loadedModulesRef.current = {
+        reportCard: false,
+        hallPass: false,
+        parentReviews: false,
+        qrAccess: false,
+      };
+    }
     if (manual) {
       setSyncToastMessage('डेटा सिंक किया जा रहा है... (Syncing fresh records)');
     }
@@ -4217,7 +4312,7 @@ export default function App() {
       let deferredStaleSyncTimer: ReturnType<typeof setTimeout> | null = null;
 
       if (pendingPostUpdate || isBuildUpdated) {
-        setSyncToastMessage('🔄 नया GitHub अपडेट मिला — पूरा स्कूल डेटा फोन मेमोरी में ताज़ा लोड हो रहा है...');
+        setSyncToastMessage('🔄 नया अपडेट मिला — पूरा स्कूल डेटा फोन मेमोरी में ताज़ा लोड हो रहा है...');
         await syncAllData(false, true);
         if (isMounted) {
           setSyncToastMessage('✅ नया अपडेट व पूरा स्कूल डेटा फोन मेमोरी में सेव हो गया!');
@@ -4228,32 +4323,15 @@ export default function App() {
         await syncAllData(false, true);
       } else {
         // Phone memory already populated & NO app update -> 0.05s instant open!
-        // Never block startup or reload all sheets on every open; only run a quiet deferred
-        // refresh if cached data is genuinely older than 6 hours.
+        // Never re-download already-loaded datasets automatically; user has manual header Reload button whenever needed.
         setLoadingStudents(false);
         setLoadingHomework(false);
         if (!prevBuildSig && runningBuildId !== 'dev') {
           setSyncedBuildSignature(runningBuildId);
         }
-        const cachedTs = Number(hydrated[CACHE_KEY_TIMESTAMP] || lastSyncTimestamp || 0);
-        const cacheAgeMs = cachedTs ? Date.now() - cachedTs : 0;
-
-        if (cacheAgeMs > 30 * 60 * 1000) {
-          deferredWaiverTimer = setTimeout(() => {
-            if (isMounted) syncFeeWaiversWithServer();
-          }, 2500);
-        }
-        if (cachedTs && cacheAgeMs > 6 * 60 * 60 * 1000) {
-          deferredStaleSyncTimer = setTimeout(() => {
-            if (isMounted) syncAllData(false, false);
-          }, 4000);
-        }
       }
 
-      return () => {
-        if (deferredWaiverTimer) clearTimeout(deferredWaiverTimer);
-        if (deferredStaleSyncTimer) clearTimeout(deferredStaleSyncTimer);
-      };
+      return undefined;
     };
 
     let cleanupDeferred: (() => void) | undefined;
@@ -4264,20 +4342,34 @@ export default function App() {
     // 2. Listen for live GitHub update events from pwaUpdater (automatically performs full reload into Phone Memory)
     const handleGitHubUpdateFullReload = async () => {
       if (!isMounted) return;
-      setSyncToastMessage('🆕 GitHub पर नया अपडेट मिला — पूरा डेटा ताज़ा लोड हो रहा है...');
+      setSyncToastMessage('🆕 नया ऐप अपडेट मिला — पूरा डेटा ताज़ा लोड हो रहा है...');
       await syncAllData(false, true);
       if (isMounted) {
-        setSyncToastMessage('✅ नया GitHub डेटा फोन मेमोरी में सफलतापूर्वक अपडेट हो गया!');
+        setSyncToastMessage('✅ नया डेटा फोन मेमोरी में सफलतापूर्वक अपडेट हो गया!');
         setTimeout(() => setSyncToastMessage(null), 4000);
       }
     };
     window.addEventListener(GITHUB_FULL_RELOAD_EVENT, handleGitHubUpdateFullReload);
 
-    // 3. Subscribe to real-time push updates (cross-tab via BroadcastChannel & cross-device via WebSocket)
-    // Targeted entity refresh only when an actual write/edit occurs elsewhere; zero periodic/focus reload storm.
+    // 3. Subscribe to real-time push updates ONLY from OTHER tabs or OTHER devices (skip redundant same-tab echoes)
     const unsubscribe = realtimeSync.subscribe((event) => {
       if (event.action === 'visibility_change' || event.action === 'window_focus') return;
-      console.log('[RealtimeSync] Auto-refreshing data for entity:', event.entity);
+      const isSameTab = Boolean(event.originTabId && event.originTabId === CLIENT_TAB_ID);
+
+      if (event.entity === 'exam_seating_plan') {
+        if (!isSameTab) {
+          invalidateSeatingPlanCache();
+        }
+        refreshTeacherSeatingDuty(!isSameTab);
+        return;
+      }
+
+      // Same-tab writes already updated local React state immediately — never re-fetch Google Sheets!
+      if (isSameTab) {
+        return;
+      }
+
+      console.log('[RealtimeSync] Cross-tab/device refresh for entity:', event.entity);
       if (event.entity === 'fee') {
         fetchFeeCollection();
       } else if (event.entity === 'student') {
@@ -4303,14 +4395,12 @@ export default function App() {
       } else if (event.entity === 'users') {
         fetchUsers();
       } else if (event.entity === 'hall_pass_config') {
-        fetchHallPassConfigFromServer(true).then(setHallPassConfig);
-      } else if (event.entity === 'exam_seating_plan') {
-        refreshTeacherSeatingDuty();
-        return;
+        invalidateHallPassCache();
+        ensureHallPassConfigLoaded(true);
       } else if (event.entity === 'fee_waivers') {
         syncFeeWaiversWithServer();
       } else if (event.entity === 'parent_reviews') {
-        refreshParentReviews(false);
+        refreshParentReviews(true);
       } else if (event.entity === 'teacher_qr_attendance_access' || event.entity === 'report_card_workflow') {
         if (Date.now() - lastQrAccessMutationAtRef.current < 2500) {
           return;
@@ -4322,6 +4412,7 @@ export default function App() {
             localStorage.setItem('evs_teacher_qr_attendance_allowed', nextEnabled ? 'true' : 'false');
           } catch {}
         }
+        invalidateReportCardCache();
         fetchReportCardWorkflowFromServer(true)
           .then((wf) => {
             if (wf) {
@@ -4338,6 +4429,8 @@ export default function App() {
           .catch(() => {});
         return;
       } else if (event.entity === 'exam_marks' || event.entity === 'report_card_meta' || event.entity === 'weekly_tests') {
+        invalidateReportCardCache();
+        loadedModulesRef.current.reportCard = false;
         fetchReportCardAllData(true);
         return;
       } else {
@@ -4348,8 +4441,8 @@ export default function App() {
       setTimeout(() => setSyncToastMessage(null), 3000);
     });
 
-    // Fetch Manager-controlled Teacher QR Attendance permission once on initial app boot
-    syncTeacherQrAttendanceAccess(true, false);
+    // Load Manager-controlled Teacher QR Attendance permission cleanly from cache or server once per session
+    syncTeacherQrAttendanceAccess(false, false);
 
     return () => {
       isMounted = false;
@@ -4359,12 +4452,12 @@ export default function App() {
     };
   }, []);
 
-  // Sync Teacher permissions & assigned classes cleanly when Teacher Portal is active (plus quiet 45s diff-only check for cross-device Vercel changes without reloading UI)
+  // Sync Teacher permissions & hall-pass config from cache first (plus quiet 45s diff-only check for remote toggles without UI reload)
   useEffect(() => {
     if (activeTab !== 'teacher' || !teacherUser) return;
     lastTeacherQrBootCheckRef.current = String(teacherUser.User_ID || teacherUser.Username || teacherUser.Name || 'teacher');
-    syncTeacherQrAttendanceAccess(true, false);
-    fetchHallPassConfigFromServer(true).then(setHallPassConfig).catch(() => {});
+    syncTeacherQrAttendanceAccess(false, false);
+    ensureHallPassConfigLoaded(false);
 
     const timer = window.setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
@@ -5633,10 +5726,13 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       // Successful login
       purgeAllSessionsExcept('manager');
       setManagerUser(user);
+      setManagerTab('home');
+      setIsManagerMenuOpen(false);
       setActiveTab('manager');
       try {
         localStorage.setItem('evs_manager_user', JSON.stringify(user));
         localStorage.setItem('evs_active_tab', 'manager');
+        localStorage.setItem('evs_manager_tab', 'home');
       } catch (err) {
         console.warn('LocalStorage error:', err);
       }
@@ -5763,9 +5859,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
     setTeacherLoginError(null);
     setTeacherLoginSubmitting(false);
 
-    // Auto-refresh teacher portal data on login
+    // Quietly fetch only any missing datasets on login without wiping/reloading already-loaded data
     setTimeout(() => {
-      handleRefreshTeacherPortal();
+      fetchMissingTeacherData();
     }, 100);
   };
 
@@ -6171,6 +6267,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
   // Sync Teacher QR Attendance & workflow permissions reliably across AI Studio & Vercel
   const syncTeacherQrAttendanceAccess = async (forceRefresh = false, showToast = false) => {
+    if (!forceRefresh && !showToast && loadedModulesRef.current.qrAccess) {
+      return;
+    }
     if (showToast) setTeacherQrStatusChecking(true);
     try {
       const activeUrl = getEffectiveApiUrl();
@@ -6230,6 +6329,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
           setTimeout(() => setSyncToastMessage(null), 3500);
         }
       }
+      loadedModulesRef.current.qrAccess = true;
     } catch {
       if (showToast) {
         setSyncToastMessage('⚠️ अनुमति स्थिति जांचने में समस्या आई।');
@@ -7392,17 +7492,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
   };
 
   return (
-    <Suspense
-      fallback={
-        <div className="min-h-screen flex flex-col items-center justify-center bg-[#0c2340] text-white">
-          <div className="w-12 h-12 rounded-2xl bg-amber-400 text-[#0c2340] flex items-center justify-center text-2xl font-black mb-4 shadow-lg shadow-amber-400/20">
-            🏫
-          </div>
-          <div className="w-8 h-8 border-3 border-amber-400/30 border-t-amber-400 rounded-full animate-spin"></div>
-        </div>
-      }
-    >
-      <div className="min-h-screen flex flex-col bg-slate-50 text-slate-800 font-sans">
+    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-800 font-sans">
       {/* Main Header with Blue & Gold Theme */}
       <header className="bg-gradient-to-r from-[#0c2340] via-[#10316b] to-[#0c2340] text-white shadow-lg border-b-2 border-amber-400/80 sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3.5">
@@ -7432,8 +7522,37 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 </div>
               </div>
 
-              {/* Top-Bar App Update Button + 1-Click Language Switcher */}
-              <div className="flex items-center gap-1.5 sm:gap-2 ml-auto sm:ml-4 shrink-0">
+              {/* Top-Bar App Update Button + 1-Click Full App Reload + Language Switcher */}
+              <div className="flex items-center gap-1.5 sm:gap-2 ml-auto sm:ml-4 shrink-0 flex-wrap justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isFullAppReloading) return;
+                    setIsFullAppReloading(true);
+                    reloadFullAppWithFreshSync();
+                  }}
+                  disabled={isFullAppReloading}
+                  className="px-2.5 sm:px-3 py-1.5 rounded-xl bg-white/15 hover:bg-amber-400 hover:text-slate-950 text-amber-200 border border-amber-300/40 text-xs font-black flex items-center gap-1.5 cursor-pointer transition-all active:scale-95 shrink-0 disabled:opacity-60 shadow-xs"
+                  title={
+                    currentLang === 'en'
+                      ? 'Reload Full App & Fetch Fresh School Data'
+                      : 'पूरी ऐप व ताज़ा डेटा को एक क्लिक में रीलोड करें (Full App Reload)'
+                  }
+                >
+                  <i className={`fa-solid fa-arrows-rotate text-xs ${isFullAppReloading ? 'fa-spin' : ''}`} />
+                  <span className="hidden sm:inline">
+                    {isFullAppReloading
+                      ? currentLang === 'en'
+                        ? 'Reloading...'
+                        : 'रीलोड हो रहा...'
+                      : currentLang === 'en'
+                      ? 'Reload App'
+                      : 'पूरी ऐप रीलोड'}
+                  </span>
+                  <span className="sm:hidden">
+                    {isFullAppReloading ? '...' : currentLang === 'en' ? 'Reload' : 'रीलोड'}
+                  </span>
+                </button>
                 <PWAHeaderUpdateButton lang={currentLang} />
 
                 {/* 1-Click Language Switcher: English Medium Default */}
@@ -7605,17 +7724,6 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               {/* CASE 2: MANAGER LOGGED IN */}
               {managerUser && (
                 <div className="flex items-center gap-2 flex-wrap">
-                  {/* 3-Line Menu Toggle Button (Hamburger) */}
-                  <button
-                    type="button"
-                    onClick={() => setIsManagerMenuOpen((prev) => !prev)}
-                    className="flex items-center gap-1.5 bg-gradient-to-r from-amber-400 via-amber-300 to-amber-400 hover:from-amber-300 hover:to-amber-500 text-slate-950 px-3 py-1.5 rounded-xl font-black text-xs shadow-sm transition-all cursor-pointer active:scale-95 border border-amber-500 shrink-0"
-                    title="सभी 11 प्रबंधन सुविधाएं खोलें (3-Line Menu)"
-                  >
-                    <i className="fa-solid fa-bars text-sm"></i>
-                    <span>मेन्यू</span>
-                  </button>
-
                   <div className="flex items-center gap-1.5 bg-amber-400 text-slate-950 px-3 py-1.5 rounded-xl font-bold text-xs shadow-xs">
                     <i className="fa-solid fa-user-tie"></i>
                     <span>प्रबंधक: {managerUser.Name}</span>
@@ -9288,7 +9396,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           id="parent-tab-report-card"
                           type="button"
                           onClick={() => {
-                            fetchReportCardAllData(true);
+                            fetchReportCardAllData(false);
                             setParentActiveSection('reportCard');
                             window.scrollTo({ top: 0, behavior: 'smooth' });
                           }}
@@ -9355,7 +9463,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       <button
                         type="button"
                         onClick={() => {
-                          fetchHallPassConfigFromServer().then(setHallPassConfig);
+                          ensureHallPassConfigLoaded(false);
                           setParentActiveSection('hallPass');
                           window.scrollTo({ top: 0, behavior: 'smooth' });
                         }}
@@ -9452,7 +9560,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       </button>
                       <button
                         onClick={() => {
-                          fetchReportCardAllData(true);
+                          fetchReportCardAllData(false);
                           setParentActiveSection('reportCard');
                         }}
                         className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
@@ -9463,7 +9571,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       </button>
                       <button
                         onClick={() => {
-                          fetchHallPassConfigFromServer().then(setHallPassConfig);
+                          ensureHallPassConfigLoaded(false);
                           setParentActiveSection('hallPass');
                         }}
                         className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
@@ -11256,17 +11364,26 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     </div>
 
                     {/* Directly Embedded Monthly Attendance Calendar */}
-                    <AttendanceCalendarModal
-                      embedded={true}
-                      isOpen={true}
-                      selectedStudent={selectedStudent}
-                      allStudents={parentChildren.length > 0 ? parentChildren : [selectedStudent]}
-                      behaviorRecords={behaviorList}
-                      initialMode="calendar"
-                      schoolName="E.V.S. PUBLIC SCHOOL"
-                      onSelectStudent={(st) => setSelectedStudent(st)}
-                      isParentView={true}
-                    />
+                    <Suspense
+                      fallback={
+                        <div className="bg-white rounded-3xl p-8 text-center text-slate-500 font-bold border border-slate-200">
+                          <i className="fa-solid fa-circle-notch fa-spin text-amber-500 mr-2 text-xl"></i>
+                          <span>मासिक हाजिरी कैलेंडर लोड हो रहा है...</span>
+                        </div>
+                      }
+                    >
+                      <AttendanceCalendarModal
+                        embedded={true}
+                        isOpen={true}
+                        selectedStudent={selectedStudent}
+                        allStudents={parentChildren.length > 0 ? parentChildren : [selectedStudent]}
+                        behaviorRecords={behaviorList}
+                        initialMode="calendar"
+                        schoolName="E.V.S. PUBLIC SCHOOL"
+                        onSelectStudent={(st) => setSelectedStudent(st)}
+                        isParentView={true}
+                      />
+                    </Suspense>
 
                     <div className="pt-2 border-t border-slate-200 flex justify-center">
                       <button
@@ -12380,17 +12497,26 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 </div>
 
                 {teacherTrackerViewMode === 'by_homework' ? (
-                  <TeacherHomeworkChecker
-                    currentUser={teacherUser}
-                    homeworkList={homeworkList}
-                    students={students}
-                    hwTrackerList={hwTrackerList}
-                    onSetStudentStatus={handleSetStudentHomeworkStatus}
-                    onBulkSetStatus={handleBulkSetHomeworkStatus}
-                    getClassName={getClassName}
-                    getStudentPhoto={getStudentPhoto}
-                    onOpenUploadTab={() => setTeacherPortalTab('upload')}
-                  />
+                  <Suspense
+                    fallback={
+                      <div className="bg-white rounded-2xl p-10 text-center text-slate-500 font-bold border border-slate-200">
+                        <i className="fa-solid fa-circle-notch fa-spin text-amber-500 mr-2 text-xl"></i>
+                        <span>होमवर्क चेकर लोड हो रहा है...</span>
+                      </div>
+                    }
+                  >
+                    <TeacherHomeworkChecker
+                      currentUser={teacherUser}
+                      homeworkList={homeworkList}
+                      students={students}
+                      hwTrackerList={hwTrackerList}
+                      onSetStudentStatus={handleSetStudentHomeworkStatus}
+                      onBulkSetStatus={handleBulkSetHomeworkStatus}
+                      getClassName={getClassName}
+                      getStudentPhoto={getStudentPhoto}
+                      onOpenUploadTab={() => setTeacherPortalTab('upload')}
+                    />
+                  </Suspense>
                 ) : (
                   <>
                 {/* PROMINENT QR SCANNER BANNER FOR YESTERDAY'S HOMEWORK TRACKING */}
@@ -12968,19 +13094,28 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             </div>
                           )}
 
-                          <ClassroomBulkAttendanceRegister
-                            students={students}
-                            behaviorRecords={behaviorList}
-                            classOptions={classOptions}
-                            initialClass={initialCls}
-                            allowedClasses={teacherClasses.length > 0 ? teacherClasses : undefined}
-                            teacherName={teacherUser?.Name || 'Teacher'}
-                            getClassName={getClassName}
-                            getStudentPhoto={getStudentPhoto}
-                            onSaveBatch={handleSaveBatchBehavior}
-                            isEmbedded={true}
-                            lang={currentLang}
-                          />
+                          <Suspense
+                            fallback={
+                              <div className="bg-white rounded-2xl p-10 text-center text-slate-500 font-bold border border-slate-200">
+                                <i className="fa-solid fa-circle-notch fa-spin text-amber-500 mr-2 text-xl"></i>
+                                <span>क्लास हाजिरी रजिस्टर लोड हो रहा है...</span>
+                              </div>
+                            }
+                          >
+                            <ClassroomBulkAttendanceRegister
+                              students={students}
+                              behaviorRecords={behaviorList}
+                              classOptions={classOptions}
+                              initialClass={initialCls}
+                              allowedClasses={teacherClasses.length > 0 ? teacherClasses : undefined}
+                              teacherName={teacherUser?.Name || 'Teacher'}
+                              getClassName={getClassName}
+                              getStudentPhoto={getStudentPhoto}
+                              onSaveBatch={handleSaveBatchBehavior}
+                              isEmbedded={true}
+                              lang={currentLang}
+                            />
+                          </Suspense>
                         </>
                       );
                     })()}
@@ -13307,17 +13442,26 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
             {/* TAB 6: STAFF ATTENDANCE & QR CHECK-IN (स्टाफ हाजिरी) */}
             {teacherPortalTab === 'staff_attendance' && teacherUser && (
-              <StaffAttendanceView
-                currentUser={teacherUser}
-                allStaffUsers={usersList}
-                attendanceRecords={staffAttendanceList}
-                onOpenScanner={() => setIsStaffAttendanceScannerOpen(true)}
-                onOpenSchoolQr={() => setIsSchoolQrModalOpen(true)}
-                onManualCheckIn={handleStaffCheckInSuccess}
-                onRefresh={() => fetchStaffAttendance(false)}
-                isLoading={loadingStaffAttendance}
-                isManager={false}
-              />
+              <Suspense
+                fallback={
+                  <div className="bg-white rounded-3xl p-10 text-center text-slate-500 font-bold border border-slate-200">
+                    <i className="fa-solid fa-circle-notch fa-spin text-amber-500 mr-2 text-xl"></i>
+                    <span>स्टाफ उपस्थिति पोर्टल लोड हो रहा है...</span>
+                  </div>
+                }
+              >
+                <StaffAttendanceView
+                  currentUser={teacherUser}
+                  allStaffUsers={usersList}
+                  attendanceRecords={staffAttendanceList}
+                  onOpenScanner={() => setIsStaffAttendanceScannerOpen(true)}
+                  onOpenSchoolQr={() => setIsSchoolQrModalOpen(true)}
+                  onManualCheckIn={handleStaffCheckInSuccess}
+                  onRefresh={() => fetchStaffAttendance(false)}
+                  isLoading={loadingStaffAttendance}
+                  isManager={false}
+                />
+              </Suspense>
             )}
 
             {/* TAB 7: TEACHER PERFORMANCE LEADERBOARD & TEACHER OF THE YEAR */}
@@ -13567,110 +13711,152 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
           </div>
         )}
 
-        {activeTab === 'manager' && managerUser && (
-          <div className="space-y-6 animate-fadeIn">
-            {/* 4 Dynamic Summary Cards & Interactive Modals (Manager Dashboard Header Overview) */}
-            <ManagerOverviewModals
-              students={students}
-              feeRecords={feeRecords}
-              feeBalances={feeBalances}
-              behaviorList={behaviorList}
-              classMap={classMap}
-              getClassName={getClassName}
-              getStudentPhoto={getStudentPhoto}
-              loadingStudents={loadingStudents}
-              loadingFees={loadingFees}
-              loadingBehavior={loadingBehavior}
-              onSelectStudent={(st) => setSelectedStudentDetail(st)}
-              onOpenAddStudent={() => setAddStudentModalOpen(true)}
-              onSyncStudent={syncStudentToSheet}
-              onSyncAllPending={syncAllPendingStudentsToSheet}
-              onOpenSyncSettings={() => setSheetSyncModalOpen(true)}
-              onDeleteStudent={handleDeleteStudent}
-              onRequestDeleteStudent={(st) => setStudentToDelete(st)}
-              onOpenAttendanceCalendar={(st) => {
-                if (st) setSelectedStudent(st);
-                setAttendanceCalendarMode('calendar');
-                setIsAttendanceCalendarOpen(true);
+        {activeTab === 'manager' && managerUser && (() => {
+          const handleSelectManagerTab = (tab: ManagerTabId) => {
+            if (tab === 'reportCards') {
+              fetchReportCardAllData(false);
+            } else if (tab === 'hallPass') {
+              ensureHallPassConfigLoaded(false);
+            } else if (tab === 'attendance') {
+              syncTeacherQrAttendanceAccess(false, false);
+            } else if (tab === 'parentReviews') {
+              refreshParentReviews(false);
+            }
+            setManagerTab(tab);
+          };
+
+          const activeMenuMeta =
+            managerTab === 'home'
+              ? null
+              : MANAGER_MENU_ITEMS.find((m) => m.id === managerTab) || null;
+
+          const activeModuleBadge =
+            managerTab === 'students'
+              ? `${filteredStudents.length}`
+              : managerTab === 'homework'
+              ? `${filteredHomework.length}`
+              : managerTab === 'behavior'
+              ? `${filteredManagerBehavior.length}`
+              : managerTab === 'fees'
+              ? `${filteredManagerFees.length}`
+              : managerTab === 'users'
+              ? `${filteredUsers.length}`
+              : managerTab === 'staffAttendance'
+              ? 'लाइव'
+              : managerTab === 'vanTracking'
+              ? 'GPS'
+              : managerTab === 'attendance'
+              ? 'कैलेंडर'
+              : managerTab === 'notices'
+              ? `${schoolNotices.length}`
+              : managerTab === 'autoTransport'
+              ? 'रूट्स'
+              : managerTab === 'teacherPerformance'
+              ? '100 Pts'
+              : managerTab === 'reportCards'
+              ? 'PDF'
+              : managerTab === 'hallPass'
+              ? '9/A4'
+              : managerTab === 'parentReviews'
+              ? `${parentReviewsList.length}`
+              : '';
+
+          return (
+          <div className="space-y-5 animate-fadeIn">
+            {/* Flush Left-Wall Slide-Out Navigation Drawer */}
+            <ManagerLeftSidebar
+              isOpen={isManagerMenuOpen}
+              onClose={() => setIsManagerMenuOpen(false)}
+              activeTab={managerTab}
+              onSelectTab={handleSelectManagerTab}
+              managerName={managerUser.Name}
+              onOpenQrAttendance={() => {
+                handleSelectManagerTab('attendance');
+                setQuickQrAttendanceOpen(true);
               }}
-              onSaveBatchAttendance={handleSaveBatchBehavior}
+              onOpenQrSearch={() => {
+                setQrScannerTarget('managerStudents');
+                setQrScannerSubtitle('प्रबंधक: छात्र खोजें (QR स्कैन, नाम, ID या मोबाइल द्वारा)');
+                setQrScannerOpen(true);
+              }}
+              onOpenSheetSync={() => setSheetSyncModalOpen(true)}
+              counts={{
+                students: filteredStudents.length,
+                homework: filteredHomework.length,
+                behavior: filteredManagerBehavior.length,
+                fees: filteredManagerFees.length,
+                users: filteredUsers.length,
+                notices: schoolNotices.length,
+                parentReviews: parentReviewsList.length,
+                reportCardsPending:
+                  reportCardWorkflow.pendingMarks.length +
+                  Object.keys(reportCardWorkflow.pendingMeta || {}).length,
+              }}
             />
 
-            {/* Manager Compact Active Feature Bar with 3-Line Hamburger Trigger */}
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-2 sm:p-2.5 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 min-w-0">
-                {/* 3-Line Hamburger Menu Toggle Button */}
+            {/* Single Left-Wall Menu Trigger + Active Context Bar */}
+            <div className="sticky top-2 z-[90] flex flex-wrap items-center justify-between gap-2 bg-white/95 backdrop-blur-xs rounded-2xl shadow-xs border border-slate-200 pr-3 py-1.5 pl-0">
+              <div className="flex items-center gap-2.5 min-w-0">
                 <button
                   type="button"
+                  id="manager-left-wall-trigger"
                   onClick={() => setIsManagerMenuOpen(true)}
-                  className="px-3.5 py-2 bg-gradient-to-r from-[#0c2340] via-[#10316b] to-[#0c2340] hover:from-[#10316b] hover:to-[#0c2340] text-amber-300 font-black text-xs sm:text-sm rounded-xl flex items-center gap-2 shadow-md cursor-pointer transition-all active:scale-95 border border-amber-400/40 shrink-0"
-                  title="सभी 12 प्रबंधन सुविधाएं खोलें (3-Line Menu)"
+                  className="-ml-4 sm:-ml-6 lg:-ml-8 pl-4 sm:pl-5 pr-3.5 py-2.5 bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-black text-xs sm:text-sm rounded-r-xl rounded-l-none flex items-center gap-2 shadow-md border border-l-0 border-amber-400/50 cursor-pointer transition-colors whitespace-nowrap shrink-0"
+                  title="प्रबंधन मेन्यू खोलें"
                 >
-                  <i className="fa-solid fa-bars text-sm"></i>
-                  <span>मेन्यू (12 सुविधाएं)</span>
-                  <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+                  <i className="fa-solid fa-ellipsis-vertical text-sm" aria-hidden="true"></i>
+                  <span>मेनू</span>
                 </button>
 
-                {/* Currently Active Feature Indicator */}
-                <div className="flex items-center gap-2 min-w-0 pl-1 border-l border-slate-200">
-                  <div className="flex items-center gap-1.5 truncate">
-                    <span className="text-xs sm:text-sm text-slate-900 font-black truncate flex items-center gap-1.5">
-                      {managerTab === 'students' && <><i className="fa-solid fa-users text-blue-900"></i> All Students Records</>}
-                      {managerTab === 'homework' && <><i className="fa-solid fa-book-open text-indigo-700"></i> Homework Submissions</>}
-                      {managerTab === 'behavior' && <><i className="fa-solid fa-clipboard-check text-purple-700"></i> Behavior Logs</>}
-                      {managerTab === 'fees' && <><i className="fa-solid fa-file-invoice-dollar text-emerald-700"></i> Fee Collection & Accounts</>}
-                      {managerTab === 'users' && <><i className="fa-solid fa-id-card-clip text-amber-700"></i> Staff & Users Sheet</>}
-                      {managerTab === 'staffAttendance' && <><i className="fa-solid fa-clipboard-user text-emerald-700"></i> स्टाफ उपस्थिति</>}
-                      {managerTab === 'vanTracking' && <><i className="fa-solid fa-van-shuttle text-amber-600"></i> वैन लाइव ट्रैकिंग</>}
-                      {managerTab === 'attendance' && <><i className="fa-solid fa-calendar-check text-emerald-700"></i> उपस्थिति व अनुपस्थित अलर्ट</>}
-                      {managerTab === 'notices' && <><i className="fa-solid fa-bullhorn text-amber-600"></i> सूचना पट्ट व अवकाश</>}
-                      {managerTab === 'autoTransport' && <><i className="fa-solid fa-route text-amber-700"></i> ऑटो व रूट फीस</>}
-                      {managerTab === 'teacherPerformance' && <><i className="fa-solid fa-trophy text-amber-600"></i> 🏆 शिक्षक लीडरबोर्ड (100 Pts)</>}
-                      {managerTab === 'reportCards' && <><i className="fa-solid fa-graduation-cap text-indigo-800"></i> 🎓 मार्कशीट व रिपोर्ट कार्ड (PDF)</>}
-                      {managerTab === 'hallPass' && <><i className="fa-solid fa-ticket text-blue-900"></i> परीक्षा हॉल पास (9/A4 पेज)</>}
-                      {managerTab === 'parentReviews' && <><i className="fa-solid fa-star text-amber-500"></i> पैरेंट रिव्यू व मार्केटिंग पोस्टर</>}
-                    </span>
-                    <span className="px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-900 text-[10px] font-black shrink-0 border border-blue-200">
-                      {managerTab === 'students' && `${filteredStudents.length}`}
-                      {managerTab === 'homework' && `${filteredHomework.length}`}
-                      {managerTab === 'behavior' && `${filteredManagerBehavior.length}`}
-                      {managerTab === 'fees' && `${filteredManagerFees.length}`}
-                      {managerTab === 'users' && `${filteredUsers.length}`}
-                      {managerTab === 'staffAttendance' && 'लाइव'}
-                      {managerTab === 'vanTracking' && 'GPS'}
-                      {managerTab === 'attendance' && 'कैलेंडर'}
-                      {managerTab === 'notices' && `${schoolNotices.length}`}
-                      {managerTab === 'autoTransport' && 'रूट्स'}
-                      {managerTab === 'teacherPerformance' && '100 Pts'}
-                      {managerTab === 'reportCards' && 'PDF'}
-                      {managerTab === 'hallPass' && '9/A4'}
-                      {managerTab === 'parentReviews' && `${parentReviewsList.length}`}
-                    </span>
-                  </div>
+                {managerTab !== 'home' && (
+                  <button
+                    type="button"
+                    onClick={() => handleSelectManagerTab('home')}
+                    className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-xl flex items-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap shrink-0"
+                    title="प्रबंधक होम पेज (5 कार्ड्स) पर वापस जाएं"
+                  >
+                    <i className="fa-solid fa-arrow-left text-[11px]" aria-hidden="true"></i>
+                    <span>होम पेज</span>
+                  </button>
+                )}
+
+                <div className="flex items-center gap-2 min-w-0 pl-1.5 border-l border-slate-200">
+                  {managerTab === 'home' ? (
+                    <div className="min-w-0">
+                      <h2 className="text-xs sm:text-sm font-black text-slate-900 truncate flex items-center gap-1.5">
+                        <i className="fa-solid fa-house text-[#0c2340]" aria-hidden="true"></i>
+                        <span>प्रबंधक होम पेज (Manager Overview)</span>
+                      </h2>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-xs sm:text-sm text-slate-900 font-black truncate flex items-center gap-1.5">
+                        {activeMenuMeta && (
+                          <i className={`${activeMenuMeta.iconClass} ${activeMenuMeta.accentText}`} aria-hidden="true"></i>
+                        )}
+                        <span className="truncate">{activeMenuMeta?.title || managerTab}</span>
+                      </span>
+                      {activeModuleBadge && (
+                        <span className="text-xs font-black text-[#0c2340] tabular-nums whitespace-nowrap shrink-0">
+                          · {activeModuleBadge}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
               <div className="flex items-center gap-1.5 shrink-0">
                 <button
                   type="button"
-                  onClick={() => setIsManagerMenuOpen(true)}
-                  className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-950 border border-amber-300 rounded-xl text-xs font-black flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
-                  title="अन्य फ़ंक्शन चुनें"
-                >
-                  <i className="fa-solid fa-arrow-right-arrow-left text-[10px]"></i>
-                  <span className="hidden sm:inline">बदलें</span>
-                </button>
-
-                <button
-                  type="button"
                   onClick={() => {
-                    setManagerTab('attendance');
+                    handleSelectManagerTab('attendance');
                     setQuickQrAttendanceOpen(true);
                   }}
-                  className="px-2.5 sm:px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-xs transition-all cursor-pointer active:scale-95"
+                  className="px-2.5 sm:px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer whitespace-nowrap shrink-0"
                   title="QR कोड स्कैन करते ही तुरंत छात्र की हाजिरी दर्ज करें (केवल मैनेजर)"
                 >
-                  <i className="fa-solid fa-camera text-xs text-amber-300"></i>
+                  <i className="fa-solid fa-camera text-xs text-amber-300" aria-hidden="true"></i>
                   <span className="hidden sm:inline">QR हाजिरी</span>
                 </button>
 
@@ -13681,572 +13867,107 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     setQrScannerSubtitle('प्रबंधक: छात्र खोजें (QR स्कैन, नाम, ID या मोबाइल द्वारा)');
                     setQrScannerOpen(true);
                   }}
-                  className="px-3 py-1.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 rounded-xl text-xs font-black flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
+                  className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 rounded-xl text-xs font-black flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer whitespace-nowrap shrink-0"
                   title="छात्र खोजें / QR स्कैनर"
                 >
-                  <i className="fa-solid fa-qrcode text-xs"></i>
+                  <i className="fa-solid fa-qrcode text-xs" aria-hidden="true"></i>
                   <span className="hidden sm:inline">QR खोजें</span>
                 </button>
               </div>
             </div>
 
-            {/* 3-LINE TOGGLE MENU MODAL / SLIDE-OVER DRAWER FOR MANAGER */}
-            {isManagerMenuOpen && (
-              <div
-                onClick={(e) => {
-                  if (e.target === e.currentTarget) setIsManagerMenuOpen(false);
-                }}
-                className="fixed inset-0 z-[120] flex items-start justify-center p-3 sm:p-5 bg-slate-950/80 backdrop-blur-sm overflow-y-auto animate-fadeIn"
-              >
-                <div className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden my-auto flex flex-col max-h-[90vh]">
-                  {/* Header */}
-                  <div className="bg-gradient-to-r from-[#0c2340] via-[#10316b] to-[#0c2340] px-5 py-4 text-white flex items-center justify-between shrink-0 shadow-md">
-                    <div className="flex items-center gap-3">
-                      <span className="w-10 h-10 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center font-black text-lg shadow-md">
-                        <i className="fa-solid fa-bars"></i>
-                      </span>
-                      <div>
-                        <h3 className="font-black text-base sm:text-lg text-amber-300">
-                          प्रबंधन सुविधाएं मेन्यू (All Manager Functions)
-                        </h3>
-                        <p className="text-xs text-blue-200">
-                          किसी भी फ़ंक्शन पर क्लिक करें — स्क्रीन पर वही सेक्शन खुल जाएगा
-                        </p>
-                      </div>
+            {/* DEDICATED MANAGER HOME PAGE: 5 Overview Cards shown ONLY when managerTab === 'home' */}
+            {managerTab === 'home' && (
+              <div className="space-y-6 animate-fadeIn">
+                <Suspense
+                  fallback={
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+                      <div className="h-36 rounded-2xl bg-white border border-slate-200 animate-pulse" />
+                      <div className="h-36 rounded-2xl bg-white border border-slate-200 animate-pulse" />
+                      <div className="h-36 rounded-2xl bg-white border border-slate-200 animate-pulse" />
+                      <div className="h-36 rounded-2xl bg-white border border-slate-200 animate-pulse" />
+                      <div className="h-36 rounded-2xl bg-white border border-slate-200 animate-pulse" />
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setIsManagerMenuOpen(false)}
-                      className="w-9 h-9 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center font-black cursor-pointer transition-colors"
-                    >
-                      ✕
-                    </button>
+                  }
+                >
+                  <ManagerOverviewModals
+                    students={students}
+                    feeRecords={feeRecords}
+                    feeBalances={feeBalances}
+                    behaviorList={behaviorList}
+                    classMap={classMap}
+                    getClassName={getClassName}
+                    getStudentPhoto={getStudentPhoto}
+                    loadingStudents={loadingStudents}
+                    loadingFees={loadingFees}
+                    loadingBehavior={loadingBehavior}
+                    onSelectStudent={(st) => setSelectedStudentDetail(st)}
+                    onOpenAddStudent={() => setAddStudentModalOpen(true)}
+                    onSyncStudent={syncStudentToSheet}
+                    onSyncAllPending={syncAllPendingStudentsToSheet}
+                    onOpenSyncSettings={() => setSheetSyncModalOpen(true)}
+                    onDeleteStudent={handleDeleteStudent}
+                    onRequestDeleteStudent={(st) => setStudentToDelete(st)}
+                    onOpenAttendanceCalendar={(st) => {
+                      if (st) setSelectedStudent(st);
+                      setAttendanceCalendarMode('calendar');
+                      setIsAttendanceCalendarOpen(true);
+                    }}
+                    onSaveBatchAttendance={handleSaveBatchBehavior}
+                  />
+                </Suspense>
+
+                {/* Essential Daily Shortcuts on Home Page */}
+                <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 space-y-3">
+                  <div>
+                    <h3 className="text-sm sm:text-base font-black text-slate-900">
+                      आज के मुख्य कार्य (Quick Access)
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      तुरंत खोलने के लिए किसी भी कार्ड पर क्लिक करें
+                    </p>
                   </div>
 
-                  {/* Drawer Body - Categorized Grid */}
-                  <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5">
-                    {/* CATEGORY 1: STUDENTS & ACADEMICS */}
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2 text-xs font-black text-slate-500 uppercase tracking-wider px-1">
-                        <i className="fa-solid fa-graduation-cap text-blue-900"></i>
-                        <span>1. छात्र एवं शिक्षण (Students & Academics)</span>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                        {/* Students */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    {(
+                      [
+                        'hallPass',
+                        'attendance',
+                        'fees',
+                        'students',
+                      ] as Array<Exclude<ManagerTabId, 'home'>>
+                    ).map((shortcutId) => {
+                      const item = MANAGER_MENU_ITEMS.find((m) => m.id === shortcutId);
+                      if (!item) return null;
+                      return (
                         <button
+                          key={item.id}
                           type="button"
-                          onClick={() => {
-                            setManagerTab('students');
-                            setIsManagerMenuOpen(false);
-                          }}
-                          className={`p-3 rounded-2xl border text-left transition-all flex items-center justify-between gap-3 cursor-pointer ${
-                            managerTab === 'students'
-                              ? 'bg-blue-50 border-blue-900 ring-2 ring-blue-900/20 shadow-sm'
-                              : 'bg-white hover:bg-slate-50 border-slate-200'
-                          }`}
+                          onClick={() => handleSelectManagerTab(item.id)}
+                          className="p-3.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 text-left transition-colors flex items-center justify-between gap-3 cursor-pointer"
                         >
                           <div className="flex items-center gap-3 min-w-0">
-                            <span className="w-10 h-10 rounded-xl bg-blue-100 text-blue-900 flex items-center justify-center text-lg shrink-0">
-                              <i className="fa-solid fa-users"></i>
+                            <span
+                              className={`w-10 h-10 rounded-xl ${item.accentBg} ${item.accentText} flex items-center justify-center text-base shrink-0`}
+                            >
+                              <i className={item.iconClass} aria-hidden="true"></i>
                             </span>
                             <div className="min-w-0">
-                              <h4 className="font-black text-xs sm:text-sm text-slate-900 truncate">
-                                All Students Records
-                              </h4>
-                              <p className="text-[11px] text-slate-500 truncate">छात्र प्रोफाइल, क्लास व डायरेक्टरी</p>
+                              <div className="font-bold text-xs sm:text-sm text-slate-900 truncate">
+                                {item.title}
+                              </div>
+                              <div className="text-[11px] text-slate-500 truncate">
+                                {item.subtitle}
+                              </div>
                             </div>
                           </div>
-                          <span className={`px-2 py-0.5 rounded-lg text-xs font-black shrink-0 ${
-                            managerTab === 'students' ? 'bg-blue-900 text-white' : 'bg-slate-100 text-slate-700'
-                          }`}>
-                            {filteredStudents.length}
-                          </span>
+                          <i
+                            className="fa-solid fa-chevron-right text-xs text-slate-400 shrink-0"
+                            aria-hidden="true"
+                          ></i>
                         </button>
-
-                        {/* Homework */}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setManagerTab('homework');
-                            setIsManagerMenuOpen(false);
-                          }}
-                          className={`p-3 rounded-2xl border text-left transition-all flex items-center justify-between gap-3 cursor-pointer ${
-                            managerTab === 'homework'
-                              ? 'bg-indigo-50 border-indigo-900 ring-2 ring-indigo-900/20 shadow-sm'
-                              : 'bg-white hover:bg-slate-50 border-slate-200'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <span className="w-10 h-10 rounded-xl bg-indigo-100 text-indigo-900 flex items-center justify-center text-lg shrink-0">
-                              <i className="fa-solid fa-book-open"></i>
-                            </span>
-                            <div className="min-w-0">
-                              <h4 className="font-black text-xs sm:text-sm text-slate-900 truncate">
-                                Homework Submissions
-                              </h4>
-                              <p className="text-[11px] text-slate-500 truncate">गृहकार्य, डायरी व चेकिंग फोटो</p>
-                            </div>
-                          </div>
-                          <span className={`px-2 py-0.5 rounded-lg text-xs font-black shrink-0 ${
-                            managerTab === 'homework' ? 'bg-indigo-900 text-white' : 'bg-slate-100 text-slate-700'
-                          }`}>
-                            {filteredHomework.length}
-                          </span>
-                        </button>
-
-                        {/* Behavior */}
-                        <button
-                          type="button"
-                          id="manager-tab-behavior"
-                          onClick={() => {
-                            setManagerTab('behavior');
-                            setIsManagerMenuOpen(false);
-                          }}
-                          className={`p-3 rounded-2xl border text-left transition-all flex items-center justify-between gap-3 cursor-pointer ${
-                            managerTab === 'behavior'
-                              ? 'bg-purple-50 border-purple-900 ring-2 ring-purple-900/20 shadow-sm'
-                              : 'bg-white hover:bg-slate-50 border-slate-200'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <span className="w-10 h-10 rounded-xl bg-purple-100 text-purple-900 flex items-center justify-center text-lg shrink-0">
-                              <i className="fa-solid fa-clipboard-check"></i>
-                            </span>
-                            <div className="min-w-0">
-                              <h4 className="font-black text-xs sm:text-sm text-slate-900 truncate">
-                                Behavior Logs
-                              </h4>
-                              <p className="text-[11px] text-slate-500 truncate">वर्दी, नाखून, व्यवहार व अनुशासन</p>
-                            </div>
-                          </div>
-                          <span className={`px-2 py-0.5 rounded-lg text-xs font-black shrink-0 ${
-                            managerTab === 'behavior' ? 'bg-purple-900 text-white' : 'bg-slate-100 text-slate-700'
-                          }`}>
-                            {filteredManagerBehavior.length}
-                          </span>
-                        </button>
-
-                        {/* Teacher Performance */}
-                        <button
-                          type="button"
-                          id="manager-tab-teacher-performance"
-                          onClick={() => {
-                            setManagerTab('teacherPerformance');
-                            setIsManagerMenuOpen(false);
-                          }}
-                          className={`p-3 rounded-2xl border text-left transition-all flex items-center justify-between gap-3 cursor-pointer ${
-                            managerTab === 'teacherPerformance'
-                              ? 'bg-amber-50 border-amber-600 ring-2 ring-amber-500/30 shadow-sm'
-                              : 'bg-white hover:bg-slate-50 border-slate-200'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <span className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center text-lg shrink-0">
-                              <i className="fa-solid fa-trophy"></i>
-                            </span>
-                            <div className="min-w-0">
-                              <h4 className="font-black text-xs sm:text-sm text-slate-900 truncate">
-                                🏆 शिक्षक लीडरबोर्ड
-                              </h4>
-                              <p className="text-[11px] text-slate-500 truncate">सिलेबस प्लानर व Teacher of the Year</p>
-                            </div>
-                          </div>
-                          <span className="px-2 py-0.5 rounded-lg text-xs font-black bg-amber-400 text-slate-950 shrink-0">
-                            100 Pts
-                          </span>
-                        </button>
-
-                        {/* Digital Report Cards & Exam Marks */}
-                        <button
-                          type="button"
-                          id="manager-tab-report-cards"
-                          onClick={() => {
-                            fetchReportCardAllData(true);
-                            setManagerTab('reportCards');
-                            setIsManagerMenuOpen(false);
-                          }}
-                          className={`p-3 rounded-2xl border text-left transition-all flex items-center justify-between gap-3 cursor-pointer ${
-                            managerTab === 'reportCards'
-                              ? 'bg-indigo-50 border-indigo-900 ring-2 ring-indigo-900/20 shadow-sm'
-                              : 'bg-white hover:bg-slate-50 border-slate-200'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <span className="w-10 h-10 rounded-xl bg-indigo-100 text-indigo-900 flex items-center justify-center text-lg shrink-0">
-                              <i className="fa-solid fa-graduation-cap"></i>
-                            </span>
-                            <div className="min-w-0">
-                              <h4 className="font-black text-xs sm:text-sm text-slate-900 truncate">
-                                🎓 मार्कशीट व रिपोर्ट कार्ड
-                              </h4>
-                              <p className="text-[11px] text-slate-500 truncate">
-                                तिमाही + छमाही + सालाना अंक व PDF
-                              </p>
-                            </div>
-                          </div>
-                          <span className="px-2 py-0.5 rounded-lg text-xs font-black bg-indigo-900 text-amber-300 shrink-0">
-                            {(reportCardWorkflow.pendingMarks.length + Object.keys(reportCardWorkflow.pendingMeta || {}).length) > 0
-                              ? `${reportCardWorkflow.pendingMarks.length + Object.keys(reportCardWorkflow.pendingMeta || {}).length} Pending`
-                              : 'PDF'}
-                          </span>
-                        </button>
-
-                        {/* Exam Hall Pass (9 per A4) */}
-                        <button
-                          type="button"
-                          id="manager-tab-hall-pass"
-                          onClick={() => {
-                            fetchHallPassConfigFromServer().then(setHallPassConfig);
-                            setManagerTab('hallPass');
-                            setIsManagerMenuOpen(false);
-                          }}
-                          className={`p-3 rounded-2xl border text-left transition-all flex items-center justify-between gap-3 cursor-pointer ${
-                            managerTab === 'hallPass'
-                              ? 'bg-blue-50 border-blue-900 ring-2 ring-blue-900/20 shadow-sm'
-                              : 'bg-white hover:bg-slate-50 border-slate-200'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <span className="w-10 h-10 rounded-xl bg-blue-100 text-blue-900 flex items-center justify-center text-lg shrink-0">
-                              <i className="fa-solid fa-ticket"></i>
-                            </span>
-                            <div className="min-w-0">
-                              <h4 className="font-black text-xs sm:text-sm text-slate-900 truncate">
-                                परीक्षा हॉल पास व सीटिंग प्लान
-                              </h4>
-                              <p className="text-[11px] text-slate-500 truncate">
-                                9 पास/पेज · Datesheet · 6-रूम सीटिंग प्लान
-                              </p>
-                            </div>
-                          </div>
-                          <span className="px-2 py-0.5 rounded-lg text-xs font-black bg-[#0c2340] text-amber-300 shrink-0">
-                            9/A4
-                          </span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* CATEGORY 2: FEES & FINANCIALS */}
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2 text-xs font-black text-slate-500 uppercase tracking-wider px-1">
-                        <i className="fa-solid fa-indian-rupee-sign text-emerald-700"></i>
-                        <span>2. शुल्क व वित्तीय प्रबंधन (Fees & Accounts)</span>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                        {/* Fees */}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setManagerTab('fees');
-                            setIsManagerMenuOpen(false);
-                          }}
-                          className={`p-3 rounded-2xl border text-left transition-all flex items-center justify-between gap-3 cursor-pointer ${
-                            managerTab === 'fees'
-                              ? 'bg-emerald-50 border-emerald-900 ring-2 ring-emerald-900/20 shadow-sm'
-                              : 'bg-white hover:bg-slate-50 border-slate-200'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <span className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center text-lg shrink-0">
-                              <i className="fa-solid fa-file-invoice-dollar"></i>
-                            </span>
-                            <div className="min-w-0">
-                              <h4 className="font-black text-xs sm:text-sm text-slate-900 truncate">
-                                Fee Collection & Accounts
-                              </h4>
-                              <p className="text-[11px] text-slate-500 truncate">शुल्क संग्रह, बकाया व रसीदें</p>
-                            </div>
-                          </div>
-                          <span className={`px-2 py-0.5 rounded-lg text-xs font-black shrink-0 ${
-                            managerTab === 'fees' ? 'bg-emerald-800 text-white' : 'bg-slate-100 text-slate-700'
-                          }`}>
-                            {filteredManagerFees.length}
-                          </span>
-                        </button>
-
-                        {/* Auto Transport Fee */}
-                        <button
-                          type="button"
-                          id="manager-tab-auto-transport"
-                          onClick={() => {
-                            setManagerTab('autoTransport');
-                            setIsManagerMenuOpen(false);
-                          }}
-                          className={`p-3 rounded-2xl border text-left transition-all flex items-center justify-between gap-3 cursor-pointer ${
-                            managerTab === 'autoTransport'
-                              ? 'bg-amber-50 border-amber-900 ring-2 ring-amber-900/20 shadow-sm'
-                              : 'bg-white hover:bg-slate-50 border-slate-200'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <span className="w-10 h-10 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center text-lg shrink-0">
-                              <i className="fa-solid fa-route"></i>
-                            </span>
-                            <div className="min-w-0">
-                              <h4 className="font-black text-xs sm:text-sm text-slate-900 truncate">
-                                ऑटो व रूट फीस
-                              </h4>
-                              <p className="text-[11px] text-slate-500 truncate">वाहन किराया, रूट व स्टॉपेज प्रबंधन</p>
-                            </div>
-                          </div>
-                          <span className="px-2 py-0.5 rounded-lg text-xs font-black bg-slate-100 text-slate-700 shrink-0">
-                            रूट्स
-                          </span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* CATEGORY 3: STAFF & ATTENDANCE */}
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2 text-xs font-black text-slate-500 uppercase tracking-wider px-1">
-                        <i className="fa-solid fa-user-tie text-purple-700"></i>
-                        <span>3. स्टाफ व उपस्थिति (Staff & Attendance)</span>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                        {/* Staff Users */}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setManagerTab('users');
-                            setIsManagerMenuOpen(false);
-                          }}
-                          className={`p-3 rounded-2xl border text-left transition-all flex items-center justify-between gap-3 cursor-pointer ${
-                            managerTab === 'users'
-                              ? 'bg-amber-50 border-amber-900 ring-2 ring-amber-900/20 shadow-sm'
-                              : 'bg-white hover:bg-slate-50 border-slate-200'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <span className="w-10 h-10 rounded-xl bg-amber-100 text-amber-900 flex items-center justify-center text-lg shrink-0">
-                              <i className="fa-solid fa-id-card-clip"></i>
-                            </span>
-                            <div className="min-w-0">
-                              <h4 className="font-black text-xs sm:text-sm text-slate-900 truncate">
-                                Staff & Users Sheet
-                              </h4>
-                              <p className="text-[11px] text-slate-500 truncate">शिक्षक व कर्मचारी यूजर आईडी</p>
-                            </div>
-                          </div>
-                          <span className={`px-2 py-0.5 rounded-lg text-xs font-black shrink-0 ${
-                            managerTab === 'users' ? 'bg-amber-900 text-white' : 'bg-slate-100 text-slate-700'
-                          }`}>
-                            {filteredUsers.length}
-                          </span>
-                        </button>
-
-                        {/* Staff Attendance */}
-                        <button
-                          type="button"
-                          id="manager-tab-staff-attendance"
-                          onClick={() => {
-                            setManagerTab('staffAttendance');
-                            setIsManagerMenuOpen(false);
-                          }}
-                          className={`p-3 rounded-2xl border text-left transition-all flex items-center justify-between gap-3 cursor-pointer ${
-                            managerTab === 'staffAttendance'
-                              ? 'bg-emerald-50 border-emerald-900 ring-2 ring-emerald-900/20 shadow-sm'
-                              : 'bg-white hover:bg-slate-50 border-slate-200'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <span className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center text-lg shrink-0">
-                              <i className="fa-solid fa-clipboard-user"></i>
-                            </span>
-                            <div className="min-w-0">
-                              <h4 className="font-black text-xs sm:text-sm text-slate-900 truncate">
-                                स्टाफ उपस्थिति
-                              </h4>
-                              <p className="text-[11px] text-slate-500 truncate">शिक्षक व स्टाफ दैनिक हाजिरी रजिस्टर</p>
-                            </div>
-                          </div>
-                          <span className="px-2 py-0.5 rounded-lg text-xs font-black bg-emerald-100 text-emerald-800 shrink-0">
-                            हाजिरी
-                          </span>
-                        </button>
-
-                        {/* Student Attendance & Absent WhatsApp */}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            syncTeacherQrAttendanceAccess(true, false);
-                            setManagerTab('attendance');
-                            setIsManagerMenuOpen(false);
-                          }}
-                          className={`p-3 rounded-2xl border text-left transition-all flex items-center justify-between gap-3 cursor-pointer sm:col-span-2 ${
-                            managerTab === 'attendance'
-                              ? 'bg-emerald-50 border-emerald-900 ring-2 ring-emerald-900/20 shadow-sm'
-                              : 'bg-white hover:bg-slate-50 border-slate-200'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <span className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center text-lg shrink-0">
-                              <i className="fa-solid fa-calendar-check"></i>
-                            </span>
-                            <div className="min-w-0">
-                              <h4 className="font-black text-xs sm:text-sm text-slate-900 truncate">
-                                उपस्थिति व अनुपस्थित अलर्ट (Attendance & Absent)
-                              </h4>
-                              <p className="text-[11px] text-slate-500 truncate">तुरंत QR स्कैन हाजिरी, मासिक कैलेंडर, अवकाश व WhatsApp अलर्ट</p>
-                            </div>
-                          </div>
-                          <span className="px-2 py-0.5 rounded-lg text-xs font-black bg-emerald-100 text-emerald-800 shrink-0">
-                            QR हाजिरी + अलर्ट
-                          </span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* CATEGORY 4: TRANSPORT & NOTICES */}
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2 text-xs font-black text-slate-500 uppercase tracking-wider px-1">
-                        <i className="fa-solid fa-van-shuttle text-amber-600"></i>
-                        <span>4. परिवहन, सूचना व खोज (Transport & Notices)</span>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                        {/* Van Tracking */}
-                        <button
-                          type="button"
-                          id="manager-tab-van-tracking"
-                          onClick={() => {
-                            setManagerTab('vanTracking');
-                            setIsManagerMenuOpen(false);
-                          }}
-                          className={`p-3 rounded-2xl border text-left transition-all flex items-center justify-between gap-3 cursor-pointer ${
-                            managerTab === 'vanTracking'
-                              ? 'bg-amber-50 border-amber-900 ring-2 ring-amber-900/20 shadow-sm'
-                              : 'bg-white hover:bg-slate-50 border-slate-200'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <span className="w-10 h-10 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center text-lg shrink-0">
-                              <i className="fa-solid fa-van-shuttle"></i>
-                            </span>
-                            <div className="min-w-0">
-                              <h4 className="font-black text-xs sm:text-sm text-slate-900 truncate flex items-center gap-1.5">
-                                <span>वैन लाइव ट्रैकिंग</span>
-                                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                              </h4>
-                              <p className="text-[11px] text-slate-500 truncate">GPS लाइव लोकेशन व स्टॉपेज दूरी</p>
-                            </div>
-                          </div>
-                          <span className="px-2 py-0.5 rounded-lg text-xs font-black bg-emerald-100 text-emerald-800 shrink-0">
-                            Live GPS
-                          </span>
-                        </button>
-
-                        {/* Notices */}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setManagerTab('notices');
-                            setIsManagerMenuOpen(false);
-                          }}
-                          className={`p-3 rounded-2xl border text-left transition-all flex items-center justify-between gap-3 cursor-pointer ${
-                            managerTab === 'notices'
-                              ? 'bg-orange-50 border-orange-900 ring-2 ring-orange-900/20 shadow-sm'
-                              : 'bg-white hover:bg-slate-50 border-slate-200'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <span className="w-10 h-10 rounded-xl bg-orange-100 text-orange-800 flex items-center justify-center text-lg shrink-0">
-                              <i className="fa-solid fa-bullhorn"></i>
-                            </span>
-                            <div className="min-w-0">
-                              <h4 className="font-black text-xs sm:text-sm text-slate-900 truncate">
-                                सूचना पट्ट व अवकाश (Notices)
-                              </h4>
-                              <p className="text-[11px] text-slate-500 truncate">विद्यालय परिपत्र व आधिकारिक घोषणाएं</p>
-                            </div>
-                          </div>
-                          <span className="px-2 py-0.5 rounded-lg text-xs font-black bg-slate-100 text-slate-700 shrink-0">
-                            {schoolNotices.length}
-                          </span>
-                        </button>
-
-                        {/* Parent Reviews & Marketing Poster Studio */}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            refreshParentReviews(false);
-                            setManagerTab('parentReviews');
-                            setIsManagerMenuOpen(false);
-                          }}
-                          className={`p-3 rounded-2xl border text-left transition-all flex items-center justify-between gap-3 cursor-pointer sm:col-span-2 ${
-                            managerTab === 'parentReviews'
-                              ? 'bg-emerald-50 border-emerald-900 ring-2 ring-emerald-900/20 shadow-sm'
-                              : 'bg-white hover:bg-slate-50 border-slate-200'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <span className="w-10 h-10 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center text-lg shrink-0">
-                              <i className="fa-solid fa-star"></i>
-                            </span>
-                            <div className="min-w-0">
-                              <h4 className="font-black text-xs sm:text-sm text-slate-900 truncate">
-                                ⭐ पैरेंट रिव्यू व मार्केटिंग पोस्टर स्टूडियो
-                              </h4>
-                              <p className="text-[11px] text-slate-500 truncate">अभिभावक समीक्षा संग्रह, WhatsApp आमंत्रण व 1-क्लिक एडमिशन पोस्टर</p>
-                            </div>
-                          </div>
-                          <span className="px-2 py-0.5 rounded-lg text-xs font-black bg-emerald-100 text-emerald-800 shrink-0">
-                            {parentReviewsList.length} रिव्यू
-                          </span>
-                        </button>
-
-                        {/* QR Scanner Quick Button */}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setIsManagerMenuOpen(false);
-                            setQrScannerTarget('managerStudents');
-                            setQrScannerSubtitle('प्रबंधक: छात्र खोजें (QR स्कैन, नाम, ID या मोबाइल द्वारा)');
-                            setQrScannerOpen(true);
-                          }}
-                          className="p-3 rounded-2xl border border-amber-300 bg-gradient-to-r from-amber-50 to-amber-100/70 hover:from-amber-100 hover:to-amber-200 text-left transition-all flex items-center justify-between gap-3 cursor-pointer sm:col-span-2"
-                        >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <span className="w-10 h-10 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center text-lg shrink-0 shadow-xs">
-                              <i className="fa-solid fa-qrcode"></i>
-                            </span>
-                            <div className="min-w-0">
-                              <h4 className="font-black text-xs sm:text-sm text-slate-950 truncate">
-                                🔍 छात्र खोजें / QR स्कैनर
-                              </h4>
-                              <p className="text-[11px] text-amber-900 truncate">कैमरे से छात्र का आईडी कार्ड स्कैन करें या नाम/मोबाइल से खोजें</p>
-                            </div>
-                          </div>
-                          <span className="px-2.5 py-1 rounded-xl text-xs font-black bg-amber-400 text-slate-950 shadow-2xs shrink-0">
-                            स्कैनर खोलें
-                          </span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Footer */}
-                  <div className="bg-slate-50 px-5 py-3 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500 shrink-0">
-                    <span>ई.वी.एस. पब्लिक स्कूल • प्रबंधन कंट्रोल पैनल</span>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsManagerMenuOpen(false);
-                          setSheetSyncModalOpen(true);
-                        }}
-                        className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded-xl font-bold cursor-pointer transition-colors border border-emerald-300 flex items-center gap-1.5"
-                        title="Google Sheets & Apps Script Sync सेटिंग्स"
-                      >
-                        <i className="fa-solid fa-file-excel text-emerald-600"></i>
-                        <span>Sheet Sync</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setIsManagerMenuOpen(false)}
-                        className="px-4 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-xl font-bold cursor-pointer transition-colors"
-                      >
-                        बंद करें
-                      </button>
-                    </div>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -15389,38 +15110,47 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
             {/* VIEW 4: FEE COLLECTION & ACCOUNTS */}
             {managerTab === 'fees' && (
-              <ManagerFeeDashboard
-                students={students}
-                feeRecords={feeRecords}
-                feeBalances={feeBalances}
-                classMap={classMap}
-                getClassName={getClassName}
-                getStudentPhoto={getStudentPhoto}
-                onOpenAddFeeModal={(studentId) => {
-                  setAddFeeInitialStudentId(studentId);
-                  setAddFeeModalOpen(true);
-                }}
-                onTriggerQRScan={() => {
-                  setQrScannerTarget('managerFees');
-                  setQrScannerSubtitle('प्रबंधक: फीस रिकॉर्ड खोजने हेतु छात्र का क्यूआर कोड स्कैन करें');
-                  setQrScannerOpen(true);
-                }}
-                onRefreshFees={fetchFeeCollection}
-                loadingFees={loadingFees}
-                managerName={managerUser?.Name || 'School Manager'}
-                initialSelectedStudent={managerSelectedFeeStudent}
-                onClearBalance={(st) => {
-                  const sId = String(st.Student_ID || '').toLowerCase();
-                  if (sId) {
-                    setFeeBalances((prev) => ({ ...prev, [sId]: 0 }));
-                  }
-                }}
-                onEditFee={handleEditFee}
-                onDeleteFee={handleDeleteFee}
-                onApproveUpiPayment={handleFeeAdded}
-                externalFamilyTarget={managerFamilyFeeTarget}
-                onClearExternalFamilyTarget={() => setManagerFamilyFeeTarget(null)}
-              />
+              <Suspense
+                fallback={
+                  <div className="bg-white rounded-3xl p-12 text-center text-slate-500 font-bold border border-slate-200">
+                    <i className="fa-solid fa-circle-notch fa-spin text-amber-500 mr-2 text-2xl"></i>
+                    <span>शुल्क संग्रह व लेखा डैशबोर्ड लोड हो रहा है...</span>
+                  </div>
+                }
+              >
+                <ManagerFeeDashboard
+                  students={students}
+                  feeRecords={feeRecords}
+                  feeBalances={feeBalances}
+                  classMap={classMap}
+                  getClassName={getClassName}
+                  getStudentPhoto={getStudentPhoto}
+                  onOpenAddFeeModal={(studentId) => {
+                    setAddFeeInitialStudentId(studentId);
+                    setAddFeeModalOpen(true);
+                  }}
+                  onTriggerQRScan={() => {
+                    setQrScannerTarget('managerFees');
+                    setQrScannerSubtitle('प्रबंधक: फीस रिकॉर्ड खोजने हेतु छात्र का क्यूआर कोड स्कैन करें');
+                    setQrScannerOpen(true);
+                  }}
+                  onRefreshFees={fetchFeeCollection}
+                  loadingFees={loadingFees}
+                  managerName={managerUser?.Name || 'School Manager'}
+                  initialSelectedStudent={managerSelectedFeeStudent}
+                  onClearBalance={(st) => {
+                    const sId = String(st.Student_ID || '').toLowerCase();
+                    if (sId) {
+                      setFeeBalances((prev) => ({ ...prev, [sId]: 0 }));
+                    }
+                  }}
+                  onEditFee={handleEditFee}
+                  onDeleteFee={handleDeleteFee}
+                  onApproveUpiPayment={handleFeeAdded}
+                  externalFamilyTarget={managerFamilyFeeTarget}
+                  onClearExternalFamilyTarget={() => setManagerFamilyFeeTarget(null)}
+                />
+              </Suspense>
             )}
 
             {/* VIEW 5: USERS & STAFF DIRECTORY (Users Sheet) */}
@@ -15857,27 +15587,45 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
             {/* VIEW 5B: STAFF ATTENDANCE (School QR & Staff Roster) */}
             {managerTab === 'staffAttendance' && (
-              <StaffAttendanceView
-                currentUser={managerUser || { Name: 'School Manager', Designation: 'Manager', User_ID: 'M1', Username: 'manager', Mobile_number: '' }}
-                allStaffUsers={usersList}
-                attendanceRecords={staffAttendanceList}
-                onOpenScanner={() => setIsStaffAttendanceScannerOpen(true)}
-                onOpenSchoolQr={() => setIsSchoolQrModalOpen(true)}
-                onManualCheckIn={handleStaffCheckInSuccess}
-                onRefresh={() => fetchStaffAttendance(false)}
-                isLoading={loadingStaffAttendance}
-                isManager={true}
-              />
+              <Suspense
+                fallback={
+                  <div className="bg-white rounded-3xl p-12 text-center text-slate-500 font-bold border border-slate-200">
+                    <i className="fa-solid fa-circle-notch fa-spin text-amber-500 mr-2 text-2xl"></i>
+                    <span>स्टाफ उपस्थिति रजिस्टर लोड हो रहा है...</span>
+                  </div>
+                }
+              >
+                <StaffAttendanceView
+                  currentUser={managerUser || { Name: 'School Manager', Designation: 'Manager', User_ID: 'M1', Username: 'manager', Mobile_number: '' }}
+                  allStaffUsers={usersList}
+                  attendanceRecords={staffAttendanceList}
+                  onOpenScanner={() => setIsStaffAttendanceScannerOpen(true)}
+                  onOpenSchoolQr={() => setIsSchoolQrModalOpen(true)}
+                  onManualCheckIn={handleStaffCheckInSuccess}
+                  onRefresh={() => fetchStaffAttendance(false)}
+                  isLoading={loadingStaffAttendance}
+                  isManager={true}
+                />
+              </Suspense>
             )}
 
             {/* VIEW 6: VAN LIVE TRACKING */}
             {managerTab === 'vanTracking' && (
-              <ManagerVanTracker
-                students={students}
-                users={usersList}
-                onOpenDriverPortal={() => setActiveTab('driver')}
-                getClassName={getClassName}
-              />
+              <Suspense
+                fallback={
+                  <div className="bg-white rounded-3xl p-12 text-center text-slate-500 font-bold border border-slate-200">
+                    <i className="fa-solid fa-circle-notch fa-spin text-amber-500 mr-2 text-2xl"></i>
+                    <span>वैन लाइव GPS ट्रैकर लोड हो रहा है...</span>
+                  </div>
+                }
+              >
+                <ManagerVanTracker
+                  students={students}
+                  users={usersList}
+                  onOpenDriverPortal={() => setActiveTab('driver')}
+                  getClassName={getClassName}
+                />
+              </Suspense>
             )}
 
             {/* VIEW 7: MANAGER ATTENDANCE & ABSENT ALERTS */}
@@ -16015,16 +15763,25 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 </div>
 
                 {/* Directly Embedded Attendance & Absent Management Hub */}
-                <AttendanceCalendarModal
-                  embedded={true}
-                  isOpen={true}
-                  selectedStudent={selectedStudent || previewQRStudent || students[0]}
-                  allStudents={students}
-                  behaviorRecords={behaviorList}
-                  initialMode={attendanceCalendarMode}
-                  schoolName="E.V.S. PUBLIC SCHOOL"
-                  onSelectStudent={(st) => setSelectedStudent(st)}
-                />
+                <Suspense
+                  fallback={
+                    <div className="bg-white rounded-3xl p-10 text-center text-slate-500 font-bold border border-slate-200">
+                      <i className="fa-solid fa-circle-notch fa-spin text-amber-500 mr-2 text-xl"></i>
+                      <span>उपस्थिति व अनुपस्थित हब लोड हो रहा है...</span>
+                    </div>
+                  }
+                >
+                  <AttendanceCalendarModal
+                    embedded={true}
+                    isOpen={true}
+                    selectedStudent={selectedStudent || previewQRStudent || students[0]}
+                    allStudents={students}
+                    behaviorRecords={behaviorList}
+                    initialMode={attendanceCalendarMode}
+                    schoolName="E.V.S. PUBLIC SCHOOL"
+                    onSelectStudent={(st) => setSelectedStudent(st)}
+                  />
+                </Suspense>
               </div>
             )}
 
@@ -16042,10 +15799,19 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
             {/* VIEW 9: VILLAGE ROUTE AUTO & TRANSPORT MANAGER */}
             {managerTab === 'autoTransport' && (
-              <VillageRouteAutoManager
-                students={students}
-                getClassName={getClassName}
-              />
+              <Suspense
+                fallback={
+                  <div className="bg-white rounded-3xl p-12 text-center text-slate-500 font-bold border border-slate-200">
+                    <i className="fa-solid fa-circle-notch fa-spin text-amber-500 mr-2 text-2xl"></i>
+                    <span>ऑटो व रूट फीस प्रबंधन लोड हो रहा है...</span>
+                  </div>
+                }
+              >
+                <VillageRouteAutoManager
+                  students={students}
+                  getClassName={getClassName}
+                />
+              </Suspense>
             )}
 
             {/* VIEW 10: TEACHER PERFORMANCE TRACKING, MONTHLY LEADERBOARD & TEACHER OF THE YEAR */}
@@ -16151,25 +15917,35 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               </Suspense>
             )}
           </div>
-        )}
+          );
+        })()}
 
         {/* ========================================================================= */}
         {/* 5. DRIVER PORTAL                                                          */}
         {/* ========================================================================= */}
         {activeTab === 'driver' && (
-          <DriverPortal
-            users={usersList}
-            initialBusId={driverMagicBusId}
-            autoStartFromLink={driverAutoTrackFromLink}
-            loggedDriverUser={driverUser}
-            onDriverLogin={handleDriverLogin}
-            onDriverLogout={handleDriverLogout}
-            onBackToHome={() => setActiveTab('home')}
-            onOpenManagerTracker={() => {
-              setActiveTab('manager');
-              setManagerTab('vanTracking');
-            }}
-          />
+          <Suspense
+            fallback={
+              <div className="bg-white rounded-3xl p-12 text-center text-slate-500 font-bold border border-slate-200">
+                <i className="fa-solid fa-circle-notch fa-spin text-amber-500 mr-2 text-2xl"></i>
+                <span>ड्राइवर पोर्टल लोड हो रहा है...</span>
+              </div>
+            }
+          >
+            <DriverPortal
+              users={usersList}
+              initialBusId={driverMagicBusId}
+              autoStartFromLink={driverAutoTrackFromLink}
+              loggedDriverUser={driverUser}
+              onDriverLogin={handleDriverLogin}
+              onDriverLogout={handleDriverLogout}
+              onBackToHome={() => setActiveTab('home')}
+              onOpenManagerTracker={() => {
+                setActiveTab('manager');
+                setManagerTab('vanTracking');
+              }}
+            />
+          </Suspense>
         )}
       </main>
 
@@ -16533,165 +16309,167 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       {/* ========================================================================= */}
       {/* ADD STUDENT MODAL (प्रबंधक: नया छात्र जोड़ें)                                */}
       {/* ========================================================================= */}
-      <AddStudentModal
-        isOpen={addStudentModalOpen}
-        onClose={() => {
-          setAddStudentModalOpen(false);
-          setStudentToEdit(null);
-        }}
-        onStudentAdded={handleStudentAdded}
-        existingStudents={students}
-        studentToEdit={studentToEdit}
-        classMap={classMap}
-        getClassName={getClassName}
-        onOpenSyncSettings={() => setSheetSyncModalOpen(true)}
-      />
+      <Suspense fallback={null}>
+        <AddStudentModal
+          isOpen={addStudentModalOpen}
+          onClose={() => {
+            setAddStudentModalOpen(false);
+            setStudentToEdit(null);
+          }}
+          onStudentAdded={handleStudentAdded}
+          existingStudents={students}
+          studentToEdit={studentToEdit}
+          classMap={classMap}
+          getClassName={getClassName}
+          onOpenSyncSettings={() => setSheetSyncModalOpen(true)}
+        />
 
-      {/* Google Sheets & Apps Script Sync Diagnostics Modal */}
-      <GoogleSheetSyncModal
-        isOpen={sheetSyncModalOpen}
-        onClose={() => {
-          setSheetSyncModalOpen(false);
-          // Sync all data to pick up any new updates
-          fetchStudents();
-        }}
-      />
+        {/* Google Sheets & Apps Script Sync Diagnostics Modal */}
+        <GoogleSheetSyncModal
+          isOpen={sheetSyncModalOpen}
+          onClose={() => {
+            setSheetSyncModalOpen(false);
+            // Sync all data to pick up any new updates
+            fetchStudents();
+          }}
+        />
 
-      {/* Classroom Bulk Attendance Register Modal */}
-      {bulkAttendanceModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-start justify-center p-2 sm:p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-5xl w-full max-h-[92vh] overflow-y-auto shadow-2xl border border-slate-200 p-4 sm:p-6 my-auto animate-scaleUp">
-            <ClassroomBulkAttendanceRegister
-              students={students}
-              behaviorRecords={behaviorList}
-              classOptions={classOptions}
-              initialClass={bulkAttendanceInitialClass || classOptions[0] || '1'}
-              teacherName={managerUser?.Name || teacherUser?.Name || 'School Manager'}
-              getClassName={getClassName}
-              getStudentPhoto={getStudentPhoto}
-              onSaveBatch={handleSaveBatchBehavior}
-              onClose={() => setBulkAttendanceModalOpen(false)}
-            />
+        {/* Classroom Bulk Attendance Register Modal */}
+        {bulkAttendanceModalOpen && (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-start justify-center p-2 sm:p-4 overflow-y-auto">
+            <div className="bg-white rounded-3xl max-w-5xl w-full max-h-[92vh] overflow-y-auto shadow-2xl border border-slate-200 p-4 sm:p-6 my-auto animate-scaleUp">
+              <ClassroomBulkAttendanceRegister
+                students={students}
+                behaviorRecords={behaviorList}
+                classOptions={classOptions}
+                initialClass={bulkAttendanceInitialClass || classOptions[0] || '1'}
+                teacherName={managerUser?.Name || teacherUser?.Name || 'School Manager'}
+                getClassName={getClassName}
+                getStudentPhoto={getStudentPhoto}
+                onSaveBatch={handleSaveBatchBehavior}
+                onClose={() => setBulkAttendanceModalOpen(false)}
+              />
+            </div>
           </div>
-        </div>
-      )}
-
-      {/* Instant 1-Scan QR Attendance Modal (Manager Always + Teacher when Manager turns ON) */}
-      {quickQrAttendanceOpen &&
-        ((activeTab === 'manager' && managerUser) ||
-          (activeTab === 'teacher' && teacherUser && teacherQrAttendanceAllowed)) && (
-          <QuickQrAttendanceModal
-            isOpen={quickQrAttendanceOpen}
-            onClose={() => setQuickQrAttendanceOpen(false)}
-            students={students}
-            behaviorRecords={behaviorList}
-            getClassName={getClassName}
-            getStudentPhoto={getStudentPhoto}
-            onMarkPresent={handleInstantQrAttendance}
-          />
         )}
 
-      {/* ========================================================================= */}
-      {/* ADD FEE COLLECTION MODAL (फ़ीस रसीद काटें व जमा करें)                         */}
-      {/* ========================================================================= */}
-      <AddFeeModal
-        isOpen={addFeeModalOpen}
-        onClose={() => {
-          setAddFeeModalOpen(false);
-          setAddFeeInitialStudentId(undefined);
-        }}
-        onFeeAdded={handleFeeAdded}
-        students={students}
-        feeRecords={feeRecords}
-        managerName={managerUser?.Name || 'Manager'}
-        classMap={classMap}
-        getClassName={getClassName}
-        feeBalances={feeBalances}
-        initialSelectedStudentId={addFeeInitialStudentId}
-        onTriggerQRScan={() => {
-          setQrScannerTarget('managerStudents');
-          setQrScannerSubtitle('फ़ीस जमा करने हेतु छात्र का QR कोड स्कैन करें');
-          setQrScannerOpen(true);
-        }}
-        onOpenFamilyFeeModal={(fam) => {
-          setAddFeeModalOpen(false);
-          setAddFeeInitialStudentId(undefined);
-          setManagerFamilyFeeTarget(fam);
-          setActiveTab('manager');
-          setManagerTab('fees');
-        }}
-      />
+        {/* Instant 1-Scan QR Attendance Modal (Manager Always + Teacher when Manager turns ON) */}
+        {quickQrAttendanceOpen &&
+          ((activeTab === 'manager' && managerUser) ||
+            (activeTab === 'teacher' && teacherUser && teacherQrAttendanceAllowed)) && (
+            <QuickQrAttendanceModal
+              isOpen={quickQrAttendanceOpen}
+              onClose={() => setQuickQrAttendanceOpen(false)}
+              students={students}
+              behaviorRecords={behaviorList}
+              getClassName={getClassName}
+              getStudentPhoto={getStudentPhoto}
+              onMarkPresent={handleInstantQrAttendance}
+            />
+          )}
 
-      {/* ========================================================================= */}
-      {/* UNIVERSAL STUDENT FINDER & ACTION HUB (QR Code, Name, ID, Mobile Scanner) */}
-      {/* ========================================================================= */}
-      <StudentQRScannerModal
-        isOpen={qrScannerOpen}
-        onClose={() => setQrScannerOpen(false)}
-        onScan={handleQRScanned}
-        students={students}
-        title="छात्र खोजें एवं त्वरित कार्य (Find Student & Actions)"
-        subtitle={qrScannerSubtitle || 'QR स्कैन, नाम, स्टूडेंट ID, मोबाइल नंबर या रोल नंबर द्वारा खोजें'}
-        classMap={classMap}
-        getClassName={getClassName}
-        getStudentPhoto={getStudentPhoto}
-        onTrackHomework={(student) => {
-          setSelectedHwTrackerStudent(student as Student);
-          setHwTrackerModalOpen(true);
-        }}
-        onAssignHomework={(student) => {
-          if (student.Class) setHwClass(student.Class);
-          setActiveTab('teacher');
-          setTeacherPortalTab('upload');
-        }}
-        onAddFee={(student) => {
-          setAddFeeInitialStudentId(student.Student_ID);
-          setAddFeeModalOpen(true);
-        }}
-        onRecordBehavior={(student) => {
-          setSelectedBehaviorStudent(student as Student);
-          setBehaviorModalOpen(true);
-        }}
-      />
+        {/* ========================================================================= */}
+        {/* ADD FEE COLLECTION MODAL (फ़ीस रसीद काटें व जमा करें)                         */}
+        {/* ========================================================================= */}
+        <AddFeeModal
+          isOpen={addFeeModalOpen}
+          onClose={() => {
+            setAddFeeModalOpen(false);
+            setAddFeeInitialStudentId(undefined);
+          }}
+          onFeeAdded={handleFeeAdded}
+          students={students}
+          feeRecords={feeRecords}
+          managerName={managerUser?.Name || 'Manager'}
+          classMap={classMap}
+          getClassName={getClassName}
+          feeBalances={feeBalances}
+          initialSelectedStudentId={addFeeInitialStudentId}
+          onTriggerQRScan={() => {
+            setQrScannerTarget('managerStudents');
+            setQrScannerSubtitle('फ़ीस जमा करने हेतु छात्र का QR कोड स्कैन करें');
+            setQrScannerOpen(true);
+          }}
+          onOpenFamilyFeeModal={(fam) => {
+            setAddFeeModalOpen(false);
+            setAddFeeInitialStudentId(undefined);
+            setManagerFamilyFeeTarget(fam);
+            setActiveTab('manager');
+            setManagerTab('fees');
+          }}
+        />
 
-      {/* ========================================================================= */}
-      {/* STUDENT BEHAVIOR & CONDUCT MODAL (आचरण व अनुशासन दर्ज करें)              */}
-      {/* ========================================================================= */}
-      <StudentBehaviorModal
-        isOpen={behaviorModalOpen}
-        onClose={() => {
-          setBehaviorModalOpen(false);
-          setSelectedBehaviorStudent(null);
-        }}
-        student={selectedBehaviorStudent}
-        onSaveBehavior={handleSaveStudentBehavior}
-        teacherName={teacherUser?.Name || managerUser?.Name || 'School Teacher'}
-        getClassName={getClassName}
-        getStudentPhoto={getStudentPhoto}
-      />
+        {/* ========================================================================= */}
+        {/* UNIVERSAL STUDENT FINDER & ACTION HUB (QR Code, Name, ID, Mobile Scanner) */}
+        {/* ========================================================================= */}
+        <StudentQRScannerModal
+          isOpen={qrScannerOpen}
+          onClose={() => setQrScannerOpen(false)}
+          onScan={handleQRScanned}
+          students={students}
+          title="छात्र खोजें एवं त्वरित कार्य (Find Student & Actions)"
+          subtitle={qrScannerSubtitle || 'QR स्कैन, नाम, स्टूडेंट ID, मोबाइल नंबर या रोल नंबर द्वारा खोजें'}
+          classMap={classMap}
+          getClassName={getClassName}
+          getStudentPhoto={getStudentPhoto}
+          onTrackHomework={(student) => {
+            setSelectedHwTrackerStudent(student as Student);
+            setHwTrackerModalOpen(true);
+          }}
+          onAssignHomework={(student) => {
+            if (student.Class) setHwClass(student.Class);
+            setActiveTab('teacher');
+            setTeacherPortalTab('upload');
+          }}
+          onAddFee={(student) => {
+            setAddFeeInitialStudentId(student.Student_ID);
+            setAddFeeModalOpen(true);
+          }}
+          onRecordBehavior={(student) => {
+            setSelectedBehaviorStudent(student as Student);
+            setBehaviorModalOpen(true);
+          }}
+        />
 
-      {/* ========================================================================= */}
-      {/* STUDENT HOMEWORK QR TRACKER MODAL (Complete / Incomplete Tracker)        */}
-      {/* ========================================================================= */}
-      <StudentHomeworkQRTrackerModal
-        isOpen={hwTrackerModalOpen}
-        onClose={() => setHwTrackerModalOpen(false)}
-        student={selectedHwTrackerStudent}
-        homeworkList={homeworkList}
-        hwTrackerList={hwTrackerList}
-        classMap={classMap}
-        getClassName={getClassName}
-        getStudentPhoto={getStudentPhoto}
-        onUpdateStatus={handleUpdateHomeworkStatusModal}
-        onScanNextStudent={() => {
-          setQrScannerTarget('teacherTracker');
-          setQrScannerSubtitle('कल का होमवर्क चेक करने हेतु छात्र का QR कोड स्कैन करें');
-          setQrScannerOpen(true);
-        }}
-        teacherName={teacherUser?.Name || 'Teacher'}
-        allStudents={students}
-        onSelectStudent={(st) => setSelectedHwTrackerStudent(st)}
-      />
+        {/* ========================================================================= */}
+        {/* STUDENT BEHAVIOR & CONDUCT MODAL (आचरण व अनुशासन दर्ज करें)              */}
+        {/* ========================================================================= */}
+        <StudentBehaviorModal
+          isOpen={behaviorModalOpen}
+          onClose={() => {
+            setBehaviorModalOpen(false);
+            setSelectedBehaviorStudent(null);
+          }}
+          student={selectedBehaviorStudent}
+          onSaveBehavior={handleSaveStudentBehavior}
+          teacherName={teacherUser?.Name || managerUser?.Name || 'School Teacher'}
+          getClassName={getClassName}
+          getStudentPhoto={getStudentPhoto}
+        />
+
+        {/* ========================================================================= */}
+        {/* STUDENT HOMEWORK QR TRACKER MODAL (Complete / Incomplete Tracker)        */}
+        {/* ========================================================================= */}
+        <StudentHomeworkQRTrackerModal
+          isOpen={hwTrackerModalOpen}
+          onClose={() => setHwTrackerModalOpen(false)}
+          student={selectedHwTrackerStudent}
+          homeworkList={homeworkList}
+          hwTrackerList={hwTrackerList}
+          classMap={classMap}
+          getClassName={getClassName}
+          getStudentPhoto={getStudentPhoto}
+          onUpdateStatus={handleUpdateHomeworkStatusModal}
+          onScanNextStudent={() => {
+            setQrScannerTarget('teacherTracker');
+            setQrScannerSubtitle('कल का होमवर्क चेक करने हेतु छात्र का QR कोड स्कैन करें');
+            setQrScannerOpen(true);
+          }}
+          teacherName={teacherUser?.Name || 'Teacher'}
+          allStudents={students}
+          onSelectStudent={(st) => setSelectedHwTrackerStudent(st)}
+        />
+      </Suspense>
 
       {/* ========================================================================= */}
       {/* STUDENT QR CODE PREVIEW MODAL                                             */}
@@ -17243,53 +17021,55 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
       )}
 
       {/* Official Printable Fee Receipt Modal */}
-      <OfficialFeeReceiptModal
-        isOpen={Boolean(activeReceiptModalData)}
-        onClose={() => setActiveReceiptModalData(null)}
-        student={activeReceiptModalData?.student}
-        feeRecord={activeReceiptModalData?.fee}
-        schoolName="E.V.S. PUBLIC SCHOOL"
-        managerName={managerUser?.Name || 'School Office'}
-      />
-
-      {/* Monthly Attendance Calendar & Absent Alert Modal */}
-      <AttendanceCalendarModal
-        isOpen={isAttendanceCalendarOpen}
-        onClose={() => setIsAttendanceCalendarOpen(false)}
-        selectedStudent={selectedStudent || previewQRStudent || students[0]}
-        allStudents={activeTab === 'parent' || parentLoggedIn ? (parentChildren.length > 0 ? parentChildren : (selectedStudent ? [selectedStudent] : [])) : students}
-        behaviorRecords={behaviorList}
-        initialMode={activeTab === 'parent' || parentLoggedIn ? 'calendar' : attendanceCalendarMode}
-        schoolName="E.V.S. PUBLIC SCHOOL"
-        onSelectStudent={(st) => setSelectedStudent(st)}
-        isParentView={activeTab === 'parent' || parentLoggedIn}
-      />
-
-      {/* Install App Modal for iOS Safari & Android */}
-      <InstallAppModal
-        isOpen={showInstallModal}
-        onClose={() => setShowInstallModal(false)}
-      />
-
-      {/* School Official Staff Attendance QR Code Poster Modal */}
-      <SchoolQRCodeModal
-        isOpen={isSchoolQrModalOpen}
-        onClose={() => setIsSchoolQrModalOpen(false)}
-        schoolName="E.V.S. PUBLIC SCHOOL"
-      />
-
-      {/* Staff QR Attendance Scanner Modal */}
-      {(teacherUser || managerUser) && (
-        <StaffAttendanceScannerModal
-          isOpen={isStaffAttendanceScannerOpen}
-          onClose={() => setIsStaffAttendanceScannerOpen(false)}
-          currentUser={teacherUser || managerUser || { Name: 'Staff Member', Designation: 'Staff', User_ID: 'STAFF1', Username: 'staff', Mobile_number: '' }}
-          todayRecord={myTodayAttendanceRecord}
-          allRecords={staffAttendanceList}
-          onCheckInSuccess={handleStaffCheckInSuccess}
-          isManager={Boolean(managerUser || activeTab === 'manager')}
+      <Suspense fallback={null}>
+        <OfficialFeeReceiptModal
+          isOpen={Boolean(activeReceiptModalData)}
+          onClose={() => setActiveReceiptModalData(null)}
+          student={activeReceiptModalData?.student}
+          feeRecord={activeReceiptModalData?.fee}
+          schoolName="E.V.S. PUBLIC SCHOOL"
+          managerName={managerUser?.Name || 'School Office'}
         />
-      )}
+
+        {/* Monthly Attendance Calendar & Absent Alert Modal */}
+        <AttendanceCalendarModal
+          isOpen={isAttendanceCalendarOpen}
+          onClose={() => setIsAttendanceCalendarOpen(false)}
+          selectedStudent={selectedStudent || previewQRStudent || students[0]}
+          allStudents={activeTab === 'parent' || parentLoggedIn ? (parentChildren.length > 0 ? parentChildren : (selectedStudent ? [selectedStudent] : [])) : students}
+          behaviorRecords={behaviorList}
+          initialMode={activeTab === 'parent' || parentLoggedIn ? 'calendar' : attendanceCalendarMode}
+          schoolName="E.V.S. PUBLIC SCHOOL"
+          onSelectStudent={(st) => setSelectedStudent(st)}
+          isParentView={activeTab === 'parent' || parentLoggedIn}
+        />
+
+        {/* Install App Modal for iOS Safari & Android */}
+        <InstallAppModal
+          isOpen={showInstallModal}
+          onClose={() => setShowInstallModal(false)}
+        />
+
+        {/* School Official Staff Attendance QR Code Poster Modal */}
+        <SchoolQRCodeModal
+          isOpen={isSchoolQrModalOpen}
+          onClose={() => setIsSchoolQrModalOpen(false)}
+          schoolName="E.V.S. PUBLIC SCHOOL"
+        />
+
+        {/* Staff QR Attendance Scanner Modal */}
+        {(teacherUser || managerUser) && (
+          <StaffAttendanceScannerModal
+            isOpen={isStaffAttendanceScannerOpen}
+            onClose={() => setIsStaffAttendanceScannerOpen(false)}
+            currentUser={teacherUser || managerUser || { Name: 'Staff Member', Designation: 'Staff', User_ID: 'STAFF1', Username: 'staff', Mobile_number: '' }}
+            todayRecord={myTodayAttendanceRecord}
+            allRecords={staffAttendanceList}
+            onCheckInSuccess={handleStaffCheckInSuccess}
+            isManager={Boolean(managerUser || activeTab === 'manager')}
+          />
+        )}
+      </Suspense>
 
       {/* Floating iPhone Quick Install Pill - Only on Home screen */}
       {isIOSDevice && !isStandaloneApp && activeTab === 'home' && (
@@ -17350,6 +17130,5 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         </div>
       </footer>
     </div>
-    </Suspense>
   );
 }

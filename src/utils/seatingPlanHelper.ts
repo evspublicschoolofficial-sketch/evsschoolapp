@@ -1627,7 +1627,18 @@ export interface ExamSeatingSnapshot {
   updatedAt?: string;
 }
 
+let cachedSeatingSnapshot: ExamSeatingSnapshot | null = null;
+let cachedSeatingHistory: { entries: ExamSeatingHistoryEntry[]; sheetSynced: boolean } | null = null;
+
+export function invalidateSeatingPlanCache(): void {
+  cachedSeatingSnapshot = null;
+  cachedSeatingHistory = null;
+}
+
 export async function fetchExamSeatingPlanSnapshot(forceRefresh = false): Promise<ExamSeatingSnapshot | null> {
+  if (!forceRefresh && cachedSeatingSnapshot) {
+    return cachedSeatingSnapshot;
+  }
   const activeUrl = getAppsScriptUrl();
   const buildSnapshot = (json: any): ExamSeatingSnapshot => {
     const draftConfig = json?.draftConfig && Array.isArray(json.draftConfig.rooms) ? json.draftConfig : null;
@@ -1669,6 +1680,7 @@ export async function fetchExamSeatingPlanSnapshot(forceRefresh = false): Promis
       const json = await res.json();
       apiSnap = buildSnapshot(json);
       if (json?.sheetSynced) {
+        cachedSeatingSnapshot = apiSnap;
         return apiSnap;
       }
     }
@@ -1678,10 +1690,13 @@ export async function fetchExamSeatingPlanSnapshot(forceRefresh = false): Promis
   try {
     const direct = await directGetFromSheet('getExamSeatingPlan', activeUrl);
     if (direct.ok && direct.json) {
-      return buildSnapshot(direct.json);
+      const snap = buildSnapshot(direct.json);
+      cachedSeatingSnapshot = snap;
+      return snap;
     }
   } catch {}
 
+  if (apiSnap) cachedSeatingSnapshot = apiSnap;
   return apiSnap;
 }
 
@@ -1689,6 +1704,9 @@ export async function fetchExamSeatingHistory(forceRefresh = false): Promise<{
   entries: ExamSeatingHistoryEntry[];
   sheetSynced: boolean;
 }> {
+  if (!forceRefresh && cachedSeatingHistory) {
+    return cachedSeatingHistory;
+  }
   const activeUrl = getAppsScriptUrl();
   const localEntries = loadLocalSeatingHistory();
   let serverEntries: ExamSeatingHistoryEntry[] = [];
@@ -1724,7 +1742,9 @@ export async function fetchExamSeatingHistory(forceRefresh = false): Promise<{
           sheetSynced = true;
           const merged = mergeSeatingHistoryLists(sheetEntries, mergeSeatingHistoryLists(serverEntries, localEntries));
           saveLocalSeatingHistory(merged);
-          return { entries: merged, sheetSynced };
+          const result = { entries: merged, sheetSynced };
+          cachedSeatingHistory = result;
+          return result;
         }
       }
     } catch {}
@@ -1732,12 +1752,15 @@ export async function fetchExamSeatingHistory(forceRefresh = false): Promise<{
 
   const merged = mergeSeatingHistoryLists(serverEntries, localEntries);
   if (merged.length > 0) saveLocalSeatingHistory(merged);
-  return { entries: merged, sheetSynced };
+  const result = { entries: merged, sheetSynced };
+  cachedSeatingHistory = result;
+  return result;
 }
 
 export async function deleteExamSeatingHistoryEntry(
   archiveKey: string
 ): Promise<{ serverOk: boolean; sheetSynced: boolean }> {
+  invalidateSeatingPlanCache();
   const nextLocal = loadLocalSeatingHistory().filter((e) => e.archiveKey !== archiveKey);
   saveLocalSeatingHistory(nextLocal);
   const syncRes = await dualSyncWriteToSheet({
@@ -1779,6 +1802,7 @@ const compactSeatingDraftPayload = (draft: SeatingPlanConfigPayload): SeatingPla
 export async function saveTeacherSeatingDraft(
   draftConfig: SeatingPlanConfigPayload
 ): Promise<{ serverOk: boolean; sheetSynced: boolean; sheetError?: string }> {
+  invalidateSeatingPlanCache();
   const compacted = compactSeatingDraftPayload(draftConfig);
   saveLocalSeatingWorkflow(compacted);
   const syncRes = await dualSyncWriteToSheet({
@@ -1807,6 +1831,7 @@ export async function saveExamSeatingPlanToSheet(
   roomMeta: Record<string, RoomCustomMeta>,
   approvedConfig?: SeatingPlanConfigPayload
 ): Promise<{ savedCount: number; sheetSynced: boolean; historySaved?: boolean; sheetError?: string }> {
+  invalidateSeatingPlanCache();
   saveRoomMeta(roomMeta);
   if (approvedConfig) {
     saveLocalSeatingWorkflow(approvedConfig);
@@ -2337,6 +2362,8 @@ export async function saveExamSeatingRoomDispatch(opts: {
       rows: JSON.stringify(roomRows),
     },
   });
+
+  invalidateSeatingPlanCache();
 
   return {
     serverOk: syncRes.serverOk,

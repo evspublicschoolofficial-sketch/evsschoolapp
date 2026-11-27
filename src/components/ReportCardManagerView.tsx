@@ -109,9 +109,9 @@ export const ReportCardManagerView: React.FC<ReportCardManagerViewProps> = ({
     return totalPendingCount > 0 ? 'pending_approvals' : 'report_card';
   });
 
-  // Automatically fetch latest workflow (permissions + teacher pending drafts) on mount
+  // Load workflow (permissions + teacher pending drafts) from cache first on mount
   useEffect(() => {
-    fetchReportCardWorkflowFromServer(true)
+    fetchReportCardWorkflowFromServer(false)
       .then((snap) => onWorkflowUpdated?.(snap))
       .catch(() => {});
   }, []);

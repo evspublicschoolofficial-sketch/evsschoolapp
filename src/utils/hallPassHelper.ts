@@ -684,7 +684,18 @@ const mergeSheetDatesheetIntoConfig = (
   });
 };
 
+let cachedHallPassConfig: HallPassConfig | null = null;
+let hasFetchedHallPassFromServer = false;
+
+export function invalidateHallPassCache(): void {
+  hasFetchedHallPassFromServer = false;
+  cachedHallPassConfig = null;
+}
+
 export async function fetchHallPassConfigFromServer(forceRefresh = false): Promise<HallPassConfig> {
+  if (!forceRefresh && hasFetchedHallPassFromServer && cachedHallPassConfig) {
+    return cachedHallPassConfig;
+  }
   const activeUrl = getAppsScriptUrl();
   let resolvedConfig: HallPassConfig | null = null;
 
@@ -722,11 +733,15 @@ export async function fetchHallPassConfigFromServer(forceRefresh = false): Promi
     if (sheetRows && sheetRows.length > 0) {
       const merged = mergeSheetDatesheetIntoConfig(baseConfig, sheetRows);
       saveToPhoneMemory(HALL_PASS_CONFIG_STORAGE_KEY, merged);
+      cachedHallPassConfig = merged;
+      hasFetchedHallPassFromServer = true;
       return merged;
     }
   }
 
   saveToPhoneMemory(HALL_PASS_CONFIG_STORAGE_KEY, baseConfig);
+  cachedHallPassConfig = baseConfig;
+  hasFetchedHallPassFromServer = true;
   return baseConfig;
 }
 
@@ -758,6 +773,8 @@ export async function saveHallPassConfigWithStatus(config: HallPassConfig): Prom
 }> {
   const mergedLocal = mergeWithDefaults(config);
   saveToPhoneMemory(HALL_PASS_CONFIG_STORAGE_KEY, mergedLocal);
+  cachedHallPassConfig = mergedLocal;
+  hasFetchedHallPassFromServer = true;
 
   try {
     const syncRes = await dualSyncWriteToSheet({
@@ -772,6 +789,8 @@ export async function saveHallPassConfigWithStatus(config: HallPassConfig): Prom
     if (syncRes.data?.config) {
       const merged = mergeWithDefaults(syncRes.data.config);
       saveToPhoneMemory(HALL_PASS_CONFIG_STORAGE_KEY, merged);
+      cachedHallPassConfig = merged;
+      hasFetchedHallPassFromServer = true;
       return {
         config: merged,
         sheetSynced: syncRes.sheetSynced,

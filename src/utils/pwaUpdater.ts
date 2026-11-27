@@ -335,6 +335,18 @@ export async function applyPWAUpdate(): Promise<void> {
   }
 }
 
+/**
+ * Manual 1-click Full App Reload: clears script/cache storage, marks a fresh Phone Memory resync
+ * for the next load, keeps all user logins & offline drafts safe, and reloads the entire app.
+ */
+export async function reloadFullAppWithFreshSync(): Promise<void> {
+  if (typeof window === 'undefined') return;
+  try {
+    setPendingFullReloadAfterUpdate();
+  } catch {}
+  await applyPWAUpdate();
+}
+
 export function getPWAUpdateState(): PWAUpdateState {
   return { ...state };
 }

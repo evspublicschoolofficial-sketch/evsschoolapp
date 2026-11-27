@@ -152,11 +152,40 @@
   animation: fee-shimmer-sweep 1.15s cubic-bezier(0.22, 1, 0.36, 1) 0.1s forwards;
 }
 
+@keyframes slide-in-left {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+
+@keyframes fade-in-fast {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.animate-slide-in-left {
+  animation: slide-in-left 180ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform;
+}
+
+.animate-fadeIn {
+  animation: fade-in-fast 160ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-fee-card-settle,
   .animate-fee-text-settle,
   .animate-fee-badge-pop,
-  .animate-fee-shimmer-sweep {
+  .animate-fee-shimmer-sweep,
+  .animate-slide-in-left,
+  .animate-fadeIn {
     animation: none !important;
   }
 }

@@ -7,6 +7,11 @@
  * 4. Background smart polling checks for updates smoothly without disturbing user input.
  */
 
+export const CLIENT_TAB_ID: string =
+  typeof window !== 'undefined'
+    ? `tab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+    : 'tab-ssr';
+
 export type EntityType = 'fee' | 'student' | 'notice' | 'behavior' | 'homework' | 'users' | 'hall_pass_config' | 'fee_waivers' | 'parent_reviews' | 'teacher_qr_attendance_access' | 'report_card_workflow' | 'exam_marks' | 'report_card_meta' | 'weekly_tests' | 'exam_seating_plan' | 'all';
 
 export interface DataMutationEvent {
@@ -16,6 +21,7 @@ export interface DataMutationEvent {
   details?: any;
   data?: any;
   payload?: any;
+  originTabId?: string;
   timestamp: number;
 }
 
@@ -67,6 +73,7 @@ class RealtimeSyncManager {
               entity: data.entity || 'all',
               action: data.action,
               details: data.details,
+              originTabId: data.originTabId,
               timestamp: data.timestamp || Date.now(),
             });
           }
@@ -113,6 +120,7 @@ class RealtimeSyncManager {
       entity,
       action,
       details,
+      originTabId: CLIENT_TAB_ID,
       timestamp: Date.now(),
     };
 
