@@ -2,6 +2,8 @@ import React, { useState, useEffect, useMemo, useRef, Suspense } from 'react';
 import type { StudentBehaviorInput } from './components/StudentBehaviorModal';
 import { StudentAvatar } from './components/StudentAvatar';
 import { ManagerLeftSidebar, MANAGER_MENU_ITEMS, type ManagerTabId } from './components/ManagerLeftSidebar';
+import { TeacherLeftSidebar, TEACHER_MENU_ITEMS, type TeacherTabId } from './components/TeacherLeftSidebar';
+import { ParentLeftSidebar, PARENT_MENU_ITEMS, type ParentSectionId } from './components/ParentLeftSidebar';
 import { SchoolNoticeBoard, DEFAULT_SEED_NOTICES } from './components/SchoolNoticeBoard';
 import { EmergencyAlertBanner } from './components/EmergencyAlertBanner';
 import {
@@ -1524,7 +1526,8 @@ export default function App() {
   const [manualLinkSuccess, setManualLinkSuccess] = useState<string | null>(null);
   const [hwFilterType, setHwFilterType] = useState<'all' | 'class' | 'student'>('all');
   const [hwDaysFilter, setHwDaysFilter] = useState<'latest' | 'all'>('latest');
-  const [parentActiveSection, setParentActiveSection] = useState<'overview' | 'homework' | 'tracker' | 'behavior' | 'fees' | 'calendar' | 'notices' | 'profile' | 'reportCard' | 'hallPass' | 'reviews'>('overview');
+  const [parentActiveSection, setParentActiveSection] = useState<ParentSectionId>('overview');
+  const [isParentMenuOpen, setIsParentMenuOpen] = useState<boolean>(false);
   const [trackerStatusFilter, setTrackerStatusFilter] = useState<'all' | 'completed' | 'incompleted'>('all');
 
   // AI Daily Greeting & Activity Summary for Parent Portal
@@ -1981,15 +1984,16 @@ export default function App() {
   const [teacherLoginError, setTeacherLoginError] = useState<string | null>(null);
   const [teacherLoginSubmitting, setTeacherLoginSubmitting] = useState<boolean>(false);
   const [showTeacherPassword, setShowTeacherPassword] = useState<boolean>(false);
-  const [teacherPortalTab, setTeacherPortalTab] = useState<'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior' | 'staff_attendance' | 'performance' | 'syllabus' | 'weekly_tests' | 'report_card' | 'seating_plan'>(() => {
+  const [teacherPortalTab, setTeacherPortalTab] = useState<TeacherTabId>(() => {
     try {
       const saved = localStorage.getItem('evs_teacher_portal_tab');
-      if (saved && ['upload', 'tracker', 'submissions', 'notices', 'behavior', 'staff_attendance', 'performance', 'syllabus', 'weekly_tests', 'report_card', 'seating_plan'].includes(saved)) {
-        return saved as any;
+      if (saved && ['home', 'upload', 'tracker', 'submissions', 'notices', 'behavior', 'staff_attendance', 'performance', 'syllabus', 'weekly_tests', 'report_card', 'seating_plan'].includes(saved)) {
+        return saved as TeacherTabId;
       }
     } catch {}
-    return 'upload';
+    return 'home';
   });
+  const [isTeacherMenuOpen, setIsTeacherMenuOpen] = useState<boolean>(false);
 
   // Staff Attendance States (School QR Code scanning & presence records)
   const [staffAttendanceList, setStaffAttendanceList] = useState<StaffAttendanceRecord[]>(() =>
@@ -3626,9 +3630,23 @@ export default function App() {
     }) || null;
   }, [staffAttendanceList, teacherUser, managerUser]);
 
+  // Switch sections in Parent Portal cleanly with lazy loaders
+  const handleSelectParentSection = (sec: ParentSectionId) => {
+    if (sec === 'reportCard') {
+      fetchReportCardAllData(false);
+    } else if (sec === 'hallPass') {
+      ensureHallPassConfigLoaded(false);
+    } else if (sec === 'reviews') {
+      refreshParentReviews(false);
+    }
+    setParentActiveSection(sec);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   // Switch tabs in Teacher Portal cleanly using already-loaded memory (no redundant reloads on tab clicks)
-  const handleSelectTeacherTab = (tab: 'upload' | 'tracker' | 'submissions' | 'notices' | 'behavior' | 'staff_attendance' | 'performance' | 'syllabus' | 'weekly_tests' | 'report_card' | 'seating_plan') => {
+  const handleSelectTeacherTab = (tab: TeacherTabId) => {
     setTeacherPortalTab(tab);
+    if (tab === 'home') return;
     if (tab === 'tracker' && hwTrackerList.length === 0) {
       fetchHomeworkTracker(false, false);
     } else if (tab === 'submissions' && homeworkList.length === 0) {
@@ -4585,6 +4603,8 @@ export default function App() {
       setParentChildren(matched);
       setSelectedStudent(matched[0]);
       setParentLoggedIn(true);
+      setParentActiveSection('overview');
+      setIsParentMenuOpen(false);
       setParentSearchAttempted(false);
       setActiveTab('parent');
       try {
@@ -5837,10 +5857,13 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
 
     const resolvedUser: SchoolUser = { ...user, Assigned_Class: effectiveAssignedClass };
     setTeacherUser(resolvedUser);
+    setTeacherPortalTab('home');
+    setIsTeacherMenuOpen(false);
     setActiveTab('teacher');
     try {
       localStorage.setItem('evs_teacher_user', JSON.stringify(resolvedUser));
       localStorage.setItem('evs_active_tab', 'teacher');
+      localStorage.setItem('evs_teacher_portal_tab', 'home');
     } catch (e) {
       console.warn('LocalStorage error:', e);
     }
@@ -7492,31 +7515,31 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-800 font-sans">
-      {/* Main Header with Blue & Gold Theme */}
-      <header className="bg-gradient-to-r from-[#0c2340] via-[#10316b] to-[#0c2340] text-white shadow-lg border-b-2 border-amber-400/80 sticky top-0 z-30">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3.5">
+    <div className="min-h-screen flex flex-col bg-gradient-to-b from-[#eef2ff] via-[#f0f9ff] to-[#f8fafc] text-slate-800 font-sans">
+      {/* Main Header — Solid Royal Navy-Indigo with Golden Accent & Full Browser Compatibility */}
+      <header className="bg-[#0c2340] bg-[linear-gradient(90deg,#0c2340_0%,#1e3a8a_55%,#312e81_100%)] text-[#ffffff] shadow-lg border-b-4 border-[#fbbf24] sticky top-0 z-40">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
             {/* Logo, School Title & 1-Click Language Switcher */}
             <div className="flex items-center justify-between gap-3 flex-wrap sm:flex-nowrap">
               <div
-                className="flex items-center gap-3.5 cursor-pointer select-none"
+                className="flex items-center gap-3 cursor-pointer select-none"
                 onClick={() => setActiveTab('home')}
               >
                 {/* Crest Badge */}
-                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-400 via-amber-300 to-amber-500 flex items-center justify-center shadow-md shadow-amber-500/20 text-[#0c2340] border-2 border-amber-200 shrink-0">
-                  <i className="fa-solid fa-shield-halved text-2xl"></i>
+                <div className="w-11 h-11 rounded-2xl bg-[#f59e0b] bg-[linear-gradient(135deg,#fbbf24_0%,#f97316_100%)] flex items-center justify-center shadow-md text-[#0f172a] border-2 border-[#fde68a] shrink-0">
+                  <i className="fa-solid fa-shield-halved text-xl"></i>
                 </div>
                 <div>
-                  <div className="flex items-center gap-2">
-                    <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-white flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h1 className="text-base sm:text-xl font-extrabold tracking-tight text-[#ffffff] flex items-center gap-1.5">
                       E.V.S. Public School
                     </h1>
-                    <span className="bg-amber-400 text-slate-950 text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider shadow-xs">
+                    <span className="text-[11px] font-bold text-[#0f172a] bg-[#fde047] px-2 py-0.5 rounded-full shadow-xs">
                       {t.englishMediumBadge}
                     </span>
                   </div>
-                  <p className="text-xs text-amber-200/80 font-medium">
+                  <p className="text-xs text-[#e0e7ff] font-medium mt-0.5">
                     {t.schoolTagline}
                   </p>
                 </div>
@@ -7532,14 +7555,14 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     reloadFullAppWithFreshSync();
                   }}
                   disabled={isFullAppReloading}
-                  className="px-2.5 sm:px-3 py-1.5 rounded-xl bg-white/15 hover:bg-amber-400 hover:text-slate-950 text-amber-200 border border-amber-300/40 text-xs font-black flex items-center gap-1.5 cursor-pointer transition-all active:scale-95 shrink-0 disabled:opacity-60 shadow-xs"
+                  className="px-2.5 sm:px-3 py-1.5 rounded-xl bg-[#0284c7] hover:bg-[#0369a1] text-[#ffffff] border border-[#38bdf8] text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs active:scale-95 shrink-0 disabled:opacity-60"
                   title={
                     currentLang === 'en'
                       ? 'Reload Full App & Fetch Fresh School Data'
                       : 'पूरी ऐप व ताज़ा डेटा को एक क्लिक में रीलोड करें (Full App Reload)'
                   }
                 >
-                  <i className={`fa-solid fa-arrows-rotate text-xs ${isFullAppReloading ? 'fa-spin' : ''}`} />
+                  <i className={`fa-solid fa-arrows-rotate text-xs text-[#fde047] ${isFullAppReloading ? 'fa-spin' : ''}`} />
                   <span className="hidden sm:inline">
                     {isFullAppReloading
                       ? currentLang === 'en'
@@ -7555,15 +7578,15 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 </button>
                 <PWAHeaderUpdateButton lang={currentLang} />
 
-                {/* 1-Click Language Switcher: English Medium Default */}
-                <div className="flex items-center gap-1 bg-black/35 p-1 rounded-xl border border-white/20 shadow-xs shrink-0">
+                {/* 1-Click Language Switcher */}
+                <div className="flex items-center gap-1 bg-[#1e1b4b] p-1 rounded-xl border border-[#6366f1] shrink-0">
                   <button
                     type="button"
                     onClick={() => handleToggleLanguage('en')}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                       currentLang === 'en'
-                        ? 'bg-amber-400 text-slate-950 shadow-md scale-102 ring-1 ring-amber-300'
-                        : 'text-slate-300 hover:text-white hover:bg-white/10'
+                        ? 'bg-[#fbbf24] text-[#0f172a] shadow-xs'
+                        : 'text-[#e0e7ff] hover:text-[#ffffff] hover:bg-[#312e81]'
                     }`}
                     title="English Medium Mode (Default)"
                   >
@@ -7573,10 +7596,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   <button
                     type="button"
                     onClick={() => handleToggleLanguage('hi')}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                       currentLang === 'hi'
-                        ? 'bg-amber-400 text-slate-950 shadow-md scale-102 ring-1 ring-amber-300'
-                        : 'text-slate-300 hover:text-white hover:bg-white/10'
+                        ? 'bg-[#fbbf24] text-[#0f172a] shadow-xs'
+                        : 'text-[#e0e7ff] hover:text-[#ffffff] hover:bg-[#312e81]'
                     }`}
                     title="हिन्दी मोड"
                   >
@@ -7593,9 +7616,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               {parentLoggedIn && selectedStudent && (
                 <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
                   {/* Child's Name Badge */}
-                  <div className="flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-xl border border-white/20 text-xs shrink-0">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                    <span className="font-extrabold text-white">{selectedStudent.Student_Name}</span>
+                  <div className="flex items-center gap-2 bg-[#312e81] px-3 py-1.5 rounded-xl border border-[#818cf8] text-xs shrink-0">
+                    <span className="w-2 h-2 rounded-full bg-[#34d399] animate-pulse"></span>
+                    <span className="font-extrabold text-[#ffffff]">{selectedStudent.Student_Name}</span>
                   </div>
 
                   {/* Baki Fees (Remaining / Due Fees) */}
@@ -7607,33 +7630,27 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     }}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all duration-500 cursor-pointer shadow-xs active:scale-95 shrink-0 ${
                       studentFeeSummary.hasDues
-                        ? 'bg-rose-500/25 hover:bg-rose-500/35 text-rose-100 border-rose-400/50 hover:border-rose-300'
+                        ? 'bg-[#be123c] hover:bg-[#9f1239] text-[#ffffff] border-[#fda4af]'
                         : studentFeeSummary.isAdvance
-                        ? 'bg-purple-500/25 hover:bg-purple-500/35 text-purple-100 border-purple-400/50 hover:border-purple-300'
-                        : 'bg-emerald-500/25 hover:bg-emerald-500/35 text-emerald-100 border-emerald-400/50 hover:border-emerald-300'
-                    } ${studentFeeSettlement.justSettled ? 'animate-fee-card-settle ring-2 ring-emerald-300/60' : ''}`}
+                        ? 'bg-[#6d28d9] hover:bg-[#5b21b6] text-[#ffffff] border-[#c4b5fd]'
+                        : 'bg-[#059669] hover:bg-[#047857] text-[#ffffff] border-[#6ee7b7]'
+                    } ${studentFeeSettlement.justSettled ? 'animate-fee-card-settle ring-2 ring-emerald-300' : ''}`}
                     title="फ़ीस विवरण देखने हेतु क्लिक करें"
                   >
                     <i
                       className={`fa-solid text-[11px] ${
                         studentFeeSummary.hasDues
-                          ? 'fa-triangle-exclamation text-amber-300'
+                          ? 'fa-triangle-exclamation text-[#fde047]'
                           : studentFeeSummary.isAdvance
-                          ? 'fa-hand-holding-dollar text-purple-200'
-                          : 'fa-circle-check text-emerald-300'
+                          ? 'fa-hand-holding-dollar text-[#fde047]'
+                          : 'fa-circle-check text-[#fde047]'
                       }`}
                     ></i>
-                    <span className="text-[11px] text-white/80 font-medium">
+                    <span className="text-[11px] font-medium text-[#ffffff]">
                       {studentFeeSummary.isAdvance ? 'अग्रिम फ़ीस:' : 'बाकी फ़ीस:'}
                     </span>
                     <span
-                      className={`font-black text-xs tabular-nums ${
-                        studentFeeSummary.hasDues
-                          ? 'text-amber-200'
-                          : studentFeeSummary.isAdvance
-                          ? 'text-purple-200'
-                          : 'text-emerald-200'
-                      } ${studentFeeSettlement.justSettled ? 'animate-fee-text-settle' : ''}`}
+                      className={`font-black text-xs tabular-nums text-[#fde047] ${studentFeeSettlement.justSettled ? 'animate-fee-text-settle' : ''}`}
                     >
                       {studentFeeSettlement.justSettled && studentFeeSettlement.isCountingDown
                         ? `₹${studentFeeSettlement.displayAmount.toLocaleString('en-IN')}`
@@ -7642,12 +7659,12 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         : `₹${studentFeeSummary.balance.toLocaleString('en-IN')}`}
                     </span>
                     {studentFeeSummary.hasDues ? (
-                      <span className="text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0.2 rounded bg-rose-600/80 text-white ml-0.5">
+                      <span className="text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0.5 rounded bg-[#fbbf24] text-[#0f172a] ml-0.5">
                         Due
                       </span>
                     ) : studentFeeSummary.isAdvance ? (
                       <span
-                        className={`text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0.2 rounded bg-purple-600/80 text-white ml-0.5 ${
+                        className={`text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0.5 rounded bg-[#fbbf24] text-[#0f172a] ml-0.5 ${
                           studentFeeSettlement.justSettled ? 'animate-fee-badge-pop' : ''
                         }`}
                       >
@@ -7655,7 +7672,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       </span>
                     ) : (
                       <span
-                        className={`text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0.2 rounded bg-emerald-600/80 text-white ml-0.5 ${
+                        className={`text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0.5 rounded bg-[#ffffff] text-[#047857] ml-0.5 ${
                           studentFeeSettlement.justSettled ? 'animate-fee-badge-pop' : ''
                         }`}
                       >
@@ -7674,18 +7691,16 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       }}
                       className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold border transition-all duration-300 cursor-pointer shadow-xs active:scale-95 shrink-0 ${
                         parentFamilyFeeSummary.totalDue > 0
-                          ? 'bg-amber-400/20 hover:bg-amber-400/30 text-amber-100 border-amber-300/60'
-                          : 'bg-emerald-500/25 hover:bg-emerald-500/35 text-emerald-100 border-emerald-400/50'
-                      } ${familyFeeSettlement.justSettled ? 'animate-fee-card-settle ring-2 ring-emerald-300/60' : ''}`}
+                          ? 'bg-[#d97706] hover:bg-[#b45309] text-[#ffffff] border-[#fde68a]'
+                          : 'bg-[#059669] hover:bg-[#047857] text-[#ffffff] border-[#6ee7b7]'
+                      } ${familyFeeSettlement.justSettled ? 'animate-fee-card-settle ring-2 ring-emerald-300' : ''}`}
                       title={`सभी ${parentFamilyFeeSummary.members.length} बच्चों की कुल संयुक्त फ़ीस देखें`}
                     >
-                      <i className="fa-solid fa-users text-[11px] text-amber-300"></i>
-                      <span className="text-[11px] text-white/85 font-semibold">
+                      <i className="fa-solid fa-users text-[11px] text-[#fde047]"></i>
+                      <span className="text-[11px] font-semibold">
                         कुल ({parentFamilyFeeSummary.members.length} बच्चे):
                       </span>
-                      <span className={`font-black text-xs tabular-nums ${
-                        parentFamilyFeeSummary.totalDue > 0 ? 'text-amber-200' : 'text-emerald-200'
-                      }`}>
+                      <span className="font-black text-xs tabular-nums">
                         {familyFeeSettlement.justSettled && familyFeeSettlement.isCountingDown
                           ? `₹${familyFeeSettlement.displayAmount.toLocaleString('en-IN')}`
                           : parentFamilyFeeSummary.totalDue > 0
@@ -7700,7 +7715,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     <button
                       type="button"
                       onClick={() => setShowInstallModal(true)}
-                      className="px-3 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black transition-all shadow-xs flex items-center gap-1.5 cursor-pointer shrink-0"
+                      className="px-3 py-1.5 rounded-xl bg-[#fbbf24] bg-[linear-gradient(90deg,#fbbf24_0%,#f59e0b_100%)] hover:bg-[#f59e0b] text-[#0f172a] text-xs font-black transition-all shadow-xs flex items-center gap-1.5 cursor-pointer shrink-0"
                       title="iPhone / Android में ऐप इंस्टॉल करें"
                     >
                       <i className="fa-brands fa-apple text-sm"></i>
@@ -7712,7 +7727,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   {/* Logout Button */}
                   <button
                     onClick={handleParentLogout}
-                    className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer shrink-0"
+                    className="px-3.5 py-1.5 rounded-xl bg-[#e11d48] hover:bg-[#be123c] text-[#ffffff] text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer shrink-0"
                     title="साइन आउट करें"
                   >
                     <i className="fa-solid fa-right-from-bracket"></i>
@@ -7724,7 +7739,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               {/* CASE 2: MANAGER LOGGED IN */}
               {managerUser && (
                 <div className="flex items-center gap-2 flex-wrap">
-                  <div className="flex items-center gap-1.5 bg-amber-400 text-slate-950 px-3 py-1.5 rounded-xl font-bold text-xs shadow-xs">
+                  <div className="flex items-center gap-1.5 bg-[#fbbf24] bg-[linear-gradient(90deg,#fbbf24_0%,#f59e0b_100%)] text-[#0f172a] px-3 py-1.5 rounded-xl font-black text-xs shadow-xs">
                     <i className="fa-solid fa-user-tie"></i>
                     <span>प्रबंधक: {managerUser.Name}</span>
                   </div>
@@ -7733,10 +7748,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   <div className="flex items-center gap-1.5">
                     {isBackgroundSyncing ? (
                       <div
-                        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-400/20 border border-amber-400/40 text-amber-200 text-xs font-semibold animate-pulse shrink-0"
+                        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-[#0284c7] border border-[#38bdf8] text-[#ffffff] text-xs font-bold shrink-0"
                         title="डेटा बैकग्राउंड में सिंक हो रहा है..."
                       >
-                        <i className="fa-solid fa-arrows-rotate fa-spin text-[10px] text-amber-300"></i>
+                        <i className="fa-solid fa-arrows-rotate fa-spin text-[10px] text-[#fde047]"></i>
                         <span className="hidden sm:inline text-xs">सिंक हो रहा है...</span>
                       </div>
                     ) : (
@@ -7744,10 +7759,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         id="manual-sync-btn"
                         onClick={() => syncAllData(true)}
                         disabled={isBackgroundSyncing}
-                        className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-amber-300 hover:text-amber-200 transition-colors text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0 shadow-sm"
+                        className="px-2.5 py-1.5 rounded-xl bg-[#0d9488] hover:bg-[#0f766e] text-[#ffffff] border border-[#5eead4] transition-colors text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0 shadow-xs"
                         title={`अंतिम सिंक: ${getSyncTimeLabel()}`}
                       >
-                        <i className="fa-solid fa-rotate text-xs"></i>
+                        <i className="fa-solid fa-rotate text-xs text-[#fde047]"></i>
                         <span className="hidden md:inline">डेटा सिंक</span>
                       </button>
                     )}
@@ -7758,7 +7773,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     <button
                       type="button"
                       onClick={() => setActiveTab('manager')}
-                      className="px-2.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 transition-all text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs shrink-0"
+                      className="px-2.5 py-1.5 rounded-xl bg-[#fbbf24] hover:bg-[#f59e0b] text-[#0f172a] transition-colors text-xs font-black flex items-center gap-1.5 cursor-pointer shrink-0 shadow-xs"
                       title="प्रबंधक पोर्टल पर वापस जाएं"
                     >
                       <i className="fa-solid fa-user-tie text-xs"></i>
@@ -7768,17 +7783,17 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     <button
                       type="button"
                       onClick={() => setActiveTab('parent')}
-                      className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-amber-400 hover:text-slate-950 text-amber-200 transition-all text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs shrink-0"
+                      className="px-2.5 py-1.5 rounded-xl bg-[#6366f1] hover:bg-[#4f46e5] text-[#ffffff] border border-[#a5b4fc] transition-colors text-xs font-bold flex items-center gap-1.5 cursor-pointer shrink-0 shadow-xs"
                       title="अभिभावक पोर्टल देखें (View Parent Portal)"
                     >
-                      <i className="fa-solid fa-user-group text-xs text-amber-300"></i>
+                      <i className="fa-solid fa-user-group text-xs text-[#fde047]"></i>
                       <span className="hidden md:inline">अभिभावक पोर्टल</span>
                     </button>
                   )}
 
                   <button
                     onClick={handleManagerLogout}
-                    className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+                    className="px-3 py-1.5 rounded-xl bg-[#e11d48] hover:bg-[#be123c] text-[#ffffff] text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
                     title="प्रबंधक लॉगआउट"
                   >
                     <i className="fa-solid fa-right-from-bracket"></i>
@@ -7790,11 +7805,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               {/* CASE 3: TEACHER LOGGED IN (and not manager) */}
               {teacherUser && !managerUser && (
                 <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-xl border border-white/20 text-xs">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                    <span className="font-extrabold text-white">👩‍🏫 {teacherUser.Name}</span>
-                    <span className="text-[10px] bg-blue-400/30 text-blue-200 border border-blue-400/40 px-2 py-0.5 rounded font-bold">
-                      {currentLang === 'en' ? 'Teacher' : 'अध्यापक'}
+                  <div className="flex items-center gap-2 bg-[#0284c7] bg-[linear-gradient(90deg,#0284c7_0%,#0ea5e9_100%)] px-3 py-1.5 rounded-xl border border-[#bae6fd] text-xs shadow-xs">
+                    <span className="font-extrabold text-[#ffffff]">👩‍🏫 {teacherUser.Name}</span>
+                    <span className="text-[11px] text-[#fef08a] font-bold">
+                      · {currentLang === 'en' ? 'Teacher' : 'अध्यापक'}
                     </span>
                   </div>
 
@@ -7803,7 +7817,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     <button
                       type="button"
                       onClick={() => setActiveTab('teacher')}
-                      className="px-2.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 transition-all text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs shrink-0"
+                      className="px-2.5 py-1.5 rounded-xl bg-[#fbbf24] hover:bg-[#f59e0b] text-[#0f172a] transition-colors text-xs font-black flex items-center gap-1.5 cursor-pointer shrink-0 shadow-xs"
                       title={currentLang === 'en' ? 'Back to Teacher Portal' : 'शिक्षक पोर्टल पर वापस जाएं'}
                     >
                       <i className="fa-solid fa-chalkboard-user text-xs"></i>
@@ -7813,17 +7827,17 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     <button
                       type="button"
                       onClick={() => setActiveTab('parent')}
-                      className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-amber-400 hover:text-slate-950 text-amber-200 transition-all text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs shrink-0"
+                      className="px-2.5 py-1.5 rounded-xl bg-[#6366f1] hover:bg-[#4f46e5] text-[#ffffff] border border-[#a5b4fc] transition-colors text-xs font-bold flex items-center gap-1.5 cursor-pointer shrink-0 shadow-xs"
                       title={currentLang === 'en' ? 'View Parent Portal' : 'अभिभावक पोर्टल देखें (View Parent Portal)'}
                     >
-                      <i className="fa-solid fa-user-group text-xs text-amber-300"></i>
+                      <i className="fa-solid fa-user-group text-xs text-[#fde047]"></i>
                       <span className="hidden sm:inline">{currentLang === 'en' ? 'Parent Portal' : 'अभिभावक पोर्टल'}</span>
                     </button>
                   )}
 
                   <button
                     onClick={handleTeacherLogout}
-                    className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+                    className="px-3.5 py-1.5 rounded-xl bg-[#e11d48] hover:bg-[#be123c] text-[#ffffff] text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
                     title={t.logout}
                   >
                     <i className="fa-solid fa-right-from-bracket"></i>
@@ -7837,13 +7851,13 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => setActiveTab('home')}
-                    className="px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-amber-400 hover:text-slate-950 text-amber-200 text-xs font-bold transition-all border border-amber-400/30 flex items-center gap-1.5 cursor-pointer shadow-xs"
+                    className="px-3.5 py-1.5 rounded-xl bg-[#fbbf24] hover:bg-[#f59e0b] text-[#0f172a] text-xs font-black transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
                     title={currentLang === 'en' ? 'Back to Role Selection' : 'भूमिका चयन पर वापस जाएं'}
                   >
                     <i className="fa-solid fa-arrow-left"></i>
-                    <span>← {currentLang === 'en' ? 'Role Selection' : 'भूमिका चयन (Roles)'}</span>
+                    <span>{currentLang === 'en' ? 'Role Selection' : 'भूमिका चयन'}</span>
                   </button>
-                  <span className="text-xs text-amber-300 bg-amber-400/20 px-2.5 py-1 rounded-lg border border-amber-400/40 font-bold hidden sm:inline-flex items-center gap-1.5">
+                  <span className="text-xs text-[#fde047] font-bold hidden sm:inline-flex items-center gap-1.5">
                     <i className="fa-solid fa-lock text-[10px]"></i>
                     <span>
                       {activeTab === 'parent'
@@ -7865,7 +7879,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     <button
                       type="button"
                       onClick={() => setShowInstallModal(true)}
-                      className="px-3 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-md border border-amber-300 cursor-pointer transition transform active:scale-95"
+                      className="px-3 py-1.5 rounded-xl bg-[#fbbf24] bg-[linear-gradient(90deg,#fbbf24_0%,#f59e0b_100%)] hover:bg-[#f59e0b] text-[#0f172a] font-black text-xs flex items-center gap-1.5 shadow-sm cursor-pointer transition-colors"
                       title="iPhone / Android में App Install करें"
                     >
                       <i className="fa-brands fa-apple text-sm"></i>
@@ -7873,10 +7887,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       <span>Install App</span>
                     </button>
                   )}
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/40 text-xs font-bold shadow-xs">
-                    <i className="fa-solid fa-shield-halved text-amber-400"></i>
-                    <span className="hidden sm:inline">{currentLang === 'en' ? 'Secure Digital Portal' : 'सुरक्षित डिजिटल पोर्टल (लॉगिन आवश्यक)'}</span>
-                    <span className="sm:hidden">{currentLang === 'en' ? 'Secure Portal' : 'सुरक्षित पोर्टल'}</span>
+                  <span className="hidden sm:inline-flex items-center gap-1.5 text-[#fde68a] text-xs font-bold">
+                    <i className="fa-solid fa-shield-halved text-[#34d399]"></i>
+                    <span>{currentLang === 'en' ? 'Secure Digital Portal' : 'सुरक्षित डिजिटल पोर्टल'}</span>
                   </span>
                 </div>
               )}
@@ -7967,25 +7980,25 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
             {/* ========================================================================= */}
             {/* IPHONE & ANDROID INSTALL BANNER & HELPER */}
             {/* ========================================================================= */}
-            <div className="bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 rounded-3xl p-4 sm:p-5 text-slate-950 shadow-xl border-2 border-amber-300 flex flex-col md:flex-row items-center justify-between gap-4 animate-fadeIn">
+            <div className="bg-gradient-to-r from-[#1e3a8a] via-[#4338ca] to-[#7c3aed] rounded-3xl p-4 sm:p-5 text-white shadow-lg border-2 border-[#fbbf24] flex flex-col md:flex-row items-center justify-between gap-4 animate-fadeIn">
               <div className="flex items-center gap-3.5">
-                <div className="w-12 h-12 rounded-2xl bg-[#0c2340] text-amber-300 flex items-center justify-center text-2xl shadow-md shrink-0">
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#fbbf24] to-[#f97316] text-[#0f172a] flex items-center justify-center text-2xl shadow-md shrink-0">
                   <i className="fa-brands fa-apple"></i>
                 </div>
                 <div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-[#0c2340] text-amber-300">
-                      iPhone & Android App
+                  <div className="flex items-center gap-2 flex-wrap text-xs">
+                    <span className="font-bold text-[#0f172a] bg-[#fde047] px-2 py-0.5 rounded-full">
+                      iPhone &amp; Android App
                     </span>
-                    <span className="text-xs font-black text-slate-950">
-                      {isStandaloneApp ? '✅ आपके फ़ोन पर स्थापित है' : '📱 बिना App Store के सीधा Phone में Install करें'}
+                    <span className="font-semibold text-[#e0e7ff]">
+                      {isStandaloneApp ? 'आपके फ़ोन पर स्थापित है' : 'बिना App Store के सीधा Phone में Install करें'}
                     </span>
                   </div>
-                  <h3 className="text-base sm:text-lg font-black text-slate-950 mt-0.5">
+                  <h3 className="text-base sm:text-lg font-extrabold text-white mt-1">
                     iPhone (iOS) में कैसे Install करें? (PWA Installation Guide)
                   </h3>
-                  <p className="text-xs text-slate-800 font-medium">
-                    iPhone Safari में <strong>Share (शेयर ⎋)</strong> ➔ <strong>'Add to Home Screen'</strong> पर क्लिक करके 1 मिनट में इंस्टॉल करें।
+                  <p className="text-xs text-[#e0e7ff] font-medium">
+                    iPhone Safari में <strong>Share (शेयर ⎋)</strong> ➔ <strong>&apos;Add to Home Screen&apos;</strong> पर क्लिक करके 1 मिनट में इंस्टॉल करें।
                   </p>
                 </div>
               </div>
@@ -7994,9 +8007,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 <button
                   type="button"
                   onClick={() => setShowInstallModal(true)}
-                  className="w-full md:w-auto px-5 py-3 rounded-2xl bg-[#0c2340] hover:bg-slate-900 text-amber-300 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg cursor-pointer transition transform active:scale-95 shrink-0"
+                  className="w-full md:w-auto px-5 py-3 rounded-2xl bg-gradient-to-r from-[#fbbf24] to-[#f97316] hover:from-[#f59e0b] hover:to-[#ea580c] text-[#0f172a] font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md cursor-pointer transition-all shrink-0"
                 >
-                  <i className="fa-solid fa-download text-amber-400"></i>
+                  <i className="fa-solid fa-download"></i>
                   <span>iPhone में कैसे Install करें?</span>
                   <i className="fa-solid fa-arrow-right text-xs"></i>
                 </button>
@@ -8009,30 +8022,30 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
             {/* ========================================================================= */}
             {/* SCHOOL PORTAL ROLE LOGIN BANNER (With Role Dropdown & Parent as Default) */}
             {/* ========================================================================= */}
-            <div id="home-login-banner" className="bg-white rounded-3xl shadow-xl border-2 border-amber-400 p-5 sm:p-8 animate-fadeIn relative overflow-hidden">
+            <div id="home-login-banner" className="bg-white rounded-3xl shadow-[0_12px_36px_-14px_rgba(15,23,42,0.1)] border border-slate-200/90 p-5 sm:p-8 animate-fadeIn relative overflow-hidden">
               {/* Top Accent Strip */}
-              <div className="absolute top-0 left-0 right-0 h-2 bg-gradient-to-r from-amber-400 via-blue-600 to-amber-400"></div>
+              <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-indigo-600 via-blue-500 to-cyan-500"></div>
 
               <div className="max-w-3xl mx-auto">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-5 border-b border-slate-100">
                   <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center text-2xl font-black shadow-md shrink-0">
-                      <i className="fa-solid fa-right-to-bracket text-blue-950"></i>
+                    <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 border border-indigo-100 flex items-center justify-center text-xl font-bold shrink-0">
+                      <i className="fa-solid fa-right-to-bracket"></i>
                     </div>
                     <div>
-                      <span className="text-[11px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
+                      <span className="text-[11px] font-semibold text-indigo-600 block">
                         {t.quickPortalLogin}
                       </span>
-                      <h2 className="text-xl sm:text-2xl font-black text-slate-900 mt-1">
+                      <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 mt-0.5">
                         {currentLang === 'en' ? 'School Portal Login' : 'स्कूल पोर्टल लॉगिन (School Portal Login)'}
                       </h2>
                     </div>
                   </div>
 
-                  <div className="text-xs text-slate-500 font-semibold sm:text-right">
+                  <div className="text-xs text-slate-500 font-medium sm:text-right">
                     <span>{t.defaultSelected}: </span>
-                    <span className="text-amber-900 font-bold bg-amber-100 px-2.5 py-1 rounded-lg border border-amber-300 inline-flex items-center gap-1">
-                      <i className="fa-solid fa-user-group text-amber-700"></i>
+                    <span className="text-indigo-700 font-semibold inline-flex items-center gap-1">
+                      <i className="fa-solid fa-user-group"></i>
                       {currentLang === 'en' ? 'Parent / Guardian' : 'अभिभावक (Parent)'}
                     </span>
                   </div>
@@ -8041,9 +8054,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 {/* ROLE DROPDOWN SELECTOR */}
                 <div className="mt-5 space-y-4">
                   <div>
-                    <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-2 flex items-center justify-between">
+                    <label className="block text-xs font-semibold text-slate-700 mb-2 flex items-center justify-between">
                       <span className="flex items-center gap-1.5">
-                        <i className="fa-solid fa-user-gear text-amber-500 text-sm"></i>
+                        <i className="fa-solid fa-user-gear text-indigo-600 text-sm"></i>
                         <span>{t.chooseRoleLabel}</span>
                       </span>
                     </label>
@@ -8053,20 +8066,20 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         id="role-dropdown-selector"
                         value={homeSelectedRole}
                         onChange={(e) => setHomeSelectedRole(e.target.value as any)}
-                        className="w-full pl-4 pr-12 py-3.5 bg-slate-50 hover:bg-slate-100 focus:bg-white text-slate-950 font-black text-base sm:text-lg rounded-2xl border-2 border-slate-300 focus:border-amber-500 focus:ring-4 focus:ring-amber-400/20 outline-none transition-all cursor-pointer shadow-xs appearance-none"
+                        className="w-full pl-4 pr-12 py-3.5 bg-slate-50 hover:bg-slate-100/80 focus:bg-white text-slate-900 font-bold text-base sm:text-lg rounded-2xl border border-slate-200 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/15 outline-none transition-all cursor-pointer appearance-none"
                       >
                         <option value="parent">{t.parentRole}</option>
                         <option value="teacher">{t.teacherRole}</option>
                         <option value="manager">{t.managerRole}</option>
                         <option value="driver">{t.driverRole}</option>
                       </select>
-                      <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-slate-600">
+                      <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-slate-500">
                         <i className="fa-solid fa-chevron-down text-base"></i>
                       </div>
                     </div>
 
                     <p className="text-[11px] sm:text-xs text-slate-500 mt-2 font-medium flex items-center gap-1.5">
-                      <i className="fa-solid fa-circle-info text-amber-500"></i>
+                      <i className="fa-solid fa-circle-info text-indigo-500"></i>
                       <span>
                         {homeSelectedRole === 'parent' && (currentLang === 'en' ? 'Parents can log in directly using their 10-digit registered mobile number to view their ward\'s portal.' : 'अभिभावक केवल अपना रजिस्टर्ड 10-अंकीय फोन नंबर डालकर सीधे अपने बच्चे के पोर्टल में लॉगिन कर सकते हैं।')}
                         {homeSelectedRole === 'teacher' && (currentLang === 'en' ? 'Teachers enter their ID/mobile number and password to access the teacher portal.' : 'शिक्षक अपनी आईडी/मोबाइल और पासवर्ड दर्ज करके शिक्षक पोर्टल में प्रवेश करें।')}
@@ -8077,7 +8090,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   </div>
 
                   {/* DYNAMIC FORM ACCORDING TO ROLE */}
-                  <div className="bg-slate-50/80 rounded-2xl p-4 sm:p-6 border border-slate-200 shadow-inner">
+                  <div className="bg-slate-50/70 rounded-2xl p-4 sm:p-6 border border-slate-200/80">
                     {/* ROLE 1: PARENT LOGIN (DEFAULT) */}
                     {homeSelectedRole === 'parent' && (
                       <form
@@ -8088,18 +8101,18 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         className="space-y-4"
                       >
                         <div>
-                          <label className="block text-xs font-bold text-slate-800 mb-1.5 flex items-center justify-between">
+                          <label className="block text-xs font-semibold text-slate-700 mb-1.5 flex items-center justify-between">
                             <span className="flex items-center gap-1.5">
-                              <i className="fa-solid fa-phone text-amber-600"></i>
+                              <i className="fa-solid fa-phone text-indigo-600"></i>
                               <span>{t.parentMobileLabel}</span>
                             </span>
-                            <span className="text-[10px] text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-md font-extrabold border border-emerald-300">
+                            <span className="text-[11px] text-emerald-700 font-semibold">
                               {currentLang === 'en' ? 'Direct Mobile Login' : 'केवल फोन नंबर डालें'}
                             </span>
                           </label>
 
                           <div className="relative">
-                            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500 font-bold text-sm">
+                            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500 font-semibold text-sm">
                               <span>+91</span>
                               <span className="mx-2 text-slate-300">|</span>
                             </div>
@@ -8112,7 +8125,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                 if (parentSearchAttempted) setParentSearchAttempted(false);
                               }}
                               placeholder={t.parentMobilePlaceholder}
-                              className="w-full pl-16 pr-10 py-3.5 bg-white text-slate-950 font-black text-base sm:text-lg rounded-xl border-2 border-slate-300 focus:border-amber-500 focus:ring-4 focus:ring-amber-500/15 outline-none transition-all placeholder:text-slate-400 placeholder:font-normal shadow-2xs"
+                              className="w-full pl-16 pr-10 py-3.5 bg-white text-slate-900 font-bold text-base sm:text-lg rounded-xl border border-slate-300 focus:border-indigo-600 focus:ring-4 focus:ring-indigo-500/15 outline-none transition-all placeholder:text-slate-400 placeholder:font-normal"
                               autoFocus
                             />
                             {parentMobileInput && (
@@ -8142,16 +8155,16 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         <button
                           type="submit"
                           disabled={parentLoginSubmitting || !parentMobileInput.trim()}
-                          className="w-full py-3.5 px-6 bg-gradient-to-r from-amber-400 via-amber-500 to-amber-400 hover:from-amber-500 hover:to-amber-600 text-slate-950 font-black text-sm sm:text-base rounded-xl shadow-md hover:shadow-lg transition-all duration-150 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed active:scale-98"
+                          className="w-full py-3.5 px-6 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm sm:text-base rounded-xl shadow-md shadow-indigo-600/20 hover:shadow-lg transition-all duration-150 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed active:scale-98"
                         >
                           {parentLoginSubmitting ? (
                             <>
-                              <div className="w-5 h-5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin"></div>
+                              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
                               <span>{t.parentFetchingData}</span>
                             </>
                           ) : (
                             <>
-                              <i className="fa-solid fa-arrow-right-to-bracket text-slate-950 text-lg"></i>
+                              <i className="fa-solid fa-arrow-right-to-bracket text-white text-base"></i>
                               <span>{t.parentFetchDataBtn} →</span>
                             </>
                           )}
@@ -8275,7 +8288,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         <button
                           type="button"
                           onClick={() => setActiveTab('driver')}
-                          className="px-6 py-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-black text-sm rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0"
+                          className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-xl shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0"
                         >
                           <i className="fa-solid fa-van-shuttle"></i>
                           <span>ड्राइवर पोर्टल खोलें →</span>
@@ -8290,11 +8303,11 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
             {/* 4 Selection Options / Buttons strictly in order: 1. Parent, 2. Manager, 3. Teacher, 4. Driver */}
             <div>
               <div className="flex items-center justify-between mb-4 px-1">
-                <span className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-blue-800"></span>
+                <span className="text-xs font-bold text-[#4338ca] uppercase tracking-wider flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-gradient-to-r from-[#f59e0b] to-[#4f46e5]"></span>
                   4 भूमिका विकल्प (4 Role Options)
                 </span>
-                <span className="text-xs text-slate-500">अपनी भूमिका पर क्लिक करें</span>
+                <span className="text-xs text-[#475569] font-medium">अपनी भूमिका पर क्लिक करें</span>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
@@ -8305,36 +8318,35 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     setHomeSelectedRole('parent');
                     document.getElementById('home-login-banner')?.scrollIntoView({ behavior: 'smooth' });
                   }}
-                  className="group bg-white rounded-2xl p-6 shadow-md hover:shadow-2xl transition-all duration-200 border-2 border-slate-100 hover:border-amber-400 flex flex-col justify-between cursor-pointer relative overflow-hidden"
+                  className="group bg-gradient-to-br from-[#ffffff] to-[#fff7ed] rounded-2xl p-6 shadow-sm hover:shadow-xl hover:-translate-y-0.5 transition-all duration-200 border border-[#fed7aa] border-t-4 border-t-[#f59e0b] flex flex-col justify-between cursor-pointer relative overflow-hidden"
                 >
-                  <div className="absolute top-0 right-0 w-24 h-24 bg-amber-50 rounded-bl-full transition-transform group-hover:scale-110 -z-0"></div>
                   <div className="relative z-10">
                     <div className="flex items-center justify-between mb-4">
-                      <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 text-[11px] font-black tracking-wider uppercase">
+                      <span className="text-[11px] font-extrabold text-[#b45309] bg-[#fef3c7] px-2.5 py-0.5 rounded-full tracking-wider uppercase">
                         1. Parent
                       </span>
-                      <span className="text-[11px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded">
+                      <span className="text-[11px] font-semibold text-[#c2410c]">
                         मोबाइल लॉगिन
                       </span>
                     </div>
 
-                    <div className="w-14 h-14 rounded-2xl bg-amber-500/10 text-amber-600 flex items-center justify-center text-2xl mb-4 group-hover:bg-amber-500 group-hover:text-white transition-colors duration-200 shadow-xs">
+                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#f59e0b] to-[#ea580c] text-white shadow-md shadow-amber-500/25 flex items-center justify-center text-xl mb-4 group-hover:scale-105 transition-transform duration-200">
                       <i className="fa-solid fa-user-group"></i>
                     </div>
 
-                    <h2 className="text-xl font-black text-slate-900 group-hover:text-blue-900 transition-colors">
+                    <h2 className="text-lg font-extrabold text-[#0f172a] group-hover:text-[#c2410c] transition-colors">
                       Parent
                     </h2>
-                    <p className="text-xs font-bold text-amber-700 mb-2">
-                      (अभिभावक)
+                    <p className="text-xs font-bold text-[#d97706] mb-2">
+                      अभिभावक पोर्टल
                     </p>
-                    <p className="text-xs text-slate-600 leading-relaxed mb-6">
+                    <p className="text-xs text-slate-600 leading-relaxed mb-5">
                       पंजीकृत मोबाइल नंबर दर्ज कर अपने बच्चे का दैनिक गृहकार्य (Homework), उपस्थिति, फीस व रिमार्क देखें।
                     </p>
                   </div>
 
-                  <div className="relative z-10 pt-4 border-t border-slate-100 flex items-center justify-between">
-                    <span className="text-xs font-bold text-blue-900 group-hover:text-amber-600 flex items-center gap-1.5">
+                  <div className="relative z-10 pt-3.5 border-t border-[#fed7aa] flex items-center justify-between">
+                    <span className="text-xs font-bold text-[#d97706] group-hover:text-[#b45309] flex items-center gap-1.5">
                       <span>मोबाइल नंबर दर्ज करें</span>
                       <i className="fa-solid fa-arrow-right text-xs group-hover:translate-x-1 transition-transform"></i>
                     </span>
@@ -8348,36 +8360,35 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     setHomeSelectedRole('manager');
                     document.getElementById('home-login-banner')?.scrollIntoView({ behavior: 'smooth' });
                   }}
-                  className="group bg-white rounded-2xl p-6 shadow-md hover:shadow-2xl transition-all duration-200 border-2 border-slate-100 hover:border-slate-800 flex flex-col justify-between cursor-pointer relative overflow-hidden"
+                  className="group bg-gradient-to-br from-[#ffffff] to-[#eef2ff] rounded-2xl p-6 shadow-sm hover:shadow-xl hover:-translate-y-0.5 transition-all duration-200 border border-[#c7d2fe] border-t-4 border-t-[#4f46e5] flex flex-col justify-between cursor-pointer relative overflow-hidden"
                 >
-                  <div className="absolute top-0 right-0 w-24 h-24 bg-slate-100 rounded-bl-full transition-transform group-hover:scale-110 -z-0"></div>
                   <div className="relative z-10">
                     <div className="flex items-center justify-between mb-4">
-                      <span className="px-2.5 py-0.5 rounded-full bg-slate-200 text-slate-900 text-[11px] font-black tracking-wider uppercase">
+                      <span className="text-[11px] font-extrabold text-[#3730a3] bg-[#e0e7ff] px-2.5 py-0.5 rounded-full tracking-wider uppercase">
                         2. Manager
                       </span>
-                      <span className="text-[11px] font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded">
+                      <span className="text-[11px] font-semibold text-[#4338ca]">
                         आईडी व पासवर्ड
                       </span>
                     </div>
 
-                    <div className="w-14 h-14 rounded-2xl bg-slate-900/10 text-slate-900 flex items-center justify-center text-2xl mb-4 group-hover:bg-slate-900 group-hover:text-white transition-colors duration-200 shadow-xs">
+                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#4f46e5] to-[#7c3aed] text-white shadow-md shadow-indigo-500/25 flex items-center justify-center text-xl mb-4 group-hover:scale-105 transition-transform duration-200">
                       <i className="fa-solid fa-user-tie"></i>
                     </div>
 
-                    <h2 className="text-xl font-black text-slate-900 group-hover:text-blue-900 transition-colors">
+                    <h2 className="text-lg font-extrabold text-[#0f172a] group-hover:text-[#4338ca] transition-colors">
                       Manager
                     </h2>
-                    <p className="text-xs font-bold text-slate-700 mb-2">
-                      (स्कूल प्रबंधक)
+                    <p className="text-xs font-bold text-[#4f46e5] mb-2">
+                      स्कूल प्रबंधक
                     </p>
-                    <p className="text-xs text-slate-600 leading-relaxed mb-6">
+                    <p className="text-xs text-slate-600 leading-relaxed mb-5">
                       संपूर्ण स्कूल प्रशासन, सभी छात्र रिकॉर्ड्स, अध्यापकों का कार्य, फीस कलेक्शन एवं वैन लाइव जीपीएस ट्रैकिंग।
                     </p>
                   </div>
 
-                  <div className="relative z-10 pt-4 border-t border-slate-100 flex items-center justify-between">
-                    <span className="text-xs font-bold text-blue-900 group-hover:text-slate-900 flex items-center gap-1.5">
+                  <div className="relative z-10 pt-3.5 border-t border-[#c7d2fe] flex items-center justify-between">
+                    <span className="text-xs font-bold text-[#4f46e5] group-hover:text-[#3730a3] flex items-center gap-1.5">
                       <span>लॉगिन करें</span>
                       <i className="fa-solid fa-arrow-right text-xs group-hover:translate-x-1 transition-transform"></i>
                     </span>
@@ -8391,36 +8402,35 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     setHomeSelectedRole('teacher');
                     document.getElementById('home-login-banner')?.scrollIntoView({ behavior: 'smooth' });
                   }}
-                  className="group bg-white rounded-2xl p-6 shadow-md hover:shadow-2xl transition-all duration-200 border-2 border-slate-100 hover:border-blue-800 flex flex-col justify-between cursor-pointer relative overflow-hidden"
+                  className="group bg-gradient-to-br from-[#ffffff] to-[#f0f9ff] rounded-2xl p-6 shadow-sm hover:shadow-xl hover:-translate-y-0.5 transition-all duration-200 border border-[#bae6fd] border-t-4 border-t-[#0284c7] flex flex-col justify-between cursor-pointer relative overflow-hidden"
                 >
-                  <div className="absolute top-0 right-0 w-24 h-24 bg-blue-50 rounded-bl-full transition-transform group-hover:scale-110 -z-0"></div>
                   <div className="relative z-10">
                     <div className="flex items-center justify-between mb-4">
-                      <span className="px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-950 text-[11px] font-black tracking-wider uppercase">
+                      <span className="text-[11px] font-extrabold text-[#0369a1] bg-[#e0f2fe] px-2.5 py-0.5 rounded-full tracking-wider uppercase">
                         3. Teacher
                       </span>
-                      <span className="text-[11px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded">
+                      <span className="text-[11px] font-semibold text-[#0284c7]">
                         आईडी व पासवर्ड
                       </span>
                     </div>
 
-                    <div className="w-14 h-14 rounded-2xl bg-blue-900/10 text-blue-900 flex items-center justify-center text-2xl mb-4 group-hover:bg-[#0c2340] group-hover:text-amber-400 transition-colors duration-200 shadow-xs">
+                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#0284c7] to-[#2563eb] text-white shadow-md shadow-sky-500/25 flex items-center justify-center text-xl mb-4 group-hover:scale-105 transition-transform duration-200">
                       <i className="fa-solid fa-chalkboard-user"></i>
                     </div>
 
-                    <h2 className="text-xl font-black text-slate-900 group-hover:text-blue-900 transition-colors">
+                    <h2 className="text-lg font-extrabold text-[#0f172a] group-hover:text-[#0369a1] transition-colors">
                       Teacher
                     </h2>
-                    <p className="text-xs font-bold text-blue-800 mb-2">
-                      (स्कूल शिक्षक)
+                    <p className="text-xs font-bold text-[#0284c7] mb-2">
+                      स्कूल शिक्षक
                     </p>
-                    <p className="text-xs text-slate-600 leading-relaxed mb-6">
+                    <p className="text-xs text-slate-600 leading-relaxed mb-5">
                       दैनिक होमवर्क (गृहकार्य) अपलोड करें, छात्रों के कार्य की जांच करें एवं कक्षा उपस्थिति मार्क करें।
                     </p>
                   </div>
 
-                  <div className="relative z-10 pt-4 border-t border-slate-100 flex items-center justify-between">
-                    <span className="text-xs font-bold text-blue-900 group-hover:text-blue-700 flex items-center gap-1.5">
+                  <div className="relative z-10 pt-3.5 border-t border-[#bae6fd] flex items-center justify-between">
+                    <span className="text-xs font-bold text-[#0284c7] group-hover:text-[#0369a1] flex items-center gap-1.5">
                       <span>लॉगिन करें</span>
                       <i className="fa-solid fa-arrow-right text-xs group-hover:translate-x-1 transition-transform"></i>
                     </span>
@@ -8434,37 +8444,36 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     setHomeSelectedRole('driver');
                     document.getElementById('home-login-banner')?.scrollIntoView({ behavior: 'smooth' });
                   }}
-                  className="group bg-white rounded-2xl p-6 shadow-md hover:shadow-2xl transition-all duration-200 border-2 border-slate-100 hover:border-emerald-500 flex flex-col justify-between cursor-pointer relative overflow-hidden"
+                  className="group bg-gradient-to-br from-[#ffffff] to-[#ecfdf5] rounded-2xl p-6 shadow-sm hover:shadow-xl hover:-translate-y-0.5 transition-all duration-200 border border-[#a7f3d0] border-t-4 border-t-[#059669] flex flex-col justify-between cursor-pointer relative overflow-hidden"
                 >
-                  <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-50 rounded-bl-full transition-transform group-hover:scale-110 -z-0"></div>
                   <div className="relative z-10">
                     <div className="flex items-center justify-between mb-4">
-                      <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-950 text-[11px] font-black tracking-wider uppercase">
+                      <span className="text-[11px] font-extrabold text-[#047857] bg-[#d1fae5] px-2.5 py-0.5 rounded-full tracking-wider uppercase">
                         4. Driver
                       </span>
-                      <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded flex items-center gap-1">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
+                      <span className="text-[11px] font-bold text-[#059669] flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#10b981] animate-ping"></span>
                         लाइव GPS
                       </span>
                     </div>
 
-                    <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center text-2xl mb-4 group-hover:bg-emerald-600 group-hover:text-white transition-colors duration-200 shadow-xs">
+                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#059669] to-[#10b981] text-white shadow-md shadow-emerald-500/25 flex items-center justify-center text-xl mb-4 group-hover:scale-105 transition-transform duration-200">
                       <i className="fa-solid fa-van-shuttle"></i>
                     </div>
 
-                    <h2 className="text-xl font-black text-slate-900 group-hover:text-emerald-700 transition-colors">
+                    <h2 className="text-lg font-extrabold text-[#0f172a] group-hover:text-[#047857] transition-colors">
                       Driver
                     </h2>
-                    <p className="text-xs font-bold text-emerald-700 mb-2">
-                      (वैन ड्राइवर)
+                    <p className="text-xs font-bold text-[#059669] mb-2">
+                      वैन ड्राइवर
                     </p>
-                    <p className="text-xs text-slate-600 leading-relaxed mb-6">
+                    <p className="text-xs text-slate-600 leading-relaxed mb-5">
                       वैन लाइव जीपीएस लोकेशन प्रसारण, रूट स्टॉप एवं प्रबंधक के साथ रीयल-टाइम संचार।
                     </p>
                   </div>
 
-                  <div className="relative z-10 pt-4 border-t border-slate-100 flex items-center justify-between">
-                    <span className="text-xs font-bold text-emerald-700 group-hover:text-emerald-900 flex items-center gap-1.5">
+                  <div className="relative z-10 pt-3.5 border-t border-[#a7f3d0] flex items-center justify-between">
+                    <span className="text-xs font-bold text-[#059669] group-hover:text-[#047857] flex items-center gap-1.5">
                       <span>लॉगिन करें</span>
                       <i className="fa-solid fa-arrow-right text-xs group-hover:translate-x-1 transition-transform"></i>
                     </span>
@@ -8642,7 +8651,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               </div>
             ) : (
               /* LOGGED IN: STUDENT PROFILE & HOMEWORK VIEW */
-              <div className="space-y-6">
+              <div className="space-y-5">
                 {/* Hidden File Input for Student Photo Upload */}
                 <input
                   ref={photoFileInputRef}
@@ -8655,112 +8664,160 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 {/* Device Push Notification Opt-in for Parents */}
                 <NotificationPermissionBanner lang={currentLang} />
 
-                {/* COMBINED MULTI-CHILD FAMILY FEE SUMMARY CARD (Top lightweight overview for 2, 3+ kids) */}
-                {parentChildren.length > 1 && parentFamilyFeeSummary && (
-                  <div
-                    className={`relative overflow-hidden rounded-2xl border p-3 sm:p-3.5 shadow-2xs transition-all duration-500 ${
-                      parentFamilyFeeSummary.totalDue > 0
-                        ? 'bg-gradient-to-r from-amber-50/90 via-white to-rose-50/70 border-amber-200/90'
-                        : 'bg-gradient-to-r from-emerald-50/90 via-white to-teal-50/60 border-emerald-200/90'
-                    } ${familyFeeSettlement.justSettled && parentFamilyFeeSummary.totalDue === 0 ? 'animate-fee-card-settle ring-2 ring-emerald-400/70' : ''}`}
-                  >
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                      <div className="space-y-1.5 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs shrink-0 ${
-                            parentFamilyFeeSummary.totalDue > 0
-                              ? 'bg-amber-100 text-amber-800 border border-amber-200'
-                              : 'bg-emerald-100 text-emerald-700 border border-emerald-200'
-                          }`}>
-                            <i className="fa-solid fa-coins"></i>
-                          </span>
-                          <span className="text-xs sm:text-sm font-extrabold text-slate-900">
-                            परिवार की कुल संयुक्त फ़ीस ({parentFamilyFeeSummary.members.length} बच्चे)
-                          </span>
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                            parentFamilyFeeSummary.totalDue > 0
-                              ? 'bg-rose-100 text-rose-800 border-rose-200'
-                              : 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                          }`}>
-                            {parentFamilyFeeSummary.totalDue > 0 ? 'कुल बकाया सक्रिय' : 'सभी बच्चों की फ़ीस जमा ✓'}
-                          </span>
-                        </div>
+                {/* Flush Left-Wall Slide-Out Drawer & Single Sticky Menu Trigger Bar */}
+                {(() => {
+                  const activeParentMeta =
+                    parentActiveSection === 'overview'
+                      ? null
+                      : PARENT_MENU_ITEMS.find((m) => m.id === parentActiveSection);
+                  const parentFeeLabel = studentFeeSummary.hasDues
+                    ? `₹${studentFeeSummary.balance.toLocaleString('en-IN')}`
+                    : studentFeeSummary.isAdvance
+                    ? `-₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')}`
+                    : currentLang === 'en'
+                    ? 'Paid ✓'
+                    : 'पूर्ण ✓';
+                  const activeParentBadge =
+                    parentActiveSection === 'homework'
+                      ? `${parentHomework.length}`
+                      : parentActiveSection === 'tracker'
+                      ? trackerStats.incompleted > 0
+                        ? `${trackerStats.incompleted} बाकी`
+                        : 'पूरा ✓'
+                      : parentActiveSection === 'fees'
+                      ? parentFeeLabel
+                      : parentActiveSection === 'notices'
+                      ? `${schoolNotices.length}`
+                      : '';
 
-                        {/* Inline per-child due chips (works dynamically for 2, 3, or any number of kids) */}
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          {parentFamilyFeeSummary.members.map((m) => {
-                            const isSelectedChild = selectedStudent?.Student_ID === m.student.Student_ID;
-                            const isExemptChild = isStudentFeeExempt(m.student);
-                            return (
-                              <button
-                                key={m.student.Student_ID}
-                                type="button"
-                                onClick={() => setSelectedStudent(m.student)}
-                                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer ${
-                                  isSelectedChild
-                                    ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
-                                    : 'bg-white/90 text-slate-700 border-slate-200 hover:bg-slate-100'
-                                }`}
-                              >
-                                <span className="truncate max-w-[120px]">{m.student.Student_Name}:</span>
-                                <span className={`font-black tabular-nums ${
-                                  m.dueAmount > 0
-                                    ? (isSelectedChild ? 'text-amber-300' : 'text-rose-700')
-                                    : (isSelectedChild ? 'text-emerald-300' : 'text-emerald-700')
-                                }`}>
-                                  {m.dueAmount > 0
-                                    ? `₹${m.dueAmount.toLocaleString('en-IN')}`
-                                    : m.advanceAmount > 0
-                                    ? `-₹${m.advanceAmount.toLocaleString('en-IN')} Adv`
-                                    : isExemptChild
-                                    ? '₹0 (माफ ✓)'
-                                    : '₹0 ✓'}
+                  return (
+                    <>
+                      <ParentLeftSidebar
+                        isOpen={isParentMenuOpen}
+                        onClose={() => setIsParentMenuOpen(false)}
+                        activeSection={parentActiveSection}
+                        onSelectSection={handleSelectParentSection}
+                        studentName={selectedStudent?.Student_Name || ''}
+                        currentLang={currentLang}
+                        onRefreshData={() => {
+                          fetchHomework();
+                          fetchHomeworkTracker();
+                          fetchStudentBehavior();
+                          fetchFeeCollection();
+                          fetchReportCardAllData(true);
+                        }}
+                        isRefreshing={loadingHomework || loadingHwTracker || loadingBehavior || loadingFees}
+                        counts={{
+                          homeworkCount: parentHomework.length,
+                          incompleteTrackerCount: trackerStats.incompleted,
+                          feeLabel: parentFeeLabel,
+                          noticesCount: schoolNotices.length,
+                        }}
+                      />
+
+                      {/* Single Left-Wall Menu Trigger + Active Context Bar */}
+                      <div className="relative z-20 flex flex-wrap items-center justify-between gap-2 bg-[#ffffff] rounded-2xl shadow-md border-2 border-[#bfdbfe] pr-3 py-1.5 pl-0">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <button
+                            type="button"
+                            id="parent-left-wall-trigger"
+                            onClick={() => setIsParentMenuOpen(true)}
+                            className="-ml-4 sm:-ml-6 lg:-ml-8 pl-4 sm:pl-5 pr-3.5 py-2.5 bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-black text-xs sm:text-sm rounded-r-xl rounded-l-none flex items-center gap-2 shadow-md border border-l-0 border-amber-400/50 cursor-pointer transition-colors whitespace-nowrap shrink-0"
+                            title={currentLang === 'en' ? 'Open Parent Menu' : 'अभिभावक मेन्यू खोलें'}
+                          >
+                            <i className="fa-solid fa-ellipsis-vertical text-sm" aria-hidden="true"></i>
+                            <span>{currentLang === 'en' ? 'Menu' : 'मेनू'}</span>
+                          </button>
+
+                          {parentActiveSection !== 'overview' && (
+                            <button
+                              type="button"
+                              onClick={() => handleSelectParentSection('overview')}
+                              className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-xs rounded-xl flex items-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap shrink-0"
+                              title={currentLang === 'en' ? 'Back to Home Page (4 Cards)' : 'होम पेज (4 कार्ड्स) पर वापस जाएं'}
+                            >
+                              <i className="fa-solid fa-arrow-left text-[11px]" aria-hidden="true"></i>
+                              <span>{currentLang === 'en' ? 'Home' : 'होम पेज'}</span>
+                            </button>
+                          )}
+
+                          <div className="flex items-center gap-2 min-w-0 pl-1.5 border-l border-slate-200">
+                            {parentActiveSection === 'overview' ? (
+                              <h2 className="text-xs sm:text-sm font-bold text-slate-900 truncate flex items-center gap-1.5">
+                                <i className="fa-solid fa-house text-[#0c2340]" aria-hidden="true"></i>
+                                <span>
+                                  {currentLang === 'en'
+                                    ? 'Parent Home (4 Cards)'
+                                    : 'अभिभावक होम पेज (Parent Home)'}
                                 </span>
-                              </button>
-                            );
-                          })}
+                              </h2>
+                            ) : (
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className="text-xs sm:text-sm text-slate-900 font-bold truncate flex items-center gap-1.5">
+                                  {activeParentMeta && (
+                                    <i
+                                      className={`${activeParentMeta.iconClass} ${activeParentMeta.accentText}`}
+                                      aria-hidden="true"
+                                    ></i>
+                                  )}
+                                  <span className="truncate">
+                                    {activeParentMeta
+                                      ? currentLang === 'en'
+                                        ? activeParentMeta.titleEn
+                                        : activeParentMeta.titleHi
+                                      : parentActiveSection}
+                                  </span>
+                                </span>
+                                {activeParentBadge && (
+                                  <span className="text-xs font-bold text-[#0c2340] tabular-nums whitespace-nowrap shrink-0">
+                                    · {activeParentBadge}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {selectedStudent && (
+                            <button
+                              type="button"
+                              onClick={() => setPreviewQRStudent(selectedStudent)}
+                              className="px-2.5 sm:px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 rounded-xl text-xs font-black flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                              title="छात्र QR कोड पास देखें"
+                            >
+                              <i className="fa-solid fa-qrcode text-xs" aria-hidden="true"></i>
+                              <span className="hidden sm:inline">QR पास</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              fetchHomework();
+                              fetchHomeworkTracker();
+                              fetchStudentBehavior();
+                              fetchFeeCollection();
+                              fetchReportCardAllData(true);
+                            }}
+                            disabled={loadingHomework || loadingHwTracker || loadingBehavior || loadingFees}
+                            className="px-2.5 sm:px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-50"
+                            title="Refresh data from Google Sheets"
+                          >
+                            <i
+                              className={`fa-solid fa-rotate-right text-xs ${
+                                loadingHomework || loadingHwTracker || loadingBehavior || loadingFees ? 'fa-spin' : ''
+                              }`}
+                              aria-hidden="true"
+                            ></i>
+                            <span className="hidden sm:inline">{t.refreshData}</span>
+                          </button>
                         </div>
                       </div>
+                    </>
+                  );
+                })()}
 
-                      <div className="flex items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-amber-200/60 shrink-0">
-                        <div className="sm:text-right">
-                          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                            {parentFamilyFeeSummary.totalDue > 0
-                              ? `कुल बाकी (${parentFamilyFeeSummary.members.length} बच्चे)`
-                              : 'संयुक्त स्थिति'}
-                          </div>
-                          <div className={`text-lg sm:text-xl font-black tabular-nums leading-tight ${
-                            parentFamilyFeeSummary.totalDue > 0 ? 'text-rose-700' : 'text-emerald-700'
-                          } ${familyFeeSettlement.justSettled ? 'animate-fee-text-settle' : ''}`}>
-                            {familyFeeSettlement.justSettled && familyFeeSettlement.isCountingDown
-                              ? `₹${familyFeeSettlement.displayAmount.toLocaleString('en-IN')}`
-                              : parentFamilyFeeSummary.totalDue > 0
-                              ? `₹${parentFamilyFeeSummary.totalDue.toLocaleString('en-IN')}`
-                              : '₹0 Paid ✓'}
-                          </div>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setParentActiveSection('fees');
-                            window.scrollTo({ top: 0, behavior: 'smooth' });
-                          }}
-                          className={`px-3.5 py-2 rounded-xl text-xs font-extrabold transition-all shadow-xs active:scale-95 cursor-pointer flex items-center gap-1.5 ${
-                            parentFamilyFeeSummary.totalDue > 0
-                              ? 'bg-[#0c2340] hover:bg-blue-950 text-amber-300'
-                              : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                          }`}
-                        >
-                          <span>{parentFamilyFeeSummary.totalDue > 0 ? 'फ़ीस देखें / भरें' : 'रसीदें देखें'}</span>
-                          <i className="fa-solid fa-arrow-right text-[10px]"></i>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* SIBLINGS / MULTI-CHILD SELECTION TOOLBAR (Clean, Compact, Uncluttered) */}
+                {/* SIBLINGS / MULTI-CHILD SELECTION TOOLBAR (Compact switcher accessible in all views) */}
                 {parentChildren.length > 1 && (
                   <div className="bg-slate-50 border border-slate-200/90 rounded-2xl p-3 sm:p-3.5 flex flex-wrap items-center justify-between gap-2.5 shadow-2xs">
                     <div className="flex flex-wrap items-center gap-2">
@@ -8873,177 +8930,278 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   </div>
                 )}
 
-                {/* AI DAILY GREETING & ACTIVITY BRIEF CARD (Replaces cluttered box) */}
-                {selectedStudent && (
-                  <div className="bg-gradient-to-br from-[#0c2340] via-[#10316b] to-[#0c2340] rounded-2xl p-4 sm:p-5 text-white shadow-lg border border-blue-900/60 relative overflow-hidden animate-fadeIn">
-                    {/* Subtle decorative glowing corner */}
-                    <div className="absolute top-0 right-0 w-48 h-48 bg-amber-400/10 rounded-full blur-2xl pointer-events-none -mr-10 -mt-10"></div>
-
-                    <div className="relative z-10">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/10">
-                        <div className="flex items-center gap-3">
-                          {/* Student Photo Avatar */}
-                          <div className="relative shrink-0">
-                            <StudentAvatar
-                              student={selectedStudent}
-                              photoUrl={getStudentPhoto(selectedStudent)}
-                              size="md"
-                              showUploadBtn={true}
-                              onUpload={() => handleTriggerPhotoUpload(selectedStudent.Student_ID)}
-                            />
-                          </div>
-                          <div>
+                {/* PARENT HOME PAGE: HIDES COMPLETELY WHENEVER ANY MODULE IS SELECTED */}
+                {parentActiveSection === 'overview' && (
+                  <div className="space-y-4 animate-fadeIn">
+                    {/* COMBINED MULTI-CHILD FAMILY FEE SUMMARY CARD */}
+                    {parentChildren.length > 1 && parentFamilyFeeSummary && (
+                      <div
+                        className={`relative overflow-hidden rounded-2xl border p-3 sm:p-3.5 shadow-2xs transition-all duration-500 ${
+                          parentFamilyFeeSummary.totalDue > 0
+                            ? 'bg-gradient-to-r from-amber-50/90 via-white to-rose-50/70 border-amber-200/90'
+                            : 'bg-gradient-to-r from-emerald-50/90 via-white to-teal-50/60 border-emerald-200/90'
+                        } ${familyFeeSettlement.justSettled && parentFamilyFeeSummary.totalDue === 0 ? 'animate-fee-card-settle ring-2 ring-emerald-400/70' : ''}`}
+                      >
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                          <div className="space-y-1.5 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <h3 className="text-base sm:text-lg font-black text-amber-300">
-                                अस्सलाम वालेकुम, {selectedStudent.Student_Name} के अभिभावक! 🌸
-                              </h3>
-                              <span className="text-[10px] bg-amber-400/20 text-amber-300 border border-amber-400/40 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
-                                <i className={`fa-solid fa-sparkles text-amber-400 ${aiGreetingLoading ? 'animate-spin' : ''}`}></i>
-                                <span>{isAiGenerated ? 'AI दैनिक रिपोर्ट' : 'दैनिक गतिविधि सार'}</span>
+                              <span
+                                className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs shrink-0 ${
+                                  parentFamilyFeeSummary.totalDue > 0
+                                    ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                                    : 'bg-emerald-100 text-emerald-700 border border-emerald-200'
+                                }`}
+                              >
+                                <i className="fa-solid fa-coins"></i>
+                              </span>
+                              <span className="text-xs sm:text-sm font-extrabold text-slate-900">
+                                परिवार की कुल संयुक्त फ़ीस ({parentFamilyFeeSummary.members.length} बच्चे)
+                              </span>
+                              <span
+                                className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                                  parentFamilyFeeSummary.totalDue > 0
+                                    ? 'bg-rose-100 text-rose-800 border-rose-200'
+                                    : 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                }`}
+                              >
+                                {parentFamilyFeeSummary.totalDue > 0 ? 'कुल बकाया सक्रिय' : 'सभी बच्चों की फ़ीस जमा ✓'}
                               </span>
                             </div>
-                            <p className="text-[11px] text-slate-300 mt-0.5">
-                              ई.वी.एस. पब्लिक स्कूल • रोल नंबर: {selectedStudent.Roll_Number || '1'} • दैनिक प्रगति
-                            </p>
+
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {parentFamilyFeeSummary.members.map((m) => {
+                                const isSelectedChild = selectedStudent?.Student_ID === m.student.Student_ID;
+                                const isExemptChild = isStudentFeeExempt(m.student);
+                                return (
+                                  <button
+                                    key={m.student.Student_ID}
+                                    type="button"
+                                    onClick={() => setSelectedStudent(m.student)}
+                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer ${
+                                      isSelectedChild
+                                        ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
+                                        : 'bg-white/90 text-slate-700 border-slate-200 hover:bg-slate-100'
+                                    }`}
+                                  >
+                                    <span className="truncate max-w-[120px]">{m.student.Student_Name}:</span>
+                                    <span
+                                      className={`font-black tabular-nums ${
+                                        m.dueAmount > 0
+                                          ? isSelectedChild
+                                            ? 'text-amber-300'
+                                            : 'text-rose-700'
+                                          : isSelectedChild
+                                          ? 'text-emerald-300'
+                                          : 'text-emerald-700'
+                                      }`}
+                                    >
+                                      {m.dueAmount > 0
+                                        ? `₹${m.dueAmount.toLocaleString('en-IN')}`
+                                        : m.advanceAmount > 0
+                                        ? `-₹${m.advanceAmount.toLocaleString('en-IN')} Adv`
+                                        : isExemptChild
+                                        ? '₹0 (माफ ✓)'
+                                        : '₹0 ✓'}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
                           </div>
-                        </div>
 
-                        {/* Useful Quick Action Buttons */}
-                        <div className="flex items-center gap-2 self-start sm:self-center">
-                          <button
-                            type="button"
-                            onClick={() => setPreviewQRStudent(selectedStudent)}
-                            className="px-3 py-1.5 bg-white/15 hover:bg-white/25 text-amber-300 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border border-white/20 shadow-xs cursor-pointer"
-                            title="छात्र QR कोड पास देखें"
-                          >
-                            <i className="fa-solid fa-qrcode text-amber-400"></i>
-                            <span>क्यूआर पास (QR Pass)</span>
-                          </button>
+                          <div className="flex items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-amber-200/60 shrink-0">
+                            <div className="sm:text-right">
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                                {parentFamilyFeeSummary.totalDue > 0
+                                  ? `कुल बाकी (${parentFamilyFeeSummary.members.length} बच्चे)`
+                                  : 'संयुक्त स्थिति'}
+                              </div>
+                              <div
+                                className={`text-lg sm:text-xl font-black tabular-nums leading-tight ${
+                                  parentFamilyFeeSummary.totalDue > 0 ? 'text-rose-700' : 'text-emerald-700'
+                                } ${familyFeeSettlement.justSettled ? 'animate-fee-text-settle' : ''}`}
+                              >
+                                {familyFeeSettlement.justSettled && familyFeeSettlement.isCountingDown
+                                  ? `₹${familyFeeSettlement.displayAmount.toLocaleString('en-IN')}`
+                                  : parentFamilyFeeSummary.totalDue > 0
+                                  ? `₹${parentFamilyFeeSummary.totalDue.toLocaleString('en-IN')}`
+                                  : '₹0 Paid ✓'}
+                              </div>
+                            </div>
 
-                          <button
-                            type="button"
-                            onClick={() => setParentActiveSection('profile')}
-                            className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-slate-200 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 border border-white/20 shadow-xs cursor-pointer"
-                            title="पूरी प्रोफ़ाइल देखें"
-                          >
-                            <i className="fa-solid fa-id-card text-slate-300"></i>
-                            <span className="hidden sm:inline">प्रोफ़ाइल</span>
-                          </button>
-
-                          {/* Text-to-Speech button to read greeting aloud */}
-                          {'speechSynthesis' in window && (
                             <button
                               type="button"
-                              onClick={() => {
-                                unlockAudioContext();
-                                speakAnnouncement(aiGreeting, {
-                                  forceLanguage: 'hi',
-                                  englishFallback: `Student daily update: ${aiGreeting}`,
-                                });
-                              }}
-                              className="w-8 h-8 rounded-xl bg-white/15 hover:bg-white/25 text-white flex items-center justify-center text-xs transition-colors border border-white/20 cursor-pointer"
-                              title="बोलकर सुनें (Listen Aloud)"
+                              onClick={() => handleSelectParentSection('fees')}
+                              className={`px-3.5 py-2 rounded-xl text-xs font-extrabold transition-all shadow-xs active:scale-95 cursor-pointer flex items-center gap-1.5 ${
+                                parentFamilyFeeSummary.totalDue > 0
+                                  ? 'bg-[#0c2340] hover:bg-blue-950 text-amber-300'
+                                  : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                              }`}
                             >
-                              <i className="fa-solid fa-volume-high text-amber-300"></i>
+                              <span>{parentFamilyFeeSummary.totalDue > 0 ? 'फ़ीस देखें / भरें' : 'रसीदें देखें'}</span>
+                              <i className="fa-solid fa-arrow-right text-[10px]"></i>
                             </button>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* AI Greeting Message Text */}
-                      <div className="mt-3.5 bg-black/25 rounded-xl p-3.5 border border-white/10 backdrop-blur-xs">
-                        <div className="flex items-start gap-2.5">
-                          <div className="w-7 h-7 rounded-lg bg-amber-400/20 text-amber-300 flex items-center justify-center shrink-0 text-sm mt-0.5">
-                            <i className="fa-solid fa-robot"></i>
-                          </div>
-                          <div className="flex-1">
-                            <p className="text-xs sm:text-sm text-slate-100 leading-relaxed font-medium">
-                              {aiGreeting || 'बच्चे की दैनिक गतिविधि का विश्लेषण हो रहा है...'}
-                            </p>
                           </div>
                         </div>
                       </div>
+                    )}
 
-                      {/* Live Highlights / Activity Badges */}
-                      <div className="flex flex-wrap items-center gap-2 mt-3 pt-2.5 border-t border-white/10 text-[11px]">
-                        {/* Attendance highlight */}
-                        <span className={`px-2.5 py-1 rounded-lg font-bold flex items-center gap-1.5 border ${
-                          latestBehaviorRecord?.Is_Present
-                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                            : latestBehaviorRecord && !latestBehaviorRecord.Is_Present
-                            ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
-                            : 'bg-white/10 text-slate-200 border-white/20'
-                        }`}>
-                          <i className={`fa-solid ${
-                            latestBehaviorRecord?.Is_Present ? 'fa-circle-check text-emerald-400' : latestBehaviorRecord ? 'fa-circle-xmark text-rose-400' : 'fa-calendar-check text-amber-400'
-                          }`}></i>
-                          <span>
-                            {latestBehaviorRecord?.Is_Present
-                              ? 'आज: उपस्थित (Present)'
-                              : latestBehaviorRecord && !latestBehaviorRecord.Is_Present
-                              ? 'आज: अनुपस्थित (Absent)'
-                              : 'उपस्थिति: नियमित'}
-                          </span>
-                        </span>
+                    {/* AI DAILY GREETING & ACTIVITY BRIEF CARD */}
+                    {selectedStudent && (
+                      <div className="bg-[#0c2340] bg-[linear-gradient(135deg,#0c2340_0%,#10316b_50%,#0c2340_100%)] rounded-2xl p-4 sm:p-5 text-white shadow-lg border border-blue-900/60 relative overflow-hidden">
+                        <div className="absolute top-0 right-0 w-48 h-48 bg-amber-400/10 rounded-full blur-2xl pointer-events-none -mr-10 -mt-10"></div>
 
-                        {/* Homework highlight */}
-                        <span className="px-2.5 py-1 rounded-lg bg-white/10 text-slate-200 border border-white/20 font-semibold flex items-center gap-1.5">
-                          <i className="fa-solid fa-book-open text-amber-300"></i>
-                          <span>
-                            {parentHomework.length > 0
-                              ? `${parentHomework.length} गृहकार्य उपलब्ध`
-                              : 'गृहकार्य: नियमित'}
-                          </span>
-                        </span>
+                        <div className="relative z-10">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/10">
+                            <div className="flex items-center gap-3">
+                              <div className="relative shrink-0">
+                                <StudentAvatar
+                                  student={selectedStudent}
+                                  photoUrl={getStudentPhoto(selectedStudent)}
+                                  size="md"
+                                  showUploadBtn={true}
+                                  onUpload={() => handleTriggerPhotoUpload(selectedStudent.Student_ID)}
+                                />
+                              </div>
+                              <div>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <h3 className="text-base sm:text-lg font-black text-amber-300">
+                                    अस्सलाम वालेकुम, {selectedStudent.Student_Name} के अभिभावक! 🌸
+                                  </h3>
+                                  <span className="text-[10px] bg-amber-400/20 text-amber-300 border border-amber-400/40 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                                    <i className={`fa-solid fa-sparkles text-amber-400 ${aiGreetingLoading ? 'animate-spin' : ''}`}></i>
+                                    <span>{isAiGenerated ? 'AI दैनिक रिपोर्ट' : 'दैनिक गतिविधि सार'}</span>
+                                  </span>
+                                </div>
+                                <p className="text-[11px] text-slate-300 mt-0.5">
+                                  ई.वी.एस. पब्लिक स्कूल • रोल नंबर: {selectedStudent.Roll_Number || '1'} • दैनिक प्रगति
+                                </p>
+                              </div>
+                            </div>
 
-                        {/* Behavior highlight ONLY if teacher manually added behavior (hidden for QR attendance-only) */}
-                        {latestBehaviorRecord?.Is_Present &&
-                          !isAttendanceOnlyRecord(latestBehaviorRecord) &&
-                          latestBehaviorRecord.Good_Manners && (
-                            <span className="px-2.5 py-1 rounded-lg bg-amber-400/20 text-amber-200 border border-amber-400/30 font-semibold flex items-center gap-1.5">
-                              <i className="fa-solid fa-star text-amber-400"></i>
-                              <span>आचरण: {latestBehaviorRecord.Good_Manners}</span>
+                            <div className="flex items-center gap-2 self-start sm:self-center">
+                              <button
+                                type="button"
+                                onClick={() => setPreviewQRStudent(selectedStudent)}
+                                className="px-3 py-1.5 bg-white/15 hover:bg-white/25 text-amber-300 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border border-white/20 shadow-xs cursor-pointer"
+                                title="छात्र QR कोड पास देखें"
+                              >
+                                <i className="fa-solid fa-qrcode text-amber-400"></i>
+                                <span>क्यूआर पास</span>
+                              </button>
+
+                              {'speechSynthesis' in window && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    unlockAudioContext();
+                                    speakAnnouncement(aiGreeting, {
+                                      forceLanguage: 'hi',
+                                      englishFallback: `Student daily update: ${aiGreeting}`,
+                                    });
+                                  }}
+                                  className="w-8 h-8 rounded-xl bg-white/15 hover:bg-white/25 text-white flex items-center justify-center text-xs transition-colors border border-white/20 cursor-pointer"
+                                  title="बोलकर सुनें (Listen Aloud)"
+                                >
+                                  <i className="fa-solid fa-volume-high text-amber-300"></i>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="mt-3.5 bg-black/25 rounded-xl p-3.5 border border-white/10 backdrop-blur-xs">
+                            <div className="flex items-start gap-2.5">
+                              <div className="w-7 h-7 rounded-lg bg-amber-400/20 text-amber-300 flex items-center justify-center shrink-0 text-sm mt-0.5">
+                                <i className="fa-solid fa-robot"></i>
+                              </div>
+                              <div className="flex-1">
+                                <p className="text-xs sm:text-sm text-slate-100 leading-relaxed font-medium">
+                                  {aiGreeting || 'बच्चे की दैनिक गतिविधि का विश्लेषण हो रहा है...'}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2 mt-3 pt-2.5 border-t border-white/10 text-[11px]">
+                            <span
+                              className={`px-2.5 py-1 rounded-lg font-bold flex items-center gap-1.5 border ${
+                                latestBehaviorRecord?.Is_Present
+                                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                                  : latestBehaviorRecord && !latestBehaviorRecord.Is_Present
+                                  ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                                  : 'bg-white/10 text-slate-200 border-white/20'
+                              }`}
+                            >
+                              <i
+                                className={`fa-solid ${
+                                  latestBehaviorRecord?.Is_Present
+                                    ? 'fa-circle-check text-emerald-400'
+                                    : latestBehaviorRecord
+                                    ? 'fa-circle-xmark text-rose-400'
+                                    : 'fa-calendar-check text-amber-400'
+                                }`}
+                              ></i>
+                              <span>
+                                {latestBehaviorRecord?.Is_Present
+                                  ? 'आज: उपस्थित (Present)'
+                                  : latestBehaviorRecord && !latestBehaviorRecord.Is_Present
+                                  ? 'आज: अनुपस्थित (Absent)'
+                                  : 'उपस्थिति: नियमित'}
+                              </span>
                             </span>
-                          )}
 
-                        {/* Fee highlight */}
-                        <span
-                          className={`px-2.5 py-1 rounded-lg font-semibold flex items-center gap-1.5 border transition-colors duration-500 ${
-                            studentFeeSummary.hasDues
-                              ? 'bg-rose-500/20 text-rose-200 border-rose-500/40'
-                              : studentFeeSummary.isAdvance
-                              ? 'bg-purple-500/20 text-purple-200 border-purple-500/40'
-                              : 'bg-emerald-500/20 text-emerald-200 border-emerald-500/40'
-                          } ${studentFeeSettlement.justSettled ? 'animate-fee-badge-pop ring-2 ring-emerald-300/60' : ''}`}
-                        >
-                          <i
-                            className={`fa-solid ${
-                              studentFeeSummary.hasDues
-                                ? 'fa-receipt'
-                                : studentFeeSummary.isAdvance
-                                ? 'fa-hand-holding-dollar'
-                                : 'fa-circle-check'
-                            }`}
-                          ></i>
-                          <span className={`tabular-nums ${studentFeeSettlement.justSettled ? 'animate-fee-text-settle' : ''}`}>
-                            {studentFeeSettlement.justSettled && studentFeeSettlement.isCountingDown
-                              ? `बकाया चुकता हो रहा है: ₹${studentFeeSettlement.displayAmount.toLocaleString('en-IN')}`
-                              : studentFeeSummary.hasDues
-                              ? `बकाया फ़ीस: ₹${studentFeeSummary.balance.toLocaleString('en-IN')}`
-                              : studentFeeSummary.isAdvance
-                              ? `अग्रिम फ़ीस: -₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')} (Advance)`
-                              : 'फ़ीस: पूर्ण चुकता ✓'}
-                          </span>
-                        </span>
+                            <span className="px-2.5 py-1 rounded-lg bg-white/10 text-slate-200 border border-white/20 font-semibold flex items-center gap-1.5">
+                              <i className="fa-solid fa-book-open text-amber-300"></i>
+                              <span>
+                                {parentHomework.length > 0
+                                  ? `${parentHomework.length} गृहकार्य उपलब्ध`
+                                  : 'गृहकार्य: नियमित'}
+                              </span>
+                            </span>
+
+                            {latestBehaviorRecord?.Is_Present &&
+                              !isAttendanceOnlyRecord(latestBehaviorRecord) &&
+                              latestBehaviorRecord.Good_Manners && (
+                                <span className="px-2.5 py-1 rounded-lg bg-amber-400/20 text-amber-200 border border-amber-400/30 font-semibold flex items-center gap-1.5">
+                                  <i className="fa-solid fa-star text-amber-400"></i>
+                                  <span>आचरण: {latestBehaviorRecord.Good_Manners}</span>
+                                </span>
+                              )}
+
+                            <span
+                              className={`px-2.5 py-1 rounded-lg font-semibold flex items-center gap-1.5 border transition-colors duration-500 ${
+                                studentFeeSummary.hasDues
+                                  ? 'bg-rose-500/20 text-rose-200 border-rose-500/40'
+                                  : studentFeeSummary.isAdvance
+                                  ? 'bg-purple-500/20 text-purple-200 border-purple-500/40'
+                                  : 'bg-emerald-500/20 text-emerald-200 border-emerald-500/40'
+                              } ${studentFeeSettlement.justSettled ? 'animate-fee-badge-pop ring-2 ring-emerald-300/60' : ''}`}
+                            >
+                              <i
+                                className={`fa-solid ${
+                                  studentFeeSummary.hasDues
+                                    ? 'fa-receipt'
+                                    : studentFeeSummary.isAdvance
+                                    ? 'fa-hand-holding-dollar'
+                                    : 'fa-circle-check'
+                                }`}
+                              ></i>
+                              <span className={`tabular-nums ${studentFeeSettlement.justSettled ? 'animate-fee-text-settle' : ''}`}>
+                                {studentFeeSettlement.justSettled && studentFeeSettlement.isCountingDown
+                                  ? `बकाया चुकता हो रहा है: ₹${studentFeeSettlement.displayAmount.toLocaleString('en-IN')}`
+                                  : studentFeeSummary.hasDues
+                                  ? `बकाया फ़ीस: ₹${studentFeeSummary.balance.toLocaleString('en-IN')}`
+                                  : studentFeeSummary.isAdvance
+                                  ? `अग्रिम फ़ीस: -₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')} (Advance)`
+                                  : 'फ़ीस: पूर्ण चुकता ✓'}
+                              </span>
+                            </span>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </div>
-                )}
+                    )}
 
-                {/* WHEN ON OVERVIEW: SHOW THE 4 INTERACTIVE CARDS */}
-                {parentActiveSection === 'overview' ? (
-                  <div className="space-y-4 animate-fadeIn">
-                    {/* School Announcement Banner Card in Parent Portal (Hidden permanently once seen/heard) */}
+                    {/* School Emergency Broadcast Banner (Hidden once seen/heard) */}
                     {seenAnnouncementTick >= 0 &&
                       (() => {
                         const emerg = schoolNotices.find(
@@ -9061,9 +9219,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                   <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 shadow-2xs">
                                     📢 स्कूल उद्घोषणा प्रसारण
                                   </span>
-                                  <span className="text-xs text-amber-200 font-bold">
-                                    दिनांक: {emerg.date}
-                                  </span>
+                                  <span className="text-xs text-amber-200 font-bold">दिनांक: {emerg.date}</span>
                                 </div>
                                 <h4 className="text-sm sm:text-base font-black text-white mt-1 leading-snug">
                                   {emerg.title}
@@ -9106,8 +9262,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                   type="button"
                                   onClick={() => {
                                     markAnnouncementSeen(emerg);
-                                    setParentActiveSection('notices');
-                                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                                    handleSelectParentSection('notices');
                                   }}
                                   className="px-3.5 py-2 bg-white hover:bg-amber-100 text-blue-950 font-black rounded-xl text-xs flex items-center gap-1 shadow-md cursor-pointer transition-transform active:scale-95"
                                 >
@@ -9132,55 +9287,27 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         );
                       })()}
 
-                    <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center justify-between gap-2 shadow-2xs">
-                      <div className="flex items-center gap-2">
-                        <i className="fa-solid fa-hand-pointer text-amber-600 text-sm animate-bounce"></i>
-                        <span className="font-bold">
-                          {currentLang === 'en'
-                            ? 'Tap on any card below to view full details:'
-                            : 'पूरा विवरण देखने के लिए नीचे दिए गए किसी भी कार्ड पर टच करें:'}
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          fetchHomework();
-                          fetchHomeworkTracker();
-                          fetchStudentBehavior();
-                          fetchFeeCollection();
-                        }}
-                        disabled={loadingHomework || loadingHwTracker || loadingBehavior || loadingFees}
-                        className="px-2.5 py-1 bg-white hover:bg-slate-50 text-slate-700 border border-amber-300 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer"
-                        title="Refresh data from Google Sheets"
-                      >
-                        <i className={`fa-solid fa-arrows-rotate ${loadingHomework || loadingHwTracker || loadingBehavior || loadingFees ? 'fa-spin' : ''}`}></i>
-                        <span>{t.refreshData}</span>
-                      </button>
-                    </div>
-
+                    {/* STRICTLY 4 MAIN INTERACTIVE CARDS ON PARENT HOME */}
                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                       {/* CARD 1: HOMEWORK */}
                       <button
                         id="parent-tab-daily-hw"
                         type="button"
-                        onClick={() => {
-                          setParentActiveSection('homework');
-                          window.scrollTo({ top: 0, behavior: 'smooth' });
-                        }}
+                        onClick={() => handleSelectParentSection('homework')}
                         className="p-4 rounded-2xl border text-left transition-all cursor-pointer relative overflow-hidden flex flex-col justify-between group bg-white hover:bg-slate-50 text-slate-800 border-slate-200 shadow-xs hover:border-slate-300 active:scale-[0.98]"
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg shrink-0 transition-transform group-hover:scale-105 bg-blue-100 text-blue-900">
                             <i className="fa-solid fa-book-open"></i>
                           </div>
-                          <span className="text-[10px] sm:text-xs font-black px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-900 border border-blue-200">
+                          <span className="text-[10px] sm:text-xs font-black px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-900 border border-blue-200 tabular-nums">
                             {currentLang === 'en' ? `${parentHomework.length} Subjects` : `${parentHomework.length} विषय`}
                           </span>
                         </div>
 
                         <div className="mt-3">
                           <div className="text-xs sm:text-sm font-black flex items-center justify-between">
-                            <span>{currentLang === 'en' ? '1. Today\'s Homework' : '1. आज का होमवर्क'}</span>
+                            <span>{currentLang === 'en' ? "1. Today's Homework" : '1. आज का होमवर्क'}</span>
                             <i className="fa-solid fa-chevron-right text-xs text-slate-300 group-hover:text-slate-500"></i>
                           </div>
                           <div className="text-[11px] mt-0.5 text-slate-500">
@@ -9193,24 +9320,27 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       <button
                         id="parent-tab-hw-tracker"
                         type="button"
-                        onClick={() => {
-                          setParentActiveSection('tracker');
-                          window.scrollTo({ top: 0, behavior: 'smooth' });
-                        }}
+                        onClick={() => handleSelectParentSection('tracker')}
                         className="p-4 rounded-2xl border text-left transition-all cursor-pointer relative overflow-hidden flex flex-col justify-between group bg-white hover:bg-slate-50 text-slate-800 border-slate-200 shadow-xs hover:border-slate-300 active:scale-[0.98]"
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg shrink-0 transition-transform group-hover:scale-105 bg-emerald-100 text-emerald-900">
                             <i className="fa-solid fa-list-check"></i>
                           </div>
-                          <span className={`text-[10px] sm:text-xs font-black px-2.5 py-0.5 rounded-full ${
-                            trackerStats.incompleted > 0
-                              ? 'bg-rose-100 text-rose-800 border border-rose-200'
-                              : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                          }`}>
+                          <span
+                            className={`text-[10px] sm:text-xs font-black px-2.5 py-0.5 rounded-full tabular-nums ${
+                              trackerStats.incompleted > 0
+                                ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                                : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                            }`}
+                          >
                             {trackerStats.incompleted > 0
-                              ? (currentLang === 'en' ? `${trackerStats.incompleted} Incomplete` : `${trackerStats.incompleted} अधूरा`)
-                              : (currentLang === 'en' ? 'All Completed ✓' : 'सब पूरा ✓')}
+                              ? currentLang === 'en'
+                                ? `${trackerStats.incompleted} Incomplete`
+                                : `${trackerStats.incompleted} अधूरा`
+                              : currentLang === 'en'
+                              ? 'All Completed ✓'
+                              : 'सब पूरा ✓'}
                           </span>
                         </div>
 
@@ -9229,10 +9359,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       <button
                         id="parent-tab-fees"
                         type="button"
-                        onClick={() => {
-                          setParentActiveSection('fees');
-                          window.scrollTo({ top: 0, behavior: 'smooth' });
-                        }}
+                        onClick={() => handleSelectParentSection('fees')}
                         className={`p-4 rounded-2xl border text-left transition-all duration-500 cursor-pointer relative overflow-hidden flex flex-col justify-between group shadow-xs active:scale-[0.98] ${
                           studentFeeSettlement.justSettled && !studentFeeSummary.hasDues
                             ? 'bg-emerald-50/70 border-emerald-400 text-slate-900 animate-fee-card-settle'
@@ -9256,10 +9383,16 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             {studentFeeSettlement.justSettled && studentFeeSettlement.isCountingDown
                               ? `₹${studentFeeSettlement.displayAmount.toLocaleString('en-IN')}`
                               : studentFeeSummary.hasDues
-                              ? (currentLang === 'en' ? `Due ₹${studentFeeSummary.balance.toLocaleString('en-IN')}` : `बकाया ₹${studentFeeSummary.balance.toLocaleString('en-IN')}`)
+                              ? currentLang === 'en'
+                                ? `Due ₹${studentFeeSummary.balance.toLocaleString('en-IN')}`
+                                : `बकाया ₹${studentFeeSummary.balance.toLocaleString('en-IN')}`
                               : studentFeeSummary.isAdvance
-                              ? (currentLang === 'en' ? `Advance -₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')}` : `अग्रिम -₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')}`)
-                              : (currentLang === 'en' ? 'Paid In Full ✓' : 'पूरी जमा ✓')}
+                              ? currentLang === 'en'
+                                ? `Advance -₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')}`
+                                : `अग्रिम -₹${studentFeeSummary.advanceAmount.toLocaleString('en-IN')}`
+                              : currentLang === 'en'
+                              ? 'Paid In Full ✓'
+                              : 'पूरी जमा ✓'}
                           </span>
                         </div>
 
@@ -9268,7 +9401,13 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             <span>{currentLang === 'en' ? '3. Fees & Receipts' : '3. स्कूल फीस व रसीदें'}</span>
                             <i className="fa-solid fa-chevron-right text-xs text-slate-300 group-hover:text-slate-500"></i>
                           </div>
-                          <div className={`text-[11px] mt-0.5 ${studentFeeSettlement.justSettled && !studentFeeSummary.hasDues ? 'text-emerald-700 font-bold animate-fee-text-settle' : 'text-slate-500'}`}>
+                          <div
+                            className={`text-[11px] mt-0.5 ${
+                              studentFeeSettlement.justSettled && !studentFeeSummary.hasDues
+                                ? 'text-emerald-700 font-bold animate-fee-text-settle'
+                                : 'text-slate-500'
+                            }`}
+                          >
                             {parentFamilyFeeSummary
                               ? parentFamilyFeeSummary.totalDue <= 0
                                 ? currentLang === 'en'
@@ -9278,40 +9417,51 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                                 ? `Family (${parentFamilyFeeSummary.members.length} kids): Due ₹${parentFamilyFeeSummary.totalDue.toLocaleString('en-IN')}`
                                 : `परिवार कुल (${parentFamilyFeeSummary.members.length} बच्चे): ₹${parentFamilyFeeSummary.totalDue.toLocaleString('en-IN')} बकाया`
                               : studentFeeSummary.hasDues
-                              ? (currentLang === 'en' ? 'View fee breakdown' : 'जमा विवरण देखें')
+                              ? currentLang === 'en'
+                                ? 'View fee breakdown'
+                                : 'जमा विवरण देखें'
                               : studentFeeSummary.isAdvance
-                              ? (currentLang === 'en' ? 'View advance receipts' : 'अग्रिम जमा रसीदें देखें')
-                              : (currentLang === 'en' ? 'All dues settled ✓' : 'सभी बकाया चुकता ✓')}
+                              ? currentLang === 'en'
+                                ? 'View advance receipts'
+                                : 'अग्रिम जमा रसीदें देखें'
+                              : currentLang === 'en'
+                              ? 'All dues settled ✓'
+                              : 'सभी बकाया चुकता ✓'}
                           </div>
                         </div>
                       </button>
 
-                      {/* CARD 4: BEHAVIOR & ATTENDANCE */}
+                      {/* CARD 4: ATTENDANCE & CONDUCT */}
                       <button
                         id="parent-tab-daily-behavior"
                         type="button"
-                        onClick={() => {
-                          setParentActiveSection('calendar');
-                          window.scrollTo({ top: 0, behavior: 'smooth' });
-                        }}
+                        onClick={() => handleSelectParentSection('calendar')}
                         className="p-4 rounded-2xl border text-left transition-all cursor-pointer relative overflow-hidden flex flex-col justify-between group bg-white hover:bg-slate-50 text-slate-800 border-slate-200 shadow-xs hover:border-slate-300 active:scale-[0.98]"
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg shrink-0 transition-transform group-hover:scale-105 bg-emerald-100 text-emerald-900">
                             <i className="fa-solid fa-calendar-check"></i>
                           </div>
-                          <span className={`text-[10px] sm:text-xs font-black px-2.5 py-0.5 rounded-full ${
-                            latestBehaviorRecord
-                              ? latestBehaviorRecord.Is_Present
-                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                                : 'bg-rose-100 text-rose-800 border border-rose-200'
-                              : 'bg-purple-100 text-purple-900 border border-purple-200'
-                          }`}>
+                          <span
+                            className={`text-[10px] sm:text-xs font-black px-2.5 py-0.5 rounded-full ${
+                              latestBehaviorRecord
+                                ? latestBehaviorRecord.Is_Present
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                  : 'bg-rose-100 text-rose-800 border border-rose-200'
+                                : 'bg-purple-100 text-purple-900 border border-purple-200'
+                            }`}
+                          >
                             {latestBehaviorRecord
                               ? latestBehaviorRecord.Is_Present
-                                ? (currentLang === 'en' ? 'Present Today ✓' : 'आज उपस्थित ✓')
-                                : (currentLang === 'en' ? 'Absent ❌' : 'अनुपस्थित ❌')
-                              : (currentLang === 'en' ? 'Attendance Report' : 'हाजिरी रिपोर्ट')}
+                                ? currentLang === 'en'
+                                  ? 'Present Today ✓'
+                                  : 'आज उपस्थित ✓'
+                                : currentLang === 'en'
+                                ? 'Absent ❌'
+                                : 'अनुपस्थित ❌'
+                              : currentLang === 'en'
+                              ? 'Attendance Report'
+                              : 'हाजिरी रिपोर्ट'}
                           </span>
                         </div>
 
@@ -9324,287 +9474,6 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                             {currentLang === 'en' ? 'Monthly calendar & grooming' : 'मासिक हाजिरी कैलेंडर, उपस्थिति व आचरण'}
                           </div>
                         </div>
-                      </button>
-                    </div>
-
-                    {/* Quick Row for Calendar & Notices */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setParentActiveSection('calendar');
-                          window.scrollTo({ top: 0, behavior: 'smooth' });
-                        }}
-                        className="p-3 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-2xl flex items-center justify-between gap-3 text-left transition-all cursor-pointer group"
-                      >
-                        <div className="flex items-center gap-2.5">
-                          <span className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold text-sm shadow-2xs">
-                            <i className="fa-solid fa-calendar-check"></i>
-                          </span>
-                          <div>
-                            <span className="font-extrabold text-xs text-emerald-950 block">
-                              {currentLang === 'en' ? 'Monthly Attendance Calendar' : 'मासिक उपस्थिति कैलेंडर'}
-                            </span>
-                            <span className="text-[11px] text-emerald-700">
-                              {currentLang === 'en' ? 'View date-wise attendance & holidays' : 'तारीखवार उपस्थिति व अवकाश देखें'}
-                            </span>
-                          </div>
-                        </div>
-                        <i className="fa-solid fa-chevron-right text-xs text-emerald-600 group-hover:translate-x-1 transition-transform"></i>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setParentActiveSection('notices');
-                          window.scrollTo({ top: 0, behavior: 'smooth' });
-                        }}
-                        className="p-3 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-2xl flex items-center justify-between gap-3 text-left transition-all cursor-pointer group"
-                      >
-                        <div className="flex items-center gap-2.5">
-                          <span className="w-9 h-9 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center font-bold text-sm shadow-2xs">
-                            <i className="fa-solid fa-bullhorn"></i>
-                          </span>
-                          <div>
-                            <span className="font-extrabold text-xs text-amber-950 block">
-                              {currentLang === 'en' ? 'Notice Board & School Circulars' : 'सूचना पट्ट व स्कूल अवकाश'}
-                            </span>
-                            <span className="text-[11px] text-amber-800">
-                              {currentLang === 'en' ? 'Festivals, holidays & exam schedules' : 'त्योहार, छुट्टियाँ व परीक्षा तिथियाँ'}
-                            </span>
-                          </div>
-                        </div>
-                        <i className="fa-solid fa-chevron-right text-xs text-amber-600 group-hover:translate-x-1 transition-transform"></i>
-                      </button>
-                    </div>
-
-                    {/* Highlight Banner Card: Protected View-Only Digital Report Card */}
-                    {selectedStudent && (() => {
-                      const rcPreview = computeStudentReportCardData({
-                        student: selectedStudent,
-                        weeklyTests: weeklyTestsList,
-                        examMarks: examMarksList,
-                        behaviorList,
-                        metaMap: reportCardMetaMap,
-                        session: CURRENT_ACADEMIC_SESSION,
-                      });
-                      const isParentAllowed =
-                        reportCardWorkflow.accessConfig.allowParentView &&
-                        rcPreview.meta.publishedToParent !== false;
-                      return (
-                        <button
-                          id="parent-tab-report-card"
-                          type="button"
-                          onClick={() => {
-                            fetchReportCardAllData(false);
-                            setParentActiveSection('reportCard');
-                            window.scrollTo({ top: 0, behavior: 'smooth' });
-                          }}
-                          className="w-full p-4 rounded-2xl border-2 border-indigo-900/20 bg-gradient-to-r from-[#0c2340] via-[#10316b] to-indigo-950 text-white text-left transition-all cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md hover:shadow-lg active:scale-[0.99]"
-                        >
-                          <div className="flex items-center gap-3">
-                            <span className="w-11 h-11 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center text-xl shrink-0 shadow">
-                              <i className="fa-solid fa-graduation-cap"></i>
-                            </span>
-                            <div>
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="font-black text-sm sm:text-base text-amber-300">
-                                  🎓 डिजिटल रिपोर्ट कार्ड व मार्कशीट ({CURRENT_ACADEMIC_SESSION})
-                                </span>
-                                <span className="px-2 py-0.5 rounded-full bg-rose-500/25 border border-rose-400/40 text-[10px] font-black text-rose-200">
-                                  {isParentAllowed
-                                    ? '🔒 केवल देखने योग्य (View-Only)'
-                                    : '⏳ प्रबंधक अनुमति की प्रतीक्षा'}
-                                </span>
-                              </div>
-                              <p className="text-[11px] text-blue-100 mt-0.5">
-                                {isParentAllowed
-                                  ? `साप्ताहिक टेस्ट + तिमाही + छमाही + सालाना परीक्षा अंक, हाजिरी (${rcPreview.attendance.attendancePct}%) व टीचर रिमार्क`
-                                  : 'जब विद्यालय प्रबंधक परिणाम लाइव करेंगे, तब आप यहाँ बच्चे की पूरी मार्कशीट देख सकेंगे।'}
-                              </p>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2.5 self-end sm:self-center">
-                            {isParentAllowed && rcPreview.overall.hasAnyScore ? (
-                              <span className="px-3 py-1.5 rounded-xl bg-white/15 border border-white/20 text-xs font-black text-amber-300">
-                                {rcPreview.overall.pct}% ({rcPreview.overall.grade})
-                              </span>
-                            ) : !isParentAllowed ? (
-                              <span className="px-3 py-1.5 rounded-xl bg-white/10 border border-white/15 text-[11px] font-black text-amber-200">
-                                🔒 लॉक (Under Review)
-                              </span>
-                            ) : null}
-                            <span className="px-3.5 py-2 rounded-xl bg-amber-400 text-slate-950 text-xs font-black flex items-center gap-1.5">
-                              <span>रिपोर्ट देखें</span>
-                              <i className="fa-solid fa-chevron-right text-[10px]"></i>
-                            </span>
-                          </div>
-                        </button>
-                      );
-                    })()}
-
-                    {/* Quick Profile Row */}
-                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2 text-xs text-slate-700">
-                        <i className="fa-solid fa-id-card text-blue-800 text-sm"></i>
-                        <span>छात्र का पूर्ण विवरण, रोल नंबर, अभिभावक का नाम और क्यूआर पास:</span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setParentActiveSection('profile');
-                          window.scrollTo({ top: 0, behavior: 'smooth' });
-                        }}
-                        className="px-3.5 py-1.5 bg-[#0c2340] hover:bg-blue-950 text-amber-300 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 shadow-xs"
-                      >
-                        <i className="fa-solid fa-user"></i>
-                        <span>7. पूरी प्रोफ़ाइल देखें</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          ensureHallPassConfigLoaded(false);
-                          setParentActiveSection('hallPass');
-                          window.scrollTo({ top: 0, behavior: 'smooth' });
-                        }}
-                        className="px-3.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-extrabold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 shadow-xs whitespace-nowrap shrink-0"
-                      >
-                        <i className="fa-solid fa-ticket"></i>
-                        <span>9. परीक्षा हॉल पास</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          refreshParentReviews(false);
-                          setParentActiveSection('reviews');
-                          window.scrollTo({ top: 0, behavior: 'smooth' });
-                        }}
-                        className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 shadow-xs whitespace-nowrap shrink-0"
-                      >
-                        <i className="fa-solid fa-star text-amber-300"></i>
-                        <span>10. स्कूल रिव्यू दें</span>
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  /* WHEN IN A DETAIL SECTION: SHOW CLEAN TOP HEADER WITH BACK BUTTON AND QUICK SWITCH TABS */
-                  <div className="flex flex-wrap items-center justify-between gap-2.5 bg-[#0c2340] text-white p-3 sm:p-4 rounded-2xl shadow-sm border border-slate-700">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setParentActiveSection('overview');
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
-                      }}
-                      className="flex items-center gap-2 px-3.5 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black rounded-xl text-xs sm:text-sm transition-all cursor-pointer shadow-sm active:scale-95 shrink-0"
-                    >
-                      <i className="fa-solid fa-arrow-left"></i>
-                      <span>← वापस मुख्य कार्ड्स (Back to Cards)</span>
-                    </button>
-
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <button
-                        onClick={() => setParentActiveSection('homework')}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                          parentActiveSection === 'homework' ? 'bg-amber-400 text-slate-950 shadow-xs' : 'bg-white/15 hover:bg-white/25 text-white'
-                        }`}
-                      >
-                        📚 1. गृहकार्य
-                      </button>
-                      <button
-                        onClick={() => setParentActiveSection('tracker')}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                          parentActiveSection === 'tracker' ? 'bg-emerald-400 text-slate-950 shadow-xs' : 'bg-white/15 hover:bg-white/25 text-white'
-                        }`}
-                      >
-                        📝 2. स्थिति
-                      </button>
-                      <button
-                        onClick={() => setParentActiveSection('fees')}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                          parentActiveSection === 'fees' ? 'bg-amber-300 text-slate-950 shadow-xs' : 'bg-white/15 hover:bg-white/25 text-white'
-                        }`}
-                      >
-                        💰 3. फीस
-                      </button>
-                      <button
-                        onClick={() => setParentActiveSection('calendar')}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                          parentActiveSection === 'calendar' ? 'bg-emerald-300 text-slate-950 shadow-xs' : 'bg-white/15 hover:bg-white/25 text-white'
-                        }`}
-                      >
-                        📅 4. हाजिरी
-                      </button>
-                      <button
-                        onClick={() => setParentActiveSection('behavior')}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                          parentActiveSection === 'behavior' ? 'bg-purple-300 text-slate-950 shadow-xs' : 'bg-white/15 hover:bg-white/25 text-white'
-                        }`}
-                      >
-                        🌟 5. आचरण
-                      </button>
-                      <button
-                        onClick={() => setParentActiveSection('notices')}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                          parentActiveSection === 'notices' ? 'bg-amber-400 text-slate-950 shadow-xs' : 'bg-white/15 hover:bg-white/25 text-white'
-                        }`}
-                      >
-                        📢 6. सूचनाएं
-                      </button>
-                      <button
-                        onClick={() => setParentActiveSection('profile')}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                          parentActiveSection === 'profile' ? 'bg-blue-300 text-slate-950 shadow-xs' : 'bg-white/15 hover:bg-white/25 text-white'
-                        }`}
-                      >
-                        🪪 7. प्रोफ़ाइल
-                      </button>
-                      <button
-                        onClick={() => {
-                          fetchReportCardAllData(false);
-                          setParentActiveSection('reportCard');
-                        }}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                          parentActiveSection === 'reportCard' ? 'bg-amber-400 text-slate-950 shadow-xs' : 'bg-white/15 hover:bg-white/25 text-white'
-                        }`}
-                      >
-                        🎓 8. रिपोर्ट कार्ड
-                      </button>
-                      <button
-                        onClick={() => {
-                          ensureHallPassConfigLoaded(false);
-                          setParentActiveSection('hallPass');
-                        }}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-                          parentActiveSection === 'hallPass' ? 'bg-amber-400 text-slate-950 shadow-xs' : 'bg-white/15 hover:bg-white/25 text-white'
-                        }`}
-                      >
-                        🎫 9. हॉल पास
-                      </button>
-                      <button
-                        onClick={() => {
-                          refreshParentReviews(false);
-                          setParentActiveSection('reviews');
-                        }}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-                          parentActiveSection === 'reviews' ? 'bg-emerald-400 text-slate-950 shadow-xs' : 'bg-white/15 hover:bg-white/25 text-white'
-                        }`}
-                      >
-                        ⭐ 10. रिव्यू दें
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          fetchHomework();
-                          fetchHomeworkTracker();
-                          fetchStudentBehavior();
-                          fetchFeeCollection();
-                          fetchReportCardAllData(true);
-                        }}
-                        disabled={loadingHomework || loadingHwTracker || loadingBehavior || loadingFees}
-                        className="px-2.5 py-1.5 bg-white/15 hover:bg-white/25 text-white rounded-xl text-xs font-semibold flex items-center gap-1 cursor-pointer"
-                        title="Refresh data from Google Sheets"
-                      >
-                        <i className={`fa-solid fa-arrows-rotate ${loadingHomework || loadingHwTracker || loadingBehavior || loadingFees ? 'fa-spin' : ''}`}></i>
                       </button>
                     </div>
                   </div>
@@ -11655,17 +11524,17 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               <span>← वापस जाएं (Back to Role Selection)</span>
             </button>
 
-            <div className="bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden">
+            <div className="bg-white rounded-3xl shadow-xl border-2 border-[#bae6fd] overflow-hidden">
               {/* Top Banner */}
-              <div className="bg-gradient-to-br from-[#0c2340] via-[#10316b] to-[#0c2340] p-6 text-white text-center relative">
-                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-amber-500 text-slate-950 flex items-center justify-center mx-auto mb-3 shadow-lg shadow-amber-500/30 border-2 border-amber-200 text-2xl font-black">
+              <div className="bg-gradient-to-r from-[#0369a1] via-[#1d4ed8] to-[#4338ca] p-6 text-white text-center relative border-b-4 border-[#fbbf24]">
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#fbbf24] to-[#f97316] text-[#0f172a] flex items-center justify-center mx-auto mb-3 shadow-lg border-2 border-[#fde68a] text-2xl font-black">
                   <i className="fa-solid fa-chalkboard-user"></i>
                 </div>
-                <span className="inline-block px-3 py-0.5 rounded-full bg-amber-400/20 text-amber-300 text-[11px] font-bold tracking-wide border border-amber-400/40 uppercase mb-1">
+                <span className="inline-block px-3 py-0.5 rounded-full bg-[#fde047] text-[#0f172a] text-[11px] font-black tracking-wide uppercase mb-1">
                   स्कूल अध्यापक सुरक्षा (Teacher Portal)
                 </span>
                 <h3 className="text-xl font-extrabold tracking-tight">स्कूल अध्यापक लॉगिन</h3>
-                <p className="text-xs text-slate-300 mt-1">
+                <p className="text-xs text-[#e0f2fe] mt-1">
                   होमवर्क अपलोड, असाइनमेंट प्रबंधन व छात्र ट्रैकर हेतु लॉगिन करें
                 </p>
               </div>
@@ -11699,7 +11568,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       }}
                       placeholder="उदा. salik या अध्यापक का मोबाइल / यूजरनेम"
                       required
-                      className="w-full pl-9 pr-3.5 py-2.5 rounded-xl border border-slate-300 focus:border-blue-800 focus:ring-2 focus:ring-blue-800/20 text-xs sm:text-sm outline-none transition-all"
+                      className="w-full pl-9 pr-3.5 py-2.5 rounded-xl border border-slate-300 focus:border-indigo-600 focus:ring-2 focus:ring-indigo-500/20 text-xs sm:text-sm outline-none transition-all"
                     />
                   </div>
                 </div>
@@ -11721,7 +11590,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       }}
                       placeholder="अपना गुप्त पासवर्ड दर्ज करें"
                       required
-                      className="w-full pl-9 pr-10 py-2.5 rounded-xl border border-slate-300 focus:border-blue-800 focus:ring-2 focus:ring-blue-800/20 text-xs sm:text-sm outline-none transition-all"
+                      className="w-full pl-9 pr-10 py-2.5 rounded-xl border border-slate-300 focus:border-indigo-600 focus:ring-2 focus:ring-indigo-500/20 text-xs sm:text-sm outline-none transition-all"
                     />
                     <button
                       type="button"
@@ -11736,7 +11605,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 <button
                   type="submit"
                   disabled={teacherLoginSubmitting || loadingUsers}
-                  className="w-full py-3 bg-gradient-to-r from-[#0c2340] via-[#10316b] to-[#0c2340] hover:brightness-110 text-amber-300 font-bold text-sm rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+                  className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm rounded-xl shadow-md shadow-indigo-600/20 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
                 >
                   {teacherLoginSubmitting || loadingUsers ? (
                     <>
@@ -11765,9 +11634,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         {activeTab === 'teacher' && teacherUser && (
           <div className="space-y-6 animate-fadeIn">
             {/* Teacher Logged-In Top Bar */}
-            <div className="bg-gradient-to-r from-[#0c2340] via-[#10316b] to-[#0c2340] text-white rounded-2xl p-4 sm:p-5 shadow-md flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="bg-[#0c2340] bg-[linear-gradient(90deg,#0c2340_0%,#10316b_50%,#0c2340_100%)] text-white rounded-2xl p-4 sm:p-5 shadow-md flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
               <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-400 to-amber-500 text-slate-950 font-black text-xl flex items-center justify-center shadow-md shrink-0">
+                <div className="w-12 h-12 rounded-xl bg-[#fbbf24] bg-[linear-gradient(135deg,#fbbf24_0%,#f59e0b_100%)] text-slate-950 font-black text-xl flex items-center justify-center shadow-md shrink-0">
                   {teacherUser.Name ? teacherUser.Name.charAt(0).toUpperCase() : 'T'}
                 </div>
                 <div>
@@ -11881,260 +11750,313 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               </div>
             </div>
 
-            {/* Morning Exam Room Duty Alert Banner (Auto-visible when Teacher is assigned an Exam Room) */}
-            {teacherAssignedRooms.length > 0 && (
-              <div className="bg-gradient-to-r from-emerald-50 via-amber-50/70 to-blue-50 border-2 border-emerald-400 rounded-2xl p-3.5 sm:p-4 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-[#0c2340] text-amber-300 flex items-center justify-center shrink-0 text-lg shadow-xs">
-                    <i className="fa-solid fa-door-open"></i>
-                  </div>
-                  <div className="space-y-0.5">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-xs sm:text-sm font-black text-[#0c2340]">
-                        🏫 आज की परीक्षा रूम ड्यूटी:{' '}
-                        {teacherAssignedRooms.map((r) => r.roomNumber).join(', ')}
-                      </span>
-                      <span className="px-2 py-0.5 rounded-full bg-white border border-slate-200 text-[10px] font-black text-slate-700 tabular-nums">
-                        {formatExamDateDisplay(teacherAssignedRooms[0].examDate)}
-                        {teacherAssignedRooms[0].examShift ? ` · ${teacherAssignedRooms[0].examShift}` : ''}
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-700 font-semibold">
-                      आपके रूम में कुल{' '}
-                      <span className="font-black text-[#0c2340]">
-                        {teacherAssignedRooms.reduce((s, r) => s + r.totalStudents, 0)} बच्चे
-                      </span>{' '}
-                      हैं (
-                      {teacherAssignedRooms.reduce((s, r) => s + r.sentCount, 0)} रूम में भेजे गए ·{' '}
-                      {teacherAssignedRooms.reduce((s, r) => s + r.pendingCount, 0)} भेजना बाकी
-                      {teacherAssignedRooms.reduce((s, r) => s + r.absentCount, 0) > 0
-                        ? ` · ${teacherAssignedRooms.reduce((s, r) => s + r.absentCount, 0)} अनुपस्थित`
-                        : ''}
-                      )।
-                    </p>
-                    <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                      <span className="text-[11px] font-black text-[#0c2340]">कक्षा-वार बच्चे:</span>
-                      {teacherAssignedRooms.flatMap((rm) =>
-                        rm.classBreakdown.map((cb) => (
-                          <span
-                            key={`${rm.slotKey}-${cb.classCode}`}
-                            className="px-2 py-0.5 rounded-lg bg-white border border-emerald-300 text-[11px] font-black text-[#0c2340] tabular-nums shadow-2xs"
-                          >
-                            {teacherAssignedRooms.length > 1 ? `${rm.roomNumber} · ` : ''}
-                            {cb.classLabel}: {cb.count}
-                          </span>
-                        ))
+            {/* Flush Left-Wall Slide-Out Drawer & Single Sticky Menu Trigger Bar */}
+            {(() => {
+              const activeTeacherMeta =
+                teacherPortalTab === 'home'
+                  ? null
+                  : TEACHER_MENU_ITEMS.find((m) => m.id === teacherPortalTab);
+              const assignedRoomsLabel =
+                teacherAssignedRooms.length > 0
+                  ? teacherAssignedRooms.map((r) => r.roomNumber).join(', ')
+                  : '';
+              const activeTeacherBadge =
+                teacherPortalTab === 'staff_attendance'
+                  ? myTodayAttendanceRecord
+                    ? currentLang === 'en'
+                      ? 'Present'
+                      : 'उपस्थित'
+                    : currentLang === 'en'
+                    ? 'Pending'
+                    : 'बाकी'
+                  : teacherPortalTab === 'submissions'
+                  ? `${homeworkList.length}`
+                  : teacherPortalTab === 'behavior'
+                  ? `${behaviorList.length}`
+                  : teacherPortalTab === 'seating_plan' && assignedRoomsLabel
+                  ? assignedRoomsLabel
+                  : teacherPortalTab === 'notices'
+                  ? `${schoolNotices.length}`
+                  : '';
+
+              return (
+                <>
+                  <TeacherLeftSidebar
+                    isOpen={isTeacherMenuOpen}
+                    onClose={() => setIsTeacherMenuOpen(false)}
+                    activeTab={teacherPortalTab}
+                    onSelectTab={handleSelectTeacherTab}
+                    teacherName={teacherUser.Name}
+                    currentLang={currentLang}
+                    onOpenFindStudent={() => {
+                      setQrScannerTarget(null);
+                      setQrScannerSubtitle(
+                        currentLang === 'en'
+                          ? 'Faculty: Find Student by QR scan, name, ID or mobile'
+                          : 'शिक्षक: छात्र खोजें (QR स्कैन, नाम, ID या मोबाइल द्वारा)'
+                      );
+                      setQrScannerOpen(true);
+                    }}
+                    onRefreshData={handleRefreshTeacherPortal}
+                    isRefreshing={isRefreshingTeacherPortal}
+                    counts={{
+                      staffPresent: Boolean(myTodayAttendanceRecord),
+                      homeworkCount: homeworkList.length,
+                      behaviorCount: behaviorList.length,
+                      assignedRoomsLabel,
+                      noticesCount: schoolNotices.length,
+                    }}
+                  />
+
+                  {/* Single Left-Wall Menu Trigger + Active Context Bar */}
+                  <div className="relative z-20 flex flex-wrap items-center justify-between gap-2 bg-[#ffffff] rounded-2xl shadow-md border-2 border-[#c7d2fe] pr-3 py-1.5 pl-0">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <button
+                        type="button"
+                        id="teacher-left-wall-trigger"
+                        onClick={() => setIsTeacherMenuOpen(true)}
+                        className="-ml-4 sm:-ml-6 lg:-ml-8 pl-4 sm:pl-5 pr-3.5 py-2.5 bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-black text-xs sm:text-sm rounded-r-xl rounded-l-none flex items-center gap-2 shadow-md border border-l-0 border-amber-400/50 cursor-pointer transition-colors whitespace-nowrap shrink-0"
+                        title={currentLang === 'en' ? 'Open Teacher Menu' : 'टीचर मेन्यू खोलें'}
+                      >
+                        <i className="fa-solid fa-ellipsis-vertical text-sm" aria-hidden="true"></i>
+                        <span>{currentLang === 'en' ? 'Menu' : 'मेनू'}</span>
+                      </button>
+
+                      {teacherPortalTab !== 'home' && (
+                        <button
+                          type="button"
+                          onClick={() => handleSelectTeacherTab('home')}
+                          className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-xs rounded-xl flex items-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap shrink-0"
+                          title={currentLang === 'en' ? 'Back to Teacher Home (4 Cards)' : 'टीचर होम पेज (4 कार्ड्स) पर वापस जाएं'}
+                        >
+                          <i className="fa-solid fa-arrow-left text-[11px]" aria-hidden="true"></i>
+                          <span>{currentLang === 'en' ? 'Home' : 'होम पेज'}</span>
+                        </button>
                       )}
+
+                      <div className="flex items-center gap-2 min-w-0 pl-1.5 border-l border-slate-200">
+                        {teacherPortalTab === 'home' ? (
+                          <h2 className="text-xs sm:text-sm font-bold text-slate-900 truncate flex items-center gap-1.5">
+                            <i className="fa-solid fa-house text-[#0c2340]" aria-hidden="true"></i>
+                            <span>
+                              {currentLang === 'en'
+                                ? 'Teacher Home (4 Cards)'
+                                : 'टीचर होम पेज (Teacher Home)'}
+                            </span>
+                          </h2>
+                        ) : (
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-xs sm:text-sm text-slate-900 font-bold truncate flex items-center gap-1.5">
+                              {activeTeacherMeta && (
+                                <i
+                                  className={`${activeTeacherMeta.iconClass} ${activeTeacherMeta.accentText}`}
+                                  aria-hidden="true"
+                                ></i>
+                              )}
+                              <span className="truncate">
+                                {activeTeacherMeta
+                                  ? currentLang === 'en'
+                                    ? activeTeacherMeta.titleEn
+                                    : activeTeacherMeta.titleHi
+                                  : teacherPortalTab}
+                              </span>
+                            </span>
+                            {activeTeacherBadge && (
+                              <span className="text-xs font-bold text-indigo-700 tabular-nums whitespace-nowrap shrink-0">
+                                · {activeTeacherBadge}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQrScannerTarget(null);
+                          setQrScannerSubtitle(
+                            currentLang === 'en'
+                              ? 'Faculty: Find Student by QR scan, name, ID or mobile'
+                              : 'शिक्षक: छात्र खोजें (QR स्कैन, नाम, ID या मोबाइल द्वारा)'
+                          );
+                          setQrScannerOpen(true);
+                        }}
+                        className="px-2.5 sm:px-3 py-1.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 rounded-xl text-xs font-black flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                      >
+                        <i className="fa-solid fa-qrcode text-xs" aria-hidden="true"></i>
+                        <span>{t.tabFindStudent}</span>
+                      </button>
                     </div>
                   </div>
-                </div>
+                </>
+              );
+            })()}
+
+            {/* TEACHER HOME PAGE: STRICTLY 4 MAIN SUMMARY CARDS (Hidden completely when any module opens) */}
+            {teacherPortalTab === 'home' && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 animate-fadeIn">
+                {/* CARD 1: MY STAFF ATTENDANCE */}
                 <button
+                  id="teacher-home-card-attendance"
+                  type="button"
+                  onClick={() => handleSelectTeacherTab('staff_attendance')}
+                  className="p-4 sm:p-5 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 text-left transition-all cursor-pointer flex flex-col justify-between gap-4 shadow-xs group active:scale-[0.98]"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="w-11 h-11 rounded-xl bg-emerald-100 text-emerald-900 flex items-center justify-center text-lg shrink-0 transition-transform group-hover:scale-105">
+                      <i className="fa-solid fa-id-card-clip" aria-hidden="true"></i>
+                    </div>
+                    <span
+                      className={`text-[11px] font-black px-2.5 py-0.5 rounded-full border tabular-nums ${
+                        myTodayAttendanceRecord
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                          : 'bg-amber-100 text-amber-900 border-amber-200'
+                      }`}
+                    >
+                      {myTodayAttendanceRecord
+                        ? myTodayAttendanceRecord.check_out_time
+                          ? currentLang === 'en'
+                            ? 'Completed ✓'
+                            : 'पूर्ण ✓'
+                          : `${currentLang === 'en' ? 'In:' : 'इन:'} ${myTodayAttendanceRecord.check_in_time}`
+                        : currentLang === 'en'
+                        ? 'Check-In Pending'
+                        : 'चेक-इन बाकी'}
+                    </span>
+                  </div>
+                  <div>
+                    <div className="text-sm font-black text-slate-900 flex items-center justify-between gap-2">
+                      <span>{currentLang === 'en' ? '1. My Today Attendance' : '1. मेरी आज की हाजिरी'}</span>
+                      <i className="fa-solid fa-chevron-right text-xs text-slate-300 group-hover:text-slate-600" aria-hidden="true"></i>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      {currentLang === 'en'
+                        ? 'School QR check-in, check-out & log'
+                        : 'स्कूल QR चेक-इन, चेक-आउट व रिकॉर्ड'}
+                    </p>
+                  </div>
+                </button>
+
+                {/* CARD 2: HOMEWORK & DIARY */}
+                <button
+                  id="teacher-home-card-homework"
+                  type="button"
+                  onClick={() => handleSelectTeacherTab('upload')}
+                  className="p-4 sm:p-5 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 text-left transition-all cursor-pointer flex flex-col justify-between gap-4 shadow-xs group active:scale-[0.98]"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="w-11 h-11 rounded-xl bg-blue-100 text-blue-900 flex items-center justify-center text-lg shrink-0 transition-transform group-hover:scale-105">
+                      <i className="fa-solid fa-cloud-arrow-up" aria-hidden="true"></i>
+                    </div>
+                    <span className="text-[11px] font-black px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-900 border border-blue-200 tabular-nums">
+                      {currentLang === 'en' ? `${homeworkList.length} Saved` : `${homeworkList.length} दर्ज`}
+                    </span>
+                  </div>
+                  <div>
+                    <div className="text-sm font-black text-slate-900 flex items-center justify-between gap-2">
+                      <span>{currentLang === 'en' ? '2. Upload Homework' : '2. नया होमवर्क डालें'}</span>
+                      <i className="fa-solid fa-chevron-right text-xs text-slate-300 group-hover:text-slate-600" aria-hidden="true"></i>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      {currentLang === 'en'
+                        ? 'Send daily homework & photos'
+                        : 'कक्षा व विषय के अनुसार गृहकार्य भेजें'}
+                    </p>
+                  </div>
+                </button>
+
+                {/* CARD 3: STUDENT ATTENDANCE & CONDUCT */}
+                <button
+                  id="teacher-home-card-behavior"
+                  type="button"
+                  onClick={() => handleSelectTeacherTab('behavior')}
+                  className="p-4 sm:p-5 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 text-left transition-all cursor-pointer flex flex-col justify-between gap-4 shadow-xs group active:scale-[0.98]"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="w-11 h-11 rounded-xl bg-purple-100 text-purple-900 flex items-center justify-center text-lg shrink-0 transition-transform group-hover:scale-105">
+                      <i className="fa-solid fa-user-check" aria-hidden="true"></i>
+                    </div>
+                    <span className="text-[11px] font-black px-2.5 py-0.5 rounded-full bg-purple-100 text-purple-900 border border-purple-200 tabular-nums">
+                      {behaviorList.length} {currentLang === 'en' ? 'Logs' : 'लॉग'}
+                      {teacherQrAttendanceAllowed ? ' · QR ✓' : ''}
+                    </span>
+                  </div>
+                  <div>
+                    <div className="text-sm font-black text-slate-900 flex items-center justify-between gap-2">
+                      <span>{currentLang === 'en' ? '3. Attendance & Conduct' : '3. छात्र हाजिरी व आचरण'}</span>
+                      <i className="fa-solid fa-chevron-right text-xs text-slate-300 group-hover:text-slate-600" aria-hidden="true"></i>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      {currentLang === 'en'
+                        ? 'Mark daily presence, uniform & conduct'
+                        : 'उपस्थिति, वर्दी, नाखून व अनुशासन दर्ज करें'}
+                    </p>
+                  </div>
+                </button>
+
+                {/* CARD 4: EXAM ROOM DUTY & SEATING PLAN */}
+                <button
+                  id="teacher-home-card-seating"
                   type="button"
                   onClick={() => handleSelectTeacherTab('seating_plan')}
-                  className="px-4 py-2.5 rounded-xl bg-[#0c2340] hover:bg-blue-950 text-amber-300 text-xs font-black inline-flex items-center justify-center gap-2 cursor-pointer shadow-sm shrink-0 active:scale-95"
+                  className={`p-4 sm:p-5 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-3.5 shadow-xs group active:scale-[0.98] ${
+                    teacherAssignedRooms.length > 0
+                      ? 'bg-emerald-50/60 hover:bg-emerald-50 border-emerald-300'
+                      : 'bg-white hover:bg-slate-50 border-slate-200 hover:border-slate-300'
+                  }`}
                 >
-                  <i className="fa-solid fa-arrow-right-to-bracket"></i>
-                  <span>
-                    {teacherPortalTab === 'seating_plan'
-                      ? 'मेरा रूम नीचे खुला है ↓'
-                      : '🚪 मेरा रूम खोलें व बच्चों को रूम में भेजें'}
-                  </span>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="w-11 h-11 rounded-xl bg-amber-100 text-amber-900 flex items-center justify-center text-lg shrink-0 transition-transform group-hover:scale-105">
+                      <i className="fa-solid fa-chair" aria-hidden="true"></i>
+                    </div>
+                    {teacherAssignedRooms.length > 0 ? (
+                      <span className="text-[11px] font-black px-2.5 py-0.5 rounded-full bg-emerald-600 text-white tabular-nums">
+                        {teacherAssignedRooms.map((r) => `${r.roomNumber} (${r.totalStudents})`).join(', ')}
+                      </span>
+                    ) : (
+                      <span className="text-[11px] font-black px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-200">
+                        {currentLang === 'en' ? 'Room Duty' : 'सीटिंग प्लान'}
+                      </span>
+                    )}
+                  </div>
+                  <div>
+                    <div className="text-sm font-black text-slate-900 flex items-center justify-between gap-2">
+                      <span>{currentLang === 'en' ? '4. Exam Room & Seating' : '4. परीक्षा रूम व सीटिंग'}</span>
+                      <i className="fa-solid fa-chevron-right text-xs text-slate-300 group-hover:text-slate-600" aria-hidden="true"></i>
+                    </div>
+                    {teacherAssignedRooms.length > 0 ? (
+                      <div className="mt-1.5 space-y-1">
+                        <p className="text-[11px] text-emerald-900 font-bold tabular-nums">
+                          {formatExamDateDisplay(teacherAssignedRooms[0].examDate)} ·{' '}
+                          {teacherAssignedRooms.reduce((s, r) => s + r.sentCount, 0)}/{teacherAssignedRooms.reduce((s, r) => s + r.totalStudents, 0)} रूम में
+                        </p>
+                        <div className="flex flex-wrap gap-1">
+                          {teacherAssignedRooms
+                            .flatMap((rm) => rm.classBreakdown)
+                            .slice(0, 4)
+                            .map((cb, idx) => (
+                              <span
+                                key={`${cb.classCode}-${idx}`}
+                                className="px-1.5 py-0.5 rounded bg-white border border-emerald-200 text-[10px] font-bold text-slate-800 tabular-nums"
+                              >
+                                {cb.classLabel}: {cb.count}
+                              </span>
+                            ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-slate-500 mt-1">
+                        {currentLang === 'en'
+                          ? 'View assigned exam room & seating chart'
+                          : 'रूम ड्यूटी, सीटिंग चार्ट व बच्चों को भेजें'}
+                      </p>
+                    )}
+                  </div>
                 </button>
               </div>
             )}
-
-            {/* Teacher Sub-Navigation Tabs */}
-            <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-2">
-              <button
-                onClick={() => handleSelectTeacherTab('staff_attendance')}
-                className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
-                  teacherPortalTab === 'staff_attendance'
-                    ? 'bg-[#0c2340] text-amber-300 shadow-sm ring-2 ring-amber-400/50'
-                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-                }`}
-              >
-                <i className="fa-solid fa-id-card-clip text-amber-400"></i>
-                <span>{t.tabStaffAttendance}</span>
-                {myTodayAttendanceRecord ? (
-                  <span className="px-2 py-0.2 rounded-full bg-emerald-500/20 text-emerald-700 text-[11px] font-bold">
-                    {t.staffPresent}
-                  </span>
-                ) : (
-                  <span className="px-2 py-0.2 rounded-full bg-amber-500/20 text-amber-800 text-[11px] font-bold">
-                    {t.staffCheckInNeeded}
-                  </span>
-                )}
-              </button>
-
-              <button
-                onClick={() => handleSelectTeacherTab('upload')}
-                className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
-                  teacherPortalTab === 'upload'
-                    ? 'bg-[#0c2340] text-amber-300 shadow-sm'
-                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-                }`}
-              >
-                <i className="fa-solid fa-cloud-arrow-up text-amber-400"></i>
-                <span>{t.tabUploadHomework}</span>
-              </button>
-
-              <button
-                onClick={() => handleSelectTeacherTab('tracker')}
-                className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
-                  teacherPortalTab === 'tracker'
-                    ? 'bg-[#0c2340] text-amber-300 shadow-sm ring-2 ring-amber-400/50'
-                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-                }`}
-              >
-                <i className="fa-solid fa-list-check text-emerald-400"></i>
-                <span>{t.tabHomeworkChecker}</span>
-                <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-black">
-                  1-Click
-                </span>
-              </button>
-
-              <button
-                onClick={() => handleSelectTeacherTab('submissions')}
-                className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
-                  teacherPortalTab === 'submissions'
-                    ? 'bg-[#0c2340] text-amber-300 shadow-sm'
-                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-                }`}
-              >
-                <i className="fa-solid fa-clock-rotate-left text-blue-400"></i>
-                <span>{t.tabRecentSubmissions}</span>
-                <span className="px-2 py-0.2 rounded-full bg-blue-100 text-blue-800 text-[11px]">
-                  {homeworkList.length}
-                </span>
-              </button>
-
-              <button
-                onClick={() => handleSelectTeacherTab('behavior')}
-                className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
-                  teacherPortalTab === 'behavior'
-                    ? 'bg-[#0c2340] text-amber-300 shadow-sm'
-                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-                }`}
-              >
-                <i className="fa-solid fa-user-check text-indigo-400"></i>
-                <span>{t.tabDailyConduct}</span>
-                <span className="px-2 py-0.2 rounded-full bg-indigo-100 text-indigo-800 text-[11px]">
-                  {behaviorList.length}
-                </span>
-              </button>
-
-              <button
-                onClick={() => handleSelectTeacherTab('notices')}
-                className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
-                  teacherPortalTab === 'notices'
-                    ? 'bg-[#0c2340] text-amber-300 shadow-sm'
-                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-                }`}
-              >
-                <i className="fa-solid fa-bullhorn text-amber-400"></i>
-                <span>{t.tabSchoolNotices}</span>
-              </button>
-
-              <button
-                onClick={() => handleSelectTeacherTab('performance')}
-                className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
-                  teacherPortalTab === 'performance'
-                    ? 'bg-[#0c2340] text-amber-300 shadow-sm ring-2 ring-amber-400/50'
-                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-                }`}
-              >
-                <i className="fa-solid fa-trophy text-amber-400"></i>
-                <span>{currentLang === 'en' ? 'Performance & Leaderboard' : 'शिक्षक लीडरबोर्ड'}</span>
-                <span className="px-1.5 py-0.5 text-[10px] bg-amber-400/20 text-amber-300 font-black rounded-md">🏆 Top 3</span>
-              </button>
-
-              <button
-                onClick={() => handleSelectTeacherTab('syllabus')}
-                className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
-                  teacherPortalTab === 'syllabus'
-                    ? 'bg-[#0c2340] text-amber-300 shadow-sm ring-2 ring-amber-400/50'
-                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-                }`}
-              >
-                <i className="fa-solid fa-book-open-reader text-amber-400"></i>
-                <span>{currentLang === 'en' ? 'Syllabus Tracker' : 'वीकली सिलेबस ट्रैकर'}</span>
-                <span className="px-1.5 py-0.5 text-[10px] bg-amber-400/20 text-amber-300 font-black rounded-md">30 Pts</span>
-              </button>
-
-              <button
-                onClick={() => handleSelectTeacherTab('weekly_tests')}
-                className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
-                  teacherPortalTab === 'weekly_tests'
-                    ? 'bg-[#0c2340] text-amber-300 shadow-sm ring-2 ring-amber-400/50'
-                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-                }`}
-              >
-                <i className="fa-solid fa-file-pen text-emerald-400"></i>
-                <span>{currentLang === 'en' ? 'Weekly Subject Test' : 'वीकली विषय टेस्ट'}</span>
-                <span className="px-1.5 py-0.5 text-[10px] bg-emerald-400/20 text-emerald-300 font-black rounded-md">25 Pts</span>
-              </button>
-
-              <button
-                onClick={() => handleSelectTeacherTab('report_card')}
-                className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
-                  teacherPortalTab === 'report_card'
-                    ? 'bg-[#0c2340] text-amber-300 shadow-sm ring-2 ring-amber-400/50'
-                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-                }`}
-              >
-                <i className="fa-solid fa-graduation-cap text-amber-400"></i>
-                <span>{currentLang === 'en' ? 'Exam Marks & Report Draft' : 'परीक्षा अंक व रिपोर्ट कार्ड'}</span>
-                <span className="px-1.5 py-0.5 text-[10px] bg-amber-400/20 text-amber-300 font-black rounded-md">
-                  {reportCardWorkflow.accessConfig.allowTeacherPtmView ? 'PTM View' : 'Marks Only'}
-                </span>
-              </button>
-
-              <button
-                onClick={() => handleSelectTeacherTab('seating_plan')}
-                className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
-                  teacherPortalTab === 'seating_plan'
-                    ? 'bg-[#0c2340] text-amber-300 shadow-sm ring-2 ring-amber-400/50'
-                    : teacherAssignedRooms.length > 0
-                    ? 'bg-emerald-50 text-emerald-950 hover:bg-emerald-100 border-2 border-emerald-400'
-                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-                }`}
-              >
-                <i className="fa-solid fa-chair text-amber-400"></i>
-                <span>
-                  {currentLang === 'en'
-                    ? teacherAssignedRooms.length > 0
-                      ? 'My Exam Room & Seating'
-                      : 'Exam Seating Plan'
-                    : teacherAssignedRooms.length > 0
-                    ? 'मेरा एग्जाम रूम व सीटिंग'
-                    : 'परीक्षा सीटिंग प्लान'}
-                </span>
-                {teacherAssignedRooms.length > 0 ? (
-                  <span className="px-1.5 py-0.5 text-[10px] bg-emerald-600 text-white font-black rounded-md tabular-nums">
-                    {teacherAssignedRooms.map((r) => `${r.roomNumber} (${r.totalStudents})`).join(', ')}
-                  </span>
-                ) : (
-                  <span className="px-1.5 py-0.5 text-[10px] bg-emerald-400/20 text-emerald-700 font-black rounded-md">
-                    Anti-Cheat
-                  </span>
-                )}
-              </button>
-
-              {/* Universal Student Finder & QR Scanner button */}
-              <button
-                type="button"
-                onClick={() => {
-                  setQrScannerTarget(null);
-                  setQrScannerSubtitle(currentLang === 'en' ? 'Faculty: Find Student by QR scan, name, ID or mobile' : 'शिक्षक: छात्र खोजें (QR स्कैन, नाम, ID या मोबाइल द्वारा)');
-                  setQrScannerOpen(true);
-                }}
-                className="px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 shadow-sm ml-auto"
-              >
-                <i className="fa-solid fa-magnifying-glass"></i>
-                <i className="fa-solid fa-qrcode"></i>
-                <span>{t.tabFindStudent}</span>
-              </button>
-            </div>
 
             {/* TAB 1: UPLOAD HOMEWORK */}
             {teacherPortalTab === 'upload' && (
@@ -13604,17 +13526,17 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               <span>← वापस जाएं (Back to Role Selection)</span>
             </button>
 
-            <div className="bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden">
+            <div className="bg-white rounded-3xl shadow-xl border-2 border-[#c7d2fe] overflow-hidden">
               {/* Top Banner */}
-              <div className="bg-gradient-to-br from-[#0c2340] via-[#10316b] to-[#0c2340] p-6 text-white text-center relative">
-                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-amber-500 text-slate-950 flex items-center justify-center mx-auto mb-3 shadow-lg shadow-amber-500/30 border-2 border-amber-200 text-2xl font-black">
+              <div className="bg-gradient-to-r from-[#1e3a8a] via-[#312e81] to-[#4338ca] p-6 text-white text-center relative border-b-4 border-[#fbbf24]">
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#fbbf24] to-[#f97316] text-[#0f172a] flex items-center justify-center mx-auto mb-3 shadow-lg border-2 border-[#fde68a] text-2xl font-black">
                   <i className="fa-solid fa-user-tie"></i>
                 </div>
-                <span className="inline-block px-3 py-0.5 rounded-full bg-amber-400/20 text-amber-300 text-[11px] font-bold tracking-wide border border-amber-400/40 uppercase mb-1">
+                <span className="inline-block px-3 py-0.5 rounded-full bg-[#fde047] text-[#0f172a] text-[11px] font-black tracking-wide uppercase mb-1">
                   स्कूल प्रबंधक सुरक्षा (Manager Portal)
                 </span>
                 <h3 className="text-xl font-extrabold tracking-tight">स्कूल मैनेजर लॉगिन</h3>
-                <p className="text-xs text-slate-300 mt-1">
+                <p className="text-xs text-[#e0e7ff] mt-1">
                   प्रशासनिक रिकॉर्ड्स, फीस व स्टाफ विवरण देखने हेतु लॉगिन करें
                 </p>
               </div>
@@ -13648,7 +13570,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       }}
                       placeholder="उदा. mahak या 10-अंकीय मोबाइल"
                       required
-                      className="w-full pl-9 pr-3.5 py-2.5 rounded-xl border border-slate-300 focus:border-blue-800 focus:ring-2 focus:ring-blue-800/20 text-xs sm:text-sm outline-none transition-all"
+                      className="w-full pl-9 pr-3.5 py-2.5 rounded-xl border border-slate-300 focus:border-indigo-600 focus:ring-2 focus:ring-indigo-500/20 text-xs sm:text-sm outline-none transition-all"
                     />
                   </div>
                 </div>
@@ -13670,7 +13592,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       }}
                       placeholder="अपना गुप्त पासवर्ड दर्ज करें"
                       required
-                      className="w-full pl-9 pr-10 py-2.5 rounded-xl border border-slate-300 focus:border-blue-800 focus:ring-2 focus:ring-blue-800/20 text-xs sm:text-sm outline-none transition-all"
+                      className="w-full pl-9 pr-10 py-2.5 rounded-xl border border-slate-300 focus:border-indigo-600 focus:ring-2 focus:ring-indigo-500/20 text-xs sm:text-sm outline-none transition-all"
                     />
                     <button
                       type="button"
@@ -13685,7 +13607,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 <button
                   type="submit"
                   disabled={managerLoginSubmitting || loadingUsers}
-                  className="w-full py-3 bg-gradient-to-r from-[#0c2340] via-[#10316b] to-[#0c2340] hover:brightness-110 text-amber-300 font-bold text-sm rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+                  className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm rounded-xl shadow-md shadow-indigo-600/20 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
                 >
                   {managerLoginSubmitting || loadingUsers ? (
                     <>
@@ -13700,8 +13622,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   )}
                 </button>
 
-                <div className="p-3 bg-amber-50/80 border border-amber-200/80 rounded-xl text-[11px] text-amber-900 flex items-start gap-2 mt-2">
-                  <i className="fa-solid fa-shield-halved text-amber-600 text-xs mt-0.5 shrink-0"></i>
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-[11px] text-slate-700 flex items-start gap-2 mt-2">
+                  <i className="fa-solid fa-shield-halved text-indigo-600 text-xs mt-0.5 shrink-0"></i>
                   <div>
                     <span className="font-bold">सुरक्षा सूचना:</span> क्रेडेंशियल्स Google Sheet ('Users') के अनुसार मान्य हैं। केवल <strong>Manager</strong> पदनाम वाले उपयोगकर्ता ही इस पोर्टल में लॉगिन कर सकते हैं।
                   </div>
@@ -13795,16 +13717,16 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
             />
 
             {/* Single Left-Wall Menu Trigger + Active Context Bar */}
-            <div className="sticky top-2 z-[90] flex flex-wrap items-center justify-between gap-2 bg-white/95 backdrop-blur-xs rounded-2xl shadow-xs border border-slate-200 pr-3 py-1.5 pl-0">
+            <div className="relative z-20 flex flex-wrap items-center justify-between gap-2 bg-[#ffffff] rounded-2xl shadow-md border-2 border-[#c7d2fe] pr-3 py-1.5 pl-0">
               <div className="flex items-center gap-2.5 min-w-0">
                 <button
                   type="button"
                   id="manager-left-wall-trigger"
                   onClick={() => setIsManagerMenuOpen(true)}
-                  className="-ml-4 sm:-ml-6 lg:-ml-8 pl-4 sm:pl-5 pr-3.5 py-2.5 bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-black text-xs sm:text-sm rounded-r-xl rounded-l-none flex items-center gap-2 shadow-md border border-l-0 border-amber-400/50 cursor-pointer transition-colors whitespace-nowrap shrink-0"
+                  className="-ml-4 sm:-ml-6 lg:-ml-8 pl-4 sm:pl-5 pr-3.5 py-2.5 bg-[#4f46e5] bg-[linear-gradient(90deg,#4f46e5_0%,#7c3aed_100%)] hover:bg-[#4338ca] text-[#ffffff] font-extrabold text-xs sm:text-sm rounded-r-xl rounded-l-none flex items-center gap-2 shadow-md cursor-pointer transition-all whitespace-nowrap shrink-0"
                   title="प्रबंधन मेन्यू खोलें"
                 >
-                  <i className="fa-solid fa-ellipsis-vertical text-sm" aria-hidden="true"></i>
+                  <i className="fa-solid fa-ellipsis-vertical text-sm text-[#fde047]" aria-hidden="true"></i>
                   <span>मेनू</span>
                 </button>
 
@@ -13812,7 +13734,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   <button
                     type="button"
                     onClick={() => handleSelectManagerTab('home')}
-                    className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-xl flex items-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap shrink-0"
+                    className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-xs rounded-xl flex items-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap shrink-0"
                     title="प्रबंधक होम पेज (5 कार्ड्स) पर वापस जाएं"
                   >
                     <i className="fa-solid fa-arrow-left text-[11px]" aria-hidden="true"></i>
@@ -13823,21 +13745,21 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 <div className="flex items-center gap-2 min-w-0 pl-1.5 border-l border-slate-200">
                   {managerTab === 'home' ? (
                     <div className="min-w-0">
-                      <h2 className="text-xs sm:text-sm font-black text-slate-900 truncate flex items-center gap-1.5">
-                        <i className="fa-solid fa-house text-[#0c2340]" aria-hidden="true"></i>
+                      <h2 className="text-xs sm:text-sm font-bold text-slate-900 truncate flex items-center gap-1.5">
+                        <i className="fa-solid fa-house text-indigo-600" aria-hidden="true"></i>
                         <span>प्रबंधक होम पेज (Manager Overview)</span>
                       </h2>
                     </div>
                   ) : (
                     <div className="flex items-center gap-2 min-w-0">
-                      <span className="text-xs sm:text-sm text-slate-900 font-black truncate flex items-center gap-1.5">
+                      <span className="text-xs sm:text-sm text-slate-900 font-bold truncate flex items-center gap-1.5">
                         {activeMenuMeta && (
                           <i className={`${activeMenuMeta.iconClass} ${activeMenuMeta.accentText}`} aria-hidden="true"></i>
                         )}
                         <span className="truncate">{activeMenuMeta?.title || managerTab}</span>
                       </span>
                       {activeModuleBadge && (
-                        <span className="text-xs font-black text-[#0c2340] tabular-nums whitespace-nowrap shrink-0">
+                        <span className="text-xs font-bold text-indigo-600 tabular-nums whitespace-nowrap shrink-0">
                           · {activeModuleBadge}
                         </span>
                       )}
@@ -13853,10 +13775,10 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     handleSelectManagerTab('attendance');
                     setQuickQrAttendanceOpen(true);
                   }}
-                  className="px-2.5 sm:px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  className="px-2.5 sm:px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer whitespace-nowrap shrink-0"
                   title="QR कोड स्कैन करते ही तुरंत छात्र की हाजिरी दर्ज करें (केवल मैनेजर)"
                 >
-                  <i className="fa-solid fa-camera text-xs text-amber-300" aria-hidden="true"></i>
+                  <i className="fa-solid fa-camera text-xs" aria-hidden="true"></i>
                   <span className="hidden sm:inline">QR हाजिरी</span>
                 </button>
 
@@ -13867,7 +13789,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     setQrScannerSubtitle('प्रबंधक: छात्र खोजें (QR स्कैन, नाम, ID या मोबाइल द्वारा)');
                     setQrScannerOpen(true);
                   }}
-                  className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 rounded-xl text-xs font-black flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer whitespace-nowrap shrink-0"
                   title="छात्र खोजें / QR स्कैनर"
                 >
                   <i className="fa-solid fa-qrcode text-xs" aria-hidden="true"></i>
@@ -13918,9 +13840,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 </Suspense>
 
                 {/* Essential Daily Shortcuts on Home Page */}
-                <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 space-y-3">
+                <div className="bg-white rounded-2xl border border-slate-200/80 shadow-[0_1px_2px_rgba(15,23,42,0.03)] p-4 sm:p-5 space-y-3">
                   <div>
-                    <h3 className="text-sm sm:text-base font-black text-slate-900">
+                    <h3 className="text-sm sm:text-base font-bold text-slate-900">
                       आज के मुख्य कार्य (Quick Access)
                     </h3>
                     <p className="text-xs text-slate-500">
@@ -13944,7 +13866,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                           key={item.id}
                           type="button"
                           onClick={() => handleSelectManagerTab(item.id)}
-                          className="p-3.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 text-left transition-colors flex items-center justify-between gap-3 cursor-pointer"
+                          className="p-3.5 rounded-xl border border-slate-200/80 bg-white hover:bg-slate-50/80 hover:border-indigo-300 hover:shadow-sm text-left transition-all flex items-center justify-between gap-3 cursor-pointer"
                         >
                           <div className="flex items-center gap-3 min-w-0">
                             <span
@@ -13953,7 +13875,7 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                               <i className={item.iconClass} aria-hidden="true"></i>
                             </span>
                             <div className="min-w-0">
-                              <div className="font-bold text-xs sm:text-sm text-slate-900 truncate">
+                              <div className="font-semibold text-xs sm:text-sm text-slate-900 truncate">
                                 {item.title}
                               </div>
                               <div className="text-[11px] text-slate-500 truncate">

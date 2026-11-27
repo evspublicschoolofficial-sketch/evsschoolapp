@@ -55,14 +55,14 @@ export const PWAHeaderUpdateButton: React.FC<PWAUpdateProps> = ({ lang = 'hi' })
       type="button"
       disabled
       aria-disabled="true"
-      className="px-2.5 py-1.5 rounded-xl bg-white/5 text-slate-300/60 border border-white/10 text-xs font-bold flex items-center gap-1.5 cursor-not-allowed opacity-60 shrink-0 select-none"
+      className="px-2.5 py-1.5 rounded-xl bg-[#1e1b4b] text-[#e0e7ff] border border-[#6366f1] text-xs font-bold flex items-center gap-1.5 cursor-not-allowed opacity-85 shrink-0 select-none"
       title={
         lang === 'en'
           ? 'Up to date — Update Now becomes active only when a new update is pushed to GitHub'
           : 'ऐप नवीनतम वर्ज़न पर है — GitHub पर नया अपडेट आने पर ही यह बटन सक्रिय होगा'
       }
     >
-      <i className="fa-solid fa-circle-check text-[11px] text-emerald-400/75" />
+      <i className="fa-solid fa-circle-check text-[11px] text-[#34d399]" />
       <span className="hidden sm:inline">{lang === 'en' ? 'Update Now' : 'अभी अपडेट करें'}</span>
       <span className="sm:hidden">{lang === 'en' ? 'Update Now' : 'अपडेट'}</span>
     </button>

@@ -293,18 +293,18 @@ export const ManagerLeftSidebar: React.FC<ManagerLeftSidebarProps> = ({
           }}
           className="no-print fixed inset-0 z-[120] bg-slate-950/60 backdrop-blur-[2px] flex justify-start animate-fadeIn"
         >
-          <aside className="w-[300px] sm:w-[328px] max-w-[88vw] h-full bg-white border-r border-slate-200 shadow-2xl flex flex-col animate-slide-in-left">
+          <aside className="w-[300px] sm:w-[328px] max-w-[88vw] h-full bg-white border-r border-slate-200/90 shadow-[20px_0_50px_-15px_rgba(15,23,42,0.2)] flex flex-col animate-slide-in-left">
             {/* Drawer Header */}
-            <div className="bg-[#0c2340] px-4 py-3.5 text-white flex items-center justify-between gap-3 border-b border-amber-400/40 shrink-0">
+            <div className="bg-gradient-to-r from-[#1e3a8a] via-[#312e81] to-[#4338ca] px-4 py-3.5 text-white flex items-center justify-between gap-3 border-b-4 border-[#fbbf24] shrink-0">
               <div className="flex items-center gap-2.5 min-w-0">
-                <span className="w-9 h-9 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center font-black text-base shrink-0">
-                  <i className="fa-solid fa-bars" aria-hidden="true"></i>
+                <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#fbbf24] to-[#f97316] text-[#0f172a] flex items-center justify-center font-black text-sm shadow-sm shrink-0">
+                  <i className="fa-solid fa-layer-group" aria-hidden="true"></i>
                 </span>
                 <div className="min-w-0">
-                  <h2 className="font-black text-sm text-amber-300 truncate">
-                    प्रबंधन मेन्यू (Menu)
+                  <h2 className="font-extrabold text-sm text-white truncate">
+                    प्रबंधन मेन्यू
                   </h2>
-                  <p className="text-[11px] text-blue-100/90 truncate">
+                  <p className="text-[11px] text-[#fde68a] font-medium truncate">
                     {managerName || 'प्रबंधक'} · E.V.S. Public School
                   </p>
                 </div>
@@ -313,7 +313,7 @@ export const ManagerLeftSidebar: React.FC<ManagerLeftSidebarProps> = ({
                 type="button"
                 onClick={onClose}
                 aria-label="मेन्यू बंद करें"
-                className="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center font-black cursor-pointer transition-colors shrink-0"
+                className="w-10 h-10 rounded-xl bg-[#4f46e5] hover:bg-[#6366f1] text-white border border-[#818cf8] flex items-center justify-center font-bold cursor-pointer transition-colors shrink-0"
               >
                 <i className="fa-solid fa-xmark text-base" aria-hidden="true"></i>
               </button>
@@ -331,7 +331,7 @@ export const ManagerLeftSidebar: React.FC<ManagerLeftSidebarProps> = ({
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   placeholder="फंक्शन खोजें (जैसे: Fees, Hall Pass)..."
-                  className="w-full pl-8 pr-8 py-2 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-800 placeholder:text-slate-400 focus:border-[#0c2340] focus:outline-none"
+                  className="w-full pl-8 pr-8 py-2 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-800 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/15 focus:outline-none transition-all"
                 />
                 {searchTerm && (
                   <button
@@ -354,29 +354,29 @@ export const ManagerLeftSidebar: React.FC<ManagerLeftSidebarProps> = ({
                   type="button"
                   id="manager-menu-item-home"
                   onClick={() => handleChooseTab('home')}
-                  className={`w-full min-h-[48px] px-3 py-2.5 rounded-xl border text-left transition-colors flex items-center justify-between gap-2.5 cursor-pointer ${
+                  className={`w-full min-h-[48px] px-3 py-2.5 rounded-xl border text-left transition-all flex items-center justify-between gap-2.5 cursor-pointer ${
                     activeTab === 'home'
-                      ? 'bg-[#0c2340] border-[#0c2340] text-white shadow-sm'
-                      : 'bg-amber-50/70 hover:bg-amber-100/70 border-amber-200 text-slate-900'
+                      ? 'bg-indigo-600 border-indigo-600 text-white shadow-sm shadow-indigo-600/20'
+                      : 'bg-indigo-50/60 hover:bg-indigo-50 border-indigo-200/80 text-slate-900'
                   }`}
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
                     <span
                       className={`w-9 h-9 rounded-lg flex items-center justify-center text-sm shrink-0 ${
                         activeTab === 'home'
-                          ? 'bg-amber-400 text-slate-950'
-                          : 'bg-amber-200/80 text-amber-950'
+                          ? 'bg-white/20 text-white'
+                          : 'bg-indigo-100 text-indigo-700'
                       }`}
                     >
                       <i className="fa-solid fa-house" aria-hidden="true"></i>
                     </span>
                     <div className="min-w-0">
-                      <div className="font-black text-xs sm:text-[13px] truncate">
+                      <div className="font-bold text-xs sm:text-[13px] truncate">
                         होम पेज (Manager Home)
                       </div>
                       <div
                         className={`text-[11px] truncate ${
-                          activeTab === 'home' ? 'text-blue-100' : 'text-slate-600'
+                          activeTab === 'home' ? 'text-indigo-100' : 'text-slate-600'
                         }`}
                       >
                         5 मुख्य सारांश कार्ड व डैशबोर्ड
@@ -384,8 +384,8 @@ export const ManagerLeftSidebar: React.FC<ManagerLeftSidebarProps> = ({
                     </div>
                   </div>
                   <span
-                    className={`text-[11px] font-black whitespace-nowrap shrink-0 tabular-nums ${
-                      activeTab === 'home' ? 'text-amber-300' : 'text-amber-900'
+                    className={`text-[11px] font-bold whitespace-nowrap shrink-0 tabular-nums ${
+                      activeTab === 'home' ? 'text-indigo-100' : 'text-indigo-700'
                     }`}
                   >
                     5 कार्ड
@@ -418,29 +418,29 @@ export const ManagerLeftSidebar: React.FC<ManagerLeftSidebarProps> = ({
                               type="button"
                               id={`manager-menu-item-${item.id}`}
                               onClick={() => handleChooseTab(item.id)}
-                              className={`w-full min-h-[46px] px-3 py-2 rounded-xl border text-left transition-colors flex items-center justify-between gap-2.5 cursor-pointer ${
+                              className={`w-full min-h-[46px] px-3 py-2 rounded-xl border text-left transition-all flex items-center justify-between gap-2.5 cursor-pointer ${
                                 isActive
-                                  ? 'bg-[#0c2340] border-[#0c2340] text-white shadow-xs'
-                                  : 'bg-white hover:bg-slate-50 border-transparent hover:border-slate-200 text-slate-900'
+                                  ? 'bg-indigo-600 border-indigo-600 text-white shadow-sm shadow-indigo-600/20'
+                                  : 'bg-white hover:bg-slate-50 border-transparent hover:border-slate-200/90 text-slate-900'
                               }`}
                             >
                               <div className="flex items-center gap-2.5 min-w-0">
                                 <span
                                   className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm shrink-0 ${
                                     isActive
-                                      ? 'bg-white/15 text-amber-300'
+                                      ? 'bg-white/20 text-white'
                                       : `${item.accentBg} ${item.accentText}`
                                   }`}
                                 >
                                   <i className={item.iconClass} aria-hidden="true"></i>
                                 </span>
                                 <div className="min-w-0">
-                                  <div className="font-bold text-xs sm:text-[13px] truncate">
+                                  <div className="font-semibold text-xs sm:text-[13px] truncate">
                                     {item.title}
                                   </div>
                                   <div
                                     className={`text-[11px] truncate ${
-                                      isActive ? 'text-blue-100' : 'text-slate-500'
+                                      isActive ? 'text-indigo-100' : 'text-slate-500'
                                     }`}
                                   >
                                     {item.subtitle}
@@ -450,7 +450,7 @@ export const ManagerLeftSidebar: React.FC<ManagerLeftSidebarProps> = ({
                               {badgeLabel && (
                                 <span
                                   className={`text-[11px] font-bold whitespace-nowrap shrink-0 tabular-nums ${
-                                    isActive ? 'text-amber-300' : 'text-slate-600'
+                                    isActive ? 'text-indigo-100' : 'text-slate-500'
                                   }`}
                                 >
                                   {badgeLabel}
@@ -486,7 +486,7 @@ export const ManagerLeftSidebar: React.FC<ManagerLeftSidebarProps> = ({
                     onClose();
                     onOpenQrSearch();
                   }}
-                  className="min-h-[40px] px-3 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap"
+                  className="min-h-[40px] px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap"
                 >
                   <i className="fa-solid fa-qrcode text-xs" aria-hidden="true"></i>
                   <span>QR खोजें</span>

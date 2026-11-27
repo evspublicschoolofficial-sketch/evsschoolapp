@@ -1030,32 +1030,32 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
           type="button"
           id="manager-card-total-students"
           onClick={() => setActiveModal('totalStudents')}
-          className="group relative bg-white hover:bg-blue-50/40 p-4 rounded-2xl shadow-xs hover:shadow-md border border-slate-200/90 hover:border-blue-300 transition-all text-left cursor-pointer flex flex-col justify-between"
+          className="group relative bg-gradient-to-br from-[#ffffff] to-[#eff6ff] p-4.5 rounded-2xl shadow-sm hover:shadow-xl border border-[#bfdbfe] border-t-4 border-t-[#2563eb] transition-all text-left cursor-pointer flex flex-col justify-between hover:-translate-y-0.5"
         >
           <div className="flex items-start justify-between gap-2">
-            <div className="w-11 h-11 rounded-xl bg-blue-100 text-blue-900 flex items-center justify-center text-lg font-bold shadow-2xs group-hover:scale-105 transition-transform">
+            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-[#2563eb] to-[#4f46e5] text-white shadow-md shadow-blue-500/25 flex items-center justify-center text-lg font-bold group-hover:scale-105 transition-transform">
               <i className="fa-solid fa-user-graduate"></i>
             </div>
-            <span className="text-[11px] font-semibold text-blue-800">
-              {activeClassCount} Classes Active
+            <span className="text-[11px] font-bold text-[#1d4ed8] bg-[#dbeafe] px-2.5 py-0.5 rounded-full">
+              {activeClassCount} Classes
             </span>
           </div>
 
-          <div className="mt-3">
-            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
-              Total Students (कुल छात्र)
+          <div className="mt-3.5">
+            <span className="text-[11px] font-bold text-[#1e40af] block">
+              Total Students · कुल छात्र
             </span>
-            <div className="flex items-baseline gap-2 mt-0.5 tabular-nums">
-              <span className="text-2xl sm:text-3xl font-black text-slate-900">
+            <div className="flex items-baseline gap-2 mt-1 tabular-nums">
+              <span className="text-2xl sm:text-3xl font-extrabold tracking-tight text-[#0f172a]">
                 {loadingStudents ? '...' : totalStudentsCount}
               </span>
-              <span className="text-xs text-slate-500 font-medium">Enrolled</span>
+              <span className="text-xs text-[#3b82f6] font-semibold">Enrolled</span>
             </div>
           </div>
 
-          <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs text-blue-700 font-bold group-hover:text-blue-900">
+          <div className="mt-3.5 pt-2.5 border-t border-[#dbeafe] flex items-center justify-between text-xs text-[#2563eb] font-bold group-hover:text-[#1d4ed8]">
             <span>View Full Directory</span>
-            <i className="fa-solid fa-arrow-right text-[11px] group-hover:translate-x-1 transition-transform"></i>
+            <i className="fa-solid fa-arrow-right text-[11px] group-hover:translate-x-0.5 transition-transform"></i>
           </div>
         </button>
 
@@ -1064,47 +1064,46 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
           type="button"
           id="manager-card-fees-overview"
           onClick={() => setActiveModal('feesOverview')}
-          className="group relative bg-white hover:bg-emerald-50/40 p-4 rounded-2xl shadow-xs hover:shadow-md border border-slate-200/90 hover:border-emerald-300 transition-all text-left cursor-pointer flex flex-col justify-between"
+          className="group relative bg-gradient-to-br from-[#ffffff] to-[#ecfdf5] p-4.5 rounded-2xl shadow-sm hover:shadow-xl border border-[#a7f3d0] border-t-4 border-t-[#059669] transition-all text-left cursor-pointer flex flex-col justify-between hover:-translate-y-0.5"
         >
           <div className="flex items-start justify-between gap-2">
-            <div className="w-11 h-11 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center text-lg font-bold shadow-2xs group-hover:scale-105 transition-transform">
+            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-[#059669] to-[#10b981] text-white shadow-md shadow-emerald-500/25 flex items-center justify-center text-lg font-bold group-hover:scale-105 transition-transform">
               <i className="fa-solid fa-file-invoice-dollar"></i>
             </div>
-            <span className="text-[11px] font-semibold text-emerald-800">
+            <span className="text-[11px] font-bold text-[#047857] bg-[#d1fae5] px-2.5 py-0.5 rounded-full">
               ₹ Accounts Live
             </span>
           </div>
 
-          <div className="mt-3">
-            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
-              Fees Overview (शुल्क सारांश)
+          <div className="mt-3.5">
+            <span className="text-[11px] font-bold text-[#065f46] block">
+              Fees Overview · शुल्क सारांश
             </span>
-            <div className="flex items-baseline gap-2 mt-0.5 tabular-nums">
-              <span className="text-xl sm:text-2xl font-black text-emerald-700">
+            <div className="flex items-baseline gap-2 mt-1 tabular-nums">
+              <span className="text-xl sm:text-2xl font-extrabold tracking-tight text-[#047857]">
                 {loadingFees ? '...' : `₹${formatIndianCurrency(schoolFeeTotals.totalCollected)}`}
               </span>
-              <span className="text-[11px] text-slate-500 font-semibold">Total Collected</span>
+              <span className="text-[11px] text-[#059669] font-semibold">Collected</span>
             </div>
-            <div className="mt-1 text-xs text-slate-600 font-medium flex items-center gap-1.5 flex-wrap tabular-nums">
-              <span className="text-rose-600 font-bold">₹{formatIndianCurrency(totalPendingAmount)}</span>
-              <span>Pending Dues</span>
+            <div className="mt-1 text-xs text-slate-700 font-medium flex items-center gap-1.5 flex-wrap tabular-nums">
+              <span className="text-[#e11d48] font-bold">₹{formatIndianCurrency(totalPendingAmount)}</span>
+              <span>Pending</span>
               {schoolFeeTotals.totalAdvance > 0 && (
-                <span className="text-purple-700 font-bold text-[10px]">
+                <span className="text-[#4f46e5] font-bold text-[11px]">
                   · ₹{formatIndianCurrency(schoolFeeTotals.totalAdvance)} Advance
                 </span>
               )}
             </div>
-            <div className="mt-1 text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200/80 rounded-lg px-2 py-0.5 inline-flex items-center gap-1.5 tabular-nums">
-              <i className="fa-solid fa-hand-holding-heart text-amber-600 text-[10px]"></i>
+            <div className="mt-1.5 text-[11px] font-semibold text-[#b45309] bg-[#fef3c7] px-2 py-0.5 rounded-md inline-block tabular-nums">
               <span>
-                फीस माफी: <strong>{waivedSummary.totalWaivedStudents} छात्र</strong> (₹{formatIndianCurrency(waivedSummary.totalWaivedAmountTillDate)} माफ)
+                फीस माफी: <strong>{waivedSummary.totalWaivedStudents} छात्र</strong> (₹{formatIndianCurrency(waivedSummary.totalWaivedAmountTillDate)})
               </span>
             </div>
           </div>
 
-          <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs text-emerald-700 font-bold group-hover:text-emerald-900">
+          <div className="mt-3.5 pt-2.5 border-t border-[#d1fae5] flex items-center justify-between text-xs text-[#059669] font-bold group-hover:text-[#047857]">
             <span>Collected vs Pending</span>
-            <i className="fa-solid fa-arrow-right text-[11px] group-hover:translate-x-1 transition-transform"></i>
+            <i className="fa-solid fa-arrow-right text-[11px] group-hover:translate-x-0.5 transition-transform"></i>
           </div>
         </button>
 
@@ -1113,60 +1112,60 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
           type="button"
           id="manager-card-attendance-overview"
           onClick={() => setActiveModal('attendanceOverview')}
-          className="group relative bg-white hover:bg-teal-50/40 p-4 rounded-2xl shadow-xs hover:shadow-md border border-slate-200/90 hover:border-teal-300 transition-all text-left cursor-pointer flex flex-col justify-between"
+          className="group relative bg-gradient-to-br from-[#ffffff] to-[#f0fdfa] p-4.5 rounded-2xl shadow-sm hover:shadow-xl border border-[#99f6e4] border-t-4 border-t-[#0d9488] transition-all text-left cursor-pointer flex flex-col justify-between hover:-translate-y-0.5"
         >
           <div className="flex items-start justify-between gap-2">
-            <div className="w-11 h-11 rounded-xl bg-teal-100 text-teal-800 flex items-center justify-center text-lg font-bold shadow-2xs group-hover:scale-105 transition-transform">
+            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-[#0d9488] to-[#06b6d4] text-white shadow-md shadow-teal-500/25 flex items-center justify-center text-lg font-bold group-hover:scale-105 transition-transform">
               <i className="fa-solid fa-chart-pie"></i>
             </div>
-            <span className="text-[11px] font-semibold text-teal-800 tabular-nums">
+            <span className="text-[11px] font-bold text-[#0f766e] bg-[#ccfbf1] px-2.5 py-0.5 rounded-full tabular-nums">
               {todayDmy}
             </span>
           </div>
 
-          <div className="mt-3">
-            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
-              Attendance Overview (उपस्थिति दर)
+          <div className="mt-3.5">
+            <span className="text-[11px] font-bold text-[#115e59] block">
+              Attendance Overview · उपस्थिति दर
             </span>
             {loadingBehavior ? (
-              <div className="text-xl font-black text-slate-400 mt-1">...</div>
+              <div className="text-xl font-bold text-slate-400 mt-1">...</div>
             ) : (
               <>
-                <div className="flex items-baseline justify-between gap-2 mt-0.5 tabular-nums">
+                <div className="flex items-baseline justify-between gap-2 mt-1 tabular-nums">
                   <div>
-                    <span className="text-2xl sm:text-[26px] font-black text-emerald-700">
+                    <span className="text-2xl sm:text-[26px] font-extrabold tracking-tight text-[#047857]">
                       {todayAttendanceOverview.presentPercent}%
                     </span>
-                    <span className="text-[11px] font-bold text-emerald-700 ml-1">Present</span>
+                    <span className="text-[11px] font-bold text-[#059669] ml-1">Present</span>
                   </div>
                   <div className="text-right">
-                    <span className="text-sm sm:text-base font-extrabold text-rose-600">
+                    <span className="text-sm sm:text-base font-extrabold text-[#e11d48]">
                       {todayAttendanceOverview.absentPercent}%
                     </span>
-                    <span className="text-[11px] font-semibold text-rose-600 ml-1">Absent</span>
+                    <span className="text-[11px] font-semibold text-[#e11d48] ml-1">Absent</span>
                   </div>
                 </div>
 
                 {/* Split Percentage Bar */}
                 <div
-                  className="mt-2 h-2 w-full bg-slate-100 rounded-full overflow-hidden flex"
+                  className="mt-2 h-2.5 w-full bg-[#e2e8f0] rounded-full overflow-hidden flex"
                   aria-label={`Present ${todayAttendanceOverview.presentPercent}%, Absent ${todayAttendanceOverview.absentPercent}%`}
                 >
                   {todayAttendanceOverview.markedCount > 0 && (
                     <>
                       <div
-                        className="bg-emerald-600 h-full transition-all duration-300"
+                        className="bg-[#10b981] h-full transition-all duration-300"
                         style={{ width: `${todayAttendanceOverview.presentPercent}%` }}
                       />
                       <div
-                        className="bg-rose-500 h-full transition-all duration-300"
+                        className="bg-[#f43f5e] h-full transition-all duration-300"
                         style={{ width: `${todayAttendanceOverview.absentPercent}%` }}
                       />
                     </>
                   )}
                 </div>
 
-                <div className="mt-1.5 text-[11px] text-slate-500 font-medium tabular-nums">
+                <div className="mt-1.5 text-[11px] text-slate-600 font-semibold tabular-nums">
                   {todayAttendanceOverview.markedCount > 0 ? (
                     <span>
                       {todayAttendanceOverview.presentCount} P · {todayAttendanceOverview.absentCount} A ({todayAttendanceOverview.markedCount}/{totalStudentsCount} Marked)
@@ -1179,9 +1178,9 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
             )}
           </div>
 
-          <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs text-teal-800 font-bold group-hover:text-teal-950">
+          <div className="mt-3.5 pt-2.5 border-t border-[#ccfbf1] flex items-center justify-between text-xs text-[#0d9488] font-bold group-hover:text-[#0f766e]">
             <span>Class-wise Present %</span>
-            <i className="fa-solid fa-arrow-right text-[11px] group-hover:translate-x-1 transition-transform"></i>
+            <i className="fa-solid fa-arrow-right text-[11px] group-hover:translate-x-0.5 transition-transform"></i>
           </div>
         </button>
 
@@ -1190,34 +1189,34 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
           type="button"
           id="manager-card-absent-today"
           onClick={() => setActiveModal('absentToday')}
-          className="group relative bg-white hover:bg-rose-50/40 p-4 rounded-2xl shadow-xs hover:shadow-md border border-slate-200/90 hover:border-rose-300 transition-all text-left cursor-pointer flex flex-col justify-between"
+          className="group relative bg-gradient-to-br from-[#ffffff] to-[#fff1f2] p-4.5 rounded-2xl shadow-sm hover:shadow-xl border border-[#fecdd3] border-t-4 border-t-[#e11d48] transition-all text-left cursor-pointer flex flex-col justify-between hover:-translate-y-0.5"
         >
           <div className="flex items-start justify-between gap-2">
-            <div className="w-11 h-11 rounded-xl bg-rose-100 text-rose-800 flex items-center justify-center text-lg font-bold shadow-2xs group-hover:scale-105 transition-transform">
+            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-[#e11d48] to-[#f43f5e] text-white shadow-md shadow-rose-500/25 flex items-center justify-center text-lg font-bold group-hover:scale-105 transition-transform">
               <i className="fa-solid fa-user-xmark"></i>
             </div>
-            <span className="text-[11px] font-semibold text-rose-800">
+            <span className="text-[11px] font-bold text-[#be123c] bg-[#ffe4e6] px-2.5 py-0.5 rounded-full">
               Today&apos;s Absentees
             </span>
           </div>
 
-          <div className="mt-3">
-            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
-              Absent Students Today (अनुपस्थित)
+          <div className="mt-3.5">
+            <span className="text-[11px] font-bold text-[#9f1239] block">
+              Absent Students · अनुपस्थित
             </span>
-            <div className="flex items-baseline gap-2 mt-0.5 tabular-nums">
-              <span className="text-2xl sm:text-3xl font-black text-rose-600">
+            <div className="flex items-baseline gap-2 mt-1 tabular-nums">
+              <span className="text-2xl sm:text-3xl font-extrabold tracking-tight text-[#e11d48]">
                 {loadingBehavior ? '...' : effectiveAbsentCount}
               </span>
-              <span className="text-xs text-slate-500 font-medium">
-                {todayAttendanceRecords.length > 0 ? 'Marked Absent Today' : 'Recent Absentees'}
+              <span className="text-xs text-[#be123c] font-semibold">
+                {todayAttendanceRecords.length > 0 ? 'Marked Today' : 'Recent'}
               </span>
             </div>
           </div>
 
-          <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs text-rose-700 font-bold group-hover:text-rose-900">
+          <div className="mt-3.5 pt-2.5 border-t border-[#ffe4e6] flex items-center justify-between text-xs text-[#e11d48] font-bold group-hover:text-[#be123c]">
             <span>View &amp; Call Parents</span>
-            <i className="fa-solid fa-arrow-right text-[11px] group-hover:translate-x-1 transition-transform"></i>
+            <i className="fa-solid fa-arrow-right text-[11px] group-hover:translate-x-0.5 transition-transform"></i>
           </div>
         </button>
 
@@ -1226,32 +1225,32 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
           type="button"
           id="manager-card-faulty-behavior"
           onClick={() => setActiveModal('faultyBehavior')}
-          className="group relative bg-white hover:bg-amber-50/40 p-4 rounded-2xl shadow-xs hover:shadow-md border border-slate-200/90 hover:border-amber-300 transition-all text-left cursor-pointer flex flex-col justify-between"
+          className="group relative bg-gradient-to-br from-[#ffffff] to-[#fffbeb] p-4.5 rounded-2xl shadow-sm hover:shadow-xl border border-[#fde68a] border-t-4 border-t-[#f59e0b] transition-all text-left cursor-pointer flex flex-col justify-between hover:-translate-y-0.5"
         >
           <div className="flex items-start justify-between gap-2">
-            <div className="w-11 h-11 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center text-lg font-bold shadow-2xs group-hover:scale-105 transition-transform">
+            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-[#f59e0b] to-[#ea580c] text-white shadow-md shadow-amber-500/25 flex items-center justify-center text-lg font-bold group-hover:scale-105 transition-transform">
               <i className="fa-solid fa-triangle-exclamation"></i>
             </div>
-            <span className="text-[11px] font-semibold text-amber-900">
+            <span className="text-[11px] font-bold text-[#b45309] bg-[#fef3c7] px-2.5 py-0.5 rounded-full">
               Requires Caution
             </span>
           </div>
 
-          <div className="mt-3">
-            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
-              Faulty Behaviour (शिकायत/अनुशासन)
+          <div className="mt-3.5">
+            <span className="text-[11px] font-bold text-[#92400e] block">
+              Faulty Behaviour · अनुशासन
             </span>
-            <div className="flex items-baseline gap-2 mt-0.5 tabular-nums">
-              <span className="text-2xl sm:text-3xl font-black text-amber-700">
+            <div className="flex items-baseline gap-2 mt-1 tabular-nums">
+              <span className="text-2xl sm:text-3xl font-extrabold tracking-tight text-[#d97706]">
                 {loadingBehavior ? '...' : faultyBehaviorRecords.length}
               </span>
-              <span className="text-xs text-slate-500 font-medium">Flagged Records</span>
+              <span className="text-xs text-[#b45309] font-semibold">Flagged Records</span>
             </div>
           </div>
 
-          <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs text-amber-800 font-bold group-hover:text-amber-950">
+          <div className="mt-3.5 pt-2.5 border-t border-[#fef3c7] flex items-center justify-between text-xs text-[#d97706] font-bold group-hover:text-[#b45309]">
             <span>Action Required</span>
-            <i className="fa-solid fa-arrow-right text-[11px] group-hover:translate-x-1 transition-transform"></i>
+            <i className="fa-solid fa-arrow-right text-[11px] group-hover:translate-x-0.5 transition-transform"></i>
           </div>
         </button>
       </div>
@@ -1271,9 +1270,9 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
             onClick={(e) => e.stopPropagation()}
           >
             {/* MODAL HEADER */}
-            <div className="px-5 py-4 bg-gradient-to-r from-[#0c2340] via-[#10316b] to-[#0c2340] text-white flex items-center justify-between gap-4 border-b-2 border-amber-400 shrink-0">
+            <div className="px-5 py-4 bg-gradient-to-r from-[#1e3a8a] via-[#312e81] to-[#4338ca] text-white flex items-center justify-between gap-4 border-b-4 border-[#fbbf24] shrink-0">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center text-lg font-black shrink-0">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#fbbf24] to-[#f97316] text-[#0f172a] flex items-center justify-center text-lg font-black shrink-0 shadow-sm">
                   {activeModal === 'totalStudents' && <i className="fa-solid fa-users"></i>}
                   {activeModal === 'feesOverview' && <i className="fa-solid fa-file-invoice-dollar"></i>}
                   {activeModal === 'attendanceOverview' && <i className="fa-solid fa-chart-pie"></i>}
@@ -1288,7 +1287,7 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                     {activeModal === 'absentToday' && 'Absent Students Today (आज अनुपस्थित छात्र)'}
                     {activeModal === 'faultyBehavior' && 'Faulty Behaviour & Caution Records (आचरण व अनुशासन)'}
                   </h3>
-                  <p className="text-xs text-amber-200/90 tabular-nums">
+                  <p className="text-xs text-[#fde68a] font-medium tabular-nums">
                     {activeModal === 'totalStudents' && `Total ${students.length} students enrolled across ${activeClassCount} classes`}
                     {activeModal === 'feesOverview' && `Collected ₹${formatIndianCurrency(totalCollectedThisMonth)} · Pending ₹${formatIndianCurrency(totalPendingAmount)}`}
                     {activeModal === 'attendanceOverview' && `${todayDmy} · Present ${todayAttendanceOverview.presentPercent}% vs Absent ${todayAttendanceOverview.absentPercent}% (${todayAttendanceOverview.markedCount}/${totalStudentsCount} Marked)`}
