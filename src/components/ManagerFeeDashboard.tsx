@@ -17,7 +17,9 @@ import { OfficialFeeReceiptModal } from './OfficialFeeReceiptModal';
 import { FeeMasterModal } from './FeeMasterModal';
 import { FamilyFeeCollectionModal } from './FamilyFeeCollectionModal';
 import { ClassFeeRegisterView } from './ClassFeeRegisterView';
-import { Student, UpiPaymentRequest, UpiSettings } from '../types';
+import { ManagerFeePromisesView } from './ManagerFeePromisesView';
+import { FeePromiseRecord, Student, UpiPaymentRequest, UpiSettings } from '../types';
+import { getEffectivePromiseState } from '../utils/feePromiseHelper';
 import {
   computeStudentFeeMetrics,
   computeSchoolFeeTotals,
@@ -300,6 +302,8 @@ interface ManagerFeeDashboardProps {
   onApproveUpiPayment?: (newRec: FeeCollectionRecord, sendWhatsApp: boolean) => Promise<void> | void;
   externalFamilyTarget?: FamilyFeeSummary | null;
   onClearExternalFamilyTarget?: () => void;
+  feePromises?: FeePromiseRecord[];
+  onFeePromisesUpdated?: (next: FeePromiseRecord[]) => void;
 }
 
 export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
@@ -320,6 +324,8 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
   onApproveUpiPayment,
   externalFamilyTarget = null,
   onClearExternalFamilyTarget,
+  feePromises = [],
+  onFeePromisesUpdated,
 }) => {
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [classFilter, setClassFilter] = useState<string>('all');
@@ -335,7 +341,19 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
       window.removeEventListener(FEE_MASTER_UPDATED_EVENT, handleWaiverChange);
     };
   }, []);
-  const [activeViewMode, setActiveViewMode] = useState<'trends' | 'student' | 'family' | 'allLedger' | 'classRegister' | 'upiQueue' | 'feeWaivers'>('trends');
+  const [activeViewMode, setActiveViewMode] = useState<'trends' | 'student' | 'family' | 'allLedger' | 'classRegister' | 'upiQueue' | 'feeWaivers' | 'promises'>('trends');
+  const [promiseTargetStudentId, setPromiseTargetStudentId] = useState<string | null>(null);
+  const [promiseTargetEpoch, setPromiseTargetEpoch] = useState<number>(0);
+
+  const urgentPromisesCount = useMemo(() => {
+    const todayYmd = getLocalDateYMD();
+    return feePromises.filter((p) => {
+      if (p.status !== 'Pending') return false;
+      const due = Number(feeBalances[p.studentId] ?? feeBalances[p.studentId.toLowerCase()] ?? 0);
+      const st = getEffectivePromiseState(p, due, todayYmd);
+      return st === 'due_today' || st === 'overdue';
+    }).length;
+  }, [feePromises, feeBalances]);
   const [waiverSearchQuery, setWaiverSearchQuery] = useState<string>('');
   const [customWaiverDiscMap, setCustomWaiverDiscMap] = useState<Record<string, string>>({});
   const [syncingWaiversSheet, setSyncingWaiversSheet] = useState<boolean>(false);
@@ -1560,6 +1578,23 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
               <i className="fa-solid fa-hand-holding-heart text-xs"></i>
               <span>🎁 माफी / छूट ({waivedSummary.totalWaivedStudents + discountedSummary.totalDiscountedStudents})</span>
             </button>
+            <button
+              type="button"
+              onClick={() => setActiveViewMode('promises')}
+              className={`px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                activeViewMode === 'promises'
+                  ? 'bg-[#0c2340] text-amber-300 shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+              }`}
+            >
+              <i className="fa-solid fa-handshake text-xs"></i>
+              <span>🤝 फीस वादे</span>
+              {urgentPromisesCount > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-rose-600 text-white text-[10px] font-black">
+                  {urgentPromisesCount}
+                </span>
+              )}
+            </button>
           </div>
         </div>
 
@@ -2358,6 +2393,20 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
                       <span>बकाया रिमाइंडर</span>
                     </button>
                   )}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPromiseTargetStudentId(selectedStudent.Student_ID);
+                      setPromiseTargetEpoch((prev) => prev + 1);
+                      setActiveViewMode('promises');
+                    }}
+                    className="px-3.5 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 font-bold rounded-xl text-xs flex items-center gap-1.5 border border-indigo-200 cursor-pointer transition-colors shadow-2xs"
+                    title="अभिभावक द्वारा बताई गई फीस जमा करने की तारीख (वादा) मैन्युअली दर्ज करें"
+                  >
+                    <i className="fa-solid fa-handshake text-indigo-600 text-sm"></i>
+                    <span>🤝 वादा जोड़ें</span>
+                  </button>
 
                   <button
                     type="button"
@@ -3855,6 +3904,21 @@ export const ManagerFeeDashboard: React.FC<ManagerFeeDashboardProps> = ({
             </div>
           )}
         </div>
+      )}
+
+      {/* 3.45 VIEW MODE: FEE PROMISES (2-WAY SHEET SYNC) */}
+      {activeViewMode === 'promises' && (
+        <ManagerFeePromisesView
+          promises={feePromises}
+          onPromisesUpdated={(next) => onFeePromisesUpdated?.(next)}
+          students={students}
+          feeBalances={feeBalances}
+          getClassName={getClassName}
+          managerName={managerName}
+          onOpenAddFeeModal={onOpenAddFeeModal}
+          preselectedStudentId={promiseTargetStudentId}
+          preselectEpoch={promiseTargetEpoch}
+        />
       )}
 
       {/* 3.5 VIEW MODE: FAMILY / MULTI-CHILD FEE BY MOBILE NUMBER */}

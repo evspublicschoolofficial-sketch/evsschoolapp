@@ -17,7 +17,7 @@ import {
   EVS_SEEN_ANNOUNCEMENTS_KEY,
 } from './utils/sirenAudio';
 import { InstallAppModal } from './components/InstallAppModal';
-import { AcademicsConfigSnapshot, ExamMarkRecord, HallPassConfig, ReportCardRemarkRecord, SchoolNotice, StaffAttendanceRecord, WeeklyTestRecord } from './types';
+import { AcademicsConfigSnapshot, ExamMarkRecord, FeePromiseRecord, HallPassConfig, ReportCardRemarkRecord, SchoolNotice, StaffAttendanceRecord, WeeklyTestRecord } from './types';
 import {
   ACADEMICS_CONFIG_STORAGE_KEY,
   applyAcademicOverridesToStudents,
@@ -58,7 +58,18 @@ import { AppLanguage, getStoredLanguage, setStoredLanguage, TRANSLATIONS } from 
 import { NotificationPermissionBanner } from './components/NotificationPermissionBanner';
 import { PWAHeaderUpdateButton, PWAUpdateBanner } from './components/PWAUpdateBanner';
 import { reloadFullAppWithFreshSync } from './utils/pwaUpdater';
-import { checkAndNotifyNewNotices } from './utils/notificationService';
+import { checkAndNotifyNewNotices, showDeviceNotification } from './utils/notificationService';
+import {
+  ensureWebPushSubscribed,
+  fetchFeePromisesFromServer,
+  formatPromiseDateDisplay,
+  getEffectivePromiseState,
+  invalidateFeePromisesCache,
+  loadLocalFeePromises,
+  markDeviceNotifiedTodayForPromise,
+  updateFeePromiseStatusOnServer,
+  wasDeviceNotifiedTodayForPromise,
+} from './utils/feePromiseHelper';
 import {
   CURRENT_ACADEMIC_SESSION,
   computeClassRanksMap,
@@ -124,6 +135,7 @@ const TeacherPerformanceDashboard = lazyWithRetry(() => import('./components/Tea
 const TeacherSyllabusPlanner = lazyWithRetry(() => import('./components/TeacherSyllabusPlanner').then((m) => ({ default: m.TeacherSyllabusPlanner })));
 const WeeklySubjectTestManager = lazyWithRetry(() => import('./components/WeeklySubjectTestManager').then((m) => ({ default: m.WeeklySubjectTestManager })));
 const ParentUpiFeeSection = lazyWithRetry(() => import('./components/ParentUpiFeeSection').then((m) => ({ default: m.ParentUpiFeeSection })));
+const ParentFeePromiseCard = lazyWithRetry(() => import('./components/ParentFeePromiseCard').then((m) => ({ default: m.ParentFeePromiseCard })));
 const ReportCardManagerView = lazyWithRetry(() => import('./components/ReportCardManagerView').then((m) => ({ default: m.ReportCardManagerView })));
 const PrintableReportCard = lazyWithRetry(() => import('./components/PrintableReportCard').then((m) => ({ default: m.PrintableReportCard })));
 const HallPassManagerView = lazyWithRetry(() => import('./components/HallPassManagerView').then((m) => ({ default: m.HallPassManagerView })));
@@ -1658,6 +1670,11 @@ export default function App() {
   const [reportCardWorkflow, setReportCardWorkflow] = useState<ReportCardWorkflowSnapshot>(() => loadLocalReportCardWorkflow());
   const [hallPassConfig, setHallPassConfig] = useState<HallPassConfig>(() => loadLocalHallPassConfig());
   const [parentReviewsList, setParentReviewsList] = useState<ParentReviewRecord[]>(() => loadLocalParentReviews());
+  const [feePromises, setFeePromises] = useState<FeePromiseRecord[]>(() => loadLocalFeePromises());
+  const [upiPrefillState, setUpiPrefillState] = useState<{ amount: number | null; epoch: number }>({
+    amount: null,
+    epoch: 0,
+  });
 
   const [isFullAppReloading, setIsFullAppReloading] = useState<boolean>(false);
   const loadedModulesRef = useRef({
@@ -3952,6 +3969,11 @@ export default function App() {
         fetchHomeworkTracker(),
         fetchStudentBehavior(),
         refreshParentReviews(manual || forceFullAll),
+        fetchFeePromisesFromServer(true)
+          .then((res) => {
+            if (Array.isArray(res?.promises)) setFeePromises(res.promises);
+          })
+          .catch(() => null),
       ];
 
       // On first seed, GitHub update, manual sync, or staff portal load: reload ALL modules into Phone Memory
@@ -4471,6 +4493,14 @@ export default function App() {
         syncFeeWaiversWithServer();
       } else if (event.entity === 'parent_reviews') {
         refreshParentReviews(true);
+      } else if (event.entity === 'fee_promises') {
+        invalidateFeePromisesCache();
+        fetchFeePromisesFromServer(true)
+          .then((res) => {
+            if (Array.isArray(res?.promises)) setFeePromises(res.promises);
+          })
+          .catch(() => {});
+        return;
       } else if (event.entity === 'academics') {
         invalidateAcademicsCache();
         fetchAcademicsConfigFromServer(true)
@@ -4535,6 +4565,15 @@ export default function App() {
           if (cfg.studentOverrides && Object.keys(cfg.studentOverrides).length > 0) {
             setStudents((prev) => applyAcademicOverridesToStudents(prev, cfg.studentOverrides));
           }
+        }
+      })
+      .catch(() => {});
+
+    // Sync Parent Fee Promises cleanly on load
+    fetchFeePromisesFromServer(true)
+      .then((res) => {
+        if (isMounted && Array.isArray(res?.promises)) {
+          setFeePromises(res.promises);
         }
       })
       .catch(() => {});
@@ -5172,6 +5211,94 @@ export default function App() {
     parentFamilyFeeSummary ? `family:${parentFamilyFeeSummary.mobileKey}` : null,
     parentFamilyFeeSummary ? parentFamilyFeeSummary.totalDue : 0
   );
+
+  // Active Fee Promise for the currently selected student
+  const selectedStudentActivePromise = useMemo(() => {
+    if (!selectedStudent) return null;
+    const sId = String(selectedStudent.Student_ID || '').trim().toLowerCase();
+    return (
+      feePromises.find(
+        (p) =>
+          (p.status === 'Pending' || p.status === 'Overdue') &&
+          String(p.studentId || '').trim().toLowerCase() === sId
+      ) || null
+    );
+  }, [selectedStudent, feePromises]);
+
+  // All due/overdue Fee Promises across logged-in Parent's children
+  const parentDueFeePromises = useMemo(() => {
+    if (!parentLoggedIn) return [];
+    const list = parentChildren.length > 0 ? parentChildren : selectedStudent ? [selectedStudent] : [];
+    if (list.length === 0) return [];
+    const todayYmd = getLocalDateYMD();
+    const out: Array<{
+      promise: FeePromiseRecord;
+      student: Student;
+      currentDue: number;
+      state: 'due_today' | 'overdue';
+    }> = [];
+
+    for (const child of list) {
+      const sId = String(child.Student_ID || '').trim().toLowerCase();
+      const summary = calculateStudentSummary(child.Student_ID, feeRecords, child);
+      if (!summary.isDue || summary.currentDues <= 0) continue;
+      const promise = feePromises.find(
+        (p) =>
+          (p.status === 'Pending' || p.status === 'Overdue') &&
+          String(p.studentId || '').trim().toLowerCase() === sId
+      );
+      if (!promise) continue;
+      const state = getEffectivePromiseState(promise, summary.currentDues, todayYmd);
+      if (state === 'due_today' || state === 'overdue') {
+        out.push({
+          promise,
+          student: child,
+          currentDue: summary.currentDues,
+          state,
+        });
+      }
+    }
+    return out;
+  }, [parentLoggedIn, parentChildren, selectedStudent, feeRecords, feePromises, waiverVersion]);
+
+  // Auto-subscribe Web Push & send 1x/day device notification when a parent's promised fee date arrives
+  useEffect(() => {
+    if (!parentLoggedIn || (!selectedStudent && parentChildren.length === 0)) return;
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+
+    const childIds = (parentChildren.length > 0 ? parentChildren : selectedStudent ? [selectedStudent] : [])
+      .map((c) => c.Student_ID)
+      .filter(Boolean);
+
+    ensureWebPushSubscribed({
+      role: 'parent',
+      studentId: selectedStudent?.Student_ID || childIds[0],
+      studentIds: childIds,
+      mobile: selectedStudent?.Parent_Mobile || parentMobileInput || '',
+      name: selectedStudent?.Father_Name || selectedStudent?.Student_Name || 'Parent',
+    }).catch(() => {});
+
+    if (parentDueFeePromises.length === 0) return;
+    const todayYmd = getLocalDateYMD();
+    for (const item of parentDueFeePromises) {
+      if (wasDeviceNotifiedTodayForPromise(item.promise.id, todayYmd)) continue;
+      markDeviceNotifiedTodayForPromise(item.promise.id, todayYmd);
+      showDeviceNotification({
+        title:
+          item.state === 'overdue'
+            ? `⚠️ फीस वादा तिथि निकल गई — ${item.student.Student_Name}`
+            : `🔔 आज फीस जमा करने का वादा है — ${item.student.Student_Name}`,
+        body: `आपने ${formatPromiseDateDisplay(item.promise.promisedDate)} को ₹${Number(
+          item.promise.promisedAmount || 0
+        ).toLocaleString('en-IN')} जमा करने का वादा किया था (कुल बकाया: ₹${Number(
+          item.currentDue || 0
+        ).toLocaleString('en-IN')})। ऐप में जाकर अपनी सुविधा अनुसार UPI से जमा करें।`,
+        tag: `fee-promise-${item.promise.id}-${todayYmd}`,
+        url: '/',
+        requireInteraction: true,
+      }).catch(() => {});
+    }
+  }, [parentLoggedIn, selectedStudent?.Student_ID, parentChildren.length, parentDueFeePromises]);
 
   // Attendance Trend Data (Last 30 Days) for Recharts Line Chart
   const attendanceChartData = useMemo(() => {
@@ -7059,6 +7186,20 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
         ...prev,
         [sId]: metrics.dueBalance,
       }));
+      if (metrics.dueBalance <= 0) {
+        const activeProms = feePromises.filter(
+          (p) =>
+            (p.status === 'Pending' || p.status === 'Overdue') &&
+            String(p.studentId || '').trim().toLowerCase() === sId
+        );
+        activeProms.forEach((pr) => {
+          updateFeePromiseStatusOnServer(pr.id, 'Fulfilled', 'फीस पूर्ण जमा होने पर स्वतः पूर्ण')
+            .then((res) => {
+              if (Array.isArray(res?.promises)) setFeePromises(res.promises);
+            })
+            .catch(() => {});
+        });
+      }
     } else if (sId && newRec.Balance_Amount !== null && newRec.Balance_Amount !== undefined) {
       setFeeBalances((prev) => ({
         ...prev,
@@ -9004,6 +9145,87 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                         {manualLinkSuccess}
                       </p>
                     )}
+                  </div>
+                )}
+
+                {/* PARENT FEE PROMISE DUE REMINDER BANNER (Shown automatically on/after promised date) */}
+                {parentDueFeePromises.length > 0 && (
+                  <div className="space-y-2 animate-fadeIn">
+                    {parentDueFeePromises.map((item) => {
+                      const isOverdue = item.state === 'overdue';
+                      return (
+                        <div
+                          key={item.promise.id}
+                          className={`rounded-2xl border-2 p-3.5 sm:p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                            isOverdue
+                              ? 'bg-gradient-to-r from-rose-50 via-white to-amber-50 border-rose-300'
+                              : 'bg-gradient-to-r from-amber-50 via-white to-emerald-50 border-amber-300'
+                          }`}
+                        >
+                          <div className="flex items-start gap-3 min-w-0">
+                            <div
+                              className={`w-10 h-10 rounded-xl flex items-center justify-center text-white shrink-0 shadow-xs ${
+                                isOverdue ? 'bg-rose-600' : 'bg-amber-600'
+                              }`}
+                            >
+                              <i className="fa-solid fa-bell"></i>
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span
+                                  className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase ${
+                                    isOverdue ? 'bg-rose-600 text-white' : 'bg-amber-600 text-white'
+                                  }`}
+                                >
+                                  {isOverdue ? 'फीस वादा तिथि बीत गई' : 'आज फीस वादे की तिथि है'}
+                                </span>
+                                <span className="text-xs sm:text-sm font-black text-slate-900">
+                                  {item.student.Student_Name} (कक्षा {getClassName(item.student.Class)})
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-700 mt-1 leading-relaxed">
+                                आपने <strong>{formatPromiseDateDisplay(item.promise.promisedDate)}</strong> को{' '}
+                                <strong className="text-indigo-900">
+                                  ₹{Number(item.promise.promisedAmount || 0).toLocaleString('en-IN')}
+                                </strong>{' '}
+                                जमा करने का वादा किया था (कुल बकाया:{' '}
+                                <strong className="text-rose-700">
+                                  ₹{Number(item.currentDue || 0).toLocaleString('en-IN')}
+                                </strong>
+                                )। अपनी सुविधा अनुसार पूरा या आंशिक भुगतान अभी करें।
+                              </p>
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedStudent(item.student);
+                              handleSelectParentSection('fees');
+                              setUpiPrefillState((prev) => ({
+                                amount: item.promise.promisedAmount,
+                                epoch: prev.epoch + 1,
+                              }));
+                              setTimeout(() => {
+                                document
+                                  .getElementById('parent-upi-fee-anchor')
+                                  ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                              }, 120);
+                            }}
+                            className={`px-4 py-2.5 rounded-xl text-xs font-black text-white shadow-xs transition-colors cursor-pointer shrink-0 inline-flex items-center justify-center gap-2 ${
+                              isOverdue
+                                ? 'bg-rose-600 hover:bg-rose-700'
+                                : 'bg-emerald-600 hover:bg-emerald-700'
+                            }`}
+                          >
+                            <i className="fa-solid fa-qrcode"></i>
+                            <span>
+                              अभी ₹{Number(item.promise.promisedAmount || 0).toLocaleString('en-IN')} UPI से भरें
+                            </span>
+                          </button>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
 
@@ -11110,34 +11332,58 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       </div>
                     </div>
 
-                    {/* Feature 6: Online UPI QR Fee Payment & Proof Submission */}
-                    <Suspense
-                      fallback={
-                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-500 flex items-center gap-2">
-                          <i className="fa-solid fa-spinner fa-spin text-blue-900"></i>
-                          <span>ऑनलाइन UPI फीस भुगतान सेक्शन लोड हो रहा है...</span>
-                        </div>
-                      }
-                    >
-                      <ParentUpiFeeSection
+                    {/* Fee Payment Promise & Auto-Reminder Card (जब भी बकाया हो) */}
+                    <Suspense fallback={null}>
+                      <ParentFeePromiseCard
                         student={selectedStudent}
                         pendingDue={studentFeeSummary.hasDues ? studentFeeSummary.balance : 0}
-                        monthlyTuition={studentFeeSummary.monthlyTuition ?? 0}
                         getClassName={getClassName}
-                        onFeeSynced={() => fetchFeeCollection()}
-                        siblings={
-                          parentFamilyFeeSummary
-                            ? parentFamilyFeeSummary.members.map((m) => ({
-                                student: m.student,
-                                pendingDue: m.dueAmount,
-                                monthlyTuition: m.metrics.monthlyTuition ?? 0,
-                              }))
-                            : undefined
-                        }
-                        familyTotalDue={parentFamilyFeeSummary?.totalDue}
-                        onSelectChild={(st) => setSelectedStudent(st)}
+                        promises={feePromises}
+                        onPromisesUpdated={setFeePromises}
+                        onPayPromisedAmount={(amt) => {
+                          setUpiPrefillState((prev) => ({ amount: amt, epoch: prev.epoch + 1 }));
+                          setTimeout(() => {
+                            document
+                              .getElementById('parent-upi-fee-anchor')
+                              ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                          }, 80);
+                        }}
                       />
                     </Suspense>
+
+                    {/* Feature 6: Online UPI QR Fee Payment & Proof Submission */}
+                    <div id="parent-upi-fee-anchor">
+                      <Suspense
+                        fallback={
+                          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-500 flex items-center gap-2">
+                            <i className="fa-solid fa-spinner fa-spin text-blue-900"></i>
+                            <span>ऑनलाइन UPI फीस भुगतान सेक्शन लोड हो रहा है...</span>
+                          </div>
+                        }
+                      >
+                        <ParentUpiFeeSection
+                          student={selectedStudent}
+                          pendingDue={studentFeeSummary.hasDues ? studentFeeSummary.balance : 0}
+                          monthlyTuition={studentFeeSummary.monthlyTuition ?? 0}
+                          getClassName={getClassName}
+                          onFeeSynced={() => fetchFeeCollection()}
+                          promisedAmount={selectedStudentActivePromise?.promisedAmount}
+                          externalPrefillAmount={upiPrefillState.amount}
+                          externalPrefillEpoch={upiPrefillState.epoch}
+                          siblings={
+                            parentFamilyFeeSummary
+                              ? parentFamilyFeeSummary.members.map((m) => ({
+                                  student: m.student,
+                                  pendingDue: m.dueAmount,
+                                  monthlyTuition: m.metrics.monthlyTuition ?? 0,
+                                }))
+                              : undefined
+                          }
+                          familyTotalDue={parentFamilyFeeSummary?.totalDue}
+                          onSelectChild={(st) => setSelectedStudent(st)}
+                        />
+                      </Suspense>
+                    </div>
 
                     {/* Receipts List Table */}
                     <div>
@@ -13971,6 +14217,9 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                       setIsAttendanceCalendarOpen(true);
                     }}
                     onSaveBatchAttendance={handleSaveBatchBehavior}
+                    feePromises={feePromises}
+                    onFeePromisesUpdated={setFeePromises}
+                    managerName={managerUser?.Name || 'School Manager'}
                   />
                 </Suspense>
 
@@ -15206,6 +15455,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   onApproveUpiPayment={handleFeeAdded}
                   externalFamilyTarget={managerFamilyFeeTarget}
                   onClearExternalFamilyTarget={() => setManagerFamilyFeeTarget(null)}
+                  feePromises={feePromises}
+                  onFeePromisesUpdated={setFeePromises}
                 />
               </Suspense>
             )}

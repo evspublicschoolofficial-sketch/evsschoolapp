@@ -7,7 +7,7 @@ export interface WhatsappAlertLog {
   id: string;
   date: string;
   time: string;
-  alertType: 'Absent Alert' | 'Fee Due Reminder' | 'Staff Salary Slip' | 'WhatsApp Alert';
+  alertType: 'Absent Alert' | 'Fee Due Reminder' | 'Fee Promise Reminder' | 'Staff Salary Slip' | 'WhatsApp Alert';
   recipientType: 'Parent' | 'Staff';
   recipientId: string;
   recipientName: string;
@@ -217,3 +217,49 @@ export const buildFeeDueReminderMessage = (params: {
     `_धन्यवाद! शुल्क विभाग — ई.वी.एस. पब्लिक स्कूल_`
   );
 };
+
+export const buildFeePromiseReminderMessage = (params: {
+  studentName: string;
+  className: string;
+  studentId?: string;
+  fatherName?: string;
+  promisedAmount: number;
+  promisedDate: string;
+  pendingAmount: number;
+  isOverdue?: boolean;
+}): string => {
+  const {
+    studentName,
+    className,
+    studentId,
+    fatherName,
+    promisedAmount,
+    promisedDate,
+    pendingAmount,
+    isOverdue,
+  } = params;
+  const fmtPromised = Number(promisedAmount || 0).toLocaleString('en-IN');
+  const fmtDue = Number(pendingAmount || 0).toLocaleString('en-IN');
+  const fatherLine = fatherName ? ` (पिता: श्री ${fatherName})` : '';
+  const idLine = studentId ? ` · ID: ${studentId}` : '';
+
+  const formattedDate = (() => {
+    const p = String(promisedDate || '').split('-');
+    return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : promisedDate;
+  })();
+
+  return (
+    `*E.V.S. PUBLIC SCHOOL — फीस वादा स्मरण (Fee Promise Reminder)*\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `अस्सलाम वालेकुम / आदरणीय अभिभावक,\n\n` +
+    `आपके बच्चे *${studentName}*${fatherLine} (कक्षा: *${className}*${idLine}) के शुल्क हेतु आपके द्वारा दिए गए वादे का स्मरण:\n\n` +
+    `📅 *वादा की गई तारीख:* *${formattedDate}* ${isOverdue ? '_(तारीख बीत चुकी है)_' : '_(आज देय तिथि है)_'}\n` +
+    `🤝 *वादा राशि:* *₹${fmtPromised}*\n` +
+    `💰 *कुल शेष बकाया:* *₹${fmtDue}*\n\n` +
+    `कृपया आज यह राशि विद्यालय कार्यालय में या *Parent Portal -> School Fees (UPI QR)* के माध्यम से अपनी सुविधा अनुसार (पूरा या आंशिक) ऑनलाइन जमा करें।\n` +
+    `_(यदि आपने अभी भुगतान कर दिया है, तो कृपया इस संदेश को अनदेखा करें।)_\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `_धन्यवाद! शुल्क विभाग — ई.वी.एस. पब्लिक स्कूल_`
+  );
+};
+

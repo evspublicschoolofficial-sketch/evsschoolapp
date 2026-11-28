@@ -12,7 +12,7 @@ export const CLIENT_TAB_ID: string =
     ? `tab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
     : 'tab-ssr';
 
-export type EntityType = 'fee' | 'student' | 'notice' | 'behavior' | 'homework' | 'users' | 'hall_pass_config' | 'fee_waivers' | 'parent_reviews' | 'teacher_qr_attendance_access' | 'report_card_workflow' | 'exam_marks' | 'report_card_meta' | 'weekly_tests' | 'exam_seating_plan' | 'academics' | 'all';
+export type EntityType = 'fee' | 'student' | 'notice' | 'behavior' | 'homework' | 'users' | 'hall_pass_config' | 'fee_waivers' | 'fee_promises' | 'parent_reviews' | 'teacher_qr_attendance_access' | 'report_card_workflow' | 'exam_marks' | 'report_card_meta' | 'weekly_tests' | 'exam_seating_plan' | 'academics' | 'all';
 
 export interface DataMutationEvent {
   type: 'APP_DATA_UPDATED';

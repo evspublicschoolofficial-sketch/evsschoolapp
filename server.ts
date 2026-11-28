@@ -5,6 +5,10 @@ import fs from 'fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const webpush = require('web-push') as typeof import('web-push');
 
 // Global resilience handlers to prevent unexpected process exit
 process.on('uncaughtException', (err) => {
@@ -816,6 +820,44 @@ async function forwardToGoogleAppsScript(payload: any) {
           if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
         }
       } catch {}
+    } else if (formattedPayload.action === 'saveFeePromise') {
+      try {
+        const pStr =
+          typeof formattedPayload.promise === 'string'
+            ? formattedPayload.promise
+            : JSON.stringify(formattedPayload.promise || {});
+        const getUrl = `${targetUrl}?action=saveFeePromise&promise=${encodeURIComponent(pStr)}`;
+        if (getUrl.length < 7500) {
+          const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(15000) });
+          const gText = await gRes.text();
+          const gCheck = parseAppsScriptResponse(gText);
+          if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
+        }
+      } catch {}
+    } else if (formattedPayload.action === 'updateFeePromiseStatus') {
+      try {
+        const params = new URLSearchParams({
+          action: 'updateFeePromiseStatus',
+          id: String(formattedPayload.id || ''),
+          status: String(formattedPayload.status || 'Fulfilled'),
+        });
+        if (formattedPayload.notes !== undefined) {
+          params.set('notes', String(formattedPayload.notes));
+        }
+        const getUrl = `${targetUrl}?${params.toString()}`;
+        const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(15000) });
+        const gText = await gRes.text();
+        const gCheck = parseAppsScriptResponse(gText);
+        if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
+      } catch {}
+    } else if (formattedPayload.action === 'deleteFeePromise') {
+      try {
+        const getUrl = `${targetUrl}?action=deleteFeePromise&id=${encodeURIComponent(String(formattedPayload.id || ''))}`;
+        const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(15000) });
+        const gText = await gRes.text();
+        const gCheck = parseAppsScriptResponse(gText);
+        if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
+      } catch {}
     }
 
     return { ok: false, error: postCheck.error || `HTTP ${lastPostStatus || 500}`, response: lastPostText };
@@ -833,6 +875,7 @@ let lastHolidaySheetSync = 0;
 let lastWeeklyTestSheetSync = 0;
 let lastHallPassSheetSync = 0;
 let lastAcademicsSheetSync = 0;
+let lastFeePromisesSheetSync = 0;
 
 const SERVER_SPREADSHEET_ID = '1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU';
 const SERVER_DATESHEET_COLS = ['Play', 'M1', 'M2', 'M3', 'Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6 & 7', 'Class 8'];
@@ -5648,6 +5691,396 @@ async function startServer() {
       });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err?.message || 'Could not save academics config' });
+    }
+  });
+
+  // =========================================================================
+  // FEE PROMISES & BACKGROUND WEB PUSH REMINDERS
+  // =========================================================================
+  const FEE_PROMISES_FILE = '/tmp/evs_fee_promises.json';
+  let feePromisesStore: any[] = [];
+  try {
+    if (fs.existsSync(FEE_PROMISES_FILE)) {
+      const rawFp = JSON.parse(fs.readFileSync(FEE_PROMISES_FILE, 'utf-8'));
+      if (Array.isArray(rawFp)) feePromisesStore = rawFp;
+    }
+  } catch {}
+
+  const saveFeePromisesCache = () => {
+    try {
+      fs.writeFileSync(FEE_PROMISES_FILE, JSON.stringify(feePromisesStore, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Could not write fee promises cache:', e);
+    }
+  };
+
+  // Web Push VAPID Setup & Subscriptions Store
+  const VAPID_FILE = '/tmp/evs_vapid_keys.json';
+  const PUSH_SUBS_FILE = '/tmp/evs_push_subscriptions.json';
+  let vapidKeys: { publicKey: string; privateKey: string } = { publicKey: '', privateKey: '' };
+  let pushSubscriptionsStore: Array<{
+    endpoint: string;
+    subscription: any;
+    role: string;
+    studentId?: string;
+    studentIds?: string[];
+    mobile?: string;
+    name?: string;
+    updatedAt: string;
+  }> = [];
+
+  try {
+    if (fs.existsSync(VAPID_FILE)) {
+      const savedVapid = JSON.parse(fs.readFileSync(VAPID_FILE, 'utf-8'));
+      if (savedVapid?.publicKey && savedVapid?.privateKey) {
+        vapidKeys = savedVapid;
+      }
+    }
+    if (!vapidKeys.publicKey || !vapidKeys.privateKey) {
+      vapidKeys = webpush.generateVAPIDKeys();
+      fs.writeFileSync(VAPID_FILE, JSON.stringify(vapidKeys, null, 2), 'utf-8');
+    }
+    webpush.setVapidDetails(
+      'mailto:evspublicschool.official@gmail.com',
+      vapidKeys.publicKey,
+      vapidKeys.privateKey
+    );
+  } catch (vapidErr) {
+    console.warn('WebPush VAPID init note:', vapidErr);
+  }
+
+  try {
+    if (fs.existsSync(PUSH_SUBS_FILE)) {
+      const rawSubs = JSON.parse(fs.readFileSync(PUSH_SUBS_FILE, 'utf-8'));
+      if (Array.isArray(rawSubs)) pushSubscriptionsStore = rawSubs;
+    }
+  } catch {}
+
+  const savePushSubscriptionsCache = () => {
+    try {
+      fs.writeFileSync(PUSH_SUBS_FILE, JSON.stringify(pushSubscriptionsStore, null, 2), 'utf-8');
+    } catch {}
+  };
+
+  const normalizeDigits10 = (m?: string) => {
+    const d = String(m || '').replace(/\D/g, '');
+    return d.length >= 10 ? d.slice(-10) : d;
+  };
+
+  async function dispatchPushToParentForPromise(promiseItem: any): Promise<number> {
+    if (!vapidKeys.publicKey || !vapidKeys.privateKey || pushSubscriptionsStore.length === 0) return 0;
+    const targetSid = String(promiseItem?.studentId || '').trim().toLowerCase();
+    const targetMobile = normalizeDigits10(promiseItem?.parentMobile);
+    const matchingSubs = pushSubscriptionsStore.filter((sub) => {
+      if (sub.role !== 'parent') return false;
+      const subSid = String(sub.studentId || '').trim().toLowerCase();
+      const subSids = Array.isArray(sub.studentIds)
+        ? sub.studentIds.map((x) => String(x || '').trim().toLowerCase())
+        : [];
+      const subMobile = normalizeDigits10(sub.mobile);
+      return (
+        (targetSid && (subSid === targetSid || subSids.includes(targetSid))) ||
+        (targetMobile && subMobile === targetMobile)
+      );
+    });
+    if (matchingSubs.length === 0) return 0;
+
+    const amtFmt = Number(promiseItem.promisedAmount || 0).toLocaleString('en-IN');
+    const dtParts = String(promiseItem.promisedDate || '').split('-');
+    const dtDisplay = dtParts.length === 3 ? `${dtParts[2]}/${dtParts[1]}/${dtParts[0]}` : promiseItem.promisedDate;
+    const payload = JSON.stringify({
+      title: `🤝 स्कूल फीस वादा रिमाइंडर (${promiseItem.studentName})`,
+      body: `आज (${dtDisplay}) आपने ₹${amtFmt} स्कूल फीस जमा करने का वादा किया था। कृपया अभी UPI से या स्कूल कार्यालय में जमा करें।`,
+      tag: `fee-promise-${promiseItem.id}-${dtDisplay}`,
+      url: '/',
+    });
+
+    let sentCount = 0;
+    const staleEndpoints = new Set<string>();
+    for (const entry of matchingSubs) {
+      try {
+        await webpush.sendNotification(entry.subscription, payload);
+        sentCount++;
+      } catch (err: any) {
+        if (err?.statusCode === 410 || err?.statusCode === 404) {
+          staleEndpoints.add(entry.endpoint);
+        }
+      }
+    }
+    if (staleEndpoints.size > 0) {
+      pushSubscriptionsStore = pushSubscriptionsStore.filter((s) => !staleEndpoints.has(s.endpoint));
+      savePushSubscriptionsCache();
+    }
+    return sentCount;
+  }
+
+  async function runFeePromisePushReminders() {
+    const todayIst = getLocalDateIST();
+    let changed = false;
+    for (const p of feePromisesStore) {
+      if (!p || p.status !== 'Pending') continue;
+      if (!p.promisedDate || p.promisedDate > todayIst) continue;
+      if (p.lastRemindedDate === todayIst) continue;
+
+      const sent = await dispatchPushToParentForPromise(p);
+      if (sent > 0) {
+        p.lastRemindedDate = todayIst;
+        p.updatedAt = getLocalTimestampIST();
+        changed = true;
+      }
+    }
+    if (changed) {
+      saveFeePromisesCache();
+    }
+  }
+
+  // Run automatic Fee Promise Push Reminder check every 10 minutes
+  setInterval(() => {
+    runFeePromisePushReminders().catch(() => {});
+  }, 10 * 60 * 1000);
+
+  async function syncFeePromisesFromGoogleSheet(force = false, overrideUrl?: string): Promise<boolean> {
+    const now = Date.now();
+    if (!force && now - lastFeePromisesSheetSync < 20000) return false;
+    lastFeePromisesSheetSync = now;
+    try {
+      const baseUrl = overrideUrl || currentAppsScriptUrl;
+      const url = `${baseUrl}?action=getFeePromises&_t=${now}`;
+      const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(9500) });
+      if (!res.ok) return false;
+      const text = await res.text();
+      if (!text || text.trim().startsWith('<')) return false;
+      const json: any = JSON.parse(text);
+      if (!json || json.status === 'error' || !Array.isArray(json.promises)) return false;
+
+      const merged = new Map<string, any>();
+      for (const item of json.promises) {
+        if (item?.id) merged.set(item.id, item);
+      }
+      for (const localItem of feePromisesStore) {
+        if (localItem?.id && !merged.has(localItem.id)) {
+          merged.set(localItem.id, localItem);
+        }
+      }
+      feePromisesStore = Array.from(merged.values()).sort((a, b) =>
+        String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''))
+      );
+      saveFeePromisesCache();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  app.get('/api/push/vapid-public-key', (_req, res) => {
+    return res.json({ success: true, publicKey: vapidKeys.publicKey || '' });
+  });
+
+  app.post('/api/push/subscribe', (req, res) => {
+    try {
+      const { subscription, role, studentId, studentIds, mobile, name } = req.body || {};
+      if (!subscription || !subscription.endpoint) {
+        return res.status(400).json({ success: false, error: 'Invalid push subscription' });
+      }
+      const nextEntry = {
+        endpoint: String(subscription.endpoint),
+        subscription,
+        role: String(role || 'parent'),
+        studentId: studentId ? String(studentId) : undefined,
+        studentIds: Array.isArray(studentIds) ? studentIds.map(String) : undefined,
+        mobile: mobile ? String(mobile) : undefined,
+        name: name ? String(name) : undefined,
+        updatedAt: getLocalTimestampIST(),
+      };
+      pushSubscriptionsStore = [
+        nextEntry,
+        ...pushSubscriptionsStore.filter((s) => s.endpoint !== nextEntry.endpoint),
+      ].slice(0, 500);
+      savePushSubscriptionsCache();
+
+      // Immediately check if any due promise awaits this parent
+      runFeePromisePushReminders().catch(() => {});
+
+      return res.json({ success: true, count: pushSubscriptionsStore.length });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Push subscribe failed' });
+    }
+  });
+
+  app.post('/api/push/test', async (req, res) => {
+    try {
+      const { endpoint } = req.body || {};
+      const target = endpoint
+        ? pushSubscriptionsStore.find((s) => s.endpoint === endpoint)
+        : pushSubscriptionsStore[0];
+      if (!target) {
+        return res.status(404).json({ success: false, error: 'No subscribed device found' });
+      }
+      await webpush.sendNotification(
+        target.subscription,
+        JSON.stringify({
+          title: '🔔 E.V.S. स्कूल रिमाइंडर सक्रिय',
+          body: 'अब आपको फीस वादे और स्कूल नोटिस की सूचना समय पर फोन स्क्रीन पर मिलेगी!',
+          tag: 'evs-push-test',
+          url: '/',
+        })
+      );
+      return res.json({ success: true });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Test push failed' });
+    }
+  });
+
+  app.get('/api/fee-promises', async (req, res) => {
+    const force = req.query.fresh === '1' || req.query.refresh === '1';
+    const targetUrl = resolveTargetAppsScriptUrl(req);
+    const sheetSynced = await syncFeePromisesFromGoogleSheet(force, targetUrl);
+    return res.json({
+      success: true,
+      sheetSynced,
+      promises: feePromisesStore,
+    });
+  });
+
+  app.post('/api/fee-promises', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const p = req.body?.promise || req.body || {};
+      const nowIst = getLocalTimestampIST();
+      const sId = String(p.studentId || '').trim();
+      const record = {
+        ...p,
+        id: String(p.id || `PRM-${sId}-${Date.now().toString(36)}`),
+        studentId: sId,
+        promisedDate: String(p.promisedDate || '').slice(0, 10),
+        promisedAmount: Math.max(1, Number(p.promisedAmount || 0)),
+        status: p.status || 'Pending',
+        createdAt: p.createdAt || nowIst,
+        updatedAt: nowIst,
+      };
+
+      // Cancel older active pending promises for same student
+      feePromisesStore = [
+        record,
+        ...feePromisesStore
+          .filter((item) => item.id !== record.id)
+          .map((item) =>
+            sId &&
+            String(item.studentId || '').toLowerCase() === sId.toLowerCase() &&
+            item.status === 'Pending'
+              ? { ...item, status: 'Cancelled', updatedAt: nowIst }
+              : item
+          ),
+      ];
+      saveFeePromisesCache();
+
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'saveFeePromise',
+        promise: record,
+        appsScriptUrl: targetUrl,
+      });
+
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'fee_promises',
+        action: 'saveFeePromise',
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) client.send(broadcastMsg);
+      }
+
+      // If promise is for today, fire Web Push reminder check immediately
+      runFeePromisePushReminders().catch(() => {});
+
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : gasResult.error,
+        promise: record,
+        promises: feePromisesStore,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Could not save fee promise' });
+    }
+  });
+
+  app.post('/api/fee-promises/status', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const { id, status, notes } = req.body || {};
+      const nowIst = getLocalTimestampIST();
+      feePromisesStore = feePromisesStore.map((p) =>
+        p.id === id
+          ? {
+              ...p,
+              status: status || 'Fulfilled',
+              notes: notes !== undefined ? notes : p.notes,
+              updatedAt: nowIst,
+              fulfilledAt: (status || 'Fulfilled') === 'Fulfilled' ? nowIst : p.fulfilledAt,
+            }
+          : p
+      );
+      saveFeePromisesCache();
+
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'updateFeePromiseStatus',
+        id,
+        status: status || 'Fulfilled',
+        notes,
+        appsScriptUrl: targetUrl,
+      });
+
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'fee_promises',
+        action: 'updateFeePromiseStatus',
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) client.send(broadcastMsg);
+      }
+
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        promises: feePromisesStore,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Status update failed' });
+    }
+  });
+
+  app.delete('/api/fee-promises/:id', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const id = String(req.params.id || '').trim();
+      feePromisesStore = feePromisesStore.filter((p) => p.id !== id);
+      saveFeePromisesCache();
+
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'deleteFeePromise',
+        id,
+        appsScriptUrl: targetUrl,
+      });
+
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'fee_promises',
+        action: 'deleteFeePromise',
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) client.send(broadcastMsg);
+      }
+
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        promises: feePromisesStore,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Delete failed' });
     }
   });
 

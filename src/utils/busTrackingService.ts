@@ -362,7 +362,7 @@ function menuCreateFeatureBackupTabs() {
   var ss = getSpreadsheet();
   ensureFeatureBackupTabs(ss);
   try {
-    SpreadsheetApp.getUi().alert("✅ 'WhatsApp_Alert_Logs', 'Staff_Salary_Config', 'Staff_Salary_Payroll', 'UPI_Settings', 'UPI_Payments', 'Exam_Marks', 'Report_Cards_Backup', 'Weekly_Tests', 'Teacher_Performance', 'Syllabus_Tracker', 'School_Holidays', 'Academics_Config', 'Class_Sections', 'Class_Timetable', 'Teacher_Substitutions' सभी टैब Google Sheet में तैयार हैं!");
+    SpreadsheetApp.getUi().alert("✅ 'WhatsApp_Alert_Logs', 'Staff_Salary_Config', 'Staff_Salary_Payroll', 'UPI_Settings', 'UPI_Payments', 'Fee_Promises', 'Exam_Marks', 'Report_Cards_Backup', 'Weekly_Tests', 'Teacher_Performance', 'Syllabus_Tracker', 'School_Holidays', 'Academics_Config', 'Class_Sections', 'Class_Timetable', 'Teacher_Substitutions' सभी टैब Google Sheet में तैयार हैं!");
   } catch(e) {}
 }
 
@@ -463,6 +463,7 @@ function ensureFeatureBackupTabs(ss) {
   ensureTabSafe_(ss, "Class_Sections", ["Class Sections", "ClassSections"], ["Section_Key", "Class_Key", "Section_Name", "Room_Number", "Class_Teacher_ID", "Class_Teacher_Name", "Subject_IDs_JSON", "Subject_Teachers_JSON"], added);
   ensureTabSafe_(ss, "Class_Timetable", ["Class Timetable", "ClassTimetable", "Timetable"], ["Slot_ID", "Session_ID", "Class_Key", "Section_Name", "Day", "Period_ID", "Subject_ID", "Subject_Name", "Teacher_ID", "Teacher_Name", "Room_Number"], added);
   ensureTabSafe_(ss, "Teacher_Substitutions", ["Teacher Substitutions", "Substitutions"], ["Sub_ID", "Session_ID", "Date", "Day", "Period_ID", "Period_Label", "Class_Key", "Section_Name", "Subject_Name", "Original_Teacher_ID", "Original_Teacher_Name", "Substitute_Teacher_ID", "Substitute_Teacher_Name", "Reason", "Created_At"], added);
+  ensureTabSafe_(ss, "Fee_Promises", ["Fee Promises", "FeePromises", "Fee_Commitments"], ["Promise_ID", "Student_ID", "Student_Name", "Class", "Father_Name", "Parent_Mobile", "Total_Due_At_Promise", "Promised_Amount", "Promised_Date", "Notes", "Status", "Created_By", "Created_At", "Updated_At", "Fulfilled_At", "Last_Reminded_Date"], added);
   return added;
 }
 
@@ -762,9 +763,12 @@ function doGet(e) {
   if (action === "getAcademicsConfig") {
     return handleGetAcademicsConfig(ss);
   }
+  if (action === "getFeePromises") {
+    return handleGetFeePromises(ss);
+  }
 
   // 10. GET FALLBACK: Delegate write actions when called via GET query parameters
-  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "saveTeacherProfile" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveReportCardDraft" || action === "saveReportCardAccess" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig" || action === "saveExamDatesheet" || action === "saveExamSeatingPlan" || action === "saveExamSeatingDraft" || action === "saveExamSeatingRoomDispatch" || action === "deleteExamSeatingHistory" || action === "saveFeeWaiver" || action === "saveFeeWaiversBatch" || action === "saveParentReview" || action === "updateParentReviewStatus" || action === "deleteParentReview" || action === "saveAcademicsConfig") {
+  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "saveTeacherProfile" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveReportCardDraft" || action === "saveReportCardAccess" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig" || action === "saveExamDatesheet" || action === "saveExamSeatingPlan" || action === "saveExamSeatingDraft" || action === "saveExamSeatingRoomDispatch" || action === "deleteExamSeatingHistory" || action === "saveFeeWaiver" || action === "saveFeeWaiversBatch" || action === "saveParentReview" || action === "updateParentReviewStatus" || action === "deleteParentReview" || action === "saveAcademicsConfig" || action === "saveFeePromise" || action === "updateFeePromiseStatus" || action === "deleteFeePromise") {
     return doPost(e);
   }
 
@@ -1519,6 +1523,17 @@ function doPost(e) {
     // 19. ACADEMICS, SESSIONS, SECTIONS, TIMETABLE & PROMOTION (4-Tab 2-Way Sync)
     if (action === "saveAcademicsConfig") {
       return handleSaveAcademicsConfig(ss, data);
+    }
+
+    // 20. FEE PROMISES & COMMITMENTS (2-Way Sync)
+    if (action === "saveFeePromise") {
+      return handleSaveFeePromise(ss, data);
+    }
+    if (action === "updateFeePromiseStatus") {
+      return handleUpdateFeePromiseStatus(ss, data);
+    }
+    if (action === "deleteFeePromise") {
+      return handleDeleteFeePromise(ss, data);
     }
 
     return ContentService.createTextOutput(JSON.stringify({
@@ -5309,6 +5324,154 @@ function handleSaveAcademicsConfig(ss, data) {
   return ContentService.createTextOutput(JSON.stringify({
     status: "success",
     message: "Academics_Config, Class_Sections, Class_Timetable & Teacher_Substitutions saved to Google Sheet!"
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+// =========================================================================
+// 20. FEE PROMISES & COMMITMENTS (Fee_Promises Tab)
+// =========================================================================
+function handleGetFeePromises(ss) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Fee_Promises", "Fee Promises", "FeePromises", "Fee_Commitments"]);
+  var rows = sheet ? sheet.getDataRange().getValues() : [];
+  var list = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r[0] && !r[1]) continue;
+    var pDate = r[8];
+    var pDateStr = "";
+    if (Object.prototype.toString.call(pDate) === "[object Date]") {
+      pDateStr = Utilities.formatDate(pDate, "Asia/Kolkata", "yyyy-MM-dd");
+    } else {
+      pDateStr = String(pDate || "").trim().slice(0, 10);
+    }
+    list.push({
+      id: String(r[0] || "").trim(),
+      studentId: String(r[1] || "").trim(),
+      studentName: String(r[2] || "").trim(),
+      className: String(r[3] || "").trim(),
+      fatherName: String(r[4] || "").trim(),
+      parentMobile: String(r[5] || "").trim(),
+      totalDueAtPromise: Number(r[6] || 0),
+      promisedAmount: Number(r[7] || 0),
+      promisedDate: pDateStr,
+      notes: String(r[9] || "").trim(),
+      status: String(r[10] || "Pending").trim(),
+      createdBy: String(r[11] || "Parent").trim(),
+      createdAt: String(r[12] || "").trim(),
+      updatedAt: String(r[13] || "").trim(),
+      fulfilledAt: String(r[14] || "").trim(),
+      lastRemindedDate: String(r[15] || "").trim()
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    promises: list
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveFeePromise(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Fee_Promises", "Fee Promises", "FeePromises", "Fee_Commitments"]);
+  var p = data.promise ? (typeof data.promise === "string" ? JSON.parse(data.promise) : data.promise) : data;
+  if (typeof p === "string") {
+    try { p = JSON.parse(p); } catch (e) { p = data; }
+  }
+  var nowIst = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var pId = String(p.id || ("PRM-" + (p.studentId || "") + "-" + Date.now())).trim();
+  var sId = String(p.studentId || p.Student_ID || "").trim();
+
+  var rowVals = [
+    pId,
+    sId,
+    String(p.studentName || ""),
+    String(p.className || ""),
+    String(p.fatherName || ""),
+    String(p.parentMobile || ""),
+    Number(p.totalDueAtPromise || 0),
+    Number(p.promisedAmount || 0),
+    String(p.promisedDate || "").slice(0, 10),
+    String(p.notes || ""),
+    String(p.status || "Pending"),
+    String(p.createdBy || "Parent"),
+    formatToLocalIST_(p.createdAt, nowIst),
+    formatToLocalIST_(p.updatedAt, nowIst),
+    String(p.fulfilledAt || ""),
+    String(p.lastRemindedDate || "")
+  ];
+
+  var vals = sheet.getDataRange().getValues();
+  var foundRow = -1;
+  for (var i = 1; i < vals.length; i++) {
+    var rowId = String(vals[i][0] || "").trim();
+    var rowSid = String(vals[i][1] || "").trim();
+    var rowStatus = String(vals[i][10] || "").trim();
+    if (rowId === pId) {
+      foundRow = i + 1;
+    } else if (sId && rowSid.toLowerCase() === sId.toLowerCase() && rowStatus === "Pending") {
+      sheet.getRange(i + 1, 11).setValue("Cancelled");
+      sheet.getRange(i + 1, 14).setValue(nowIst);
+    }
+  }
+
+  if (foundRow > 0) {
+    sheet.getRange(foundRow, 1, 1, rowVals.length).setValues([rowVals]);
+  } else {
+    sheet.appendRow(rowVals);
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Fee Promise saved to Fee_Promises sheet!",
+    id: pId
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleUpdateFeePromiseStatus(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Fee_Promises", "Fee Promises", "FeePromises", "Fee_Commitments"]);
+  var targetId = String(data.id || data.promiseId || "").trim();
+  var newStatus = String(data.status || "Fulfilled").trim();
+  var nowIst = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+  var vals = sheet.getDataRange().getValues();
+  var updated = false;
+  for (var i = 1; i < vals.length; i++) {
+    if (String(vals[i][0] || "").trim() === targetId) {
+      sheet.getRange(i + 1, 11).setValue(newStatus);
+      sheet.getRange(i + 1, 14).setValue(nowIst);
+      if (data.notes !== undefined) {
+        sheet.getRange(i + 1, 10).setValue(String(data.notes || ""));
+      }
+      if (newStatus === "Fulfilled") {
+        sheet.getRange(i + 1, 15).setValue(nowIst);
+      }
+      updated = true;
+      break;
+    }
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: updated ? "success" : "not_found",
+    message: updated ? "Fee Promise status updated!" : "Promise ID not found"
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleDeleteFeePromise(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var sheet = findExistingSheet_(ss, ["Fee_Promises", "Fee Promises", "FeePromises", "Fee_Commitments"]);
+  var targetId = String(data.id || data.promiseId || "").trim();
+  var vals = sheet.getDataRange().getValues();
+  for (var i = vals.length - 1; i >= 1; i--) {
+    if (String(vals[i][0] || "").trim() === targetId) {
+      sheet.deleteRow(i + 1);
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        message: "Fee Promise deleted from sheet!"
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "not_found",
+    message: "Promise ID not found"
   })).setMimeType(ContentService.MimeType.JSON);
 }
 `;

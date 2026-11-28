@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Student, FeeCollectionRecord, StudentBehaviorRecord } from '../types';
+import { Student, FeeCollectionRecord, StudentBehaviorRecord, FeePromiseRecord } from '../types';
 import { StudentAvatar } from './StudentAvatar';
 import { computeStudentFeeMetrics, computeSchoolFeeTotals, computeWaivedStudentsSummary } from '../utils/feeCalculation';
 import { FREE_STUDENTS_UPDATED_EVENT, FEE_MASTER_UPDATED_EVENT, tagStudentWaiver } from '../utils/feeMaster';
@@ -7,6 +7,7 @@ import {
   openWhatsappAlert,
   buildAbsentAlertMessage,
   buildFeeDueReminderMessage,
+  buildFeePromiseReminderMessage,
   buildWhatsappUrl,
   logWhatsappAlertBackup,
   normalizeWhatsappDigits,
@@ -15,6 +16,8 @@ import {
   WHATSAPP_LOGS_UPDATED_EVENT,
   WhatsappAlertLog,
 } from '../utils/whatsappReminders';
+import { formatPromiseDateDisplay, getEffectivePromiseState, saveFeePromiseToServer } from '../utils/feePromiseHelper';
+import { getLocalDateYMD } from '../utils/localTime';
 import {
   loadLocalSeatingWorkflow,
   loadLocalSeatingHistory,
@@ -52,6 +55,9 @@ interface ManagerOverviewModalsProps {
   onRequestDeleteStudent?: (student: Student) => void;
   onOpenAttendanceCalendar?: (student?: Student) => void;
   onSaveBatchAttendance?: (records: Partial<StudentBehaviorRecord>[]) => Promise<void> | void;
+  feePromises?: FeePromiseRecord[];
+  onFeePromisesUpdated?: (next: FeePromiseRecord[]) => void;
+  managerName?: string;
 }
 
 export type ManagerModalType = 'totalStudents' | 'feesOverview' | 'attendanceOverview' | 'absentToday' | 'faultyBehavior' | null;
@@ -93,7 +99,28 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
   onRequestDeleteStudent,
   onOpenAttendanceCalendar,
   onSaveBatchAttendance,
+  feePromises = [],
+  onFeePromisesUpdated,
+  managerName = 'School Manager',
 }) => {
+  const [inlinePromiseStudentId, setInlinePromiseStudentId] = useState<string | null>(null);
+  const [inlinePromiseDate, setInlinePromiseDate] = useState<string>(() => getLocalDateYMD());
+  const [inlinePromiseAmount, setInlinePromiseAmount] = useState<string>('500');
+  const [inlinePromiseNotes, setInlinePromiseNotes] = useState<string>('');
+  const [savingInlinePromise, setSavingInlinePromise] = useState<boolean>(false);
+
+  const activePromiseByStudentId = useMemo(() => {
+    const map = new Map<string, FeePromiseRecord>();
+    feePromises.forEach((p) => {
+      if (p.status === 'Pending' || p.status === 'Overdue') {
+        const key = String(p.studentId || '').trim().toLowerCase();
+        if (key && !map.has(key)) {
+          map.set(key, p);
+        }
+      }
+    });
+    return map;
+  }, [feePromises]);
   const [activeModal, setActiveModal] = useState<ManagerModalType>(null);
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [classFilter, setClassFilter] = useState<string>('all');
@@ -1905,95 +1932,243 @@ export const ManagerOverviewModals: React.FC<ManagerOverviewModalsProps> = ({
                             const phone = getStudentPhone(student);
                             const alertKey = `fee_${student.Student_ID}`;
                             const isSent = Boolean(sentAlertIds[alertKey]);
+                            const activePromise = activePromiseByStudentId.get(
+                              String(student.Student_ID || '').trim().toLowerCase()
+                            );
+                            const promiseState = activePromise
+                              ? getEffectivePromiseState(activePromise, pendingAmount)
+                              : null;
+
+                            const isEditingThisPromise = inlinePromiseStudentId === student.Student_ID;
 
                             return (
                               <div
                                 key={student.Student_ID}
-                                className="bg-white p-3.5 rounded-2xl border border-slate-200 hover:border-rose-300 hover:shadow-xs transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                                className="bg-white p-3.5 rounded-2xl border border-slate-200 hover:border-rose-300 hover:shadow-xs transition-all space-y-2.5"
                               >
-                                <div className="flex items-center gap-3 min-w-0">
-                                  <StudentAvatar
-                                    student={student}
-                                    photoUrl={getStudentPhoto(student)}
-                                    size="md"
-                                  />
-                                  <div className="min-w-0">
-                                    <div className="flex items-center gap-2 flex-wrap">
-                                      <h4 className="font-extrabold text-sm text-slate-900">
-                                        {student.Student_Name}
-                                      </h4>
-                                      <span className="text-[10px] font-bold px-1.5 py-0.2 bg-blue-100 text-blue-900 rounded">
-                                        Class {getClassName(student.Class)}
-                                      </span>
-                                      <span className="text-[10px] text-slate-500">
-                                        Roll: {student.Roll_Number || 'N/A'}
-                                      </span>
-                                    </div>
-                                    <div className="text-[11px] text-slate-500 flex items-center gap-2 mt-1">
-                                      <span>पिता: {student.Father_Name || 'N/A'}</span>
-                                      <span>•</span>
-                                      <span>ID: {student.Student_ID}</span>
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                  <div className="flex items-center gap-3 min-w-0">
+                                    <StudentAvatar
+                                      student={student}
+                                      photoUrl={getStudentPhoto(student)}
+                                      size="md"
+                                    />
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <h4 className="font-extrabold text-sm text-slate-900">
+                                          {student.Student_Name}
+                                        </h4>
+                                        <span className="text-[10px] font-bold px-1.5 py-0.2 bg-blue-100 text-blue-900 rounded">
+                                          Class {getClassName(student.Class)}
+                                        </span>
+                                        <span className="text-[10px] text-slate-500">
+                                          Roll: {student.Roll_Number || 'N/A'}
+                                        </span>
+                                        {activePromise && promiseState && promiseState !== 'cancelled' && promiseState !== 'fulfilled' && (
+                                          <span
+                                            className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md border ${
+                                              promiseState === 'overdue'
+                                                ? 'bg-rose-100 text-rose-800 border-rose-300'
+                                                : promiseState === 'due_today'
+                                                  ? 'bg-amber-100 text-amber-900 border-amber-300'
+                                                  : 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                                            }`}
+                                          >
+                                            🤝 वादा: ₹{formatIndianCurrency(activePromise.promisedAmount)} · {formatPromiseDateDisplay(activePromise.promisedDate)}
+                                            {promiseState === 'due_today' ? ' (आज)' : promiseState === 'overdue' ? ' (अवधि बीती)' : ''}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div className="text-[11px] text-slate-500 flex items-center gap-2 mt-1">
+                                        <span>पिता: {student.Father_Name || 'N/A'}</span>
+                                        <span>•</span>
+                                        <span>ID: {student.Student_ID}</span>
+                                      </div>
                                     </div>
                                   </div>
-                                </div>
 
-                                <div className="flex items-center justify-between sm:justify-end gap-2 sm:gap-2.5 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 flex-wrap">
-                                  <div className="text-right mr-1 tabular-nums">
-                                    <div className="text-base font-black text-rose-600">
-                                      ₹{formatIndianCurrency(pendingAmount)}
+                                  <div className="flex items-center justify-between sm:justify-end gap-2 sm:gap-2.5 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 flex-wrap">
+                                    <div className="text-right mr-1 tabular-nums">
+                                      <div className="text-base font-black text-rose-600">
+                                        ₹{formatIndianCurrency(pendingAmount)}
+                                      </div>
+                                      <div className="text-[10px] text-rose-500 font-semibold uppercase tracking-wider">
+                                        Pending Due
+                                      </div>
                                     </div>
-                                    <div className="text-[10px] text-rose-500 font-semibold uppercase tracking-wider">
-                                      Pending Due
-                                    </div>
-                                  </div>
 
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const msg = buildFeeDueReminderMessage({
-                                        studentName: student.Student_Name || student.Student_ID,
-                                        className: getClassName(student.Class),
-                                        studentId: student.Student_ID,
-                                        fatherName: student.Father_Name,
-                                        pendingAmount,
-                                      });
-                                      openWhatsappAlert(phone, msg, {
-                                        alertType: 'Fee Due Reminder',
-                                        recipientType: 'Parent',
-                                        recipientId: student.Student_ID,
-                                        recipientName: student.Student_Name || student.Student_ID,
-                                        classOrRole: getClassName(student.Class),
-                                        amount: pendingAmount,
-                                        sentBy: 'Manager',
-                                      });
-                                      setSentAlertIds((prev) => ({ ...prev, [alertKey]: true }));
-                                    }}
-                                    className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer ${
-                                      isSent
-                                        ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
-                                        : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                                    }`}
-                                    title={phone ? `WhatsApp बकाया रिमाइंडर भेजें: ${phone}` : 'WhatsApp रिमाइंडर खोलें'}
-                                  >
-                                    <i className="fa-brands fa-whatsapp text-sm"></i>
-                                    <span>{isSent ? 'भेजा गया ✓' : 'WhatsApp'}</span>
-                                  </button>
-
-                                  {phone ? (
-                                    <a
-                                      href={`tel:${phone}`}
-                                      className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors"
-                                      title={`फीस याद दिलाने हेतु कॉल करें: ${phone}`}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (isEditingThisPromise) {
+                                          setInlinePromiseStudentId(null);
+                                          return;
+                                        }
+                                        setInlinePromiseStudentId(student.Student_ID);
+                                        setInlinePromiseDate(activePromise?.promisedDate || getLocalDateYMD());
+                                        setInlinePromiseAmount(String(activePromise?.promisedAmount || pendingAmount));
+                                        setInlinePromiseNotes(activePromise?.notes || '');
+                                      }}
+                                      className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border transition-colors cursor-pointer ${
+                                        isEditingThisPromise
+                                          ? 'bg-indigo-700 text-white border-indigo-700'
+                                          : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border-indigo-200'
+                                      }`}
+                                      title="मैनेजर द्वारा अभिभावक का फीस जमा वादा जोड़ें या बदलें"
                                     >
-                                      <i className="fa-solid fa-phone text-[10px]"></i>
-                                      <span>Call</span>
-                                    </a>
-                                  ) : (
-                                    <span className="text-[10px] text-slate-400 bg-slate-100 px-2 py-1 rounded-lg">
-                                      No Contact
-                                    </span>
-                                  )}
+                                      <i className="fa-solid fa-handshake text-[11px]"></i>
+                                      <span>{activePromise ? 'वादा बदलें' : '+ वादा जोड़ें'}</span>
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const msg =
+                                          activePromise && promiseState && promiseState !== 'cancelled' && promiseState !== 'fulfilled'
+                                            ? buildFeePromiseReminderMessage({
+                                                studentName: student.Student_Name || student.Student_ID,
+                                                className: getClassName(student.Class),
+                                                studentId: student.Student_ID,
+                                                fatherName: student.Father_Name,
+                                                promisedAmount: activePromise.promisedAmount,
+                                                promisedDate: activePromise.promisedDate,
+                                                pendingAmount,
+                                                isOverdue: promiseState === 'overdue',
+                                              })
+                                            : buildFeeDueReminderMessage({
+                                                studentName: student.Student_Name || student.Student_ID,
+                                                className: getClassName(student.Class),
+                                                studentId: student.Student_ID,
+                                                fatherName: student.Father_Name,
+                                                pendingAmount,
+                                              });
+                                        openWhatsappAlert(phone, msg, {
+                                          alertType: 'Fee Due Reminder',
+                                          recipientType: 'Parent',
+                                          recipientId: student.Student_ID,
+                                          recipientName: student.Student_Name || student.Student_ID,
+                                          classOrRole: getClassName(student.Class),
+                                          amount: pendingAmount,
+                                          sentBy: 'Manager',
+                                        });
+                                        setSentAlertIds((prev) => ({ ...prev, [alertKey]: true }));
+                                      }}
+                                      className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer ${
+                                        isSent
+                                          ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                                          : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                      }`}
+                                      title={phone ? `WhatsApp बकाया रिमाइंडर भेजें: ${phone}` : 'WhatsApp रिमाइंडर खोलें'}
+                                    >
+                                      <i className="fa-brands fa-whatsapp text-sm"></i>
+                                      <span>{isSent ? 'भेजा गया ✓' : 'WhatsApp'}</span>
+                                    </button>
+
+                                    {phone ? (
+                                      <a
+                                        href={`tel:${phone}`}
+                                        className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors"
+                                        title={`फीस याद दिलाने हेतु कॉल करें: ${phone}`}
+                                      >
+                                        <i className="fa-solid fa-phone text-[10px]"></i>
+                                        <span>Call</span>
+                                      </a>
+                                    ) : (
+                                      <span className="text-[10px] text-slate-400 bg-slate-100 px-2 py-1 rounded-lg">
+                                        No Contact
+                                      </span>
+                                    )}
+                                  </div>
                                 </div>
+
+                                {isEditingThisPromise && (
+                                  <form
+                                    onSubmit={async (e) => {
+                                      e.preventDefault();
+                                      const amt = Math.max(1, Number(inlinePromiseAmount) || pendingAmount);
+                                      setSavingInlinePromise(true);
+                                      try {
+                                        const res = await saveFeePromiseToServer({
+                                          studentId: student.Student_ID,
+                                          studentName: student.Student_Name || student.Student_ID,
+                                          className: getClassName(student.Class),
+                                          fatherName: student.Father_Name || '',
+                                          parentMobile: phone,
+                                          totalDueAtPromise: pendingAmount,
+                                          promisedAmount: amt,
+                                          promisedDate: inlinePromiseDate,
+                                          notes:
+                                            inlinePromiseNotes.trim() ||
+                                            'मैनेजर द्वारा बकाया सूची (कार्यालय/कॉल) से दर्ज',
+                                          createdBy: `Manager (${managerName})`,
+                                        });
+                                        onFeePromisesUpdated?.(res.promises);
+                                        setInlinePromiseStudentId(null);
+                                        setSyncNotice(
+                                          `🤝 ${student.Student_Name} का वादा (${formatPromiseDateDisplay(inlinePromiseDate)} · ₹${formatIndianCurrency(amt)}) सेव हो गया!`
+                                        );
+                                        setTimeout(() => setSyncNotice(null), 4000);
+                                      } finally {
+                                        setSavingInlinePromise(false);
+                                      }
+                                    }}
+                                    className="bg-indigo-50/70 border border-indigo-200 rounded-xl p-3 grid grid-cols-1 sm:grid-cols-12 gap-2 items-end text-xs"
+                                  >
+                                    <div className="sm:col-span-3">
+                                      <label className="block font-bold text-indigo-950 mb-1 text-[11px]">
+                                        वादा तारीख *
+                                      </label>
+                                      <input
+                                        type="date"
+                                        required
+                                        value={inlinePromiseDate}
+                                        onChange={(e) => setInlinePromiseDate(e.target.value)}
+                                        className="w-full px-2.5 py-1.5 rounded-lg border border-indigo-300 bg-white font-bold outline-none"
+                                      />
+                                    </div>
+                                    <div className="sm:col-span-3">
+                                      <label className="block font-bold text-indigo-950 mb-1 text-[11px]">
+                                        वादा राशि (₹) *
+                                      </label>
+                                      <input
+                                        type="number"
+                                        min="1"
+                                        required
+                                        value={inlinePromiseAmount}
+                                        onChange={(e) => setInlinePromiseAmount(e.target.value)}
+                                        className="w-full px-2.5 py-1.5 rounded-lg border border-indigo-300 bg-white font-black text-emerald-800 outline-none"
+                                      />
+                                    </div>
+                                    <div className="sm:col-span-4">
+                                      <label className="block font-bold text-indigo-950 mb-1 text-[11px]">
+                                        नोट (कॉल/बातचीत)
+                                      </label>
+                                      <input
+                                        type="text"
+                                        value={inlinePromiseNotes}
+                                        onChange={(e) => setInlinePromiseNotes(e.target.value)}
+                                        placeholder="जैसे: अभिभावक ने 5 ता. कहा"
+                                        className="w-full px-2.5 py-1.5 rounded-lg border border-indigo-300 bg-white outline-none"
+                                      />
+                                    </div>
+                                    <div className="sm:col-span-2 flex gap-1.5">
+                                      <button
+                                        type="submit"
+                                        disabled={savingInlinePromise}
+                                        className="flex-1 px-3 py-1.5 rounded-lg bg-indigo-700 hover:bg-indigo-800 text-white font-black cursor-pointer"
+                                      >
+                                        {savingInlinePromise ? '...' : 'सेव ✓'}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setInlinePromiseStudentId(null)}
+                                        className="px-2 py-1.5 rounded-lg bg-white border border-slate-300 text-slate-600 font-bold cursor-pointer"
+                                      >
+                                        ✕
+                                      </button>
+                                    </div>
+                                  </form>
+                                )}
                               </div>
                             );
                           })}

@@ -27,6 +27,9 @@ interface ParentUpiFeeSectionProps {
   siblings?: FamilySiblingOption[];
   familyTotalDue?: number;
   onSelectChild?: (student: Student) => void;
+  promisedAmount?: number;
+  externalPrefillAmount?: number | null;
+  externalPrefillEpoch?: number;
 }
 
 const FEE_HEAD_OPTIONS = [
@@ -55,6 +58,9 @@ export const ParentUpiFeeSection: React.FC<ParentUpiFeeSectionProps> = ({
   siblings = [],
   familyTotalDue,
   onSelectChild,
+  promisedAmount,
+  externalPrefillAmount,
+  externalPrefillEpoch,
 }) => {
   const hasMultipleChildren = siblings.length > 1;
   const effectiveFamilyDue = useMemo(
@@ -108,6 +114,15 @@ export const ParentUpiFeeSection: React.FC<ParentUpiFeeSectionProps> = ({
     }
     setPayerName(student.Father_Name || '');
   }, [student.Student_ID, pendingDue, monthlyTuition, student.Father_Name, payScope, hasMultipleChildren, effectiveFamilyDue, totalFamilyMonthly]);
+
+  useEffect(() => {
+    if (externalPrefillAmount && externalPrefillAmount > 0) {
+      setPayScope('single');
+      setAmount(String(externalPrefillAmount));
+    }
+  }, [externalPrefillAmount, externalPrefillEpoch]);
+
+  const activeScopeDue = payScope === 'all_family' && hasMultipleChildren ? effectiveFamilyDue : pendingDue;
 
   const loadAll = async () => {
     setLoadingPayments(true);
@@ -414,9 +429,30 @@ export const ParentUpiFeeSection: React.FC<ParentUpiFeeSectionProps> = ({
                 )}
               </div>
 
-              {/* Quick Amount Chips */}
-              <div className="w-full space-y-1.5">
-                <div className="text-[11px] font-bold text-slate-500">त्वरित राशि चुनें (Select Pay Amount):</div>
+              {/* Flexible Partial Payment & Quick Amount Selector */}
+              <div className="w-full space-y-2 bg-slate-50/90 border border-slate-200 rounded-xl p-2.5 text-left">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-black text-slate-700">
+                    💳 जितनी राशि चाहें उतनी जमा करें (Flexible Pay):
+                  </span>
+                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                    आंशिक भुगतान चालू
+                  </span>
+                </div>
+
+                {/* Live Custom Amount Box right above QR action */}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-black text-slate-600 pl-1">₹</span>
+                  <input
+                    type="number"
+                    min="1"
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                    placeholder="अपनी मर्जी की राशि लिखें"
+                    className="flex-1 px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-black text-sm text-[#0c2340] outline-none focus:border-blue-900 tabular-nums"
+                  />
+                </div>
+
                 <div className="flex flex-wrap justify-center gap-1.5 tabular-nums">
                   {payScope === 'all_family' && hasMultipleChildren ? (
                     <>
@@ -430,7 +466,20 @@ export const ParentUpiFeeSection: React.FC<ParentUpiFeeSectionProps> = ({
                               : 'bg-rose-50 text-rose-800 border-rose-200 hover:bg-rose-100'
                           }`}
                         >
-                          पूरा परिवार बकाया: ₹{effectiveFamilyDue.toLocaleString('en-IN')}
+                          पूरा परिवार: ₹{effectiveFamilyDue.toLocaleString('en-IN')}
+                        </button>
+                      )}
+                      {effectiveFamilyDue >= 200 && (
+                        <button
+                          type="button"
+                          onClick={() => setAmount(String(Math.ceil(effectiveFamilyDue / 2)))}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
+                            Number(amount) === Math.ceil(effectiveFamilyDue / 2)
+                              ? 'bg-[#0c2340] text-amber-300 border-[#0c2340]'
+                              : 'bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100'
+                          }`}
+                        >
+                          50%: ₹{Math.ceil(effectiveFamilyDue / 2).toLocaleString('en-IN')}
                         </button>
                       )}
                       {totalFamilyMonthly > 0 && (
@@ -443,12 +492,25 @@ export const ParentUpiFeeSection: React.FC<ParentUpiFeeSectionProps> = ({
                               : 'bg-blue-50 text-blue-900 border-blue-200 hover:bg-blue-100'
                           }`}
                         >
-                          1 माह (सभी बच्चे): ₹{totalFamilyMonthly.toLocaleString('en-IN')}
+                          1 माह (सभी): ₹{totalFamilyMonthly.toLocaleString('en-IN')}
                         </button>
                       )}
                     </>
                   ) : (
                     <>
+                      {promisedAmount && promisedAmount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setAmount(String(promisedAmount))}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold border cursor-pointer transition-colors ${
+                            Number(amount) === promisedAmount
+                              ? 'bg-[#0c2340] text-amber-300 border-[#0c2340]'
+                              : 'bg-amber-100 text-amber-950 border-amber-300 hover:bg-amber-200'
+                          }`}
+                        >
+                          🤝 वादा राशि: ₹{promisedAmount.toLocaleString('en-IN')}
+                        </button>
+                      )}
                       {pendingDue > 0 && (
                         <button
                           type="button"
@@ -460,6 +522,19 @@ export const ParentUpiFeeSection: React.FC<ParentUpiFeeSectionProps> = ({
                           }`}
                         >
                           पूरा बकाया: ₹{pendingDue.toLocaleString('en-IN')}
+                        </button>
+                      )}
+                      {pendingDue >= 200 && (
+                        <button
+                          type="button"
+                          onClick={() => setAmount(String(Math.ceil(pendingDue / 2)))}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
+                            Number(amount) === Math.ceil(pendingDue / 2)
+                              ? 'bg-[#0c2340] text-amber-300 border-[#0c2340]'
+                              : 'bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100'
+                          }`}
+                        >
+                          आधा (50%): ₹{Math.ceil(pendingDue / 2).toLocaleString('en-IN')}
                         </button>
                       )}
                       {monthlyTuition > 0 && (
@@ -477,6 +552,20 @@ export const ParentUpiFeeSection: React.FC<ParentUpiFeeSectionProps> = ({
                       )}
                     </>
                   )}
+                  {[500, 1000].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setAmount(String(preset))}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
+                        Number(amount) === preset
+                          ? 'bg-[#0c2340] text-amber-300 border-[#0c2340]'
+                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                      }`}
+                    >
+                      ₹{preset.toLocaleString('en-IN')}
+                    </button>
+                  ))}
                 </div>
               </div>
 
@@ -560,7 +649,7 @@ export const ParentUpiFeeSection: React.FC<ParentUpiFeeSectionProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
-                  भुगतान राशि (Amount ₹) *
+                  भुगतान राशि (जितनी चाहें उतनी ₹) *
                 </label>
                 <input
                   type="number"
@@ -570,6 +659,13 @@ export const ParentUpiFeeSection: React.FC<ParentUpiFeeSectionProps> = ({
                   onChange={(e) => setAmount(e.target.value)}
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 font-black text-sm text-emerald-800 outline-none focus:border-blue-900 tabular-nums"
                 />
+                {activeScopeDue > 0 && numericAmount > 0 && (
+                  <p className="text-[10px] font-bold mt-1 text-slate-600 tabular-nums">
+                    {numericAmount < activeScopeDue
+                      ? `💡 ₹${numericAmount.toLocaleString('en-IN')} जमा करने के बाद शेष बकाया ₹${(activeScopeDue - numericAmount).toLocaleString('en-IN')} बचेगा`
+                      : '✅ इससे आपका पूरा बकाया चुकता हो जाएगा!'}
+                  </p>
+                )}
               </div>
 
               <div>

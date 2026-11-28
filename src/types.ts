@@ -430,3 +430,23 @@ export interface AcademicsConfigSnapshot {
   updatedBy?: string;
 }
 
+export type FeePromiseStatus = 'Pending' | 'Fulfilled' | 'Overdue' | 'Cancelled';
+
+export interface FeePromiseRecord {
+  id: string;
+  studentId: string;
+  studentName: string;
+  className: string;
+  fatherName?: string;
+  parentMobile: string;
+  totalDueAtPromise: number;
+  promisedAmount: number;
+  promisedDate: string; // YYYY-MM-DD
+  notes?: string;
+  status: FeePromiseStatus;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  fulfilledAt?: string;
+  lastRemindedDate?: string; // YYYY-MM-DD
+}
