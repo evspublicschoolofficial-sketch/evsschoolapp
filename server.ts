@@ -683,6 +683,17 @@ async function forwardToGoogleAppsScript(payload: any) {
           if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
         }
       } catch {}
+    } else if (formattedPayload.action === 'saveAcademicsConfig') {
+      try {
+        const cfgStr = typeof formattedPayload.config === 'string' ? formattedPayload.config : JSON.stringify(formattedPayload.config || formattedPayload);
+        const getUrl = `${targetUrl}?action=saveAcademicsConfig&config=${encodeURIComponent(cfgStr)}`;
+        if (getUrl.length < 7500) {
+          const gRes = await fetch(getUrl, { redirect: 'follow', signal: AbortSignal.timeout(15000) });
+          const gText = await gRes.text();
+          const gCheck = parseAppsScriptResponse(gText);
+          if (gRes.ok && gCheck.ok) return { ok: true, response: gText };
+        }
+      } catch {}
     } else if (formattedPayload.action === 'saveFeeWaiver') {
       try {
         const getUrl = `${targetUrl}?action=saveFeeWaiver&studentId=${encodeURIComponent(formattedPayload.studentId || '')}&isFree=${encodeURIComponent(String(Boolean(formattedPayload.isFree)))}&reason=${encodeURIComponent(formattedPayload.reason || '')}&monthlyDiscount=${encodeURIComponent(String(Math.max(0, Math.round(Number(formattedPayload.monthlyDiscount) || 0))))}&updatedAt=${encodeURIComponent(String(formattedPayload.updatedAt || Date.now()))}`;
@@ -821,6 +832,7 @@ let lastSyllabusSheetSync = 0;
 let lastHolidaySheetSync = 0;
 let lastWeeklyTestSheetSync = 0;
 let lastHallPassSheetSync = 0;
+let lastAcademicsSheetSync = 0;
 
 const SERVER_SPREADSHEET_ID = '1AHQowKTK_xrPHTzH85nR3Hm3PsL6J5F7_KTZ7QytERU';
 const SERVER_DATESHEET_COLS = ['Play', 'M1', 'M2', 'M3', 'Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6 & 7', 'Class 8'];
@@ -5526,6 +5538,116 @@ async function startServer() {
       });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err?.message || 'Could not save hall pass config' });
+    }
+  });
+
+  // =========================================================================
+  // ACADEMICS, SESSIONS, SECTIONS, TIMETABLE & PROMOTION PERSISTENCE
+  // =========================================================================
+  const ACADEMICS_CONFIG_FILE = '/tmp/evs_academics_config.json';
+  let academicsConfigStore: any = null;
+  try {
+    if (fs.existsSync(ACADEMICS_CONFIG_FILE)) {
+      const rawAc = JSON.parse(fs.readFileSync(ACADEMICS_CONFIG_FILE, 'utf-8'));
+      if (rawAc && typeof rawAc === 'object') {
+        academicsConfigStore = rawAc;
+      }
+    }
+  } catch {}
+
+  const saveAcademicsConfigCache = () => {
+    try {
+      fs.writeFileSync(ACADEMICS_CONFIG_FILE, JSON.stringify(academicsConfigStore, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Could not write academics config cache file:', e);
+    }
+  };
+
+  async function syncAcademicsConfigFromGoogleSheet(force = false, overrideUrl?: string): Promise<boolean> {
+    const now = Date.now();
+    if (!force && now - lastAcademicsSheetSync < 25000) return false;
+    lastAcademicsSheetSync = now;
+    try {
+      const baseUrl = overrideUrl || currentAppsScriptUrl;
+      const url = `${baseUrl}?action=getAcademicsConfig&_t=${now}`;
+      const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(9500) });
+      if (!res.ok) return false;
+      const text = await res.text();
+      if (!text || text.trim().startsWith('<')) return false;
+      const json: any = JSON.parse(text);
+      if (!json || json.status === 'error' || !json.config || typeof json.config !== 'object') {
+        return false;
+      }
+      const sc = json.config;
+      academicsConfigStore = {
+        ...(academicsConfigStore || {}),
+        activeSessionId: sc.activeSessionId || academicsConfigStore?.activeSessionId || '2026-27',
+        sessions: Array.isArray(sc.sessions) && sc.sessions.length > 0 ? sc.sessions : academicsConfigStore?.sessions || [],
+        subjects: Array.isArray(sc.subjects) && sc.subjects.length > 0 ? sc.subjects : academicsConfigStore?.subjects || [],
+        periodSets: Array.isArray(sc.periodSets) && sc.periodSets.length > 0 ? sc.periodSets : academicsConfigStore?.periodSets || [],
+        sections: Array.isArray(sc.sections) && sc.sections.length > 0 ? sc.sections : academicsConfigStore?.sections || [],
+        timetable: Array.isArray(sc.timetable) ? sc.timetable : academicsConfigStore?.timetable || [],
+        substitutions: Array.isArray(sc.substitutions) ? sc.substitutions : academicsConfigStore?.substitutions || [],
+        studentOverrides:
+          sc.studentOverrides && typeof sc.studentOverrides === 'object'
+            ? sc.studentOverrides
+            : academicsConfigStore?.studentOverrides || {},
+        promotionLogs: Array.isArray(sc.promotionLogs) ? sc.promotionLogs : academicsConfigStore?.promotionLogs || [],
+        updatedAt: sc.updatedAt || academicsConfigStore?.updatedAt || '',
+        updatedBy: sc.updatedBy || academicsConfigStore?.updatedBy || '',
+      };
+      saveAcademicsConfigCache();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  app.get('/api/academics-config', async (req, res) => {
+    const force = req.query.fresh === '1' || req.query.refresh === '1';
+    const targetUrl = resolveTargetAppsScriptUrl(req);
+    const sheetSynced = await syncAcademicsConfigFromGoogleSheet(force, targetUrl);
+    return res.json({
+      success: true,
+      sheetSynced,
+      config: academicsConfigStore,
+    });
+  });
+
+  app.post('/api/academics-config', async (req, res) => {
+    try {
+      const targetUrl = resolveTargetAppsScriptUrl(req);
+      const incoming = req.body?.config || req.body || {};
+      academicsConfigStore = {
+        ...incoming,
+        updatedAt: getLocalTimestampIST(),
+      };
+      saveAcademicsConfigCache();
+
+      const gasResult = await forwardToGoogleAppsScript({
+        action: 'saveAcademicsConfig',
+        config: academicsConfigStore,
+        appsScriptUrl: targetUrl,
+      });
+
+      const broadcastMsg = JSON.stringify({
+        type: 'APP_DATA_UPDATED',
+        entity: 'academics',
+        action: 'updateAcademicsConfig',
+        timestamp: Date.now(),
+      });
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) client.send(broadcastMsg);
+      }
+
+      return res.json({
+        success: true,
+        sheetSynced: gasResult.ok,
+        sheetError: gasResult.ok ? undefined : gasResult.error,
+        config: academicsConfigStore,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Could not save academics config' });
     }
   });
 

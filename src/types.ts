@@ -309,3 +309,124 @@ export interface HallPassConfig {
   datesheetRows?: HallPassDatesheetRow[];
   updatedAt?: string;
 }
+
+// =========================================================================
+// ACADEMICS, SESSIONS, SECTIONS, SUBJECTS & TIMETABLE ERP INTERFACES
+// =========================================================================
+
+export type WeekdayKey = 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday';
+
+export interface AcademicSession {
+  id: string; // e.g. "2026-27"
+  name: string; // e.g. "Session 2026-27"
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD
+  isActive: boolean;
+  createdAt?: string;
+}
+
+export interface AcademicSubject {
+  id: string;
+  name: string;
+  code: string;
+  isElective?: boolean;
+  colorHex?: string;
+}
+
+export interface ClassSectionConfig {
+  id: string; // e.g. "C10::A"
+  classKey: string; // e.g. "C10" or class name
+  sectionName: string; // e.g. "A", "B"
+  roomNumber?: string;
+  classTeacherId?: string;
+  classTeacherName?: string;
+  subjectIds?: string[]; // assigned subject IDs for this class-section
+  subjectTeachers?: Record<string, string>; // subjectId -> teacher User_ID
+}
+
+export interface PeriodSlot {
+  id: string;
+  periodNumber: number; // 1, 2, 3... (0 for lunch/break)
+  label: string; // e.g. "Period 1", "Lunch Break"
+  startTime: string; // "08:00"
+  endTime: string; // "08:40"
+  isBreak?: boolean;
+}
+
+export interface PeriodSetConfig {
+  id: string;
+  name: string; // e.g. "Summer Morning Shift"
+  assignedClassKeys: string[]; // e.g. ["C1", "C2", ...] or ["ALL"]
+  slots: PeriodSlot[];
+}
+
+export interface TimetableEntry {
+  id: string; // e.g. "2026-27::C10::A::Monday::p1"
+  sessionId: string;
+  classKey: string;
+  sectionName: string;
+  day: WeekdayKey;
+  periodId: string;
+  subjectId: string;
+  subjectName: string;
+  teacherId: string;
+  teacherName: string;
+  roomNumber?: string;
+}
+
+export interface TeacherSubstitution {
+  id: string;
+  sessionId: string;
+  date: string; // YYYY-MM-DD
+  day: WeekdayKey;
+  periodId: string;
+  periodLabel: string;
+  classKey: string;
+  sectionName: string;
+  subjectName: string;
+  originalTeacherId: string;
+  originalTeacherName: string;
+  substituteTeacherId: string;
+  substituteTeacherName: string;
+  reason?: string;
+  createdAt?: string;
+}
+
+export interface StudentAcademicOverride {
+  studentId: string;
+  classKey: string;
+  sectionName: string;
+  sessionId: string;
+  status: 'Active' | 'Promoted' | 'Detained' | 'Passout';
+  updatedAt?: string;
+}
+
+export interface PromotionLogEntry {
+  id: string;
+  fromSession: string;
+  toSession: string;
+  fromClass: string;
+  fromSection: string;
+  toClass: string;
+  toSection: string;
+  studentCount: number;
+  studentIds: string[];
+  actionType: 'Promote' | 'Detain' | 'Passout';
+  performedBy: string;
+  performedAt: string;
+}
+
+export interface AcademicsConfigSnapshot {
+  sessions: AcademicSession[];
+  activeSessionId: string;
+  subjects: AcademicSubject[];
+  sections: ClassSectionConfig[];
+  periodSets: PeriodSetConfig[];
+  timetable: TimetableEntry[];
+  substitutions: TeacherSubstitution[];
+  studentOverrides: Record<string, StudentAcademicOverride>;
+  promotionLogs: PromotionLogEntry[];
+  updatedAt?: string;
+  updatedBy?: string;
+}
+

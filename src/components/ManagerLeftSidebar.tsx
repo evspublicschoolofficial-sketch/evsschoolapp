@@ -8,6 +8,7 @@ export type ManagerTabId =
   | 'teacherPerformance'
   | 'reportCards'
   | 'hallPass'
+  | 'academics'
   | 'fees'
   | 'autoTransport'
   | 'users'
@@ -98,6 +99,16 @@ export const MANAGER_MENU_ITEMS: ManagerMenuItemMeta[] = [
     accentBg: 'bg-blue-50',
     accentText: 'text-blue-900',
     keywords: 'hall pass admit card datesheet seating plan room हॉल पास सीटिंग प्लान परीक्षा',
+  },
+  {
+    id: 'academics',
+    category: 'academics',
+    title: 'Academics व टाइमटेबल',
+    subtitle: 'सत्र, सेक्शन, पीरियड, टाइमटेबल व प्रमोशन',
+    iconClass: 'fa-solid fa-calendar-week',
+    accentBg: 'bg-indigo-50',
+    accentText: 'text-indigo-800',
+    keywords: 'academics timetable session section subject period promote टाइमटेबल सेक्शन प्रमोशन',
   },
   {
     id: 'fees',
@@ -257,6 +268,8 @@ export const ManagerLeftSidebar: React.FC<ManagerLeftSidebarProps> = ({
         return counts.reportCardsPending > 0 ? `${counts.reportCardsPending} Pending` : 'PDF';
       case 'hallPass':
         return '9/A4';
+      case 'academics':
+        return 'ERP';
       case 'parentReviews':
         return `${counts.parentReviews}`;
       default:

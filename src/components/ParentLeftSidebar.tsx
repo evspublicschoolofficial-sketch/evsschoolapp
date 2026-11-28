@@ -11,6 +11,7 @@ export type ParentSectionId =
   | 'profile'
   | 'reportCard'
   | 'hallPass'
+  | 'timetable'
   | 'reviews';
 
 export interface ParentMenuItemMeta {
@@ -116,9 +117,19 @@ export const PARENT_MENU_ITEMS: ParentMenuItemMeta[] = [
     keywords: 'hall pass admit card exam datesheet हॉल पास परीक्षा',
   },
   {
+    id: 'timetable',
+    titleEn: '10. Class Timetable',
+    titleHi: '10. कक्षा टाइमटेबल व शिक्षक',
+    subtitleHi: 'आज की कक्षाएं, पीरियड व विषय-अध्यापक',
+    iconClass: 'fa-solid fa-calendar-week',
+    accentBg: 'bg-indigo-50',
+    accentText: 'text-indigo-800',
+    keywords: 'timetable class schedule periods teachers टाइमटेबल कक्षा',
+  },
+  {
     id: 'reviews',
-    titleEn: '10. School Review',
-    titleHi: '10. स्कूल रिव्यू दें',
+    titleEn: '11. School Review',
+    titleHi: '11. स्कूल रिव्यू दें',
     subtitleHi: 'विद्यालय के बारे में अपना अनुभव लिखें',
     iconClass: 'fa-solid fa-comment-dots',
     accentBg: 'bg-emerald-50',

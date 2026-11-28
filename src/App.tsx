@@ -17,7 +17,16 @@ import {
   EVS_SEEN_ANNOUNCEMENTS_KEY,
 } from './utils/sirenAudio';
 import { InstallAppModal } from './components/InstallAppModal';
-import { ExamMarkRecord, HallPassConfig, ReportCardRemarkRecord, SchoolNotice, StaffAttendanceRecord, WeeklyTestRecord } from './types';
+import { AcademicsConfigSnapshot, ExamMarkRecord, HallPassConfig, ReportCardRemarkRecord, SchoolNotice, StaffAttendanceRecord, WeeklyTestRecord } from './types';
+import {
+  ACADEMICS_CONFIG_STORAGE_KEY,
+  applyAcademicOverridesToStudents,
+  fetchAcademicsConfigFromServer,
+  invalidateAcademicsCache,
+  loadLocalAcademicsConfig,
+  saveAcademicsConfigToServer,
+  syncAcademicsConfigFromSheetWithStatus,
+} from './utils/academicsHelper';
 import {
   fetchHallPassConfigFromServer,
   HALL_PASS_CONFIG_STORAGE_KEY,
@@ -122,6 +131,9 @@ const ExamSeatingPlanView = lazyWithRetry(() => import('./components/ExamSeating
 const ParentHallPassView = lazyWithRetry(() => import('./components/ParentHallPassView').then((m) => ({ default: m.ParentHallPassView })));
 const ParentReviewSection = lazyWithRetry(() => import('./components/ParentReviewSection').then((m) => ({ default: m.ParentReviewSection })));
 const ManagerParentReviewsView = lazyWithRetry(() => import('./components/ManagerParentReviewsView').then((m) => ({ default: m.ManagerParentReviewsView })));
+const AcademicsManagerView = lazyWithRetry(() => import('./components/AcademicsManagerView').then((m) => ({ default: m.AcademicsManagerView })));
+const TeacherTimetableView = lazyWithRetry(() => import('./components/TeacherTimetableView').then((m) => ({ default: m.TeacherTimetableView })));
+const ParentTimetableView = lazyWithRetry(() => import('./components/ParentTimetableView').then((m) => ({ default: m.ParentTimetableView })));
 
 // Non-inlined static asset paths (prevents 1.4 MB image bloat inside main JS bundle)
 const studentFarahPhoto = '/assets/student_farah_1789483069291.jpg';
@@ -2168,6 +2180,7 @@ export default function App() {
           'teacherPerformance',
           'reportCards',
           'hallPass',
+          'academics',
           'parentReviews',
         ].includes(saved)
       ) {
@@ -2176,6 +2189,42 @@ export default function App() {
     } catch {}
     return 'home';
   });
+
+  const [academicsConfig, setAcademicsConfig] = useState<AcademicsConfigSnapshot>(() =>
+    loadLocalAcademicsConfig()
+  );
+
+  const handleSaveAcademicsConfig = async (nextConfig: AcademicsConfigSnapshot) => {
+    setAcademicsConfig(nextConfig);
+    const res = await saveAcademicsConfigToServer(
+      nextConfig,
+      managerUser?.Name || teacherUser?.Name || 'Manager'
+    );
+    if (res?.config) {
+      setAcademicsConfig(res.config);
+    }
+    return res;
+  };
+
+  const handleRefreshAcademicsFromSheet = async (): Promise<boolean> => {
+    const res = await syncAcademicsConfigFromSheetWithStatus();
+    if (res?.config) {
+      setAcademicsConfig(res.config);
+      if (
+        res.config.studentOverrides &&
+        Object.keys(res.config.studentOverrides).length > 0
+      ) {
+        setStudents((prev) =>
+          applyAcademicOverridesToStudents(prev, res.config.studentOverrides)
+        );
+      }
+    }
+    return Boolean(res?.sheetSynced);
+  };
+
+  const handleApplyAcademicOverridesToStudents = (overrides: Record<string, any>) => {
+    setStudents((prev) => applyAcademicOverridesToStudents(prev, overrides));
+  };
 
   useEffect(() => {
     try {
@@ -2448,7 +2497,10 @@ export default function App() {
         const uniqueCustom = customStudents.filter(
           (s) => !parsedIdSet.has(String(s.Student_ID || '').toLowerCase().trim())
         );
-        const mergedStudents = [...uniqueCustom, ...enrichedValid];
+        const mergedStudents = applyAcademicOverridesToStudents(
+          [...uniqueCustom, ...enrichedValid],
+          loadLocalAcademicsConfig().studentOverrides
+        );
 
         setStudents(mergedStudents);
         saveToPhoneMemory(CACHE_KEY_STUDENTS, mergedStudents);
@@ -4419,6 +4471,19 @@ export default function App() {
         syncFeeWaiversWithServer();
       } else if (event.entity === 'parent_reviews') {
         refreshParentReviews(true);
+      } else if (event.entity === 'academics') {
+        invalidateAcademicsCache();
+        fetchAcademicsConfigFromServer(true)
+          .then((cfg) => {
+            if (cfg) {
+              setAcademicsConfig(cfg);
+              if (cfg.studentOverrides && Object.keys(cfg.studentOverrides).length > 0) {
+                setStudents((prev) => applyAcademicOverridesToStudents(prev, cfg.studentOverrides));
+              }
+            }
+          })
+          .catch(() => {});
+        return;
       } else if (event.entity === 'teacher_qr_attendance_access' || event.entity === 'report_card_workflow') {
         if (Date.now() - lastQrAccessMutationAtRef.current < 2500) {
           return;
@@ -4461,6 +4526,18 @@ export default function App() {
 
     // Load Manager-controlled Teacher QR Attendance permission cleanly from cache or server once per session
     syncTeacherQrAttendanceAccess(false, false);
+
+    // Sync Academics, Sessions & Timetable configuration cleanly on load
+    fetchAcademicsConfigFromServer(true)
+      .then((cfg) => {
+        if (isMounted && cfg) {
+          setAcademicsConfig(cfg);
+          if (cfg.studentOverrides && Object.keys(cfg.studentOverrides).length > 0) {
+            setStudents((prev) => applyAcademicOverridesToStudents(prev, cfg.studentOverrides));
+          }
+        }
+      })
+      .catch(() => {});
 
     return () => {
       isMounted = false;
@@ -11501,6 +11578,42 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                     </div>
                   </div>
                 )}
+
+                {/* VIEW 9: CLASS TIMETABLE & SUBJECT TEACHERS */}
+                {parentActiveSection === 'timetable' && selectedStudent && (
+                  <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-6 space-y-4 animate-fadeIn">
+                    <Suspense
+                      fallback={
+                        <div className="p-10 text-center text-slate-500 font-bold">
+                          <i className="fa-solid fa-circle-notch fa-spin text-blue-900 mr-2"></i>
+                          कक्षा टाइमटेबल लोड हो रहा है...
+                        </div>
+                      }
+                    >
+                      <ParentTimetableView
+                        config={academicsConfig}
+                        student={selectedStudent}
+                        users={usersList}
+                        getClassName={getClassName}
+                        currentLang={currentLang}
+                      />
+                    </Suspense>
+
+                    <div className="pt-4 border-t border-slate-200 flex justify-center">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setParentActiveSection('overview');
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        className="px-5 py-2.5 bg-[#0c2340] hover:bg-[#10316b] text-amber-300 font-bold rounded-xl text-xs sm:text-sm flex items-center gap-2 shadow-sm cursor-pointer transition-all active:scale-95"
+                      >
+                        <i className="fa-solid fa-arrow-left"></i>
+                        <span>← वापस मुख्य कार्ड्स पर जाएं (Back to Cards)</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -13508,6 +13621,26 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                 />
               </Suspense>
             )}
+
+            {/* TAB 12: MY TIMETABLE, WORKLOAD & FREE TEACHER FINDER */}
+            {teacherPortalTab === 'timetable' && (
+              <Suspense
+                fallback={
+                  <div className="bg-white rounded-3xl p-12 text-center text-slate-500 font-bold border border-slate-200">
+                    <i className="fa-solid fa-circle-notch fa-spin text-amber-500 mr-2 text-2xl"></i>
+                    <span>मेरा टाइमटेबल लोड हो रहा है...</span>
+                  </div>
+                }
+              >
+                <TeacherTimetableView
+                  config={academicsConfig}
+                  teacherUser={teacherUser}
+                  allUsers={usersList}
+                  getClassName={getClassName}
+                  currentLang={currentLang}
+                />
+              </Suspense>
+            )}
           </div>
         )}
 
@@ -13679,6 +13812,8 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
               ? 'PDF'
               : managerTab === 'hallPass'
               ? '9/A4'
+              : managerTab === 'academics'
+              ? `ERP · ${academicsConfig.activeSessionId}`
               : managerTab === 'parentReviews'
               ? `${parentReviewsList.length}`
               : '';
@@ -15835,6 +15970,32 @@ _E.V.S. Public School - Striving for Character & Academic Excellence_`;
                   students={students}
                   getClassName={getClassName}
                   getStudentPhoto={getStudentPhoto}
+                />
+              </Suspense>
+            )}
+
+            {/* VIEW 14: ACADEMICS, SESSIONS, SECTIONS, TIMETABLE & PROMOTION ERP */}
+            {managerTab === 'academics' && (
+              <Suspense
+                fallback={
+                  <div className="bg-white rounded-3xl p-12 text-center text-slate-500 font-bold border border-slate-200">
+                    <i className="fa-solid fa-circle-notch fa-spin text-amber-500 mr-2 text-2xl"></i>
+                    <span>Academics व टाइमटेबल मॉड्यूल लोड हो रहा है...</span>
+                  </div>
+                }
+              >
+                <AcademicsManagerView
+                  config={academicsConfig}
+                  onSaveConfig={handleSaveAcademicsConfig}
+                  onRefreshFromSheet={handleRefreshAcademicsFromSheet}
+                  onOpenSheetSetup={() => setSheetSyncModalOpen(true)}
+                  students={students}
+                  users={usersList}
+                  staffAttendanceList={staffAttendanceList}
+                  classMap={classMap}
+                  getClassName={getClassName}
+                  managerName={managerUser?.Name || 'प्रबंधक'}
+                  onPromoteStudentsApplied={handleApplyAcademicOverridesToStudents}
                 />
               </Suspense>
             )}

@@ -362,7 +362,7 @@ function menuCreateFeatureBackupTabs() {
   var ss = getSpreadsheet();
   ensureFeatureBackupTabs(ss);
   try {
-    SpreadsheetApp.getUi().alert("✅ 'WhatsApp_Alert_Logs', 'Staff_Salary_Config', 'Staff_Salary_Payroll', 'UPI_Settings', 'UPI_Payments', 'Exam_Marks', 'Report_Cards_Backup', 'Weekly_Tests', 'Teacher_Performance', 'Syllabus_Tracker', 'School_Holidays' सभी बैकअप टैब Google Sheet में तैयार हैं!");
+    SpreadsheetApp.getUi().alert("✅ 'WhatsApp_Alert_Logs', 'Staff_Salary_Config', 'Staff_Salary_Payroll', 'UPI_Settings', 'UPI_Payments', 'Exam_Marks', 'Report_Cards_Backup', 'Weekly_Tests', 'Teacher_Performance', 'Syllabus_Tracker', 'School_Holidays', 'Academics_Config', 'Class_Sections', 'Class_Timetable', 'Teacher_Substitutions' सभी टैब Google Sheet में तैयार हैं!");
   } catch(e) {}
 }
 
@@ -459,6 +459,10 @@ function ensureFeatureBackupTabs(ss) {
   ensureTabSafe_(ss, "Exam_Seating_History", ["Exam Seating History", "Seating_History"], ["Archive_Key", "Exam_Date", "Exam_Shift", "Slot_Key", "Room_No", "Wing", "Bench_No", "Seat_Position", "Student_ID", "Roll_Number", "Student_Name", "Class", "Invigilator", "Exam_Type", "Session", "Saved_At", "Confirmed_By", "Status"], added);
   ensureTabSafe_(ss, "Fee_Waivers", ["Fee Waivers", "FeeWaivers"], ["Student_ID", "Is_Free", "Reason", "Updated_At", "Updated_TS", "Monthly_Discount"], added);
   ensureTabSafe_(ss, "Parent_Reviews", ["Parent Reviews", "ParentReviews"], ["Review_ID", "Student_ID", "Student_Name", "Class_Name", "Parent_Name", "Father_Name", "Parent_Mobile", "Rating", "Highlight_Category", "Review_Text", "Parent_Photo", "Marketing_Consent", "Status", "Featured", "Source", "Created_At", "Updated_At", "Survey_Answers_JSON"], added);
+  ensureTabSafe_(ss, "Academics_Config", ["Academics Config", "AcademicsConfig"], ["Config_Key", "Active_Session_ID", "Sessions_JSON", "Subjects_JSON", "Period_Sets_JSON", "Student_Overrides_JSON", "Promotion_Logs_JSON", "Updated_At", "Updated_By"], added);
+  ensureTabSafe_(ss, "Class_Sections", ["Class Sections", "ClassSections"], ["Section_Key", "Class_Key", "Section_Name", "Room_Number", "Class_Teacher_ID", "Class_Teacher_Name", "Subject_IDs_JSON", "Subject_Teachers_JSON"], added);
+  ensureTabSafe_(ss, "Class_Timetable", ["Class Timetable", "ClassTimetable", "Timetable"], ["Slot_ID", "Session_ID", "Class_Key", "Section_Name", "Day", "Period_ID", "Subject_ID", "Subject_Name", "Teacher_ID", "Teacher_Name", "Room_Number"], added);
+  ensureTabSafe_(ss, "Teacher_Substitutions", ["Teacher Substitutions", "Substitutions"], ["Sub_ID", "Session_ID", "Date", "Day", "Period_ID", "Period_Label", "Class_Key", "Section_Name", "Subject_Name", "Original_Teacher_ID", "Original_Teacher_Name", "Substitute_Teacher_ID", "Substitute_Teacher_Name", "Reason", "Created_At"], added);
   return added;
 }
 
@@ -755,9 +759,12 @@ function doGet(e) {
   if (action === "getTeacherProfiles") {
     return handleGetTeacherProfiles(ss);
   }
+  if (action === "getAcademicsConfig") {
+    return handleGetAcademicsConfig(ss);
+  }
 
   // 10. GET FALLBACK: Delegate write actions when called via GET query parameters
-  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "saveTeacherProfile" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveReportCardDraft" || action === "saveReportCardAccess" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig" || action === "saveExamDatesheet" || action === "saveExamSeatingPlan" || action === "saveExamSeatingDraft" || action === "saveExamSeatingRoomDispatch" || action === "deleteExamSeatingHistory" || action === "saveFeeWaiver" || action === "saveFeeWaiversBatch" || action === "saveParentReview" || action === "updateParentReviewStatus" || action === "deleteParentReview") {
+  if (action === "saveRouteStops" || action === "addRouteStop" || action === "saveFeeMaster" || action === "addHomework" || action === "deleteHomework" || action === "addBehavior" || action === "updateHomeworkTracker" || action === "addFee" || action === "addStudent" || action === "deleteStudent" || action === "editFee" || action === "deleteFee" || action === "recordStaffAttendance" || action === "addStaffAttendance" || action === "assignTeacherClass" || action === "saveTeacherProfile" || action === "logWhatsappAlert" || action === "saveStaffSalaryConfig" || action === "saveStaffSalaryPayroll" || action === "saveUpiSettings" || action === "saveUpiPayment" || action === "verifyUpiPayment" || action === "syncAllUpiPayments" || action === "saveExamMarksBatch" || action === "deleteExamMark" || action === "saveReportCardMeta" || action === "syncReportCardsBatch" || action === "saveReportCardDraft" || action === "saveReportCardAccess" || action === "saveWeeklyTest" || action === "saveWeeklyTestsBatch" || action === "deleteWeeklyTest" || action === "saveTeacherPerformance" || action === "saveSyllabusTopic" || action === "deleteSyllabusTopic" || action === "saveSchoolHoliday" || action === "deleteSchoolHoliday" || action === "saveHallPassConfig" || action === "saveExamDatesheet" || action === "saveExamSeatingPlan" || action === "saveExamSeatingDraft" || action === "saveExamSeatingRoomDispatch" || action === "deleteExamSeatingHistory" || action === "saveFeeWaiver" || action === "saveFeeWaiversBatch" || action === "saveParentReview" || action === "updateParentReviewStatus" || action === "deleteParentReview" || action === "saveAcademicsConfig") {
     return doPost(e);
   }
 
@@ -1507,6 +1514,11 @@ function doPost(e) {
     }
     if (action === "deleteParentReview") {
       return handleDeleteRowById_(ss, "Parent_Reviews", data.reviewId || data.id);
+    }
+
+    // 19. ACADEMICS, SESSIONS, SECTIONS, TIMETABLE & PROMOTION (4-Tab 2-Way Sync)
+    if (action === "saveAcademicsConfig") {
+      return handleSaveAcademicsConfig(ss, data);
     }
 
     return ContentService.createTextOutput(JSON.stringify({
@@ -5044,6 +5056,259 @@ function handleUpdateParentReviewStatus(ss, data) {
   return ContentService.createTextOutput(JSON.stringify({
     status: "not_found",
     message: "Review ID not found in sheet"
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+// =========================================================================
+// FEATURE 19: ACADEMICS, SESSIONS, SECTIONS, TIMETABLE & PROMOTION (2-WAY SYNC)
+// =========================================================================
+function handleGetAcademicsConfig(ss) {
+  ensureFeatureBackupTabs(ss);
+  var cfgSheet = findExistingSheet_(ss, ["Academics_Config", "Academics Config", "AcademicsConfig"]);
+  var secSheet = findExistingSheet_(ss, ["Class_Sections", "Class Sections", "ClassSections"]);
+  var ttSheet = findExistingSheet_(ss, ["Class_Timetable", "Class Timetable", "ClassTimetable", "Timetable"]);
+  var subSheet = findExistingSheet_(ss, ["Teacher_Substitutions", "Teacher Substitutions", "Substitutions"]);
+
+  var cfgRows = cfgSheet ? cfgSheet.getDataRange().getValues() : [];
+  if (cfgRows.length < 2 && (!ttSheet || ttSheet.getLastRow() < 2) && (!secSheet || secSheet.getLastRow() < 2)) {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      config: null
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  var cfgRow = cfgRows.length >= 2 ? cfgRows[1] : [];
+  var parseJsonSafe = function(val, fallback) {
+    try {
+      if (val && String(val).trim()) return JSON.parse(String(val));
+    } catch (e) {}
+    return fallback;
+  };
+
+  var sections = [];
+  if (secSheet && secSheet.getLastRow() >= 2) {
+    var secRows = secSheet.getDataRange().getValues();
+    for (var i = 1; i < secRows.length; i++) {
+      var r = secRows[i];
+      if (!r[0] && !r[1]) continue;
+      sections.push({
+        id: String(r[0] || (String(r[1] || "") + "::" + String(r[2] || "A"))),
+        classKey: String(r[1] || ""),
+        sectionName: String(r[2] || "A"),
+        roomNumber: String(r[3] || ""),
+        classTeacherId: String(r[4] || ""),
+        classTeacherName: String(r[5] || ""),
+        subjectIds: parseJsonSafe(r[6], []),
+        subjectTeachers: parseJsonSafe(r[7], {})
+      });
+    }
+  }
+
+  var timetable = [];
+  if (ttSheet && ttSheet.getLastRow() >= 2) {
+    var ttRows = ttSheet.getDataRange().getValues();
+    for (var j = 1; j < ttRows.length; j++) {
+      var tr = ttRows[j];
+      if (!tr[0] && !tr[2]) continue;
+      timetable.push({
+        id: String(tr[0] || ""),
+        sessionId: String(tr[1] || "2026-27"),
+        classKey: String(tr[2] || ""),
+        sectionName: String(tr[3] || "A"),
+        day: String(tr[4] || "Monday"),
+        periodId: String(tr[5] || ""),
+        subjectId: String(tr[6] || ""),
+        subjectName: String(tr[7] || ""),
+        teacherId: String(tr[8] || ""),
+        teacherName: String(tr[9] || ""),
+        roomNumber: String(tr[10] || "")
+      });
+    }
+  }
+
+  var substitutions = [];
+  if (subSheet && subSheet.getLastRow() >= 2) {
+    var subRows = subSheet.getDataRange().getValues();
+    for (var k = 1; k < subRows.length; k++) {
+      var sr = subRows[k];
+      if (!sr[0]) continue;
+      substitutions.push({
+        id: String(sr[0] || ""),
+        sessionId: String(sr[1] || "2026-27"),
+        date: String(sr[2] || ""),
+        day: String(sr[3] || "Monday"),
+        periodId: String(sr[4] || ""),
+        periodLabel: String(sr[5] || ""),
+        classKey: String(sr[6] || ""),
+        sectionName: String(sr[7] || "A"),
+        subjectName: String(sr[8] || ""),
+        originalTeacherId: String(sr[9] || ""),
+        originalTeacherName: String(sr[10] || ""),
+        substituteTeacherId: String(sr[11] || ""),
+        substituteTeacherName: String(sr[12] || ""),
+        reason: String(sr[13] || ""),
+        createdAt: String(sr[14] || "")
+      });
+    }
+  }
+
+  var resultCfg = {
+    activeSessionId: String(cfgRow[1] || "2026-27"),
+    sessions: parseJsonSafe(cfgRow[2], []),
+    subjects: parseJsonSafe(cfgRow[3], []),
+    periodSets: parseJsonSafe(cfgRow[4], []),
+    studentOverrides: parseJsonSafe(cfgRow[5], {}),
+    promotionLogs: parseJsonSafe(cfgRow[6], []),
+    sections: sections,
+    timetable: timetable,
+    substitutions: substitutions,
+    updatedAt: String(cfgRow[7] || ""),
+    updatedBy: String(cfgRow[8] || "")
+  };
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    config: resultCfg
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleSaveAcademicsConfig(ss, data) {
+  ensureFeatureBackupTabs(ss);
+  var cfg = data.config ? (typeof data.config === "string" ? JSON.parse(data.config) : data.config) : data;
+  if (typeof cfg === "string") {
+    try { cfg = JSON.parse(cfg); } catch (e) { cfg = data; }
+  }
+  var nowIst = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+
+  // 1. Save Academics_Config row 2
+  var cfgSheet = findExistingSheet_(ss, ["Academics_Config", "Academics Config", "AcademicsConfig"]);
+  var cfgRow = [
+    "ACADEMICS_SETTINGS",
+    String(cfg.activeSessionId || "2026-27"),
+    JSON.stringify(Array.isArray(cfg.sessions) ? cfg.sessions : []),
+    JSON.stringify(Array.isArray(cfg.subjects) ? cfg.subjects : []),
+    JSON.stringify(Array.isArray(cfg.periodSets) ? cfg.periodSets : []),
+    JSON.stringify((cfg.studentOverrides && typeof cfg.studentOverrides === "object") ? cfg.studentOverrides : {}),
+    JSON.stringify(Array.isArray(cfg.promotionLogs) ? cfg.promotionLogs : []),
+    formatToLocalIST_(cfg.updatedAt, nowIst),
+    String(cfg.updatedBy || "Manager")
+  ];
+  if (cfgSheet.getLastRow() >= 2) {
+    cfgSheet.getRange(2, 1, 1, cfgRow.length).setValues([cfgRow]);
+  } else {
+    cfgSheet.appendRow(cfgRow);
+  }
+
+  // 2. Replace Class_Sections rows
+  var secSheet = findExistingSheet_(ss, ["Class_Sections", "Class Sections", "ClassSections"]);
+  var secHeader = ["Section_Key", "Class_Key", "Section_Name", "Room_Number", "Class_Teacher_ID", "Class_Teacher_Name", "Subject_IDs_JSON", "Subject_Teachers_JSON"];
+  secSheet.clearContents();
+  secSheet.appendRow(secHeader);
+  var sections = Array.isArray(cfg.sections) ? cfg.sections : [];
+  if (sections.length > 0) {
+    var secRows = sections.map(function(s) {
+      return [
+        String(s.id || ""),
+        String(s.classKey || ""),
+        String(s.sectionName || "A"),
+        String(s.roomNumber || ""),
+        String(s.classTeacherId || ""),
+        String(s.classTeacherName || ""),
+        JSON.stringify(Array.isArray(s.subjectIds) ? s.subjectIds : []),
+        JSON.stringify((s.subjectTeachers && typeof s.subjectTeachers === "object") ? s.subjectTeachers : {})
+      ];
+    });
+    secSheet.getRange(2, 1, secRows.length, secHeader.length).setValues(secRows);
+  }
+
+  // 3. Replace Class_Timetable rows
+  var ttSheet = findExistingSheet_(ss, ["Class_Timetable", "Class Timetable", "ClassTimetable", "Timetable"]);
+  var ttHeader = ["Slot_ID", "Session_ID", "Class_Key", "Section_Name", "Day", "Period_ID", "Subject_ID", "Subject_Name", "Teacher_ID", "Teacher_Name", "Room_Number"];
+  ttSheet.clearContents();
+  ttSheet.appendRow(ttHeader);
+  var timetable = Array.isArray(cfg.timetable) ? cfg.timetable : [];
+  if (timetable.length > 0) {
+    var ttRows = timetable.map(function(t) {
+      return [
+        String(t.id || ""),
+        String(t.sessionId || "2026-27"),
+        String(t.classKey || ""),
+        String(t.sectionName || "A"),
+        String(t.day || "Monday"),
+        String(t.periodId || ""),
+        String(t.subjectId || ""),
+        String(t.subjectName || ""),
+        String(t.teacherId || ""),
+        String(t.teacherName || ""),
+        String(t.roomNumber || "")
+      ];
+    });
+    ttSheet.getRange(2, 1, ttRows.length, ttHeader.length).setValues(ttRows);
+  }
+
+  // 4. Replace Teacher_Substitutions rows
+  var subSheet = findExistingSheet_(ss, ["Teacher_Substitutions", "Teacher Substitutions", "Substitutions"]);
+  var subHeader = ["Sub_ID", "Session_ID", "Date", "Day", "Period_ID", "Period_Label", "Class_Key", "Section_Name", "Subject_Name", "Original_Teacher_ID", "Original_Teacher_Name", "Substitute_Teacher_ID", "Substitute_Teacher_Name", "Reason", "Created_At"];
+  subSheet.clearContents();
+  subSheet.appendRow(subHeader);
+  var subs = Array.isArray(cfg.substitutions) ? cfg.substitutions : [];
+  if (subs.length > 0) {
+    var subRows = subs.map(function(sb) {
+      return [
+        String(sb.id || ""),
+        String(sb.sessionId || "2026-27"),
+        String(sb.date || ""),
+        String(sb.day || "Monday"),
+        String(sb.periodId || ""),
+        String(sb.periodLabel || ""),
+        String(sb.classKey || ""),
+        String(sb.sectionName || "A"),
+        String(sb.subjectName || ""),
+        String(sb.originalTeacherId || ""),
+        String(sb.originalTeacherName || ""),
+        String(sb.substituteTeacherId || ""),
+        String(sb.substituteTeacherName || ""),
+        String(sb.reason || ""),
+        String(sb.createdAt || nowIst)
+      ];
+    });
+    subSheet.getRange(2, 1, subRows.length, subHeader.length).setValues(subRows);
+  }
+
+  // 5. Also sync promoted student Class updates back into master Students tab if present
+  try {
+    var overrides = cfg.studentOverrides;
+    if (overrides && typeof overrides === "object") {
+      var stSheet = findExistingSheet_(ss, ["Students", "Student"]);
+      if (stSheet && stSheet.getLastRow() >= 2) {
+        var stVals = stSheet.getDataRange().getValues();
+        var headers = stVals[0] || [];
+        var classColIdx = -1;
+        var sectionColIdx = -1;
+        for (var h = 0; h < headers.length; h++) {
+          var hNorm = String(headers[h] || "").trim().toLowerCase();
+          if (hNorm === "class") classColIdx = h;
+          if (hNorm === "section") sectionColIdx = h;
+        }
+        if (classColIdx !== -1) {
+          for (var rIdx = 1; rIdx < stVals.length; rIdx++) {
+            var sid = String(stVals[rIdx][0] || "").trim().toLowerCase();
+            var ov = overrides[sid];
+            if (ov && ov.classKey) {
+              stSheet.getRange(rIdx + 1, classColIdx + 1).setValue(String(ov.classKey));
+              if (sectionColIdx !== -1 && ov.sectionName) {
+                stSheet.getRange(rIdx + 1, sectionColIdx + 1).setValue(String(ov.sectionName));
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch (eStSync) {}
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Academics_Config, Class_Sections, Class_Timetable & Teacher_Substitutions saved to Google Sheet!"
   })).setMimeType(ContentService.MimeType.JSON);
 }
 `;

@@ -12,7 +12,8 @@ export type TeacherTabId =
   | 'syllabus'
   | 'weekly_tests'
   | 'report_card'
-  | 'seating_plan';
+  | 'seating_plan'
+  | 'timetable';
 
 export interface TeacherMenuItemMeta {
   id: Exclude<TeacherTabId, 'home'>;
@@ -91,6 +92,17 @@ export const TEACHER_MENU_ITEMS: TeacherMenuItemMeta[] = [
     accentBg: 'bg-purple-50',
     accentText: 'text-purple-800',
     keywords: 'student attendance behavior conduct discipline हाजिरी आचरण',
+  },
+  {
+    id: 'timetable',
+    category: 'daily',
+    titleEn: 'My Timetable & Workload',
+    titleHi: 'मेरा टाइमटेबल व कक्षाएं',
+    subtitleHi: 'आज के पीरियड, साप्ताहिक टाइमटेबल व बदली ड्यूटी',
+    iconClass: 'fa-solid fa-calendar-week',
+    accentBg: 'bg-indigo-50',
+    accentText: 'text-indigo-800',
+    keywords: 'timetable period schedule workload free teacher टाइमटेबल पीरियड',
   },
   {
     id: 'seating_plan',
@@ -225,6 +237,8 @@ export const TeacherLeftSidebar: React.FC<TeacherLeftSidebarProps> = ({
         return '100 Pts';
       case 'notices':
         return `${counts.noticesCount}`;
+      case 'timetable':
+        return 'Mon–Sat';
       default:
         return '';
     }
